@@ -245,28 +245,132 @@ Explicit exclusions for v1 and (most likely) v2. Each entry has reasoning so the
 
 ## Traceability
 
-Filled by the roadmapper in Step 8. Each requirement maps to exactly one phase.
+Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01..10 | TBD | Pending |
-| GTO-01..11 | TBD | Pending |
-| SCF-01..14 | TBD | Pending |
-| DFT-01..11 | TBD | Pending |
-| MP2-01..08 | TBD | Pending |
-| CCSD-01..11 | TBD | Pending |
-| GRAD-01..10 | TBD | Pending |
-| GEOMOPT-01..07 | TBD | Pending |
-| BIND-01..09 | TBD | Pending |
-| ORACLE-01..09 | TBD | Pending |
-| PERF-01..07 | TBD | Pending |
-| DIST-01..06 | TBD | Pending |
+| FOUND-01 | Phase 1 | Pending |
+| FOUND-02 | Phase 1 | Pending |
+| FOUND-03 | Phase 1 | Pending |
+| FOUND-04 | Phase 1 | Pending |
+| FOUND-05 | Phase 1 | Pending |
+| FOUND-06 | Phase 1 | Pending |
+| FOUND-07 | Phase 1 | Pending |
+| FOUND-08 | Phase 1 | Pending |
+| FOUND-09 | Phase 1 | Pending |
+| FOUND-10 | Phase 1 | Pending |
+| GTO-01 | Phase 2 | Pending |
+| GTO-02 | Phase 2 | Pending |
+| GTO-03 | Phase 2 | Pending |
+| GTO-04 | Phase 2 | Pending |
+| GTO-05 | Phase 2 | Pending |
+| GTO-06 | Phase 2 | Pending |
+| GTO-07 | Phase 2 | Pending |
+| GTO-08 | Phase 2 | Pending |
+| GTO-09 | Phase 2 | Pending |
+| GTO-10 | Phase 2 | Pending |
+| GTO-11 | Phase 2 | Pending |
+| SCF-01 | Phase 3 | Pending |
+| SCF-02 | Phase 3 | Pending |
+| SCF-03 | Phase 3 | Pending |
+| SCF-04 | Phase 3 | Pending |
+| SCF-05 | Phase 3 | Pending |
+| SCF-06 | Phase 3 | Pending |
+| SCF-07 | Phase 3 | Pending |
+| SCF-08 | Phase 3 | Pending |
+| SCF-09 | Phase 3 | Pending |
+| SCF-10 | Phase 3 | Pending |
+| SCF-11 | Phase 3 | Pending |
+| SCF-12 | Phase 3 | Pending |
+| SCF-13 | Phase 3 | Pending |
+| SCF-14 | Phase 3 | Pending |
+| DFT-01 | Phase 4 | Pending |
+| DFT-02 | Phase 4 | Pending |
+| DFT-03 | Phase 4 | Pending |
+| DFT-04 | Phase 4 | Pending |
+| DFT-05 | Phase 4 | Pending |
+| DFT-06 | Phase 4 | Pending |
+| DFT-07 | Phase 4 | Pending |
+| DFT-08 | Phase 4 | Pending |
+| DFT-09 | Phase 4 | Pending |
+| DFT-10 | Phase 4 | Pending |
+| DFT-11 | Phase 4 | Pending |
+| MP2-01 | Phase 5 | Pending |
+| MP2-02 | Phase 5 | Pending |
+| MP2-03 | Phase 5 | Pending |
+| MP2-04 | Phase 5 | Pending |
+| MP2-05 | Phase 5 | Pending |
+| MP2-06 | Phase 5 | Pending |
+| MP2-07 | Phase 5 | Pending |
+| MP2-08 | Phase 5 | Pending |
+| CCSD-01 | Phase 6 | Pending |
+| CCSD-02 | Phase 6 | Pending |
+| CCSD-03 | Phase 6 | Pending |
+| CCSD-04 | Phase 6 | Pending |
+| CCSD-05 | Phase 6 | Pending |
+| CCSD-06 | Phase 6 | Pending |
+| CCSD-07 | Phase 6 | Pending |
+| CCSD-08 | Phase 6 | Pending |
+| CCSD-09 | Phase 6 | Pending |
+| CCSD-10 | Phase 6 | Pending |
+| CCSD-11 | Phase 6 | Pending |
+| GRAD-01 | Phase 7 | Pending |
+| GRAD-02 | Phase 7 | Pending |
+| GRAD-03 | Phase 7 | Pending |
+| GRAD-04 | Phase 7 | Pending |
+| GRAD-05 | Phase 7 | Pending |
+| GRAD-06 | Phase 7 | Pending |
+| GRAD-07 | Phase 7 | Pending |
+| GRAD-08 | Phase 7 | Pending |
+| GRAD-09 | Phase 7 | Pending |
+| GRAD-10 | Phase 7 | Pending |
+| GEOMOPT-01 | Phase 7 | Pending |
+| GEOMOPT-02 | Phase 7 | Pending |
+| GEOMOPT-03 | Phase 7 | Pending |
+| GEOMOPT-04 | Phase 7 | Pending |
+| GEOMOPT-05 | Phase 7 | Pending |
+| GEOMOPT-06 | Phase 7 | Pending |
+| GEOMOPT-07 | Phase 7 | Pending |
+| BIND-01 | Phase 3 | Pending |
+| BIND-02 | Phase 3 | Pending |
+| BIND-03 | Phase 8 | Pending |
+| BIND-04 | Phase 3 | Pending |
+| BIND-05 | Phase 3 | Pending |
+| BIND-06 | Phase 3 | Pending |
+| BIND-07 | Phase 3 | Pending |
+| BIND-08 | Phase 8 | Pending |
+| BIND-09 | Phase 3 | Pending |
+| ORACLE-01 | Phase 1 | Pending |
+| ORACLE-02 | Phase 3 | Pending |
+| ORACLE-03 | Phase 8 | Pending |
+| ORACLE-04 | Phase 8 | Pending |
+| ORACLE-05 | Phase 1 | Pending |
+| ORACLE-06 | Phase 8 | Pending |
+| ORACLE-07 | Phase 8 | Pending |
+| ORACLE-08 | Phase 3 | Pending |
+| ORACLE-09 | Phase 1 | Pending |
+| PERF-01 | Phase 8 | Pending |
+| PERF-02 | Phase 8 | Pending |
+| PERF-03 | Phase 8 | Pending |
+| PERF-04 | Phase 8 | Pending |
+| PERF-05 | Phase 8 | Pending |
+| PERF-06 | Phase 8 | Pending |
+| PERF-07 | Phase 8 | Pending |
+| DIST-01 | Phase 8 | Pending |
+| DIST-02 | Phase 8 | Pending |
+| DIST-03 | Phase 8 | Pending |
+| DIST-04 | Phase 8 | Pending |
+| DIST-05 | Phase 8 | Pending |
+| DIST-06 | Phase 8 | Pending |
 
 **Coverage:**
-- v1 requirements: 116 total (10 FOUND + 11 GTO + 14 SCF + 11 DFT + 8 MP2 + 11 CCSD + 10 GRAD + 7 GEOMOPT + 9 BIND + 9 ORACLE + 7 PERF + 6 DIST + 3 cross-listed) — final count 116
-- Mapped to phases: 0 (pre-roadmap)
-- Unmapped: 116 (will be 0 after roadmapping) ⚠️
+- v1 requirements: 113 total (10 FOUND + 11 GTO + 14 SCF + 11 DFT + 8 MP2 + 11 CCSD + 10 GRAD + 7 GEOMOPT + 9 BIND + 9 ORACLE + 7 PERF + 6 DIST)
+- Mapped to phases: 113 / 113 ✓
+- Unmapped: 0
+- Phase distribution: Phase 1 = 13 (FOUND-01..10 + ORACLE-01,05,09); Phase 2 = 11 (GTO-01..11); Phase 3 = 23 (SCF-01..14 + BIND-01,02,04,05,06,07,09 + ORACLE-02,08); Phase 4 = 11 (DFT-01..11); Phase 5 = 8 (MP2-01..08); Phase 6 = 11 (CCSD-01..11); Phase 7 = 17 (GRAD-01..10 + GEOMOPT-01..07); Phase 8 = 19 (PERF-01..07 + DIST-01..06 + ORACLE-03,04,06,07 + BIND-03,08)
+
+> **Counting note**: The previous version of this section asserted "116 total ... + 3 cross-listed". On enumeration, the v1 requirements list contains 113 unique REQ-IDs. The "116" figure double-counted three cross-cutting concerns that are mentioned in multiple categories' prose (subclass-override re-validation in DFT-08, frozen-core re-validation in CCSD-10, MP2 helper exposure for CCSD in MP2-08) but are encoded as single REQ-IDs. The 113 figure is the correct unique-ID count.
 
 ---
 *Requirements defined: 2026-05-09*
-*Last updated: 2026-05-09 after initial definition*
+*Traceability filled: 2026-05-10 by roadmapper (8-phase structure)*
