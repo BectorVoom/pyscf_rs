@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 1 — Foundation (workspace, core types, runtime, FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep lint, nightly cross-crate matrix CI)
+**Current focus:** Phase 1 — Foundation (15-crate workspace including new `pyscf-algebra`, core types, runtime + `PYSCF_BACKEND` env-driven backend selection, workspace `gpu` feature OFF by default → CPU is default backend, single-owner cubecl algebra surface, FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep + dependency-wall lints, nightly cross-crate matrix CI)
 
 ## Current Position
 
 Phase: 1 of 8 (Foundation)
 Plan: 0 of TBD in current phase
 Status: Ready to plan
-Last activity: 2026-05-10 — ROADMAP.md created; 113/113 v1 requirements mapped across 8 phases
+Last activity: 2026-05-10 — ROADMAP.md created; 121/121 v1 requirements mapped across 8 phases (ALG category added: 8 REQs, all Phase 1)
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -45,6 +45,9 @@ Recent decisions affecting current work:
 - Roadmapping (2026-05-10): Compressed research's 12-phase suggestion to 8 phases (standard granularity). Merged `bindings` into `scf` (Phase 3) to lock PyO3 contract on RHF before DFT; merged `geomopt` into `grad` (Phase 7); merged `GPU enable + oracle hardening + distribution` into closing Phase 8.
 - Roadmapping (2026-05-10): Phase 1 (Foundation) is the SHOWSTOPPER convergence point — 7 of 21 catalogued pitfalls have their primary mitigation here (FMA, reduction order, cubecl pin, panic policy, sibling-crate ABI, cross-platform libm, scope creep).
 - Roadmapping (2026-05-10): Phase 3 (SCF + PyO3 bindings) is the second convergence point — 5 PyO3-related pitfalls (subclass override, NumPy stride, GIL deadlock, panic→exception, chkfile schema) plus eigenvector sign canonicalization land here on the small RHF surface.
+- Algebra integration (2026-05-10): added a dedicated `pyscf-algebra` crate as the single owner of all linear algebra; only `pyscf-algebra` (and `pyscf-runtime` for client construction) may depend on `cubecl-*` runtime crates — enforced by a `cargo metadata` dependency-wall lint. Workspace grows 14 → 15 members.
+- Algebra integration (2026-05-10): workspace `gpu` umbrella feature is OFF by default; CPU is the default backend. Per-backend features `cuda`/`wgpu`/`rocm`/`metal` opt in to each cubecl runtime at compile time. `PYSCF_BACKEND` env var selects among compiled-in backends at runtime; unrecognised/uncompiled values fall back to CPU with a `tracing::warn!`.
+- Algebra integration (2026-05-10): host eigh/Cholesky/QR/SVD remain on `faer 0.24` behind the `pyscf-algebra` surface — even on a GPU build, these routines copy to host. Documented as the single intentional host-fallback path until `cubecl-linalg` ships an eigh.
 
 ### Pending Todos
 
@@ -79,5 +82,5 @@ Items acknowledged and carried forward:
 ## Session Continuity
 
 Last session: 2026-05-10
-Stopped at: ROADMAP.md created; STATE.md initialized; REQUIREMENTS.md traceability table updated. Ready for `/gsd-plan-phase 1`.
-Resume file: None
+Stopped at: Phase 1 context gathered. 4 gray areas discussed (workspace location, AlgebraClient dispatch, auto backend resolution + new PYSCF_DTYPE axis, sibling-crate sourcing). 15 decisions D-01..D-15 captured in 01-CONTEXT.md. Ready for `/gsd-plan-phase 1`.
+Resume file: .planning/phases/01-foundation/01-CONTEXT.md
