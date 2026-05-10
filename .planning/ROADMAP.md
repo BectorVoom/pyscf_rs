@@ -70,13 +70,13 @@ Plans:
 Plans:
 - [x] 02-01-PLAN.md — Wave 0 scaffolding: cintx round-trip smoke, cubecl-cpu kernel smoke, F/C-order layout table, algebra-wall allowlist update, oracle harness scaffold, PYSCF_BASIS_PATH docs (W0-T1..W0-T6)
 - [x] 02-02-PLAN.md — Mole struct + ≥30-attribute floor + format_atom port (4-of-5 atom-input forms; 5th deferred to Phase 3) (GTO-01, GTO-08)
-- [ ] 02-03-PLAN.md — Basis loader (PYSCF_BASIS_PATH resolver + ALIAS table + NWChem/NWChem-ECP/CP2K parser dispatch + format_basis dispatcher) (GTO-02, GTO-03)
-- [ ] 02-04-PLAN.md — Mole↔cintx bridge (zero-copy BasisSet re-export + make_env flat-array projection) (GTO-04, GTO-11)
-- [ ] 02-05-PLAN.md — mol.intor(name) cintx dispatcher (with F-order layout preservation per Pitfall 8) (GTO-06)
-- [ ] 02-06-PLAN.md — eval_gto cubecl kernel in pyscf-kernels + algebra-wall-friendly user wrapper in pyscf-gto (GTO-07; s-shells fully implemented; l ≥ 1 deferred to Phase 4 DFT)
-- [ ] 02-07-PLAN.md — ECP loading parser + EcpEngine trait + EcpEngineNotAvailable stub + intor dispatcher routing (GTO-05 loading half)
-- [ ] 02-08-PLAN.md — mol.dumps()/Mole::loads() JSON round-trip + mol.copy() + mol.set_geom_() in-place mutation per Pattern 5 (GTO-09, GTO-10)
-- [ ] 02-09-PLAN.md — Phase 2 verification rollup: pytest oracle harness for byte-identity + intor + eval_gto + JSON interop + builtin basis sweep + STATE/VALIDATION updates (verifies GTO-01..11)
+- [x] 02-03-PLAN.md — Basis loader (PYSCF_BASIS_PATH resolver + ALIAS table + NWChem/NWChem-ECP/CP2K parser dispatch + format_basis dispatcher) (GTO-02, GTO-03)
+- [x] 02-04-PLAN.md — Mole↔cintx bridge (zero-copy BasisSet re-export + make_env flat-array projection) (GTO-04, GTO-11)
+- [x] 02-05-PLAN.md — mol.intor(name) cintx dispatcher (with F-order layout preservation per Pitfall 8) (GTO-06)
+- [x] 02-06-PLAN.md — eval_gto cubecl kernel in pyscf-kernels + algebra-wall-friendly user wrapper in pyscf-gto (GTO-07; s-shells fully implemented; l ≥ 1 deferred to Phase 4 DFT)
+- [x] 02-07-PLAN.md — ECP loading parser + EcpEngine trait + EcpEngineNotAvailable stub + intor dispatcher routing (GTO-05 loading half)
+- [x] 02-08-PLAN.md — mol.dumps()/Mole::loads() JSON round-trip + mol.copy() + mol.set_geom_() in-place mutation per Pattern 5 (GTO-09, GTO-10)
+- [x] 02-09-PLAN.md — Phase 2 verification rollup: pytest oracle harness for byte-identity + intor + eval_gto + JSON interop + builtin basis sweep + STATE/VALIDATION updates (verifies GTO-01..11)
 - [ ] 02-10-PLAN.md — DEFERRED gap-closure: cintx ECP merge → swap EcpEngineNotAvailable for cintx-backed CintxEcpEngine; closes GTO-05 evaluation half (status: PENDING_CINTX_ECP_MERGE)
 
 ### Phase 3: SCF + PyO3 bindings
