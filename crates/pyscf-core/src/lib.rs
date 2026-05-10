@@ -31,4 +31,4 @@ pub use mo::MOCoefficients;
 pub use mole::{
     EcpShell, Mole, NuclearModel, ParsedAtom, ParsedBasis, ParsedEcp, ShellSpec, Unit,
 };
-pub use traits::{Gradient, IntegralEngine, KohnSham, Method, PostScf, Scf};
+pub use traits::{EcpEngine, Gradient, IntegralEngine, KohnSham, Method, PostScf, Scf};

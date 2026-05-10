@@ -8,23 +8,39 @@
 #![forbid(unsafe_code)]
 
 pub mod basis; // Plan 02-03 — GTO-03 (basis loading).
+pub mod ecp_engine_stub; // Plan 02-07 — GTO-05 (engine half: stub trait impl).
 pub mod eval_gto; // Plan 02-06 — GTO-07 (eval_gto user wrapper, algebra-wall friendly).
 pub mod format_atom;
 pub mod format_basis; // Plan 02-03 — GTO-02 (11→5 input-form dispatch).
+pub mod format_ecp; // Plan 02-07 — GTO-05 (loading half: format_ecp + make_ecp_env).
 pub mod intor; // Plan 02-05 — GTO-06 (mol.intor(name) dispatcher).
 pub mod layout_table; // Wave 0 (plan 02-01); consumed by intor.rs in 02-05.
 pub mod make_env; // Plan 02-04 — GTO-04 (flat-array projection, D-03).
 pub mod projection; // Plan 02-04 — GTO-11 (zero-copy cintx_core::BasisSet build).
 pub mod types;
 
-// Plans 02-07..02-08 add: ecp_engine_stub, dumps_loads.
+// Plan 02-08 adds: dumps_loads.
 
 pub use basis::{load_basis, parse as parse_basis};
+pub use ecp_engine_stub::EcpEngineNotAvailable;
 pub use eval_gto::{eval_gto, EvalGtoOutput};
 pub use format_basis::format_basis;
+pub use format_ecp::{format_ecp, make_ecp_env};
 pub use intor::{intor, IntorOutput};
 pub use pyscf_core::{Mole, Unit};
 pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
+
+/// Returns the active ECP engine. Phase 2 returns the
+/// `EcpEngineNotAvailable` stub per D-06 sequencing; gap-closure plan
+/// 02-10 swaps to the cintx-backed impl when cintx ECP merges.
+///
+/// The intor dispatcher (`pyscf_gto::intor::intor`) calls this for any
+/// `int1e_ecp*` / `ECPscalar*` name and routes through the
+/// `EcpEngine` trait — meaning 02-10 needs to change only the impl
+/// returned here, not any caller's code.
+pub fn ecp_engine() -> ecp_engine_stub::EcpEngineNotAvailable {
+    ecp_engine_stub::EcpEngineNotAvailable
+}
 
 /// Shortcut to build a Mole. Equivalent to `pyscf.M(...)` upstream.
 ///

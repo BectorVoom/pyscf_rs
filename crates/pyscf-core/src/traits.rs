@@ -70,3 +70,38 @@ pub trait IntegralEngine {
         name: &str,
     ) -> Result<Density, PyscfRsError>;
 }
+
+/// ECP engine — the cintx-side ECP integration seam.
+///
+/// Phase 2 D-07 declares the trait; Phase 2 plan 02-07 ships an
+/// `EcpEngineNotAvailable` stub. cintx implements `EcpEngine` on the
+/// same engine type as `IntegralEngine` when its ECP workstream lands;
+/// gap-closure plan 02-10 then bumps the cintx pin and `Mole`'s ECP
+/// engine accessor returns the cintx-backed impl.
+///
+/// User-facing API stays uniform: `mol.intor("int1e_ecp")` is routed
+/// through `EcpEngine` internally (see `pyscf-gto::intor`).
+///
+/// Phase 7 GRAD-07 wires `ecp_int1e_ipnuc` for ECP gradients.
+pub trait EcpEngine: Send + Sync {
+    /// Compute `int1e_ecp` (or named variant — `int1e_ecp_iprinv` etc.).
+    /// Returns `Err(PyscfRsError::EcpEngineNotAvailable)` from the stub
+    /// impl until cintx ECP merges (gap-closure plan 02-10).
+    fn ecp_int1e(&self, mol: &Mole, name: &str) -> Result<Density, PyscfRsError>;
+
+    /// Phase 7 GRAD-07: `int1e_ecp_ipnuc` (Z-vector contributions for
+    /// ECP gradients). Phase 2 default returns
+    /// `NotYetImplemented{phase:7}`; the cintx-backed impl (when 02-10
+    /// wires it) ships this for grad.
+    fn ecp_int1e_ipnuc(
+        &self,
+        mol: &Mole,
+        name: &str,
+    ) -> Result<Density, PyscfRsError> {
+        let _ = (mol, name);
+        Err(PyscfRsError::NotYetImplemented {
+            phase: 7,
+            what: "int1e_ecp_ipnuc (ECP gradient — Phase 7 GRAD-07)",
+        })
+    }
+}

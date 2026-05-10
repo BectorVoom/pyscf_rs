@@ -32,7 +32,7 @@ use cintx_core::{BasisSet as CintxBasisSet, OperatorId, Representation};
 use cintx_ops::resolver::{OperatorDescriptor, Resolver};
 use cintx_runtime::ExecutionOptions;
 use cintx_rs::SessionRequest;
-use pyscf_core::{CoreError, Mole, PyscfRsError};
+use pyscf_core::{CoreError, EcpEngine, Mole, PyscfRsError};
 
 use crate::layout_table::{self, IntorLayout, INTOR_LAYOUTS};
 
@@ -78,11 +78,39 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
     let full_name = add_suffix(name, mol.cart);
 
     // ── ECP route per Phase 2 D-07 ─────────────────────────────────────
-    // 02-07 wires the actual `EcpEngine` trait dispatch; 02-05 returns the
-    // stub error directly so this plan ships independently of 02-07's
-    // wave-2 progress.
+    // Plan 02-07 (this code) dispatches `int1e_ecp*` / `ECPscalar*` names
+    // through the `EcpEngine` trait. Phase 2 returns the
+    // `EcpEngineNotAvailable` stub via `crate::ecp_engine()`; gap-closure
+    // plan 02-10 swaps the stub for the cintx-backed impl with no change
+    // to this dispatcher.
     if full_name.starts_with("int1e_ecp") || full_name.starts_with("ECPscalar") {
-        return Err(PyscfRsError::EcpEngineNotAvailable);
+        let engine = crate::ecp_engine();
+        // The Phase 2 stub never returns Ok, so the conversion below is
+        // exercise-only until 02-10. When the cintx-backed impl lands, the
+        // returned `Density` carries an F-order `nao × nao` buffer and we
+        // re-pack it into the `IntorOutput` shape used elsewhere.
+        let density = EcpEngine::ecp_int1e(&engine, mol, &full_name)?;
+        // Defensive shape: even when 02-10 wires the real engine, this
+        // dispatcher promises the same `(nao, nao)` F-order layout
+        // every other arity-2 1e intor returns.
+        let nao = mol.nao_nr;
+        if !density.data.is_empty() && density.data.len() != nao * nao {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "ECP engine returned {} elements for `{full_name}`; expected nao*nao = {}",
+                density.data.len(),
+                nao * nao,
+            ))));
+        }
+        let values = if density.data.is_empty() {
+            vec![0.0; nao * nao]
+        } else {
+            density.data
+        };
+        return Ok(IntorOutput {
+            values,
+            shape: vec![nao, nao],
+            layout: IntorLayout::ScalarFOrder,
+        });
     }
 
     // ── Layout-table feature gate (Pitfall 1 / Pitfall 8) ──────────────
