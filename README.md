@@ -70,3 +70,83 @@ Ulf Ekström, Lucas Visscher, Radovan Bast, Andreas J. Thorvaldsen, and Kenneth 
 
 Please submit tickets on the [issues](https://github.com/pyscf/pyscf/issues) page.
 
+
+
+---
+
+## pyscf-rs (Rust port)
+
+> **Status:** Phase 1 (Foundation) — workspace skeleton + algebra surface
+> shipped. Methods (HF, DFT, MP2, CCSD, gradients) land in Phases 2-7.
+> See `.planning/ROADMAP.md` for the full phase plan.
+
+pyscf-rs is the pure-Rust port of PySCF, designed to be a drop-in
+replacement for `import pyscf` with bit-exact agreement on regression
+tests and 2–5× speedup vs PySCF + C extensions. Built on
+[cubecl](https://github.com/tracel-ai/cubecl) (single kernel source for
+CPU SIMD / CUDA / WGPU / ROCm), [PyO3](https://pyo3.rs) for Python
+bindings, and the sibling crates `cintx` (libcint replacement),
+`libxc_rs`, `xcfun_rs`.
+
+### Quickstart (developer)
+
+```bash
+# Clone alongside the upstream PySCF Python tree (already in this repo).
+git clone https://github.com/BectorVoom/pyscf_rs
+cd pyscf_rs
+
+# CPU-only build (default — fast, no GPU drivers needed):
+cargo build --workspace --locked
+
+# GPU-enabled build (compiles cuda + wgpu probe arms; runtime requires drivers):
+cargo build --workspace --locked --features gpu
+
+# Run the test suite:
+cargo test --workspace --locked -- --test-threads=1
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the local sibling-crate
+development recipe and the CI gate cheatsheet.
+
+### Backend selection at runtime
+
+Two environment variables drive the algebra layer:
+
+| Env var          | Default | Allowed values                                       |
+|------------------|---------|------------------------------------------------------|
+| `PYSCF_BACKEND`  | `cpu`   | `cpu`, `cuda`, `wgpu`, `rocm`, `metal`, `auto`       |
+| `PYSCF_DTYPE`    | `f64`   | `f32`, `f64`                                         |
+
+The workspace `gpu` feature is **OFF by default** (CPU-only builds are
+fast and reproducible). Enable a single backend via `--features cuda`
+or the host-portable umbrella `--features gpu` (= `cuda + wgpu`).
+
+`PYSCF_BACKEND=auto` walks the priority chain
+`cuda → rocm → metal → wgpu → cpu`, selecting the first backend that
+is both compiled in AND has a usable device. Unrecognised values fall
+back to CPU with a `tracing::warn!`. Setting `PYSCF_BACKEND=wgpu` with
+`PYSCF_DTYPE=f64` on an adapter without the `shader-f64` Vulkan
+extension returns a hard error rather than silently downgrading.
+
+Every PyO3 entry point emits a `tracing::info!` line on backend
+resolution: `pyscf-algebra: backend=cpu (env=unset, dtype=f64)`.
+
+### Workspace structure
+
+| Crate                  | Phase | Role                                                              |
+|------------------------|-------|-------------------------------------------------------------------|
+| `pyscf-rs` (façade)    | 1     | Top-level re-exports for `cargo add pyscf-rs`                      |
+| `pyscf-core`           | 1     | Universal types (Mole, Density, Energy) and method traits         |
+| `pyscf-runtime`        | 1     | BackendKind, per-backend probes, WorkspacePool, tracing init      |
+| `pyscf-algebra`        | 1     | Sole cubecl-* consumer; gemm/reduce/axpy/eigh public surface      |
+| `pyscf-{kernels,gto,scf,dft,mp2,ccsd,grad,geomopt}` | 2-7 | Method crates (under construction)                |
+| `pyscf-py`             | 3     | PyO3 abi3-py310 wheel (`pip install pyscf-rs`)                    |
+| `pyscf-oracle`         | 3     | PySCF live oracle (dev-deps only; release wheels never link Python) |
+| `pyscf-bench`          | 8     | Criterion benchmark suite                                         |
+
+### Cubecl pin
+
+cubecl 0.10.0 is exact-pinned across pyscf-rs AND the three sibling
+crates (cintx, libxc_rs, xcfun_rs). Bumping cubecl is a four-crate
+operation; see [docs/upgrade-cubecl.md](docs/upgrade-cubecl.md) for
+the documented ritual.
