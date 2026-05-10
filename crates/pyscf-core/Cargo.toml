@@ -1,0 +1,18 @@
+[package]
+name = "pyscf-core"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Universal types (Mole, Density, Energy) and method traits for pyscf-rs (no compute deps per FOUND-02)"
+
+[lib]
+path = "src/lib.rs"
+
+# FOUND-02: NO compute dependencies. Only error, serde, tracing allowed.
+# ALG-06 method-crate side: this crate MUST NOT name cubecl-*.
+# Plan 05's `xtask check-dependency-wall` enforces this at CI time.
+[dependencies]
+thiserror = { workspace = true }
+serde     = { workspace = true }
+tracing   = { workspace = true }
