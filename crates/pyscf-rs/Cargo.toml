@@ -10,3 +10,6 @@ description = "Top-level façade re-exporting in-scope methods (Phase 1: stub; P
 path = "src/lib.rs"
 
 [dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-runtime = { path = "../pyscf-runtime" }
+pyscf-algebra = { path = "../pyscf-algebra" }

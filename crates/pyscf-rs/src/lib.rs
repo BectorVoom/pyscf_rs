@@ -1,5 +1,17 @@
-// Phase 1 stub — implemented in Phase 1 (REQ-IDs: FOUND-01; façade body in Plan 04).
-// Phase 1 ships this empty so `cargo build --workspace` compiles all 15
-// members (FOUND-01).
-// TODO: implemented in Phase 1 (façade re-exports wired by Plan 04).
+//! pyscf-rs: top-level façade re-exporting in-scope methods.
+//!
+//! Phase 1: re-exports pyscf-{core,runtime,algebra}. Phase 2+ adds
+//! per-method re-exports as those crates land.
+//!
+//! End users do `cargo add pyscf-rs` and then `use pyscf_rs::scf::RHF;`
+//! once Phase 3 lands the SCF module.
 #![forbid(unsafe_code)]
+
+pub use pyscf_core as core;
+pub use pyscf_runtime as runtime;
+pub use pyscf_algebra as algebra;
+
+// Convenience re-exports of the most commonly used types.
+pub use pyscf_core::{Density, Energy, MOCoefficients, Mole};
+pub use pyscf_algebra::{select_backend, AlgebraClient, BackendSelection, DType, Tensor};
+pub use pyscf_runtime::{BackendKind, WorkspacePool};
