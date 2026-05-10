@@ -1,0 +1,12 @@
+[package]
+name = "pyscf-mp2"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Møller–Plesset 2nd-order (RMP2/UMP2/DF-MP2). Implemented in Phase 5."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

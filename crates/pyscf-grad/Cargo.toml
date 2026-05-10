@@ -1,0 +1,12 @@
+[package]
+name = "pyscf-grad"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Analytical gradients (HF/DFT/MP2/CCSD). Implemented in Phase 7."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
