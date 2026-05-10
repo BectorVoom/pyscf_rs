@@ -3315,6 +3315,7 @@ dependencies = [
  "cubecl-wgpu",
  "pyscf-algebra",
  "pyscf-core",
+ "pyscf-runtime",
  "thiserror 2.0.18",
  "tracing",
 ]

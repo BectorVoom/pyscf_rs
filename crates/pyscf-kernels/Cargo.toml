@@ -27,6 +27,10 @@ metal   = ["wgpu"]
 [dependencies]
 pyscf-core    = { path = "../pyscf-core" }
 pyscf-algebra = { path = "../pyscf-algebra", default-features = false }
+# Plan 02-06 D-04: eval_gto matches on `BackendKind` to dispatch CPU vs GPU
+# (Phase 8 wires the GPU arms; Phase 2 ships CPU only with a tracing::warn
+# fallback for unwired backends).
+pyscf-runtime = { path = "../pyscf-runtime" }
 cubecl         = { workspace = true }
 cubecl-runtime = { workspace = true }
 cubecl-cpu     = { workspace = true, optional = true }
