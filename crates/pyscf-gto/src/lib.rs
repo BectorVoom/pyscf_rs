@@ -7,15 +7,17 @@
 
 #![forbid(unsafe_code)]
 
-pub mod basis; // Plan 02-03 (this commit) — GTO-02 + GTO-03.
+pub mod basis; // Plan 02-03 — GTO-03 (basis loading).
 pub mod format_atom;
+pub mod format_basis; // Plan 02-03 — GTO-02 (11→5 input-form dispatch).
 pub mod layout_table; // Wave 0 (plan 02-01); consumed by intor.rs in 02-05.
 pub mod types;
 
-// Plans 02-04..02-08 add: format_basis (in-progress here), make_env, intor,
-// eval_gto, ecp_engine_stub, dumps_loads.
+// Plans 02-04..02-08 add: make_env, intor, eval_gto, ecp_engine_stub,
+// dumps_loads.
 
 pub use basis::{load_basis, parse as parse_basis};
+pub use format_basis::format_basis;
 pub use pyscf_core::{Mole, Unit};
 pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
 
@@ -99,12 +101,19 @@ pub fn build_from(
     }
     mol.nelectron = nelec as usize;
 
+    // GTO-02: format_basis — populate `mol._basis` (per-element-symbol map of
+    // ParsedBasis). Plan 02-03 (this commit) wires the dispatch + loader; the
+    // cintx Arc<BasisSet> projection (`mol.basis_set`) stays None until plan
+    // 02-04 runs make_env over `mol._basis`.
+    let parsed_basis = format_basis::format_basis(&args.basis, &mol._atom)?;
+    mol._basis = parsed_basis;
+
     // Plan 02-04 will populate _atm/_bas/_env/ao_loc_nr/nao_nr/basis_set
-    // here. For 02-02 those stay at Default::default() (empty Vecs / 0 / None).
+    // here. For now those stay at Default::default() (empty Vecs / 0 / None).
     //
     // Mole is "built" only after plan 02-04 wires the basis projection.
-    // Plan 02-02 leaves _built = false so calls to `mol.intor(...)` etc.
-    // (when 02-05 lands them) fail early on an unbuilt Mole.
+    // Leave _built = false so calls to `mol.intor(...)` (when 02-05 lands them)
+    // fail early on an unbuilt Mole.
     mol._built = false;
 
     Ok(())
