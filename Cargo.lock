@@ -3262,6 +3262,8 @@ version = "0.1.0"
 name = "pyscf-core"
 version = "0.1.0"
 dependencies = [
+ "cintx-compat",
+ "cintx-core",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -5634,6 +5636,10 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[patch.unused]]
 name = "cintx"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "libxc_rs"
 version = "0.1.0"
 
 [[patch.unused]]

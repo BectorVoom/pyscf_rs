@@ -23,7 +23,7 @@ pub mod mole;
 pub mod traits;
 
 pub use amplitudes::Amplitudes;
-pub use basis_set::BasisSet;
+pub use basis_set::{raw_layout, Atom, BasisMeta, BasisSet, CintxNuclearModel, Shell};
 pub use density::Density;
 pub use energy::Energy;
 pub use error::{BasisLoadError, CoreError, EcpLoadError, PyscfRsError};

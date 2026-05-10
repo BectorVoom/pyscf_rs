@@ -9,10 +9,16 @@ description = "Universal types (Mole, Density, Energy) and method traits for pys
 [lib]
 path = "src/lib.rs"
 
-# FOUND-02: NO compute dependencies. Only error, serde, tracing allowed.
-# ALG-06 method-crate side: this crate MUST NOT name cubecl-*.
-# Plan 05's `xtask check-dependency-wall` enforces this at CI time.
+# FOUND-02: NO compute (cubecl-*) dependencies. Phase 2 D-03 adds cintx-core
+# and cintx-compat — neither is a cubecl-* runtime crate, so the algebra wall
+# (ALG-06, enforced by `xtask check-dependency-wall`) still holds. cintx-core
+# owns the typed BasisSet that pyscf-core re-exports zero-copy per GTO-11;
+# cintx-compat owns the libcint slot constants (ATM_SLOTS, BAS_SLOTS,
+# PTR_ENV_START, etc.) that the make_env projection (plan 02-04) reuses
+# instead of duplicating libcint layout knowledge.
 [dependencies]
-thiserror = { workspace = true }
-serde     = { workspace = true }
-tracing   = { workspace = true }
+cintx-core    = { path = "../../../cintx/crates/cintx-core" }
+cintx-compat  = { path = "../../../cintx/crates/cintx-compat" }
+thiserror     = { workspace = true }
+serde         = { workspace = true }
+tracing       = { workspace = true }

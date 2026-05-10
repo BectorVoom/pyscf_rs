@@ -1,32 +1,18 @@
 //! Molecule type. Phase 2 plan 02-02 (GTO-08) implements the ≥30 attribute
-//! floor.
+//! floor; plan 02-04 (GTO-04 + GTO-11) wires the cintx flat-array
+//! projection (`_atm`/`_bas`/`_env`/`ao_loc_nr`/`nao_nr`) and the
+//! zero-copy `Arc<BasisSet>` storage.
 //!
 //! Source-of-truth: `pyscf/gto/mole.py:2189+` `MoleBase` class declaration
 //! (every `self.X = Y` field initialiser maps to a `pub X: ...` field
 //! here) and the `format_atom` / `make_env` outputs at `mole.py:320-1105`.
 //!
-//! Slot layout for `_atm`, `_bas`, `_env`: `crate::basis_set::raw_atm_layout`
-//! (which is a TEMPORARY local mirror of `cintx_compat::raw`; D-03
-//! mandates that pyscf-rs reuse cintx's slot constants once plan 02-04
-//! pulls cintx-compat into pyscf-core's dep graph — at which point this
-//! local mirror is deleted).
-//!
-//! Plan 02-02 ships:
-//!   - The struct shape (≥30 fields satisfying GTO-08).
-//!   - Method-floor obligations: `atom_charges()`, `atom_coords()`,
-//!     `atom_coord(i)`, `mass_list()`, `enuc()`.
-//!   - `Unit` enum with `length_in_au()` + `from_str()`.
-//!   - `NuclearModel` enum.
-//!   - Type aliases / placeholder structs: `ParsedAtom`, `ParsedBasis`,
-//!     `ShellSpec`, `ParsedEcp`, `EcpShell`.
-//!   - A `Mole::build()` stub returning `NotYetImplemented` (plan 02-04
-//!     wires the real basis-load + projection).
-//!
-//! Plan 02-02 does NOT ship: `_atm`/`_bas`/`_env` population (02-04),
-//! basis ALIAS resolution (02-03), ECP loading (02-07), `eval_gto`
-//! (02-06), `dumps`/`loads`/`copy`/`set_geom_` (02-08).
+//! Slot layout for `_atm`, `_bas`, `_env` is consumed via
+//! `crate::raw_layout::*` which is a `pub use cintx_compat::raw::*` per
+//! D-03 — there is no local mirror, so drift between cintx-compat and
+//! pyscf-rs is impossible by construction (T-02-04-01 mitigation).
 
-use crate::error::PyscfRsError;
+use crate::error::{CoreError, PyscfRsError};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -200,10 +186,10 @@ pub struct Mole {
 
     // === Flat-array projection (items 17, 18, 19) — plan 02-04 populates per D-03 ===
     /// Per-atom rows; `ATM_SLOTS=6` i32 entries each. Layout follows
-    /// `crate::basis_set::raw_atm_layout`.
+    /// `crate::raw_layout::*` (re-export of `cintx_compat::raw`).
     pub _atm: Vec<i32>,
     /// Per-shell rows; `BAS_SLOTS=8` i32 entries each. Layout follows
-    /// `crate::basis_set::raw_atm_layout`.
+    /// `crate::raw_layout::*` (re-export of `cintx_compat::raw`).
     pub _bas: Vec<i32>,
     /// Flat double array. First `PTR_ENV_START=20` slots are libcint reserved.
     pub _env: Vec<f64>,
@@ -230,15 +216,38 @@ pub struct Mole {
 }
 
 impl Mole {
-    /// Plan 02-04 implements `mol.build()` (basis load + flat-array projection).
-    /// Plan 02-02 (this plan) wires only the `format_atom` path which is
-    /// invoked from `pyscf_gto::build_from(MoleBuildArgs)`; calls to
-    /// `Mole::build()` directly return `NotYetImplemented` so callers
-    /// don't accidentally rely on a half-populated Mole.
+    /// Plan 02-04 implements `mol.build()` (basis load + flat-array projection)
+    /// via `pyscf_gto::M(MoleBuildArgs { ... })` / `pyscf_gto::build_from`. The
+    /// preferred entry-point in Phase 2 is `pyscf_gto::M(...)`; calling
+    /// `Mole::build()` on an already-`format_atom`-populated Mole succeeds
+    /// only if `_built` was already set by the gto crate. Direct callers who
+    /// haven't gone through the gto front-door get `NotYetImplemented` —
+    /// pyscf-core has zero-compute-deps (FOUND-02) so it cannot itself parse
+    /// basis input.
     pub fn build(&mut self) -> Result<&mut Self, PyscfRsError> {
+        if self._built {
+            return Ok(self);
+        }
         Err(PyscfRsError::NotYetImplemented {
             phase: 2,
-            what: "Mole::build full pipeline (GTO-04, plan 02-04)",
+            what: "Mole::build called directly on pyscf-core; use pyscf_gto::M(args) (GTO-04, plan 02-04)",
+        })
+    }
+
+    /// GTO-11 zero-copy accessor — returns the `Arc<BasisSet>` if built.
+    /// Cloning the returned `Arc` bumps the refcount; the underlying
+    /// `cintx_core::BasisSet` is never deep-copied.
+    pub fn basis_set(&self) -> Option<&Arc<BasisSet>> {
+        self.basis_set.as_ref()
+    }
+
+    /// GTO-11 — returns a clone of the inner `Arc<BasisSet>` (cheap, refcount bump).
+    /// Errors if `mol.build()` hasn't run.
+    pub fn cintx_basis(&self) -> Result<Arc<BasisSet>, PyscfRsError> {
+        self.basis_set.as_ref().cloned().ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(
+                "Mole not built — call pyscf_gto::M(args) or mol.build() first".into(),
+            ))
         })
     }
 
@@ -246,10 +255,10 @@ impl Mole {
 
     /// Per-atom nuclear charges, derived from `_atm[i * ATM_SLOTS + CHARGE_OF]`.
     ///
-    /// Plan 02-04 populates `_atm`; until then this returns an empty vec
-    /// for an unbuilt Mole. The signature is stable across Phase 2.
+    /// Plan 02-04 populates `_atm`; until `_built` is set, this falls back to
+    /// a symbol-table lookup. The signature is stable across Phase 2.
     pub fn atom_charges(&self) -> Vec<i32> {
-        use crate::basis_set::raw_atm_layout::{ATM_SLOTS, CHARGE_OF};
+        use crate::raw_layout::{ATM_SLOTS, CHARGE_OF};
         if self._atm.len() < self.natm * ATM_SLOTS {
             // Plan 02-02 only populates _atom (not _atm); fall back to a
             // symbol-table lookup so `atom_charges()` works for plan 02-02
