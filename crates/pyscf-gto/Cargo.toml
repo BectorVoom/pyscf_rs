@@ -38,3 +38,12 @@ serde_json    = { workspace = true }
 [dev-dependencies]
 approx        = { workspace = true }
 rstest        = { workspace = true }
+
+[features]
+default = []
+# Plan 02-09 GTO-12: gates the dump_*_for_oracle.rs integration tests
+# invoked by the pytest harness in tests/oracle/. Each helper is also
+# marked #[ignore], so even with the feature on `cargo test --workspace`
+# never runs them — the python harness invokes
+# `cargo test --features release-oracle-tests -- --ignored` explicitly.
+release-oracle-tests = []
