@@ -10,3 +10,23 @@ description = "Molecular structure & integrals via cintx. Implemented in Phase 2
 path = "src/lib.rs"
 
 [dependencies]
+# Phase 2 D-03: pyscf-gto re-uses cintx-{core,compat,rs} for the integral seam.
+# Path deps point at the sibling cintx workspace; the workspace [patch.crates-io]
+# entry for cintx (root Cargo.toml:93) keeps any transitive cintx publish
+# redirected to the same checkout. No `cubecl-*` here — algebra wall (Phase 1
+# ALG-06) forbids method crates from importing cubecl directly.
+cintx-core    = { path = "../../../cintx/crates/cintx-core" }
+cintx-compat  = { path = "../../../cintx/crates/cintx-compat" }
+cintx-rs      = { path = "../../../cintx/crates/cintx-rs" }
+cintx-ops     = { path = "../../../cintx/crates/cintx-ops" }
+cintx-runtime = { path = "../../../cintx/crates/cintx-runtime" }
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+serde         = { workspace = true, features = ["derive"] }
+serde_json    = { workspace = true }
+
+[dev-dependencies]
+approx        = { workspace = true }
+rstest        = { workspace = true }

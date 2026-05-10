@@ -319,6 +319,71 @@ dependencies = [
 ]
 
 [[package]]
+name = "cintx-compat"
+version = "0.1.0"
+dependencies = [
+ "cintx-core",
+ "cintx-cubecl",
+ "cintx-ops",
+ "cintx-runtime",
+ "smallvec",
+ "tracing",
+]
+
+[[package]]
+name = "cintx-core"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cintx-cubecl"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "cintx-core",
+ "cintx-ops",
+ "cintx-runtime",
+ "cubecl",
+ "cubecl-runtime 0.10.0",
+ "smallvec",
+ "tracing",
+]
+
+[[package]]
+name = "cintx-ops"
+version = "0.1.0"
+dependencies = [
+ "cintx-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cintx-rs"
+version = "0.1.0"
+dependencies = [
+ "cintx-compat",
+ "cintx-core",
+ "cintx-cubecl",
+ "cintx-ops",
+ "cintx-runtime",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cintx-runtime"
+version = "0.1.0"
+dependencies = [
+ "cintx-core",
+ "cintx-ops",
+ "tracing",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3217,6 +3282,21 @@ version = "0.1.0"
 [[package]]
 name = "pyscf-gto"
 version = "0.1.0"
+dependencies = [
+ "approx",
+ "cintx-compat",
+ "cintx-core",
+ "cintx-ops",
+ "cintx-rs",
+ "cintx-runtime",
+ "pyscf-algebra",
+ "pyscf-core",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
 
 [[package]]
 name = "pyscf-kernels"
@@ -5540,10 +5620,6 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[patch.unused]]
 name = "cintx"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "libxc_rs"
 version = "0.1.0"
 
 [[patch.unused]]
