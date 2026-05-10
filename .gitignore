@@ -92,4 +92,9 @@ tmp/
 target/
 Cargo.lock.local
 .cargo/config.toml.local
+# Cargo's standard multi-binary layout uses `src/bin/` directories. The
+# upstream Python `bin/` ignore (line 13) accidentally swallows them; un-ignore
+# the xtask bins explicitly so Plan 01-05 lint binaries are committed.
+!xtask/src/bin/
+!xtask/src/bin/**
 
