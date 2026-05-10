@@ -26,7 +26,9 @@ pub use amplitudes::Amplitudes;
 pub use basis_set::BasisSet;
 pub use density::Density;
 pub use energy::Energy;
-pub use error::{CoreError, PyscfRsError};
+pub use error::{BasisLoadError, CoreError, EcpLoadError, PyscfRsError};
 pub use mo::MOCoefficients;
-pub use mole::Mole;
+pub use mole::{
+    EcpShell, Mole, NuclearModel, ParsedAtom, ParsedBasis, ParsedEcp, ShellSpec, Unit,
+};
 pub use traits::{Gradient, IntegralEngine, KohnSham, Method, PostScf, Scf};

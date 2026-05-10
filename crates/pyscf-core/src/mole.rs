@@ -1,38 +1,421 @@
-//! Molecule type. Phase 1 declares the shape; Phase 2 (GTO-01..11)
-//! implements geometry/basis/ECP loading and the ≥30 attribute floor
-//! (GTO-08).
+//! Molecule type. Phase 2 plan 02-02 (GTO-08) implements the ≥30 attribute
+//! floor.
+//!
+//! Source-of-truth: `pyscf/gto/mole.py:2189+` `MoleBase` class declaration
+//! (every `self.X = Y` field initialiser maps to a `pub X: ...` field
+//! here) and the `format_atom` / `make_env` outputs at `mole.py:320-1105`.
+//!
+//! Slot layout for `_atm`, `_bas`, `_env`: `crate::basis_set::raw_atm_layout`
+//! (which is a TEMPORARY local mirror of `cintx_compat::raw`; D-03
+//! mandates that pyscf-rs reuse cintx's slot constants once plan 02-04
+//! pulls cintx-compat into pyscf-core's dep graph — at which point this
+//! local mirror is deleted).
+//!
+//! Plan 02-02 ships:
+//!   - The struct shape (≥30 fields satisfying GTO-08).
+//!   - Method-floor obligations: `atom_charges()`, `atom_coords()`,
+//!     `atom_coord(i)`, `mass_list()`, `enuc()`.
+//!   - `Unit` enum with `length_in_au()` + `from_str()`.
+//!   - `NuclearModel` enum.
+//!   - Type aliases / placeholder structs: `ParsedAtom`, `ParsedBasis`,
+//!     `ShellSpec`, `ParsedEcp`, `EcpShell`.
+//!   - A `Mole::build()` stub returning `NotYetImplemented` (plan 02-04
+//!     wires the real basis-load + projection).
+//!
+//! Plan 02-02 does NOT ship: `_atm`/`_bas`/`_env` population (02-04),
+//! basis ALIAS resolution (02-03), ECP loading (02-07), `eval_gto`
+//! (02-06), `dumps`/`loads`/`copy`/`set_geom_` (02-08).
 
 use crate::error::PyscfRsError;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-/// Molecular structure — atoms, basis set, charge, spin, electrons.
-/// Phase 1 stub: only the bare-minimum shape so downstream traits can
-/// reference `&Mole`. Phase 2 fills geometry parsing, basis loading,
-/// `_atm`/`_bas`/`_env` arrays, and the full ≥30 attribute surface
-/// (GTO-08 in REQUIREMENTS.md).
-#[derive(Debug, Default, Clone)]
+use crate::basis_set::BasisSet;
+
+/// Length unit for atom coordinates.
+///
+/// Internal storage is always Bohr (atomic units); `format_atom` converts
+/// from the user-supplied unit into Bohr at parse time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Unit {
+    /// Angstrom — upstream PySCF default. Conversion: 1 Å = 1.8897261339213 Bohr.
+    #[default]
+    Ang,
+    /// Bohr / Atomic Units — passes through unchanged.
+    Bohr,
+    /// Synonym for `Bohr` (`unit='AU'` upstream).
+    AU,
+}
+
+impl Unit {
+    /// Conversion factor to Bohr (the internal unit).
+    ///
+    /// 1.8897261339213 = CODATA 2014 Bohr-radius reciprocal in Å. Matches
+    /// upstream `pyscf/data/nist.py BOHR` (verbatim).
+    pub fn length_in_au(self) -> f64 {
+        match self {
+            Self::Ang => 1.8897261339213,
+            Self::Bohr | Self::AU => 1.0,
+        }
+    }
+
+    /// Parse from upstream string forms (`"Ang"`, `"Angstrom"`, `"ang"`,
+    /// `"B"`, `"Bohr"`, `"AU"`, `"au"`). Case-insensitive.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "ang" | "angstrom" | "a" => Some(Self::Ang),
+            "b" | "bohr" => Some(Self::Bohr),
+            "au" => Some(Self::AU),
+            _ => None,
+        }
+    }
+}
+
+/// Nuclear model — point / Gaussian-finite / ECP-fractional.
+///
+/// Mirrors libcint `NUC_MOD_OF` integer values per `cintx_compat::raw`:
+/// `POINT_NUC=1`, `GAUSSIAN_NUC=2`, `FRAC_CHARGE_NUC=3`. Note libcint uses
+/// 1/2/3 (NOT 0/1/2) — pyscf-rs follows cintx-compat exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NuclearModel {
+    #[default]
+    Point,
+    Gaussian,
+    FracCharge,
+}
+
+/// Parsed (symbol, [x, y, z]) pair — internal `_atom` representation.
+/// Coordinates are always in Bohr regardless of input `Unit`.
+pub type ParsedAtom = (String, [f64; 3]);
+
+/// Parsed basis-set entry (per element). Plan 02-03 fills the body; plan
+/// 02-02 (this plan) ships the placeholder shape so `Mole._basis` has a
+/// real type.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedBasis {
+    /// Per-shell `ShellSpec` (`(l, exponents, coeffs)`).
+    pub shells: Vec<ShellSpec>,
+}
+
+/// One shell specification — angular momentum + primitives + contraction
+/// matrix.
+#[derive(Debug, Clone, Default)]
+pub struct ShellSpec {
+    /// Angular momentum l (0=s, 1=p, 2=d, ...).
+    pub l: u8,
+    /// Primitive Gaussian exponents.
+    pub exponents: Vec<f64>,
+    /// Contraction-coefficient matrix `coeffs[ctr_idx][prim_idx]`
+    /// (F-order on flatten).
+    pub coeffs: Vec<Vec<f64>>,
+}
+
+/// Parsed ECP entry (per element). Plan 02-07 fills the body.
+#[derive(Debug, Clone, Default)]
+pub struct ParsedEcp {
+    /// Number of core electrons removed by the ECP.
+    pub n_core: u32,
+    /// Per-channel ECP shells. Plan 02-07 expands the field.
+    pub channels: Vec<EcpShell>,
+}
+
+/// One ECP channel shell. Plan 02-07 expands.
+#[derive(Debug, Clone, Default)]
+pub struct EcpShell {
+    /// l = -1 marks the local (UL) channel; 0..=5 marks projector channels.
+    pub l: i8,
+    pub n_powers: Vec<i32>,
+    pub exponents: Vec<f64>,
+    pub coeffs: Vec<f64>,
+}
+
+/// The ≥30-attribute Mole floor.
+///
+/// EVERY attribute in RESEARCH "Standard Stack" §"Mole Attribute Floor"
+/// is represented either as a public field or a public method (the lazy
+/// items — `enuc()`, `mass_list()`, `atom_charges()`, `atom_coords()`).
+///
+/// Source: `pyscf/gto/mole.py:2189+` `MoleBase` class.
+#[derive(Debug, Clone, Default)]
 pub struct Mole {
-    /// Atom positions in Bohr. Phase 2 parses from upstream PySCF
-    /// atom-input forms (string, list-of-tuples, file path, etc. —
-    /// GTO-01).
-    pub atom_coords: Vec<[f64; 3]>,
-    /// Atomic numbers, one per atom. Phase 2 fills.
-    pub atom_charges: Vec<u8>,
-    /// Total molecular charge (electrons subtracted). Phase 2 wires.
+    // === User input (preserved verbatim — items 1, 2, 31) ===
+    /// Raw user-supplied `atom=` argument (stringified for echo / dumps).
+    pub atom: String,
+    /// Raw user-supplied `basis=` argument (stringified for echo / dumps).
+    pub basis: String,
+    /// Raw user-supplied `ecp=` argument (item 31).
+    pub ecp: String,
+
+    // === Scalar molecular state (items 3, 4, 5, 12, 13, 14, 15, 16, 24, 27, 28, 29) ===
+    /// Total molecular charge (electrons subtracted).
     pub charge: i32,
-    /// Spin multiplicity − 1 (so singlet = 0). Phase 2 wires.
+    /// Multiplicity − 1 (singlet = 0).
     pub spin: i32,
-    /// Number of electrons. Phase 2 wires (computed from charges -
-    /// charge).
+    /// Number of electrons (computed: `sum(atom_charges) - charge`).
     pub nelectron: usize,
+    /// `false` = spherical AOs (default); `true` = Cartesian AOs.
+    pub cart: bool,
+    /// Verbosity 0..=9. Phase 3 wires to `tracing-subscriber`.
+    pub verbose: u8,
+    /// Memory ceiling in MB. Phase 6 CCSD-08 honours this.
+    pub max_memory: f64,
+    /// Length unit at input time (atom coordinates already converted to Bohr).
+    pub unit: Unit,
+    /// Optional log-file path. Phase 3 wires to a `tracing` writer.
+    pub output: Option<PathBuf>,
+    /// `true` once `Mole::build()` succeeds (plan 02-04 sets this).
+    pub _built: bool,
+    /// Symmetry detection. v1 is C1 only — always `false`.
+    pub symmetry: bool,
+    /// Symmetry group name. v1 is `"C1"` always.
+    pub groupname: String,
+    /// Top group name. v1 is `"C1"` always.
+    pub topgroup: String,
+
+    // === Derived from atom-input (items 6, 21) ===
+    /// Atom count. Item 6.
+    pub natm: usize,
+    /// `(symbol, [x, y, z]_in_Bohr)` pairs — internal _atom representation.
+    /// Item 21. Populated by `format_atom` (plan 02-02 wires).
+    pub _atom: Vec<ParsedAtom>,
+
+    // === Derived from basis (items 7, 8, 9, 10, 22) — plan 02-04 populates ===
+    /// Shell count.
+    pub nbas: usize,
+    /// Number of spherical AOs. Plan 02-04 populates.
+    pub nao_nr: usize,
+    /// Number of spinor AOs. Phase 2 stub OK; rare.
+    pub nao_2c: usize,
+    /// `ao_loc_nr` — cumulative AO offsets per shell. Plan 02-04 populates.
+    pub ao_loc_nr: Vec<i32>,
+    /// Per-element parsed basis. Plan 02-03 populates.
+    pub _basis: HashMap<String, ParsedBasis>,
+
+    // === ECP (items 20, 23) — plan 02-07 populates ===
+    /// `_ecpbas` — per-shell ECP rows, `n_ecp_shells * BAS_SLOTS (=8)` i32 elements.
+    pub _ecpbas: Vec<i32>,
+    /// Per-element parsed ECP. Plan 02-07 populates.
+    pub _ecp: HashMap<String, ParsedEcp>,
+
+    // === Flat-array projection (items 17, 18, 19) — plan 02-04 populates per D-03 ===
+    /// Per-atom rows; `ATM_SLOTS=6` i32 entries each. Layout follows
+    /// `crate::basis_set::raw_atm_layout`.
+    pub _atm: Vec<i32>,
+    /// Per-shell rows; `BAS_SLOTS=8` i32 entries each. Layout follows
+    /// `crate::basis_set::raw_atm_layout`.
+    pub _bas: Vec<i32>,
+    /// Flat double array. First `PTR_ENV_START=20` slots are libcint reserved.
+    pub _env: Vec<f64>,
+
+    // === Per-atom nuclear model overrides (items 25, 26) ===
+    /// Per-atom-symbol nuclear model override (default `Point`).
+    pub nucmod: HashMap<String, NuclearModel>,
+    /// Optional finite-nucleus zeta override per atom symbol.
+    pub nucprop: HashMap<String, f64>,
+
+    // === Cintx zero-copy basis (item driving GTO-11; plan 02-04 populates) ===
+    /// `Arc<BasisSet>` so `Mole.clone()` is cheap and `basis_set()`
+    /// returns a zero-copy borrow. Plan 02-04 wires `cintx_core::BasisSet`
+    /// here once the projection lands; plan 02-02 leaves this `None`.
+    pub basis_set: Option<Arc<BasisSet>>,
+
+    // === Lazy (items 30, 33) — methods, not fields ===
+    // enuc: f64                    — see method `enuc()` below
+    // mass: Vec<f64>               — see method `mass_list()` below
+
+    // === Out-of-scope (item 32) ===
+    /// Pseudopotentials (PBC). Always `None` in v1.
+    pub pseudo: Option<()>,
 }
 
 impl Mole {
-    /// Phase 2 (GTO-04) implements `mol.build()` to populate `_atm`,
-    /// `_bas`, `_env`. Phase 1 returns a not-yet-implemented error.
+    /// Plan 02-04 implements `mol.build()` (basis load + flat-array projection).
+    /// Plan 02-02 (this plan) wires only the `format_atom` path which is
+    /// invoked from `pyscf_gto::build_from(MoleBuildArgs)`; calls to
+    /// `Mole::build()` directly return `NotYetImplemented` so callers
+    /// don't accidentally rely on a half-populated Mole.
     pub fn build(&mut self) -> Result<&mut Self, PyscfRsError> {
         Err(PyscfRsError::NotYetImplemented {
             phase: 2,
-            what: "Mole::build (GTO-04)",
+            what: "Mole::build full pipeline (GTO-04, plan 02-04)",
         })
+    }
+
+    // ---------- Method-floor obligations (RESEARCH "Mole Attribute Floor" closing paragraph) ----------
+
+    /// Per-atom nuclear charges, derived from `_atm[i * ATM_SLOTS + CHARGE_OF]`.
+    ///
+    /// Plan 02-04 populates `_atm`; until then this returns an empty vec
+    /// for an unbuilt Mole. The signature is stable across Phase 2.
+    pub fn atom_charges(&self) -> Vec<i32> {
+        use crate::basis_set::raw_atm_layout::{ATM_SLOTS, CHARGE_OF};
+        if self._atm.len() < self.natm * ATM_SLOTS {
+            // Plan 02-02 only populates _atom (not _atm); fall back to a
+            // symbol-table lookup so `atom_charges()` works for plan 02-02
+            // tests. Plan 02-04 populates _atm and the slow path drops out.
+            return self
+                ._atom
+                .iter()
+                .map(|(s, _)| charge_for_symbol_internal(s).unwrap_or(0))
+                .collect();
+        }
+        (0..self.natm)
+            .map(|i| self._atm[i * ATM_SLOTS + CHARGE_OF])
+            .collect()
+    }
+
+    /// Per-atom coordinates in Bohr.
+    pub fn atom_coords(&self) -> Vec<[f64; 3]> {
+        self._atom.iter().map(|(_, xyz)| *xyz).collect()
+    }
+
+    /// Single-atom coordinate accessor (in Bohr).
+    pub fn atom_coord(&self, i: usize) -> [f64; 3] {
+        self._atom[i].1
+    }
+
+    /// Atomic mass list (item 33 lazy).
+    ///
+    /// Plan 02-02 returns a stub `vec![0.0; natm]`; Phase 4 DFT may wire
+    /// real ATOMIC_MASS values from `pyscf/data/elements.py` if VV10 needs
+    /// them.
+    pub fn mass_list(&self) -> Vec<f64> {
+        vec![0.0; self.natm]
+    }
+
+    /// Classical Coulomb (nuclear repulsion) energy (item 30 lazy).
+    ///
+    /// Source: `pyscf/gto/mole.py:1522` `classical_coulomb_energy`.
+    /// Coordinates are already in Bohr (Mole invariant), so no unit
+    /// conversion is needed here.
+    pub fn enuc(&self) -> f64 {
+        let coords = self.atom_coords();
+        let charges = self.atom_charges();
+        let mut e = 0.0;
+        for i in 0..self.natm {
+            for j in (i + 1)..self.natm {
+                let dx = coords[i][0] - coords[j][0];
+                let dy = coords[i][1] - coords[j][1];
+                let dz = coords[i][2] - coords[j][2];
+                let r = (dx * dx + dy * dy + dz * dz).sqrt();
+                if r > 0.0 {
+                    e += (charges[i] as f64) * (charges[j] as f64) / r;
+                }
+            }
+        }
+        e
+    }
+}
+
+/// Internal helper: minimal symbol→atomic-number table sufficient for
+/// plan 02-02's `atom_charges()` fallback (Z=1..36 + ghost). pyscf-gto
+/// owns the complete table + symbol-suffix normalisation; this fallback
+/// only handles the canonical leading-symbol case.
+fn charge_for_symbol_internal(symb: &str) -> Option<i32> {
+    let alpha_end = symb
+        .find(|c: char| !c.is_alphabetic())
+        .unwrap_or(symb.len());
+    let leading = &symb[..alpha_end];
+    match leading {
+        "H" => Some(1),
+        "He" => Some(2),
+        "Li" => Some(3),
+        "Be" => Some(4),
+        "B" => Some(5),
+        "C" => Some(6),
+        "N" => Some(7),
+        "O" => Some(8),
+        "F" => Some(9),
+        "Ne" => Some(10),
+        "Na" => Some(11),
+        "Mg" => Some(12),
+        "Al" => Some(13),
+        "Si" => Some(14),
+        "P" => Some(15),
+        "S" => Some(16),
+        "Cl" => Some(17),
+        "Ar" => Some(18),
+        "K" => Some(19),
+        "Ca" => Some(20),
+        "Sc" => Some(21),
+        "Ti" => Some(22),
+        "V" => Some(23),
+        "Cr" => Some(24),
+        "Mn" => Some(25),
+        "Fe" => Some(26),
+        "Co" => Some(27),
+        "Ni" => Some(28),
+        "Cu" => Some(29),
+        "Zn" => Some(30),
+        "Ga" => Some(31),
+        "Ge" => Some(32),
+        "As" => Some(33),
+        "Se" => Some(34),
+        "Br" => Some(35),
+        "Kr" => Some(36),
+        "GHOST" | "X" | "Ghost" | "ghost" => Some(0),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unit_from_str_ang_variants() {
+        assert_eq!(Unit::from_str("Ang"), Some(Unit::Ang));
+        assert_eq!(Unit::from_str("ang"), Some(Unit::Ang));
+        assert_eq!(Unit::from_str("Angstrom"), Some(Unit::Ang));
+        assert_eq!(Unit::from_str("A"), Some(Unit::Ang));
+    }
+
+    #[test]
+    fn unit_from_str_bohr_variants() {
+        assert_eq!(Unit::from_str("Bohr"), Some(Unit::Bohr));
+        assert_eq!(Unit::from_str("bohr"), Some(Unit::Bohr));
+        assert_eq!(Unit::from_str("B"), Some(Unit::Bohr));
+        assert_eq!(Unit::from_str("AU"), Some(Unit::AU));
+        assert_eq!(Unit::from_str("au"), Some(Unit::AU));
+    }
+
+    #[test]
+    fn unit_from_str_unknown() {
+        assert_eq!(Unit::from_str("nm"), None);
+        assert_eq!(Unit::from_str(""), None);
+    }
+
+    #[test]
+    fn unit_length_in_au_factors() {
+        assert_eq!(Unit::Ang.length_in_au(), 1.8897261339213);
+        assert_eq!(Unit::Bohr.length_in_au(), 1.0);
+        assert_eq!(Unit::AU.length_in_au(), 1.0);
+    }
+
+    #[test]
+    fn default_mole_enuc_is_zero() {
+        let mol = Mole::default();
+        assert_eq!(mol.enuc(), 0.0);
+    }
+
+    #[test]
+    fn default_mole_mass_list_empty() {
+        let mol = Mole::default();
+        assert!(mol.mass_list().is_empty());
+    }
+
+    #[test]
+    fn enuc_two_atom_classical() {
+        let mut mol = Mole::default();
+        mol.natm = 2;
+        mol._atom = vec![
+            ("H".to_string(), [0.0, 0.0, 0.0]),
+            ("H".to_string(), [0.0, 0.0, 1.4]),
+        ];
+        // V_NN = Z_H * Z_H / r = 1 * 1 / 1.4
+        let expected = 1.0 / 1.4;
+        let got = mol.enuc();
+        assert!((got - expected).abs() < 1e-12, "got {got}, expected {expected}");
     }
 }
