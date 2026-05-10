@@ -65,7 +65,19 @@ Plans:
   3. `mol.intor('int2e')`, `mol.intor('int1e_ovlp_sph')`, and the integral families upstream PySCF supports for SCF/DFT/MP2/CCSD/grad all dispatch to `cintx` and produce arrays that match upstream within the cintx oracle tolerance; F-order layout is preserved on output where upstream returns F-order (Pitfall 8 mitigation).
   4. `eval_gto(mol, name, coords, ...)` for `GTOval`, `GTOval_sph`, `GTOval_deriv1`, `GTOval_deriv2`, `GTOval_ip`, `GTOval_ig` matches upstream values element-wise on a 1000-point grid (GTO-07).
   5. `Mole` exposes the ≥30 attribute floor (`atom`, `basis`, `charge`, `spin`, `nelectron`, `natm`, `nbas`, `nao_nr`, `nao_2c`, `ao_loc_nr`, `ao_labels`, `cart`, `verbose`, `max_memory`, `unit`, `output`, `_atm`, `_bas`, `_env`, …); `mol.dumps()`/`gto.Mole.loads()` JSON round-trip; `mol.copy()` deep-copies; `mol.set_geom_(new_atom)` mutates in place and returns self (GTO-08, GTO-09, GTO-10).
-**Plans**: TBD
+**Plans**: 10 plans across 10 waves (1 Wave 0 risk-buy-down + 8 implementation + 1 deferred gap-closure for cintx ECP)
+
+Plans:
+- [ ] 02-01-PLAN.md — Wave 0 scaffolding: cintx round-trip smoke, cubecl-cpu kernel smoke, F/C-order layout table, algebra-wall allowlist update, oracle harness scaffold, PYSCF_BASIS_PATH docs (W0-T1..W0-T6)
+- [ ] 02-02-PLAN.md — Mole struct + ≥30-attribute floor + format_atom port (4-of-5 atom-input forms; 5th deferred to Phase 3) (GTO-01, GTO-08)
+- [ ] 02-03-PLAN.md — Basis loader (PYSCF_BASIS_PATH resolver + ALIAS table + NWChem/NWChem-ECP/CP2K parser dispatch + format_basis dispatcher) (GTO-02, GTO-03)
+- [ ] 02-04-PLAN.md — Mole↔cintx bridge (zero-copy BasisSet re-export + make_env flat-array projection) (GTO-04, GTO-11)
+- [ ] 02-05-PLAN.md — mol.intor(name) cintx dispatcher (with F-order layout preservation per Pitfall 8) (GTO-06)
+- [ ] 02-06-PLAN.md — eval_gto cubecl kernel in pyscf-kernels + algebra-wall-friendly user wrapper in pyscf-gto (GTO-07; s-shells fully implemented; l ≥ 1 deferred to Phase 4 DFT)
+- [ ] 02-07-PLAN.md — ECP loading parser + EcpEngine trait + EcpEngineNotAvailable stub + intor dispatcher routing (GTO-05 loading half)
+- [ ] 02-08-PLAN.md — mol.dumps()/Mole::loads() JSON round-trip + mol.copy() + mol.set_geom_() in-place mutation per Pattern 5 (GTO-09, GTO-10)
+- [ ] 02-09-PLAN.md — Phase 2 verification rollup: pytest oracle harness for byte-identity + intor + eval_gto + JSON interop + builtin basis sweep + STATE/VALIDATION updates (verifies GTO-01..11)
+- [ ] 02-10-PLAN.md — DEFERRED gap-closure: cintx ECP merge → swap EcpEngineNotAvailable for cintx-backed CintxEcpEngine; closes GTO-05 evaluation half (status: PENDING_CINTX_ECP_MERGE)
 
 ### Phase 3: SCF + PyO3 bindings
 **Goal**: A Python user runs `from pyscf import scf; scf.RHF(mol).kernel()` from an unmodified existing PySCF script and gets the same total energy as upstream PySCF to ≤1 µHartree, while every PyO3 contract that downstream methods inherit (subclass-override dispatch, NumPy contiguity, GIL release seam, panic-to-exception, abi3 wheel) is locked and CI-enforced on this single small surface (RHF on H2O/cc-pVDZ).
@@ -148,7 +160,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
-| 2. GTO | 0/TBD | Not started | - |
+| 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/TBD | Not started | - |
 | 4. DFT | 0/TBD | Not started | - |
 | 5. MP2 | 0/TBD | Not started | - |
