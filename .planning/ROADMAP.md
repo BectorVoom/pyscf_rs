@@ -68,7 +68,7 @@ Plans:
 **Plans**: 10 plans across 10 waves (1 Wave 0 risk-buy-down + 8 implementation + 1 deferred gap-closure for cintx ECP)
 
 Plans:
-- [ ] 02-01-PLAN.md — Wave 0 scaffolding: cintx round-trip smoke, cubecl-cpu kernel smoke, F/C-order layout table, algebra-wall allowlist update, oracle harness scaffold, PYSCF_BASIS_PATH docs (W0-T1..W0-T6)
+- [x] 02-01-PLAN.md — Wave 0 scaffolding: cintx round-trip smoke, cubecl-cpu kernel smoke, F/C-order layout table, algebra-wall allowlist update, oracle harness scaffold, PYSCF_BASIS_PATH docs (W0-T1..W0-T6)
 - [ ] 02-02-PLAN.md — Mole struct + ≥30-attribute floor + format_atom port (4-of-5 atom-input forms; 5th deferred to Phase 3) (GTO-01, GTO-08)
 - [ ] 02-03-PLAN.md — Basis loader (PYSCF_BASIS_PATH resolver + ALIAS table + NWChem/NWChem-ECP/CP2K parser dispatch + format_basis dispatcher) (GTO-02, GTO-03)
 - [ ] 02-04-PLAN.md — Mole↔cintx bridge (zero-copy BasisSet re-export + make_env flat-array projection) (GTO-04, GTO-11)

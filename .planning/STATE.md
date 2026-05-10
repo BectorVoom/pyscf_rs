@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 2 context gathered
-last_updated: "2026-05-10T09:20:24.226Z"
-last_activity: 2026-05-10 -- Phase 02 planning complete
+stopped_at: Completed 02-01-PLAN.md (Wave 0 risk buy-down)
+last_updated: "2026-05-10T10:29:18.492Z"
+last_activity: 2026-05-10
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 19
-  completed_plans: 8
-  percent: 42
+  completed_plans: 9
+  percent: 47
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 01 — foundation
+**Current focus:** Phase 02 — gto
 
 ## Current Position
 
-Phase: 01 (foundation) — EXECUTING
-Plan: 1 of 9
+Phase: 02 (gto) — EXECUTING
+Plan: 2 of 10
 Status: Ready to execute
-Last activity: 2026-05-10 -- Phase 02 planning complete
+Last activity: 2026-05-10
 
 Progress: [█████████░] 88% (7/7 plans done; verification gaps remain)
 
@@ -52,6 +52,7 @@ Progress: [█████████░] 88% (7/7 plans done; verification gap
 - Trend: — (no data yet)
 
 *Updated after each plan completion*
+| Phase 02 P01 | 12min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,9 @@ Recent decisions affecting current work:
 - Algebra integration (2026-05-10): added a dedicated `pyscf-algebra` crate as the single owner of all linear algebra; only `pyscf-algebra` (and `pyscf-runtime` for client construction) may depend on `cubecl-*` runtime crates — enforced by a `cargo metadata` dependency-wall lint. Workspace grows 14 → 15 members.
 - Algebra integration (2026-05-10): workspace `gpu` umbrella feature is OFF by default; CPU is the default backend. Per-backend features `cuda`/`wgpu`/`rocm`/`metal` opt in to each cubecl runtime at compile time. `PYSCF_BACKEND` env var selects among compiled-in backends at runtime; unrecognised/uncompiled values fall back to CPU with a `tracing::warn!`.
 - Algebra integration (2026-05-10): host eigh/Cholesky/QR/SVD remain on `faer 0.24` behind the `pyscf-algebra` surface — even on a GPU build, these routines copy to host. Documented as the single intentional host-fallback path until `cubecl-linalg` ships an eigh.
+- [Phase 02]: Wave 0 complete: cintx + cubecl-cpu reach proven; pyscf-kernels added to algebra-wall allowlist; 23-entry intor layout table; oracle harness scaffold + env-var docs in place
+- [Phase 02]: pyscf-gto uses direct per-member cintx path-deps (cintx-core, cintx-rs, cintx-compat, cintx-ops, cintx-runtime) — workspace [patch.crates-io] cintx redirect alone is insufficient for subcrate consumers
+- [Phase 02]: cubecl 0.10.0 ArrayArg::from_raw_parts signature is (Handle, usize) by value — no vectorization arg, no turbofish (older 0.9-era README sketch is stale)
 
 ### Pending Todos
 
@@ -99,6 +103,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-10T08:12:40.394Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-gto/02-CONTEXT.md
+Last session: 2026-05-10T10:29:18.489Z
+Stopped at: Completed 02-01-PLAN.md (Wave 0 risk buy-down)
+Resume file: None
