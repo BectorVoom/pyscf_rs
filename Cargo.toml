@@ -1,0 +1,87 @@
+[workspace]
+members = [
+    "crates/pyscf-rs",
+    "crates/pyscf-core",
+    "crates/pyscf-runtime",
+    "crates/pyscf-algebra",
+    "crates/pyscf-kernels",
+    "crates/pyscf-gto",
+    "crates/pyscf-scf",
+    "crates/pyscf-dft",
+    "crates/pyscf-mp2",
+    "crates/pyscf-ccsd",
+    "crates/pyscf-grad",
+    "crates/pyscf-geomopt",
+    "crates/pyscf-py",
+    "crates/pyscf-oracle",
+    "crates/pyscf-bench",
+    "xtask",
+]
+exclude = []
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+license = "Apache-2.0"
+repository = "https://github.com/BectorVoom/pyscf_rs"
+authors = ["pyscf-rs contributors"]
+
+[workspace.dependencies]
+# Cubecl pivot — all eight must move in lockstep (FOUND-04, D-13). Per
+# RESEARCH §"Standard Stack" verified 2026-05-10.
+cubecl          = { version = "=0.10.0" }
+cubecl-runtime  = { version = "=0.10.0" }
+cubecl-cpu      = { version = "=0.10.0" }
+cubecl-cuda     = { version = "=0.10.0" }
+cubecl-wgpu     = { version = "=0.10.0" }
+cubecl-hip      = { version = "=0.10.0" }
+# Version skew: cubecl-matmul / cubecl-reduce 0.10.0 unpublished as of
+# 2026-05-10 (RESEARCH Pitfall 1). Pinned at the 0.9.0-pre.5 ABI; build-
+# verification test in Plan 04 confirms compatibility with cubecl-runtime
+# 0.10.0 before any GEMM call site lands.
+cubecl-matmul   = { version = "=0.9.0-pre.5" }
+cubecl-reduce   = { version = "=0.9.0-pre.5" }
+# Adapter feature inspection. Pinned by cubecl-wgpu transitively.
+wgpu            = "29.0.3"
+# Host eigh/Cholesky/QR/SVD per ALG-05.
+faer            = "0.24.0"
+# Logging — FOUND-09 + ALG-08.
+tracing         = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["fmt"] }
+# Common utility deps.
+bytemuck        = { version = "1", features = ["derive"] }
+thiserror       = "=2.0.18"
+serde           = { version = "=1.0", features = ["derive"] }
+serde_json      = "=1.0.149"
+anyhow          = "=1.0.102"
+# Test utilities.
+approx          = "=0.5.1"
+rstest          = "=0.26.1"
+
+# FOUND-07: panic=abort on shipped artifacts.
+[profile.release]
+panic = "abort"
+lto = "thin"
+codegen-units = 16
+strip = "symbols"
+
+# FOUND-05 + Claude's-discretion §5 + §6: oracle profile is FMA-free.
+# rustflags live in .cargo/config.toml (Cargo profiles cannot carry
+# rustflags directly — RESEARCH Pitfall 2).
+[profile.release-oracle]
+inherits = "release"
+panic = "abort"
+lto = "off"
+codegen-units = 1
+opt-level = 3
+debug = 1
+
+# Sibling-crate sourcing — D-12 + D-13.
+# Phase 1 ships current default-branch HEAD SHAs. ORACLE-05 nightly CI
+# (Plan 06) bumps these via `cargo update -p cintx -p libxc_rs -p xcfun_rs`.
+[patch.crates-io]
+cintx     = { git = "https://github.com/BectorVoom/cintx.git",     branch = "main" }
+libxc_rs  = { git = "https://github.com/BectorVoom/libxc_rs.git",  branch = "main" }
+xcfun_rs  = { git = "https://github.com/BectorVoom/xcfun_rs.git",  branch = "master" }
