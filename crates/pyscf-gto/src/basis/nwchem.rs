@@ -50,10 +50,19 @@ pub fn parse_nwchem(
         if line.is_empty() {
             continue;
         }
-        // Skip all-uppercase BASIS / END / SET headers.
+        // Skip all-uppercase BASIS / END / SET headers. A bare `ECP`
+        // line marks the end of basis-set data in mixed files like
+        // `lanl2dz.dat` (which carries both basis blocks AND ECP blocks
+        // in the same .dat). Plan 02-07 (GTO-05 loading half) needs the
+        // basis parser to stop at the ECP boundary; the ECP parser
+        // (`nwchem_ecp::parse_nwchem_ecp`) handles the ECP section.
         let upper = line.to_ascii_uppercase();
         if upper.starts_with("BASIS") || upper.starts_with("END") {
             continue;
+        }
+        if upper == "ECP" {
+            // Flush any pending basis shell, then stop parsing.
+            break;
         }
 
         // Tokenise.
