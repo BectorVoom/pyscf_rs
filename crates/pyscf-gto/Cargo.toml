@@ -22,6 +22,10 @@ cintx-ops     = { path = "../../../cintx/crates/cintx-ops" }
 cintx-runtime = { path = "../../../cintx/crates/cintx-runtime" }
 pyscf-core    = { path = "../pyscf-core" }
 pyscf-algebra = { path = "../pyscf-algebra" }
+# Plan 02-04: gto_norm + _nomalize_contracted_ao need Γ(x) — libm::tgamma.
+# libm is already transitively in the dep graph via faer; declared explicitly
+# here so the `make_env` normalisation path doesn't depend on a transitive dep.
+libm          = "0.2"
 thiserror     = { workspace = true }
 tracing       = { workspace = true }
 serde         = { workspace = true, features = ["derive"] }

@@ -11,10 +11,11 @@ pub mod basis; // Plan 02-03 — GTO-03 (basis loading).
 pub mod format_atom;
 pub mod format_basis; // Plan 02-03 — GTO-02 (11→5 input-form dispatch).
 pub mod layout_table; // Wave 0 (plan 02-01); consumed by intor.rs in 02-05.
+pub mod make_env; // Plan 02-04 — GTO-04 (flat-array projection, D-03).
+pub mod projection; // Plan 02-04 — GTO-11 (zero-copy cintx_core::BasisSet build).
 pub mod types;
 
-// Plans 02-04..02-08 add: make_env, intor, eval_gto, ecp_engine_stub,
-// dumps_loads.
+// Plans 02-05..02-08 add: intor, eval_gto, ecp_engine_stub, dumps_loads.
 
 pub use basis::{load_basis, parse as parse_basis};
 pub use format_basis::format_basis;
@@ -102,19 +103,33 @@ pub fn build_from(
     mol.nelectron = nelec as usize;
 
     // GTO-02: format_basis — populate `mol._basis` (per-element-symbol map of
-    // ParsedBasis). Plan 02-03 (this commit) wires the dispatch + loader; the
-    // cintx Arc<BasisSet> projection (`mol.basis_set`) stays None until plan
-    // 02-04 runs make_env over `mol._basis`.
+    // ParsedBasis). Plan 02-03 wired the dispatch + loader.
     let parsed_basis = format_basis::format_basis(&args.basis, &mol._atom)?;
     mol._basis = parsed_basis;
 
-    // Plan 02-04 will populate _atm/_bas/_env/ao_loc_nr/nao_nr/basis_set
-    // here. For now those stay at Default::default() (empty Vecs / 0 / None).
-    //
-    // Mole is "built" only after plan 02-04 wires the basis projection.
-    // Leave _built = false so calls to `mol.intor(...)` (when 02-05 lands them)
-    // fail early on an unbuilt Mole.
-    mol._built = false;
+    // GTO-04 + GTO-11 (plan 02-04, this commit): project to libcint flat
+    // arrays + build the zero-copy cintx_core::BasisSet Arc.
+    let env_out = make_env::make_env(&mol._atom, &mol._basis, mol.cart);
+    mol._atm = env_out._atm;
+    mol._bas = env_out._bas;
+    mol._env = env_out._env;
+    mol.ao_loc_nr = env_out.ao_loc_nr;
+    mol.nao_nr = env_out.nao_nr;
+    mol.nbas = mol._bas.len() / pyscf_core::raw_layout::BAS_SLOTS;
+    mol.nao_2c = 0; // Phase 2 stub — spinor not in scope; Phase 3 may extend.
+
+    // GTO-11: zero-copy Arc<BasisSet>. Stored in mol.basis_set; consumers
+    // (02-05 intor, 02-06 eval_gto, SCF, DFT, ...) clone the Arc rather than
+    // rebuilding the typed view.
+    mol.basis_set = Some(projection::build_cintx_basis_set(
+        &mol._atom,
+        &mol._basis,
+        mol.cart,
+    )?);
+
+    // Mark built — `Mole::build()` succeeds, `mol.intor(...)` (when 02-05
+    // lands it) is allowed to dispatch.
+    mol._built = true;
 
     Ok(())
 }

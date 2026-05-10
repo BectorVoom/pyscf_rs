@@ -3291,6 +3291,7 @@ dependencies = [
  "cintx-ops",
  "cintx-rs",
  "cintx-runtime",
+ "libm",
  "pyscf-algebra",
  "pyscf-core",
  "rstest",

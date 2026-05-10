@@ -72,17 +72,18 @@ fn h2o_attribute_floor_present_and_defaults_sane() {
     assert_eq!(mol.topgroup, "C1");
     assert_eq!(mol.unit, Unit::Bohr);
 
-    // Plan 02-04 (not this plan) populates these — assert they are at
-    // default for the 02-02 deliverable:
-    assert!(mol._atm.is_empty(), "02-04 will populate _atm");
-    assert!(mol._bas.is_empty(), "02-04 will populate _bas");
-    assert!(mol._env.is_empty(), "02-04 will populate _env");
+    // Plan 02-04 (this commit) populates the flat-array projection + the
+    // zero-copy cintx_core::BasisSet Arc. Assertions flipped from "empty"
+    // (the 02-02 deliverable) to "populated" (the 02-04 contract).
+    assert!(!mol._atm.is_empty(), "02-04 populates _atm");
+    assert!(!mol._bas.is_empty(), "02-04 populates _bas");
+    assert!(!mol._env.is_empty(), "02-04 populates _env");
     assert!(
-        mol.basis_set.is_none(),
-        "02-04 will populate basis_set: Arc<BasisSet>"
+        mol.basis_set.is_some(),
+        "02-04 populates basis_set: Arc<BasisSet> (GTO-11 zero-copy)"
     );
     assert!(
-        !mol._built,
+        mol._built,
         "02-04 sets _built=true after the basis projection"
     );
 
