@@ -147,6 +147,41 @@ pub fn build_from(
         mol.cart,
     )?);
 
+    // Plan 02-07 (GTO-05 loading half): ECP processing.
+    //
+    // Order matters: `make_env` (above) populates `_atm`, then
+    // `make_ecp_env` mutates `_atm[CHARGE_OF]` per Pitfall 2. Doing
+    // ECP processing AFTER make_env keeps the Pitfall-2 contract
+    // ("subtract once") inside a single function.
+    let parsed_ecp = format_ecp::format_ecp(&args.ecp, &mol._atom)?;
+    mol._ecp = parsed_ecp;
+    if !mol._ecp.is_empty() {
+        mol._ecpbas = format_ecp::make_ecp_env(
+            &mol._atom,
+            &mol._ecp,
+            &mut mol._atm,
+            &mut mol._env,
+        );
+
+        // Recompute `nelectron` because CHARGE_OF was decremented for
+        // ECP atoms.
+        use pyscf_core::raw_layout::{ATM_SLOTS, CHARGE_OF};
+        let total_z: i32 = (0..mol.natm)
+            .map(|i| mol._atm[i * ATM_SLOTS + CHARGE_OF])
+            .sum();
+        let nelec = total_z - mol.charge;
+        if nelec < 0 {
+            return Err(pyscf_core::PyscfRsError::Core(
+                pyscf_core::CoreError::InvalidMolecule(format!(
+                    "ECP processing produced negative electron count: \
+                     total_valence_Z={total_z}, charge={}",
+                    mol.charge,
+                )),
+            ));
+        }
+        mol.nelectron = nelec as usize;
+    }
+
     // Mark built — `Mole::build()` succeeds, `mol.intor(...)` (when 02-05
     // lands it) is allowed to dispatch.
     mol._built = true;

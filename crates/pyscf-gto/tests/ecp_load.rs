@@ -77,6 +77,7 @@ fn ecp_per_element_routing() {
 }
 
 #[test]
+#[allow(non_snake_case)]
 fn full_pipeline_cu_lanl2dz_via_M() {
     // End-to-end: M(...) builds Cu/lanl2dz; CHARGE_OF subtraction
     // happens; nelectron correct.

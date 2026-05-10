@@ -37,6 +37,17 @@ pub fn parse_nwchem_ecp(
     let mut current: Option<EcpShell> = None;
     let mut active_for_symbol = false;
     let mut found_symbol = false;
+    // Mixed .dat files (e.g. `lanl2dz.dat`) carry both basis blocks
+    // AND ECP blocks separated by an `END` line and an `ECP` header.
+    // The ECP parser must IGNORE everything before the bare `ECP`
+    // line (otherwise basis primitives get misread as ECP rows).
+    //
+    // If the source text contains an `ECP` marker, gate parsing on it;
+    // otherwise treat the entire input as the ECP block (matches the
+    // `EcpInput::NwchemEcpText` inline-fixture path).
+    let mut in_ecp_section = !text
+        .lines()
+        .any(|l| l.split('#').next().unwrap_or("").trim().eq_ignore_ascii_case("ECP"));
 
     for (i, raw_line) in text.lines().enumerate() {
         let line = match raw_line.find('#') {
@@ -48,7 +59,17 @@ pub fn parse_nwchem_ecp(
             continue;
         }
         let upper = line.to_ascii_uppercase();
-        if upper == "ECP" || upper == "END" {
+        if upper == "ECP" {
+            in_ecp_section = true;
+            // Reset any half-built state — the basis section is over.
+            current = None;
+            active_for_symbol = false;
+            continue;
+        }
+        if !in_ecp_section {
+            continue;
+        }
+        if upper == "END" {
             continue;
         }
 
