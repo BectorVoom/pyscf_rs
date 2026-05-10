@@ -2,7 +2,11 @@
 
 use pyscf_runtime::{BackendKind, DType};
 
-#[derive(Debug)]
+// NOTE: `ComputeClient<R>` does not implement `Debug` in cubecl 0.10.0
+// (the inner Server/Channel types are not Debug). We provide a manual
+// `Debug` impl that prints only the backend kind — sufficient for
+// tracing diagnostics; printing channel internals would be noisy and
+// non-portable across cubecl backends.
 pub enum AlgebraClient {
     Cpu(cubecl::client::ComputeClient<cubecl_cpu::CpuRuntime>),
     #[cfg(feature = "cuda")]
@@ -11,6 +15,14 @@ pub enum AlgebraClient {
     Wgpu(cubecl::client::ComputeClient<cubecl_wgpu::WgpuRuntime>),
     #[cfg(feature = "rocm")]
     Rocm(cubecl::client::ComputeClient<cubecl_hip::HipRuntime>),
+}
+
+impl std::fmt::Debug for AlgebraClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AlgebraClient")
+            .field("kind", &self.kind().name())
+            .finish()
+    }
 }
 
 impl AlgebraClient {
