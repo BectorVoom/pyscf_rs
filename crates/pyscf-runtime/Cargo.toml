@@ -1,0 +1,45 @@
+[package]
+name = "pyscf-runtime"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Runtime backend selection (BackendKind, probes), WorkspacePool, tracing init"
+
+[lib]
+path = "src/lib.rs"
+
+# Per-backend feature gating — mirrors cintx-runtime pattern (PATTERNS row
+# "pyscf-runtime/Cargo.toml"). pyscf-algebra forwards its own per-backend
+# features here (e.g. pyscf-algebra `cuda = ["pyscf-runtime/cuda"]`).
+#
+# ALG-06: this crate is one of the two crates allowed to depend on
+# cubecl-*. Probes need cubecl-cuda/cubecl-wgpu/cubecl-hip for client
+# construction (D-10).
+[features]
+default = ["cpu"]
+cpu     = ["dep:cubecl", "dep:cubecl-cpu"]
+cuda    = ["dep:cubecl", "dep:cubecl-cuda"]
+wgpu    = ["dep:cubecl", "dep:cubecl-wgpu", "dep:wgpu"]
+rocm    = ["dep:cubecl", "dep:cubecl-hip"]
+# `metal = wgpu` alias — cubecl-metal does not exist on crates.io.
+# cintx-cubecl precedent (PATTERNS Shared "Per-backend feature naming").
+metal   = ["wgpu"]
+
+[dependencies]
+pyscf-core   = { path = "../pyscf-core" }
+thiserror    = { workspace = true }
+tracing      = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# cubecl deps gated per feature. ALG-06 allows pyscf-runtime to consume
+# these for low-level probe + client construction.
+cubecl       = { workspace = true, optional = true }
+cubecl-cpu   = { workspace = true, optional = true }
+cubecl-cuda  = { workspace = true, optional = true }
+cubecl-wgpu  = { workspace = true, optional = true }
+cubecl-hip   = { workspace = true, optional = true }
+wgpu         = { workspace = true, optional = true }
+
+[dev-dependencies]
+rstest       = { workspace = true }
