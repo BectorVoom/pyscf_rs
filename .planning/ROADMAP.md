@@ -3,12 +3,12 @@
 **Created:** 2026-05-10
 **Granularity:** standard (5-8 target; landed at 8)
 **Mode:** standard (Horizontal Layers — each phase is a complete chemistry module / cross-cutting concern, not a vertical user-story slice)
-**Total v1 requirements:** 113 (10 FOUND + 11 GTO + 14 SCF + 11 DFT + 8 MP2 + 11 CCSD + 10 GRAD + 7 GEOMOPT + 9 BIND + 9 ORACLE + 7 PERF + 6 DIST)
-**Coverage:** 113 / 113 mapped
+**Total v1 requirements:** 121 (10 FOUND + 8 ALG + 11 GTO + 14 SCF + 11 DFT + 8 MP2 + 11 CCSD + 10 GRAD + 7 GEOMOPT + 9 BIND + 9 ORACLE + 7 PERF + 6 DIST)
+**Coverage:** 121 / 121 mapped
 
 ## Overview
 
-pyscf_rs is a pure-Rust rewrite of PySCF that ships as a `pip install`-able wheel preserving the `from pyscf import gto, scf, dft, mp, cc, grad, geomopt` import surface. The architecture is locked: a 14-crate horizontal-layered façade workspace mirroring `cintx`/`xcfun_rs`, with cubecl 0.10.0 as the sole compute primitive (CPU SIMD/CUDA/WGPU/ROCm), faer 0.24 for host linear algebra, PyO3 0.28 for the Python boundary, and PySCF-as-live-oracle in CI.
+pyscf_rs is a pure-Rust rewrite of PySCF that ships as a `pip install`-able wheel preserving the `from pyscf import gto, scf, dft, mp, cc, grad, geomopt` import surface. The architecture is locked: a 15-crate horizontal-layered façade workspace mirroring `cintx`/`xcfun_rs` (with one new member, `pyscf-algebra`, owning all linear algebra), cubecl 0.10.0 as the sole compute primitive (CPU SIMD/CUDA/WGPU/ROCm), faer 0.24 used only for host eigh/Cholesky/QR/SVD behind the algebra crate's surface, PyO3 0.28 for the Python boundary, and PySCF-as-live-oracle in CI. Backend selection is runtime-driven via `PYSCF_BACKEND`; the workspace `gpu` umbrella feature is OFF by default so the standard build is CPU-only. See `docs/manual/Cubecl/` for the cubecl runtime/ComputeClient/tensor-handle pattern that `pyscf-algebra` is built on.
 
 The dependency DAG dictates phase ordering almost entirely: `core/runtime → kernels → gto → scf → {dft, mp2} → ccsd → grad → geomopt → wheel`. Phases 1–7 walk this critical path with the PyO3 contract folded into Phase 3 (SCF) so subclass-override / NumPy-boundary / GIL-release conventions lock on a small surface (RHF) before DFT's overrideable explosion. Phase 8 is the closing "ship readiness" phase combining GPU backend enable, oracle hardening, and wheel distribution because all three gate on the same artifact (a working CPU baseline across every method) and feed the same goal (validating the 2–5× speedup claim on a real benchmark suite, in a real wheel, on a real CI machine).
 
@@ -20,7 +20,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED) — none yet
 
-- [ ] **Phase 1: Foundation** — Workspace, core types, runtime, FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep lint, nightly cross-crate matrix CI
+- [ ] **Phase 1: Foundation** — Workspace (15 crates including `pyscf-algebra`), core types, runtime + env-driven backend selection (`PYSCF_BACKEND`), workspace `gpu` feature (OFF by default → CPU is the default backend), single-owner cubecl algebra crate (GEMM/reduce/AXPY/dot via `cubecl-matmul`/`cubecl-reduce`/`#[cube]`), FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep + dependency-wall lints, nightly cross-crate matrix CI
 - [ ] **Phase 2: GTO** — Mole, basis-set loading (5 atom-input × 11 basis-input forms), ECP, intor wrappers via cintx, eval_gto for grids
 - [ ] **Phase 3: SCF + PyO3 bindings** — RHF/UHF/GHF + DIIS + chkfile + sign canonicalization + first end-to-end energy AND lock the entire PyO3 contract (subclass-override dispatch, NumPy contiguity, GIL release seam, abi3-py310 wheel skeleton, oracle harness bootstrap)
 - [ ] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT
@@ -32,16 +32,26 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 ## Phase Details
 
 ### Phase 1: Foundation
-**Goal**: The workspace exists, builds clean as a 14-crate horizontal-layered façade, and every cross-cutting convention that gates downstream numerical correctness is in place and CI-enforced before the first kernel lands.
+**Goal**: The workspace exists, builds clean as a 15-crate horizontal-layered façade, the `pyscf-algebra` crate exposes a backend-agnostic linear-algebra surface dispatching to cubecl on the active runtime, and every cross-cutting convention that gates downstream numerical correctness is in place and CI-enforced before the first kernel lands.
 **Depends on**: Nothing (first phase)
-**Requirements**: FOUND-01, FOUND-02, FOUND-03, FOUND-04, FOUND-05, FOUND-06, FOUND-07, FOUND-08, FOUND-09, FOUND-10, ORACLE-01, ORACLE-05, ORACLE-09
+**Requirements**: FOUND-01, FOUND-02, FOUND-03, FOUND-04, FOUND-05, FOUND-06, FOUND-07, FOUND-08, FOUND-09, FOUND-10, ALG-01, ALG-02, ALG-03, ALG-04, ALG-05, ALG-06, ALG-07, ALG-08, ORACLE-01, ORACLE-05, ORACLE-09
 **Success Criteria** (what must be TRUE):
-  1. `cargo build --workspace` succeeds; the workspace contains 14 members (`pyscf-{core,runtime,kernels,gto,scf,dft,mp2,ccsd,grad,geomopt,py,oracle,bench}` + top-level façade) and `pyscf-{core,runtime}` are non-stub (BackendKind enum, auto_backend chain, WorkspacePool, Mole/Density/Energy types, all traits compile).
+  1. `cargo build --workspace` succeeds with no GPU features (CPU-only, the default); the workspace contains 15 members (`pyscf-{core,runtime,algebra,kernels,gto,scf,dft,mp2,ccsd,grad,geomopt,py,oracle,bench}` + top-level façade) and `pyscf-{core,runtime,algebra}` are non-stub (BackendKind enum, `select_backend()` env-driven resolver, WorkspacePool, Mole/Density/Energy types, `AlgebraClient` enum + `gemm`/`reduce_sum`/`axpy`/`dot` surface, all traits compile). `cargo build --workspace --features gpu` additionally compiles the `cuda` and `wgpu` cubecl runtimes.
   2. `cargo build --profile release-oracle --workspace` produces FMA-free machine code; CI runs `cargo-llvm-ir | grep llvm.fmuladd` over every numerical crate's object files under the oracle profile and finds **zero** matches (Pitfall 1 mitigation).
   3. A canary test using `oracle_sum`/`oracle_dot` reduction primitives produces **bit-identical** results on `RAYON_NUM_THREADS=1` and `RAYON_NUM_THREADS=8` runs of the same input vector (Pitfall 2 mitigation).
-  4. `cubecl = "=0.10.0"` (and all five `cubecl-*` crates) are pinned exactly via `[patch.crates-io]` in workspace `Cargo.toml`, matching cintx/libxc_rs/xcfun_rs; nightly cross-crate matrix CI rebuilds and tests cintx + libxc_rs + xcfun_rs + pyscf_rs together against the pin and reports green (Pitfall 3 + 15 mitigation, ORACLE-05).
-  5. CI enforces three lints that block PR merge: (a) `unwrap()` in numerical modules → clippy deny, (b) `forbidden-paths` for upstream out-of-scope imports (pbc/x2c/mcscf/tdscf/adc/gw/eom/NAC/EPH) → custom lint deny (FOUND-08, Pitfall 21), (c) every `extern "C"` callback wrapped in `catch_unwind` → grep-based CI check (FOUND-07, Pitfall 14).
-**Plans**: TBD
+  4. `cubecl = "=0.10.0"` (and all `cubecl-*` crates including `cubecl-cpu`, `cubecl-wgpu`, `cubecl-cuda`, `cubecl-rocm`, `cubecl-matmul`, `cubecl-reduce`, `cubecl-std`) are pinned exactly via `[patch.crates-io]` in workspace `Cargo.toml`, matching cintx/libxc_rs/xcfun_rs; nightly cross-crate matrix CI rebuilds and tests cintx + libxc_rs + xcfun_rs + pyscf_rs together against the pin and reports green (Pitfall 3 + 15 mitigation, ORACLE-05).
+  5. CI enforces four lints that block PR merge: (a) `unwrap()` in numerical modules → clippy deny, (b) `forbidden-paths` for upstream out-of-scope imports (pbc/x2c/mcscf/tdscf/adc/gw/eom/NAC/EPH) → custom lint deny (FOUND-08, Pitfall 21), (c) every `extern "C"` callback wrapped in `catch_unwind` → grep-based CI check (FOUND-07, Pitfall 14), (d) **algebra dependency-wall lint** (ALG-06): `cargo metadata` graph check fails the build if any crate other than `pyscf-algebra` or `pyscf-runtime` declares a `cubecl-*` dependency.
+  6. **Backend resolution behaves**: a `pyscf-algebra` integration test sets `PYSCF_BACKEND` to each of `cpu`/`cuda`/`wgpu`/`rocm`/`metal`/`auto`/`unset`/`bogus` and asserts the resolved backend matches the documented FOUND-03 + ALG-04 rules — including the case where `PYSCF_BACKEND=cuda` is set but the `cuda` feature is not compiled in (must fall back to CPU + emit `tracing::warn!`). With no env var set on a CPU-only build, GEMM/reduce-sum/axpy on a 256×256 input agree with a `faer 0.24` host reference to 1e-12 (ALG-01..04, ALG-08).
+**Plans**: 7 plans across 5 waves
+
+Plans:
+- [ ] 01-01-PLAN.md — Workspace skeleton (root Cargo.toml, 12 stub crates, .cargo/config.toml, deny.toml; FOUND-01, FOUND-04, FOUND-10, ORACLE-01)
+- [ ] 01-02-PLAN.md — pyscf-core universal types and method traits (FOUND-02)
+- [ ] 01-03-PLAN.md — pyscf-runtime BackendKind, probes, WorkspacePool, tracing init (FOUND-03, FOUND-09, ALG-04, ALG-08-prep)
+- [ ] 01-04-PLAN.md — pyscf-algebra AlgebraClient + select_backend + 7 primitives + oracle_sum + 4 integration tests + façade (ALG-01..05, ALG-07, ALG-08, FOUND-06)
+- [ ] 01-05-PLAN.md — xtask 5 CI lint binaries (FOUND-05, FOUND-07, FOUND-08, ALG-06)
+- [ ] 01-06-PLAN.md — GitHub Actions ci.yml + nightly-cross-crate.yml (FOUND-05, FOUND-08, FOUND-10, ALG-06, ORACLE-05, ORACLE-09)
+- [ ] 01-07-PLAN.md — CONTRIBUTING.md + docs/upgrade-cubecl.md + README.md additions (FOUND-04, FOUND-09)
 
 ### Phase 2: GTO
 **Goal**: A user can construct a molecule with any of upstream PySCF's atom-input or basis-input forms and run any 1e/2e integral upstream supports for in-scope methods, with byte-for-byte agreement on the internal `_atm`/`_bas`/`_env` arrays.
@@ -122,7 +132,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 **Depends on**: Phase 7 (every CPU path must be correct on the oracle before GPU drift is introduced)
 **Requirements**: PERF-01, PERF-02, PERF-03, PERF-04, PERF-05, PERF-06, PERF-07, DIST-01, DIST-02, DIST-03, DIST-04, DIST-05, DIST-06, ORACLE-03, ORACLE-04, ORACLE-06, ORACLE-07, BIND-03, BIND-08
 **Success Criteria** (what must be TRUE):
-  1. **GPU backends enabled and correct**: per-backend regression suite runs the full SCF/DFT/MP2/CCSD test corpus on CPU SIMD, CUDA, WGPU, and ROCm (where hardware is available in CI); GPU backends pass at chemical accuracy with documented per-backend tolerance (CPU: bit-exact under oracle profile; CUDA: 1e-10 Hartree energy / 1e-8 gradient; WGPU: chemical accuracy 1e-6; ROCm: 1e-10) (ORACLE-07); cubecl autotune cache ships at `CUBECL_CACHE_DIR` so first-run overhead does not regress the benchmark (PERF-06); adaptive backend dispatch falls back to CPU when `nao < 200` to avoid GPU launch overhead (PERF-07, Pitfall 19 mitigation).
+  1. **GPU backends enabled and correct**: per-backend regression suite runs the full SCF/DFT/MP2/CCSD test corpus on CPU SIMD, CUDA, WGPU, and ROCm by setting `PYSCF_BACKEND` (no recompile per backend on a `--features gpu` build) — exercising the Phase 1 `pyscf-algebra` dispatch end-to-end (ALG-04, ALG-07); where hardware is available in CI, GPU backends pass at chemical accuracy with documented per-backend tolerance (CPU: bit-exact under oracle profile; CUDA: 1e-10 Hartree energy / 1e-8 gradient; WGPU: chemical accuracy 1e-6; ROCm: 1e-10) (ORACLE-07); cubecl autotune cache ships at `CUBECL_CACHE_DIR` so first-run overhead does not regress the benchmark (PERF-06); adaptive backend dispatch falls back to CPU when `nao < 200` to avoid GPU launch overhead (PERF-07, Pitfall 19 mitigation).
   2. **2–5× speedup claim proven**: criterion-based `pyscf-bench` crate covers RHF, RKS, MP2, CCSD on H2O/cc-pVDZ, benzene/6-31G*, 20-water cluster/cc-pVDZ, alanine dipeptide/def2-SVP, caffeine/cc-pVDZ; pyscf-rs achieves **≥2× speedup** vs current PySCF + C extensions on this suite on a fair-comparison machine (same CPU, same thread count, no GPU); **stretch**: ≥5× on at least one benchmark; CUDA backend demonstrates additional speedup on caffeine and alanine dipeptide; `mol.build()` is sub-second for 5000-AO molecules (PERF-01..05).
   3. **Drop-in audit passes**: the top-20 idioms from BIND-03 (from `pyscf.M(...)` through `mol.dumps()`/`gto.Mole.loads(s)`) all run unchanged against pyscf-rs as the import target on a representative existing PySCF user script; ≥80% of curated upstream PySCF unit tests for in-scope modules pass against pyscf-rs (ORACLE-04); nightly per-basis bit-exact sweep covers every basis-set name PySCF knows (ORACLE-06); test isolation uses subprocess-per-fixture for fixtures that mutate global state, persistent worker for stateless ones (ORACLE-03, Pitfall 16 mitigation) (BIND-03).
   4. **Wheel ships**: `pyscf-rs` published on crates.io with the workspace façade re-exporting in-scope methods (DIST-01); abi3-py310 PyPI wheel installs cleanly on Linux/macOS/Windows × x86_64 + macOS aarch64; `pip install pyscf-rs && python -c "from pyscf import gto, scf"` succeeds in a fresh container (DIST-02); per-backend optional extras `pyscf-rs[cuda]`/`pyscf-rs[wgpu]`/`pyscf-rs[rocm]` keep the base wheel under the PyPI 60 MB ceiling (DIST-03, Pitfall 13 mitigation); manylinux_2_28 baseline; `auditwheel show` clean (DIST-04); HDF5 ships statically linked via `hdf5-sys/static`, no system libhdf5 required (DIST-05); `python/pyscf/__init__.py` import shim makes `import pyscf` Just Work (DIST-06); `abi3audit` runs in CI on the produced wheel and fails on non-abi3 symbols (BIND-08).
@@ -146,11 +156,12 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 ## Coverage Summary
 
-All 113 v1 REQ-IDs are mapped to exactly one phase. No orphans. No duplicates.
+All 121 v1 REQ-IDs are mapped to exactly one phase. No orphans. No duplicates.
 
 | Category | Count | Phase(s) |
 |----------|-------|----------|
 | FOUND-01..10 | 10 | Phase 1 |
+| ALG-01..08 | 8 | Phase 1 |
 | GTO-01..11 | 11 | Phase 2 |
 | SCF-01..14 | 14 | Phase 3 |
 | DFT-01..11 | 11 | Phase 4 |
@@ -162,12 +173,14 @@ All 113 v1 REQ-IDs are mapped to exactly one phase. No orphans. No duplicates.
 | ORACLE-01..09 | 9 | split: ORACLE-01,05,09 → Phase 1; ORACLE-02,08 → Phase 3; ORACLE-03,04,06,07 → Phase 8 |
 | PERF-01..07 | 7 | Phase 8 |
 | DIST-01..06 | 6 | Phase 8 |
-| **Total** | **113** | **8 phases** |
+| **Total** | **121** | **8 phases** |
 
 ## Cross-Cutting Concerns Threaded Through Every Phase
 
 These are NOT separate phases — they are conventions established in Phase 1 + Phase 3 that every later phase re-validates as part of its success criteria:
 
+- **Algebra-responsibility wall (`pyscf-algebra` is the only `cubecl-*` consumer)**: Phase 1 establishes (single-owner crate + dependency-graph lint); every method phase consumes algebra primitives only via `pyscf-algebra::{gemm,reduce_sum,axpy,dot,…}` and never imports `cubecl-*` directly. Reference: `docs/manual/Cubecl/`.
+- **Backend selection at runtime via `PYSCF_BACKEND` (CPU-default)**: Phase 1 establishes (`select_backend()` resolver + workspace `gpu` feature OFF by default); every PyO3 entry point logs the resolved backend (ALG-08); Phase 8 GPU enable phase exercises the priority chain across CUDA/WGPU/ROCm hardware.
 - **Bit-exact-with-PySCF**: Phase 1 establishes (`release-oracle` profile, `oracle_sum`/`oracle_dot`); every method phase asserts on the test corpus.
 - **PyO3 subclass-override dispatch**: Phase 3 establishes (`slf.call_method1`); Phase 4 (DFT) re-asserts on the larger DFT overrideable surface; Phases 5/6/7 inherit by convention.
 - **NumPy contiguity**: Phase 3 establishes (`to_owned()` on non-standard-layout); every PyO3 entry point in Phases 4–7 reuses the helper.
@@ -217,3 +230,4 @@ The compression preserves clear delivery boundaries while landing inside the sta
 
 ---
 *Roadmap created: 2026-05-10*
+*Updated 2026-05-10: added the `pyscf-algebra` crate (workspace 14 → 15), added ALG-01..08 (8 new REQ-IDs, all mapped to Phase 1, total 113 → 121), formalised the `gpu` workspace feature (OFF by default → CPU is default backend) and `PYSCF_BACKEND` env-driven runtime selection. Two new cross-cutting concerns documented (algebra-responsibility wall + backend selection). Reference: `docs/manual/Cubecl/`.*
