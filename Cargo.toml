@@ -81,7 +81,15 @@ debug = 1
 # Sibling-crate sourcing — D-12 + D-13.
 # Phase 1 ships current default-branch HEAD SHAs. ORACLE-05 nightly CI
 # (Plan 06) bumps these via `cargo update -p cintx -p libxc_rs -p xcfun_rs`.
+#
+# All three sibling crates are temporarily switched to local path deps to
+# (a) skip the heavy from-source builds (libcint/libxc/xcfun) inside the
+# Plan 1 inner loop, and (b) sidestep the phantom .claude/worktrees/agent-*
+# 160000-mode gitlinks present on cintx main and xcfun_rs master that block
+# `cargo generate-lockfile` against the git remotes. Restore to git pins
+# once upstream main/master is cleaned (see Plan 01-08 for the deferred
+# upstream-fix path) and Phase 2/3 needs CI parity.
 [patch.crates-io]
-cintx     = { git = "https://github.com/BectorVoom/cintx.git",     branch = "main" }
-libxc_rs  = { git = "https://github.com/BectorVoom/libxc_rs.git",  branch = "main" }
-xcfun_rs  = { git = "https://github.com/BectorVoom/xcfun_rs.git",  branch = "master" }
+cintx     = { path = "../cintx" }
+libxc_rs  = { path = "../libxc_rs" }
+xcfun_rs  = { path = "../xcfun_rs/crates/xcfun-rs", package = "xcfun-rs" }
