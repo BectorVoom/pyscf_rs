@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-01-PLAN.md (Wave 0 risk buy-down)
-last_updated: "2026-05-10T10:29:18.492Z"
+stopped_at: Completed 02-02-PLAN.md (Mole front-door + GTO-01/08)
+last_updated: "2026-05-10T11:03:25.227Z"
 last_activity: 2026-05-10
 progress:
   total_phases: 8
   completed_phases: 0
   total_plans: 19
-  completed_plans: 9
-  percent: 47
+  completed_plans: 10
+  percent: 53
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 02 (gto) — EXECUTING
-Plan: 2 of 10
+Plan: 3 of 10
 Status: Ready to execute
 Last activity: 2026-05-10
 
@@ -53,6 +53,7 @@ Progress: [█████████░] 88% (7/7 plans done; verification gap
 
 *Updated after each plan completion*
 | Phase 02 P01 | 12min | 3 tasks | 13 files |
+| Phase 02 P02 | 8min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -70,6 +71,7 @@ Recent decisions affecting current work:
 - [Phase 02]: Wave 0 complete: cintx + cubecl-cpu reach proven; pyscf-kernels added to algebra-wall allowlist; 23-entry intor layout table; oracle harness scaffold + env-var docs in place
 - [Phase 02]: pyscf-gto uses direct per-member cintx path-deps (cintx-core, cintx-rs, cintx-compat, cintx-ops, cintx-runtime) — workspace [patch.crates-io] cintx redirect alone is insufficient for subcrate consumers
 - [Phase 02]: cubecl 0.10.0 ArrayArg::from_raw_parts signature is (Handle, usize) by value — no vectorization arg, no turbofish (older 0.9-era README sketch is stale)
+- [Phase 02]: [Phase 02]: Mole >=30 attribute floor + format_atom 4-of-5 atom-input forms shipped via pyscf_gto::M(MoleBuildArgs); 5th Callable form returns NotYetImplemented{phase:3}; Local raw_atm_layout slot constants in pyscf-core::basis_set are TEMPORARY (02-04 deletes once cintx-compat dep lands)
 
 ### Pending Todos
 
@@ -103,6 +105,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-10T10:29:18.489Z
-Stopped at: Completed 02-01-PLAN.md (Wave 0 risk buy-down)
+Last session: 2026-05-10T10:42:20.502Z
+Stopped at: Completed 02-02-PLAN.md (Mole front-door + GTO-01/08)
 Resume file: None
