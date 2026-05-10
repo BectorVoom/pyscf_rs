@@ -1,0 +1,15 @@
+# Phase 2 oracle harness prerequisites (W0-T6).
+#
+# Upstream PySCF + the standard scientific-Python stack. pyscf>=2.6 covers
+# the moleintor / mole / basis surface plan 02-02..04 ports against; pytest>=7
+# is the runner; numpy>=1.26 is what the rest of the stack expects.
+#
+# Install with::
+#
+#     pip install -r tests/oracle/requirements.txt
+#
+# Phase 4 (DFT) may add scipy, h5py for chkfile interop; Phase 6 (CCSD)
+# might pin numpy more tightly. Track those bumps in the per-phase plans.
+pyscf>=2.6
+pytest>=7
+numpy>=1.26
