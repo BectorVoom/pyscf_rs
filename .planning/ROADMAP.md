@@ -42,16 +42,18 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
   4. `cubecl = "=0.10.0"` (and all `cubecl-*` crates including `cubecl-cpu`, `cubecl-wgpu`, `cubecl-cuda`, `cubecl-rocm`, `cubecl-matmul`, `cubecl-reduce`, `cubecl-std`) are pinned exactly via `[patch.crates-io]` in workspace `Cargo.toml`, matching cintx/libxc_rs/xcfun_rs; nightly cross-crate matrix CI rebuilds and tests cintx + libxc_rs + xcfun_rs + pyscf_rs together against the pin and reports green (Pitfall 3 + 15 mitigation, ORACLE-05).
   5. CI enforces four lints that block PR merge: (a) `unwrap()` in numerical modules → clippy deny, (b) `forbidden-paths` for upstream out-of-scope imports (pbc/x2c/mcscf/tdscf/adc/gw/eom/NAC/EPH) → custom lint deny (FOUND-08, Pitfall 21), (c) every `extern "C"` callback wrapped in `catch_unwind` → grep-based CI check (FOUND-07, Pitfall 14), (d) **algebra dependency-wall lint** (ALG-06): `cargo metadata` graph check fails the build if any crate other than `pyscf-algebra` or `pyscf-runtime` declares a `cubecl-*` dependency.
   6. **Backend resolution behaves**: a `pyscf-algebra` integration test sets `PYSCF_BACKEND` to each of `cpu`/`cuda`/`wgpu`/`rocm`/`metal`/`auto`/`unset`/`bogus` and asserts the resolved backend matches the documented FOUND-03 + ALG-04 rules — including the case where `PYSCF_BACKEND=cuda` is set but the `cuda` feature is not compiled in (must fall back to CPU + emit `tracing::warn!`). With no env var set on a CPU-only build, GEMM/reduce-sum/axpy on a 256×256 input agree with a `faer 0.24` host reference to 1e-12 (ALG-01..04, ALG-08).
-**Plans**: 7 plans across 5 waves
+**Plans**: 9 plans across 6 waves (7 shipped + 2 gap-closure)
 
 Plans:
-- [ ] 01-01-PLAN.md — Workspace skeleton (root Cargo.toml, 12 stub crates, .cargo/config.toml, deny.toml; FOUND-01, FOUND-04, FOUND-10, ORACLE-01)
-- [ ] 01-02-PLAN.md — pyscf-core universal types and method traits (FOUND-02)
-- [ ] 01-03-PLAN.md — pyscf-runtime BackendKind, probes, WorkspacePool, tracing init (FOUND-03, FOUND-09, ALG-04, ALG-08-prep)
-- [ ] 01-04-PLAN.md — pyscf-algebra AlgebraClient + select_backend + 7 primitives + oracle_sum + 4 integration tests + façade (ALG-01..05, ALG-07, ALG-08, FOUND-06)
-- [ ] 01-05-PLAN.md — xtask 5 CI lint binaries (FOUND-05, FOUND-07, FOUND-08, ALG-06)
-- [ ] 01-06-PLAN.md — GitHub Actions ci.yml + nightly-cross-crate.yml (FOUND-05, FOUND-08, FOUND-10, ALG-06, ORACLE-05, ORACLE-09)
-- [ ] 01-07-PLAN.md — CONTRIBUTING.md + docs/upgrade-cubecl.md + README.md additions (FOUND-04, FOUND-09)
+- [x] 01-01-PLAN.md — Workspace skeleton (root Cargo.toml, 12 stub crates, .cargo/config.toml, deny.toml; FOUND-01, FOUND-04, FOUND-10, ORACLE-01)
+- [x] 01-02-PLAN.md — pyscf-core universal types and method traits (FOUND-02)
+- [x] 01-03-PLAN.md — pyscf-runtime BackendKind, probes, WorkspacePool, tracing init (FOUND-03, FOUND-09, ALG-04, ALG-08-prep)
+- [x] 01-04-PLAN.md — pyscf-algebra AlgebraClient + select_backend + 7 primitives + oracle_sum + 4 integration tests + façade (ALG-01..05, ALG-07, ALG-08, FOUND-06)
+- [x] 01-05-PLAN.md — xtask 5 CI lint binaries (FOUND-05, FOUND-07, FOUND-08, ALG-06)
+- [x] 01-06-PLAN.md — GitHub Actions ci.yml + nightly-cross-crate.yml (FOUND-05, FOUND-08, FOUND-10, ALG-06, ORACLE-05, ORACLE-09)
+- [x] 01-07-PLAN.md — CONTRIBUTING.md + docs/upgrade-cubecl.md + README.md additions (FOUND-04, FOUND-09)
+- [ ] 01-08-PLAN.md — GAP CLOSURE: cintx clean-SHA repin + Cargo.lock commit (closes BLOCKER 1 + 3; FOUND-01, FOUND-04, FOUND-10)
+- [ ] 01-09-PLAN.md — GAP CLOSURE: check-cubecl-pin transitive version-skew reconciliation (closes BLOCKER 2; FOUND-04)
 
 ### Phase 2: GTO
 **Goal**: A user can construct a molecule with any of upstream PySCF's atom-input or basis-input forms and run any 1e/2e integral upstream supports for in-scope methods, with byte-for-byte agreement on the internal `_atm`/`_bas`/`_env` arrays.
@@ -145,7 +147,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/TBD | Not started | - |
+| 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/TBD | Not started | - |
 | 3. SCF + PyO3 bindings | 0/TBD | Not started | - |
 | 4. DFT | 0/TBD | Not started | - |
@@ -231,3 +233,5 @@ The compression preserves clear delivery boundaries while landing inside the sta
 ---
 *Roadmap created: 2026-05-10*
 *Updated 2026-05-10: added the `pyscf-algebra` crate (workspace 14 → 15), added ALG-01..08 (8 new REQ-IDs, all mapped to Phase 1, total 113 → 121), formalised the `gpu` workspace feature (OFF by default → CPU is default backend) and `PYSCF_BACKEND` env-driven runtime selection. Two new cross-cutting concerns documented (algebra-responsibility wall + backend selection). Reference: `docs/manual/Cubecl/`.*
+*Updated 2026-05-10 (gap closure): added Phase 1 plans 01-08 (cintx clean-SHA repin + Cargo.lock commit) and 01-09 (check-cubecl-pin transitive version-skew reconciliation) closing 3 BLOCKERs from 01-VERIFICATION.md. Plan count 7 → 9; wave count 5 → 6. Plans 01-01..01-07 marked shipped.*
+*Updated 2026-05-10 (revision iteration 1): per checker feedback, reassigned Plan 01-09 from Wave 6 to Wave 5 (a plan cannot share a wave with a declared dependency; 01-08 depends_on 01-09). Wave 6 retains only 01-08; Wave 5 now contains 01-07 (already shipped) plus 01-09. Total wave count unchanged at 6.*

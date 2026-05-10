@@ -1,3 +1,19 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: executing
+stopped_at: Phase 1 planned. 7 PLAN.md files (01-01..01-07) across 5 waves; pattern map (01-PATTERNS.md) produced for 21 deliverables (12 strong analogs in cintx/xcfun_rs siblings, 6 NEW PATTERN markers). All 21 REQ-IDs covered and all 15 D-IDs referenced. Plan-checker PASSED with 2 advisory warnings (RESEARCH responsibility-map doc drift on select_backend(); Plan 04 size at edge of recommended scope — both justified, neither blocking). Ready for `/gsd-execute-phase 1`.
+last_updated: "2026-05-10T06:41:26.867Z"
+last_activity: 2026-05-10 -- Phase 01 execution started
+progress:
+  total_phases: 8
+  completed_phases: 0
+  total_plans: 9
+  completed_plans: 8
+  percent: 89
+---
+
 # Project State
 
 ## Project Reference
@@ -5,20 +21,21 @@
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 1 — Foundation (15-crate workspace including new `pyscf-algebra`, core types, runtime + `PYSCF_BACKEND` env-driven backend selection, workspace `gpu` feature OFF by default → CPU is default backend, single-owner cubecl algebra surface, FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep + dependency-wall lints, nightly cross-crate matrix CI)
+**Current focus:** Phase 01 — foundation
 
 ## Current Position
 
-Phase: 1 of 8 (Foundation)
-Plan: 7 of 7 in current phase
-Status: Verification gaps_found — 18/21 must-haves verified, 3 BLOCKERs
-Last activity: 2026-05-10 — All 7 plans of Phase 1 executed and merged; verifier reports gaps_found (Cargo.lock missing; check-cubecl-pin lint fails on transitive cubecl-runtime 0.9.0-pre.5; cintx git remote has phantom submodules blocking --locked builds). See .planning/phases/01-foundation/01-VERIFICATION.md.
+Phase: 01 (foundation) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 01
+Last activity: 2026-05-10 -- Phase 01 execution started
 
 Progress: [█████████░] 88% (7/7 plans done; verification gaps remain)
 
 ## Performance Metrics
 
 **Velocity:**
+
 - Total plans completed: 0
 - Average duration: — (no plans run yet)
 - Total execution time: 0 hours
@@ -30,6 +47,7 @@ Progress: [█████████░] 88% (7/7 plans done; verification gap
 | - | - | - | - |
 
 **Recent Trend:**
+
 - Last 5 plans: —
 - Trend: — (no data yet)
 
