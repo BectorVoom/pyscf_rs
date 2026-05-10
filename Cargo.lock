@@ -3294,6 +3294,7 @@ dependencies = [
  "libm",
  "pyscf-algebra",
  "pyscf-core",
+ "pyscf-kernels",
  "rstest",
  "serde",
  "serde_json",
