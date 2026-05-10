@@ -16,13 +16,12 @@ If everything else fails, this must work: a Python user does `pip install pyscf-
 
 <!-- Shipped and confirmed valuable. -->
 
-(None yet — ship to validate)
+- [x] **Molecular structure & integrals (gto)** — Mole construction (≥30 attribute floor, 5 atom-input forms, byte-equal `_atm`/`_bas`/`_env`), basis-set loading (5 BasisInput variants × 207 built-in files, Gaussian-94 + NWChem parsers, ECP loading), 1e/2e integrals via `cintx` (intor wrappers + F-order preservation), `eval_gto` AO-on-grid, JSON dumps/loads, `set_geom_`, `copy`. Validated in Phase 2: GTO (GTO-01..11; ECP *evaluation* half tracked via 02-10-PLAN.md pending cintx ECP merge).
 
 ### Active
 
 <!-- v1 scope. Hypotheses until shipped and validated. -->
 
-- [ ] **Molecular structure & integrals (gto)** — Mole construction, basis-set loading, 1e/2e integrals via the already-rewritten `cintx` crate
 - [ ] **Self-consistent field (scf)** — RHF, UHF, GHF with DIIS convergence
 - [ ] **Density functional theory (dft)** — RKS, UKS with grid integration, XC evaluation via `libxc_rs` and `xcfun_rs`
 - [ ] **Møller–Plesset 2nd-order (mp2)** — RMP2 and UMP2, in-core and density-fitted variants
@@ -104,4 +103,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-09 after initialization*
+*Last updated: 2026-05-10 after Phase 2 (GTO) verification — Mole + basis-set loading + intor + eval_gto shipped; ECP-evaluation half deferred via 02-10 pending cintx upstream merge.*
