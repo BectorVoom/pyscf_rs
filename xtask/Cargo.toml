@@ -1,0 +1,39 @@
+[package]
+name = "xtask"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish = false
+description = "Internal build/lint automation for pyscf-rs (not published)"
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[[bin]]
+name = "check-no-fma"
+path = "src/bin/check_no_fma.rs"
+
+[[bin]]
+name = "check-forbidden-paths"
+path = "src/bin/check_forbidden_paths.rs"
+
+[[bin]]
+name = "check-catch-unwind"
+path = "src/bin/check_catch_unwind.rs"
+
+[[bin]]
+name = "check-dependency-wall"
+path = "src/bin/check_dependency_wall.rs"
+
+[[bin]]
+name = "check-cubecl-pin"
+path = "src/bin/check_cubecl_pin.rs"
+
+[dependencies]
+anyhow         = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+walkdir        = "2"
+rustc-demangle = "0.1"
