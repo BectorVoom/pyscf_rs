@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod basis; // Plan 02-03 — GTO-03 (basis loading).
+pub mod eval_gto; // Plan 02-06 — GTO-07 (eval_gto user wrapper, algebra-wall friendly).
 pub mod format_atom;
 pub mod format_basis; // Plan 02-03 — GTO-02 (11→5 input-form dispatch).
 pub mod intor; // Plan 02-05 — GTO-06 (mol.intor(name) dispatcher).
@@ -16,9 +17,10 @@ pub mod make_env; // Plan 02-04 — GTO-04 (flat-array projection, D-03).
 pub mod projection; // Plan 02-04 — GTO-11 (zero-copy cintx_core::BasisSet build).
 pub mod types;
 
-// Plans 02-06..02-08 add: eval_gto, ecp_engine_stub, dumps_loads.
+// Plans 02-07..02-08 add: ecp_engine_stub, dumps_loads.
 
 pub use basis::{load_basis, parse as parse_basis};
+pub use eval_gto::{eval_gto, EvalGtoOutput};
 pub use format_basis::format_basis;
 pub use intor::{intor, IntorOutput};
 pub use pyscf_core::{Mole, Unit};

@@ -150,7 +150,7 @@ fn eval_gto_sph_cpu(
     env_host: &[f64],
     ao_loc_host: &[i32],
     nao: usize,
-    _spherical: bool,
+    _spherical: bool, // l = 0 path is identical for sph and cart (Y_00 = (1/(4π))^{1/2}); reserved for Phase 4
 ) -> EvalGtoBuffers {
     debug_assert_eq!(
         coords_host.len(),
@@ -206,8 +206,19 @@ fn eval_gto_sph_cpu(
             let ao_off = ao_loc_host[shell_idx] as usize;
 
             if l == 0 {
-                // s-shell path: contracted radial × Y_00 (absorbed into
-                // the normalised coefficient by 02-04 `make_env`).
+                // s-shell path: contracted radial × Y_00.
+                //
+                // 02-04 `make_env::normalise_contractions` applies the
+                // *radial* normalisation only (per-prim gto_norm + the
+                // `_nomalize_contracted_ao` factor). The angular factor
+                // Y_00 = (1/(4π))^{1/2} = 1/(2*sqrt(π)) is applied here
+                // — upstream `pyscf/gto/eval_gto.py` calls `_cart2sph_l(0)`
+                // which is the [[1/(2*sqrt(π))]] 1×1 matrix. For s-shells
+                // the cartesian normalisation factor is identical to
+                // Y_00, so the same multiplier covers both `GTOval_sph`
+                // and `GTOval_cart` (`cart_variant_works_for_s_shells`
+                // smoke fixture verifies the equality).
+                let y00 = 0.5_f64 / std::f64::consts::PI.sqrt();
                 for c_idx in 0..nctr {
                     let mut acc: f64 = 0.0;
                     for p_idx in 0..nprim {
@@ -218,7 +229,7 @@ fn eval_gto_sph_cpu(
                         acc += coef * (-alpha * r2).exp();
                     }
                     let ao_idx = ao_off + c_idx;
-                    out[g + ao_idx * ngrids] = acc;
+                    out[g + ao_idx * ngrids] = acc * y00;
                 }
             } else {
                 // l ≥ 1 stub: write zeros into every (c, m) AO slot.
