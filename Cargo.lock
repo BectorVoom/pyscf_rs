@@ -3301,6 +3301,20 @@ dependencies = [
 [[package]]
 name = "pyscf-kernels"
 version = "0.1.0"
+dependencies = [
+ "approx",
+ "bytemuck",
+ "cubecl",
+ "cubecl-cpu",
+ "cubecl-cuda",
+ "cubecl-hip",
+ "cubecl-runtime 0.10.0",
+ "cubecl-wgpu",
+ "pyscf-algebra",
+ "pyscf-core",
+ "thiserror 2.0.18",
+ "tracing",
+]
 
 [[package]]
 name = "pyscf-mp2"

@@ -38,7 +38,13 @@ const FORBIDDEN_DEPS: &[&str] = &[
 ];
 
 /// Crates permitted to consume cubecl-* (ALG-06 carve-out).
-const ALLOWED_CRATES: &[&str] = &["pyscf-algebra", "pyscf-runtime"];
+///
+/// pyscf-kernels added in Phase 2 D-04: the eval_gto cubecl kernel lives
+/// here per the cintx-cubecl / xcfun-kernels split established in Phase 1.
+/// Phase 4 (DFT) will land grid loops + libxc/xcfun bridges in the same
+/// crate. Method crates (pyscf-gto, pyscf-scf, pyscf-dft, …) still go
+/// through pyscf-algebra; this carve-out is for the kernel home only.
+const ALLOWED_CRATES: &[&str] = &["pyscf-algebra", "pyscf-runtime", "pyscf-kernels"];
 
 fn main() -> Result<ExitCode> {
     let root = workspace_root()?;
