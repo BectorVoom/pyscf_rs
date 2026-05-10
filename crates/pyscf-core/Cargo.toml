@@ -20,5 +20,9 @@ path = "src/lib.rs"
 cintx-core    = { path = "../../../cintx/crates/cintx-core" }
 cintx-compat  = { path = "../../../cintx/crates/cintx-compat" }
 thiserror     = { workspace = true }
-serde         = { workspace = true }
+# `derive` feature inherited from workspace; pyscf-gto plan 02-08 (GTO-09)
+# uses Serialize/Deserialize derives on ParsedBasis / ShellSpec / ParsedEcp /
+# EcpShell so that `pyscf_gto::dumps()` / `loads()` can round-trip _basis
+# and _ecp via serde_json without a hand-rolled mirror type.
+serde         = { workspace = true, features = ["derive"] }
 tracing       = { workspace = true }

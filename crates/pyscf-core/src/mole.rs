@@ -13,6 +13,7 @@
 //! pyscf-rs is impossible by construction (T-02-04-01 mitigation).
 
 use crate::error::{CoreError, PyscfRsError};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,7 +24,7 @@ use crate::basis_set::BasisSet;
 ///
 /// Internal storage is always Bohr (atomic units); `format_atom` converts
 /// from the user-supplied unit into Bohr at parse time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Unit {
     /// Angstrom — upstream PySCF default. Conversion: 1 Å = 1.8897261339213 Bohr.
     #[default]
@@ -78,7 +79,7 @@ pub type ParsedAtom = (String, [f64; 3]);
 /// Parsed basis-set entry (per element). Plan 02-03 fills the body; plan
 /// 02-02 (this plan) ships the placeholder shape so `Mole._basis` has a
 /// real type.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ParsedBasis {
     /// Per-shell `ShellSpec` (`(l, exponents, coeffs)`).
     pub shells: Vec<ShellSpec>,
@@ -86,7 +87,7 @@ pub struct ParsedBasis {
 
 /// One shell specification — angular momentum + primitives + contraction
 /// matrix.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ShellSpec {
     /// Angular momentum l (0=s, 1=p, 2=d, ...).
     pub l: u8,
@@ -98,7 +99,7 @@ pub struct ShellSpec {
 }
 
 /// Parsed ECP entry (per element). Plan 02-07 fills the body.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ParsedEcp {
     /// Number of core electrons removed by the ECP.
     pub n_core: u32,
@@ -107,7 +108,7 @@ pub struct ParsedEcp {
 }
 
 /// One ECP channel shell. Plan 02-07 expands.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EcpShell {
     /// l = -1 marks the local (UL) channel; 0..=5 marks projector channels.
     pub l: i8,
