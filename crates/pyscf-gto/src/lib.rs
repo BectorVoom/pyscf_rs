@@ -7,13 +7,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod basis; // Plan 02-03 (this commit) — GTO-02 + GTO-03.
 pub mod format_atom;
 pub mod layout_table; // Wave 0 (plan 02-01); consumed by intor.rs in 02-05.
 pub mod types;
 
-// Plans 02-03..02-08 add: format_basis, basis (mod), make_env, intor,
+// Plans 02-04..02-08 add: format_basis (in-progress here), make_env, intor,
 // eval_gto, ecp_engine_stub, dumps_loads.
 
+pub use basis::{load_basis, parse as parse_basis};
 pub use pyscf_core::{Mole, Unit};
 pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
 
