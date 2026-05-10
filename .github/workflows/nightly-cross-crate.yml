@@ -1,0 +1,68 @@
+# Nightly cross-crate matrix per ORACLE-05 + CONTEXT D-14.
+#
+# Mechanism: bump the pinned [patch.crates-io] sibling-crate revs to
+# current default-branch HEAD via `cargo update -p cintx -p libxc_rs
+# -p xcfun_rs`, rebuild + test the workspace under --features gpu,
+# and run check-cubecl-pin to confirm the cubecl 0.10.0 lockstep
+# survived. Failure blocks merge of any sibling-crate cubecl bump
+# until pyscf-rs is fixed in lockstep.
+#
+# Reference: ROADMAP success criterion 4 (Pitfall 3 + 15 mitigation).
+name: nightly-cross-crate
+
+on:
+  schedule:
+    # 06:00 UTC daily — after US/EU evening pushes settle.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+env:
+  RUSTFLAGS: ""
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  cross-crate-matrix:
+    name: cross-crate matrix (cubecl 0.10.0 lockstep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+
+      # D-14: bump the sibling-crate revs to current HEAD on each
+      # default branch. cintx + libxc_rs default branch is "main";
+      # xcfun_rs default branch is "master" (verified via
+      # `gh api repos/BectorVoom/{name}` 2026-05-10).
+      - name: bump sibling-crate revs to HEAD
+        run: cargo update -p cintx -p libxc_rs -p xcfun_rs
+
+      # Verify the cubecl pin still holds after the bump. If a sibling
+      # bumped cubecl, this fails immediately with a clear diagnostic.
+      - name: check-cubecl-pin
+        run: cargo run --quiet -p xtask --bin check-cubecl-pin
+
+      # Compile the workspace including gpu-feature arms. cubecl-cuda
+      # + cubecl-wgpu have build-side dependencies (CUDA toolkit
+      # detection, wgpu native libs) but the gpu-feature compile-only
+      # path passes on stock ubuntu-latest.
+      - name: cargo build --workspace --features gpu --locked
+        run: cargo build --workspace --features gpu --locked
+
+      # Run the test suite (default features — GPU runtime exercise
+      # is Phase 8). The point is to catch sibling-crate API drift,
+      # not GPU regression.
+      - name: cargo test --workspace --locked
+        run: cargo test --workspace --locked --no-fail-fast -- --test-threads=1
+
+      # On failure, leave the updated Cargo.lock as a CI artifact so
+      # a developer can `git checkout` the offending revs locally for
+      # bisection.
+      - name: upload Cargo.lock on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cross-crate-cargo-lock
+          path: Cargo.lock
