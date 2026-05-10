@@ -1,0 +1,12 @@
+[package]
+name = "pyscf-dft"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Density functional theory (RKS/UKS + Becke grids). Implemented in Phase 4."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

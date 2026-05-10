@@ -88,3 +88,8 @@ tmp/
 # mypy
 .mypy_cache/
 
+# Rust workspace
+target/
+Cargo.lock.local
+.cargo/config.toml.local
+

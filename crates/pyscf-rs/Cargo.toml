@@ -1,0 +1,12 @@
+[package]
+name = "pyscf-rs"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Top-level façade re-exporting in-scope methods (Phase 1: stub; Plan 04 wires re-exports)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

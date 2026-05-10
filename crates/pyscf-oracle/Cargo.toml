@@ -1,0 +1,18 @@
+[package]
+name = "pyscf-oracle"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "PySCF live oracle (dev-deps only). Implemented in Phase 3."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]
+# ORACLE-01: pyo3 listed ONLY in dev-deps so release wheels never link Python.
+# auto-initialize feature is required for in-process upstream-PySCF driving
+# (per RESEARCH Standard Stack).
+pyo3 = { version = "=0.28.3", features = ["auto-initialize"] }

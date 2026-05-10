@@ -1,0 +1,12 @@
+[package]
+name = "pyscf-ccsd"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Coupled-cluster singles-doubles (RCCSD/UCCSD). Implemented in Phase 6."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

@@ -1,0 +1,27 @@
+# FOUND-05 + RESEARCH §6: the floating-point contraction flag below
+# applies to ALL cargo profiles (debug, test, bench, release,
+# release-oracle). Stricter than necessary for release-only behaviour
+# but keeps debug/test numerically symmetric to release — useful for
+# the 1e-12 parity contract.
+#
+# The [target.'cfg(all())'] duplication is LOAD-BEARING (RESEARCH §6 +
+# Pitfall 2): cargo's precedence rules let any [target.*] rustflags in a
+# higher-priority config (e.g. ~/.cargo/config.toml with
+# [target.'cfg(target_os = "linux")']) fully OVERRIDE [build] rustflags.
+# Duplicating into [target.'cfg(all())'] wins at the same precedence
+# tier as user-level target-specific sections.
+
+[build]
+rustflags = [
+    "-Cllvm-args=-fp-contract=off",
+    "-Ctarget-feature=-fma,-fma4",
+]
+
+[target.'cfg(all())']
+rustflags = [
+    "-Cllvm-args=-fp-contract=off",
+    "-Ctarget-feature=-fma,-fma4",
+]
+
+[profile.dev]
+incremental = false

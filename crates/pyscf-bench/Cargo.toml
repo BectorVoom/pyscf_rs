@@ -1,0 +1,12 @@
+[package]
+name = "pyscf-bench"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Criterion-based benchmark suite. Implemented in Phase 8."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
