@@ -1,0 +1,44 @@
+[package]
+name = "pyscf-algebra"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Backend-agnostic linear-algebra surface (single-owner cubecl-* consumer per ALG-06)"
+
+[lib]
+path = "src/lib.rs"
+
+# ALG-03 + Roadmap line 33: workspace `gpu` umbrella feature aliases
+# cuda + wgpu (host-portable subset). default = ["cpu"] enforces CPU-only
+# default per ALG-03 + FOUND-03.
+[features]
+default = ["cpu"]
+cpu     = ["cubecl/cpu", "pyscf-runtime/cpu"]
+wgpu    = ["dep:cubecl-wgpu", "dep:wgpu", "pyscf-runtime/wgpu"]
+cuda    = ["dep:cubecl-cuda", "pyscf-runtime/cuda"]
+rocm    = ["dep:cubecl-hip", "pyscf-runtime/rocm"]
+metal   = ["wgpu", "pyscf-runtime/metal"]
+gpu     = ["cuda", "wgpu"]
+
+[dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-runtime = { path = "../pyscf-runtime", default-features = false }
+cubecl         = { workspace = true }
+cubecl-runtime = { workspace = true }
+cubecl-cpu     = { workspace = true }
+cubecl-matmul  = { workspace = true }
+cubecl-reduce  = { workspace = true }
+cubecl-wgpu    = { workspace = true, optional = true }
+cubecl-cuda    = { workspace = true, optional = true }
+cubecl-hip     = { workspace = true, optional = true }
+wgpu           = { workspace = true, optional = true }
+faer           = { workspace = true }
+bytemuck       = { workspace = true }
+thiserror      = { workspace = true }
+tracing        = { workspace = true }
+
+[dev-dependencies]
+approx        = { workspace = true }
+rstest        = { workspace = true }
+tracing-subscriber = { workspace = true }
