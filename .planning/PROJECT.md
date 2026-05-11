@@ -17,12 +17,12 @@ If everything else fails, this must work: a Python user does `pip install pyscf-
 <!-- Shipped and confirmed valuable. -->
 
 - [x] **Molecular structure & integrals (gto)** — Mole construction (≥30 attribute floor, 5 atom-input forms, byte-equal `_atm`/`_bas`/`_env`), basis-set loading (5 BasisInput variants × 207 built-in files, Gaussian-94 + NWChem parsers, ECP loading), 1e/2e integrals via `cintx` (intor wrappers + F-order preservation), `eval_gto` AO-on-grid, JSON dumps/loads, `set_geom_`, `copy`. Validated in Phase 2: GTO (GTO-01..11; ECP *evaluation* half tracked via 02-10-PLAN.md pending cintx ECP merge).
+- [x] **Self-consistent field (scf)** — RHF/UHF/GHF kernels with DIIS Pulay extrapolation, density fitting (RHF.density_fit), chkfile dump/load, all 11 SCF hooks (get_hcore/ovlp/jk/veff/fock/eig/occ/make_rdm1/init_guess/energy_elec/energy_tot), 30-attribute floor, scanner (as_scanner), analyze/mulliken_pop/dip_moment, RHF↔UHF↔GHF conversion. PyO3 bindings (PyRHF/UHF/GHF with subclass-override dispatch via slf.call_method1, abi3-py310 + free-threading features, GIL-release seam, panic-to-exception bridge, NumPy stride policy, PyOnceLock cache). Oracle macro body + CI matrix (linux x86_64 + macos-14 aarch64, python3.13t smoke). Validated in Phase 3: SCF + PyO3 bindings (SCF-01..14, BIND-01/02/04/05/06/07/09, ORACLE-02/08). Known carry-overs (deferred to Phase 4 or follow-up plan): cintx-ops `int3c2e_sph` upstream gap blocks numeric DF-HF result; init_guess minao/atom/huckel modes stub-only; mulliken_meta NYI. µHartree numeric parity vs upstream PySCF requires CI matrix verification (xplat-uhartree job wired).
 
 ### Active
 
 <!-- v1 scope. Hypotheses until shipped and validated. -->
 
-- [ ] **Self-consistent field (scf)** — RHF, UHF, GHF with DIIS convergence
 - [ ] **Density functional theory (dft)** — RKS, UKS with grid integration, XC evaluation via `libxc_rs` and `xcfun_rs`
 - [ ] **Møller–Plesset 2nd-order (mp2)** — RMP2 and UMP2, in-core and density-fitted variants
 - [ ] **Coupled-cluster singles-doubles (ccsd)** — RCCSD and UCCSD, ground state only
@@ -103,4 +103,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-10 after Phase 2 (GTO) verification — Mole + basis-set loading + intor + eval_gto shipped; ECP-evaluation half deferred via 02-10 pending cintx upstream merge.*
+*Last updated: 2026-05-12 after Phase 3 (SCF + PyO3 bindings) execution — RHF/UHF/GHF + DIIS + DF + chkfile + 11 hooks + scanner + PyO3 surface shipped. 5 CI-matrix UAT items + 3 code carry-overs (int3c2e_sph upstream gap, init_guess minao/atom/huckel, mulliken_meta) tracked in 03-HUMAN-UAT.md.*
