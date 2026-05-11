@@ -92,20 +92,38 @@ impl OverrideHooks for PyOverrideBridge {
 
     fn get_init_guess(
         &self,
-        mol: &Mole,
+        _mol: &Mole,
         mode: &InitGuessMode,
     ) -> Result<Density, PyscfRsError> {
-        // No Python-side override surface for get_init_guess in the
-        // pyscf upstream class (it's pyscf.scf.hf.SCF.get_init_guess,
-        // signature `(mol, key='minao')`). We route to NoOverrides for
-        // now; Python overrides can target get_init_guess at the SCF.kernel
-        // level when needed (the bridge will inherit from this default).
-        //
-        // BIND-07 fidelity note: if a Python subclass really needs to
-        // override get_init_guess, a future plan can swap this body for a
-        // call_method1 dispatch. The kernel-internal default covers the 5
-        // current InitGuessMode arms.
-        pyscf_scf::NoOverrides.get_init_guess(mol, mode)
+        // BIND-07 / Pitfall 7: dispatch through `slf.call_method1` so
+        // a Python subclass override of `get_init_guess(mol, key)` is
+        // invoked transparently via MRO resolution. The pyscf upstream
+        // surface is `SCF.get_init_guess(mol, key='minao')`.
+        Python::attach(|py| {
+            let mode_str = match mode {
+                InitGuessMode::Minao => "minao",
+                InitGuessMode::Atom => "atom",
+                InitGuessMode::OneElectron => "1e",
+                InitGuessMode::Huckel => "huckel",
+                InitGuessMode::Chkfile(_) => "chkfile",
+                InitGuessMode::UserDM(d) => {
+                    // UserDM is already a density — no Python round-trip needed.
+                    return Ok(d.clone());
+                }
+            };
+            let args = PyTuple::new(
+                py,
+                [
+                    self.py_mol.bind(py).clone(),
+                    pyo3::types::PyString::new(py, mode_str).into_any(),
+                ],
+            )
+            .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "get_init_guess", args, |r| {
+                let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
+                to_density(arr)
+            })
+        })
     }
 
     fn get_jk(
