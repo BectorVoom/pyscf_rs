@@ -1,78 +1,33 @@
-[build-system]
-requires = ["setuptools>=61.0", "wheel", "cmake<4.0"]
-build-backend = "setuptools.build_meta"
+# pyscf-rs maturin packaging — Phase 3 BIND-01/BIND-02.
+#
+# This file REPLACES the upstream PySCF setuptools/cmake pyproject.toml. The
+# upstream Python tree under `pyscf/` is preserved on disk (Phase 1 D-03 forbids
+# touching it) but is no longer the active install target. From Phase 3 onward
+# the active import surface is the `python/pyscf/` overlay, which re-exports the
+# Rust `_native` cdylib built by `maturin develop` per BIND-02.
+#
+# Source-of-truth: .planning/phases/03-scf-pyo3-bindings/03-RESEARCH.md §"Pattern 10"
+# (verbatim) + §"Recommended Project Structure".
 
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
 
 [project]
-name = "pyscf_rs"
-dynamic = ["version"]
-description = "PySCF: Python-based Simulations of Chemistry Framework"
-readme = "README.md"
-classifiers = [
-  'Development Status :: 5 - Production/Stable',
-  'Intended Audience :: Science/Research',
-  'Intended Audience :: Developers',
-  'License :: OSI Approved :: Apache Software License',
-  'Programming Language :: C',
-  'Programming Language :: Python',
-  'Programming Language :: Python :: 3.7',
-  'Programming Language :: Python :: 3.8',
-  'Programming Language :: Python :: 3.9',
-  'Programming Language :: Python :: 3.10',
-  'Programming Language :: Python :: 3.11',
-  'Programming Language :: Python :: 3.12',
-  'Programming Language :: Python :: 3.13',
-  'Programming Language :: Python :: 3.14',
-  'Topic :: Software Development',
-  'Topic :: Scientific/Engineering',
-  'Operating System :: POSIX',
-  'Operating System :: Unix',
-  'Operating System :: MacOS',
-]
-
-maintainers = [{ name = "Qiming Sun", email = "osirpt.sun@gmail.com" }]
-
-authors = [{ name = "Qiming Sun", email = "osirpt.sun@gmail.com" }]
-
+name = "pyscf-rs"
+version = "0.1.0"
+description = "Pure-Rust rewrite of PySCF with drop-in pyscf.* import surface"
+requires-python = ">=3.10"
+authors = [{ name = "pyscf-rs contributors" }]
 license = { text = "Apache-2.0" }
-
-requires-python = ">=3.13"
-dependencies = [
-  'numpy>=1.13,!=1.16,!=1.17',
-  'scipy>=1.6.0',
-  'h5py>=2.7',
-  'setuptools',
-]
-
-[project.urls]
-Homepage = "http://www.pyscf.org"
-Repository = "https://github.com/pyscf/pyscf"
-Documentation = "http://www.pyscf.org"
+dependencies = ["numpy>=1.26"]
 
 [project.optional-dependencies]
+test = ["pytest>=7.0", "h5py>=3.10"]
 
-forge = ["pyscf-forge"]
-geomopt = ["pyberny>=0.6.2", "geometric>=0.9.7.2", "pyscf-qsdopt"]
-doci = ["pyscf-doci"]
-properties = ["pyscf-properties"]
-semiempirical = ['pyscf-semiempirical']
-cppe = ["cppe"]
-pyqmc = ["pyqmc"]
-bse = ["basis-set-exchange"]
-dispersion = ["pyscf-dispersion"]
-ccpy = ["coupled-cluster-py"]
-
-# all = ["pyscf[forge,geomopt,doci,properties,semiempirical,cppe,pyqmc,bse,dispersion,ccpy]"]
-
-# # extras which should not be installed by "all" components
-# nao = ["pyscf-nao"]
-# tblis = ["pyscf-tblis"]
-# icmpspt = ["pyscf-icmpspt"] # broken
-# shciscf = ["pyscf-shciscf"] # broken
-
-# cornell_shci = ["pyscf-cornell-shci"]
-# fciqmcscf = ["pyscf-fciqmc"]
-
-# [tool.uv.sources]
-# pyscf-cornell-shci = { path = "./pyscf/cornell-shci", editable = true }
-# pyscf-fciqmc = { path = "./pyscf/fciqmc", editable = true }
+[tool.maturin]
+python-source = "python"
+module-name   = "pyscf._native"
+features      = ["pyo3/extension-module", "pyo3/abi3-py310"]
+manifest-path = "crates/pyscf-py/Cargo.toml"
+strip         = true
