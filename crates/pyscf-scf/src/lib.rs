@@ -29,6 +29,8 @@ pub mod error;
 // Plan 03-04 — SCF DIIS adapter (FockSubspace impls DiisStorable +
 // diis_step helper wired into kernel_impl::scf_loop).
 pub mod diis_adapter;
+// Plan 03-05 — DF-HF entry point (RHF::density_fit + DfHooks).
+pub mod df_scf;
 
 pub use error::ScfError;
 pub use ghf::GHF;
@@ -52,3 +54,5 @@ pub use scanner::as_scanner;
 
 // Plan 03-04 re-exports.
 pub use diis_adapter::{diis_step, FockSubspace};
+// Plan 03-05 re-exports (SCF-07 surface).
+pub use df_scf::DfHooks;
