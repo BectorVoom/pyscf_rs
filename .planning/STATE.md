@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 3 context gathered
-last_updated: "2026-05-11T04:50:51.329Z"
-last_activity: 2026-05-11 -- Phase 3 planning complete
+last_updated: "2026-05-11T12:10:18.521Z"
+last_activity: 2026-05-11 -- Phase 03 execution started
 progress:
   total_phases: 8
   completed_phases: 0
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 02 — gto
+**Current focus:** Phase 03 — scf-pyo3-bindings
 
 ## Current Position
 
-Phase: 3
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-05-11 -- Phase 3 planning complete
+Phase: 03 (scf-pyo3-bindings) — EXECUTING
+Plan: 1 of 11
+Status: Executing Phase 03
+Last activity: 2026-05-11 -- Phase 03 execution started
 
 Progress: [█████████░] 88% (7/7 plans done; verification gaps remain)
 
