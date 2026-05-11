@@ -32,7 +32,7 @@ pub use ecp_engine_stub::EcpEngineNotAvailable;
 pub use eval_gto::{eval_gto, EvalGtoOutput};
 pub use format_basis::format_basis;
 pub use format_ecp::{format_ecp, make_ecp_env};
-pub use intor::{intor, IntorOutput};
+pub use intor::{intor, intor_with_auxmol, IntorOutput};
 pub use pyscf_core::{Mole, Unit};
 pub use set_geom::set_geom_;
 pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};

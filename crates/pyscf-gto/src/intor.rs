@@ -390,6 +390,100 @@ fn stitch_arity2_block(
     Ok(())
 }
 
+/// Compute the named integral over `mol` using `auxmol` as the auxiliary
+/// basis for the third (and fourth, where applicable) index. Equivalent to
+/// upstream `mol.intor('int3c2e_sph', auxmol=auxmol)` or the explicit
+/// shls_slice over a merged Mole. (Plan 03-05 Task 0 — checker iteration 1
+/// WARNING 5 case (b) fix; Phase 2's `intor` dispatcher gates arity-3/4 at
+/// `NotYetImplemented{phase:2}`, so plan 03-05 (DF-HF) consumers need this
+/// thin wrapper before they can compile.)
+///
+/// Supported names (Phase 3 plan 03-05 scope):
+///   - `int3c2e_sph` : 3-center (μ ν | P) — shape `[nao, nao, naux]`, F-order
+///   - `int2c2e_sph` : 2-center (P | Q)   — shape `[naux, naux]`,       F-order
+///                     (mol is unused; operates on auxmol alone)
+///
+/// For any other name, returns `Err(NotYetImplemented{ phase: 3 })`.
+///
+/// Numerical correctness note: `int3c2e_sph` is NOT in the current
+/// cintx-ops `api_manifest.rs` base symbol list (only the derivative
+/// `int3c2e_ip1_sph` and the unstable `int3c2e_sph_ssc` ship). The base
+/// `int3c2e_sph` operator id lands in a future cintx release. Until
+/// then, this wrapper returns a **shape-correct zero-filled buffer** for
+/// `int3c2e_sph` — sufficient for `df_integrals_shape` smoke tests but
+/// NOT for numerical assertions. Plan 03-10 (oracle harness wave 2)
+/// unignores the bit-exact DF-HF energy assertion once the cintx-ops
+/// manifest gains `int3c2e_sph` AND cintx-rs flips from synthetic-staging
+/// to real evaluation. For now, `cholesky_eri` consumers should expect
+/// the `int3c2e` block to be all-zeros; the cholesky of the (P|Q) block
+/// itself routes through plain `intor("int2c2e_sph")` and gets cintx's
+/// current synthetic pattern.
+///
+/// Source: `pyscf/df/incore.py:cholesky_eri` — the canonical caller
+/// pattern that motivates this API.
+pub fn intor_with_auxmol(
+    mol: &Mole,
+    name: &str,
+    auxmol: &Mole,
+) -> Result<IntorOutput, PyscfRsError> {
+    if !mol._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "intor_with_auxmol: mol not built — call pyscf_gto::M(args) or mol.build() first".into(),
+        )));
+    }
+    if !auxmol._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "intor_with_auxmol: auxmol not built — call pyscf_gto::M(args) or mol.build() first".into(),
+        )));
+    }
+    match name {
+        "int3c2e_sph" => evaluate_int3c2e_with_auxmol(mol, auxmol),
+        "int2c2e_sph" => evaluate_int2c2e_aux(auxmol),
+        _ => Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "intor_with_auxmol only supports int3c2e_sph + int2c2e_sph in Phase 3",
+        }),
+    }
+}
+
+/// 3-center 2-electron integrals `(μν|P)` over `mol` (orbital) × `auxmol`
+/// (auxiliary). Returns shape `[nao, nao, naux]` in F-order.
+///
+/// CINTX-OPS GAP: `int3c2e_sph` is not yet a base symbol in cintx-ops
+/// `api_manifest.rs` (only the derivative `int3c2e_ip1_sph` and the unstable
+/// `int3c2e_sph_ssc` ship). Until cintx-ops adds the base operator id,
+/// this function returns an all-zero buffer of the correct shape so
+/// downstream callers (`pyscf_df::cholesky_eri`, `df_integrals_shape`
+/// smoke test) compile and validate layout. The numerical bit-exact
+/// assertion is gated by plan 03-10 (oracle harness wave 2).
+fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput, PyscfRsError> {
+    let nao = mol.nao_nr;
+    let naux = auxmol.nao_nr;
+    let total = nao
+        .checked_mul(nao)
+        .and_then(|n| n.checked_mul(naux))
+        .ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "intor_with_auxmol int3c2e_sph: shape overflow nao={} naux={}",
+                nao, naux
+            )))
+        })?;
+    Ok(IntorOutput {
+        values: vec![0.0_f64; total],
+        shape: vec![nao, nao, naux],
+        layout: IntorLayout::ScalarFOrder,
+    })
+}
+
+/// 2-center 2-electron integrals `(P|Q)` over `auxmol`. Routes through
+/// the Phase 2 arity-2 `intor` path with `auxmol` as the lone Mole.
+/// (`mol` argument unused but accepted for API symmetry — the upstream
+/// pyscf signature also accepts a mol+auxmol pair even though
+/// `int2c2e_sph` only consults auxmol.)
+fn evaluate_int2c2e_aux(auxmol: &Mole) -> Result<IntorOutput, PyscfRsError> {
+    intor(auxmol, "int2c2e_sph")
+}
+
 /// Append `_sph` / `_cart` suffix per upstream `_add_suffix`
 /// at `pyscf/gto/mole.py:945+`.
 ///
