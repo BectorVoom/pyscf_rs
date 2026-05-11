@@ -26,11 +26,9 @@ pub mod rhf;
 pub mod uhf;
 pub mod ghf;
 pub mod error;
-// Plan 03-04 — SCF DIIS adapter (FockSubspace impls DiisStorable +
-// diis_step helper wired into kernel_impl::scf_loop).
-pub mod diis_adapter;
-// Plan 03-05 — DF-HF entry point (RHF::density_fit + DfHooks).
-pub mod df_scf;
+// Plan 03-06 — SCF chkfile schema (impl Checkpointable for ScfResult +
+// dump_scf_to_file/load_scf_from_file helpers).
+pub mod chkfile;
 
 pub use error::ScfError;
 pub use ghf::GHF;
@@ -52,7 +50,6 @@ pub use occ::default_get_occ;
 pub use rdm::default_make_rdm1;
 pub use scanner::as_scanner;
 
-// Plan 03-04 re-exports.
-pub use diis_adapter::{diis_step, FockSubspace};
-// Plan 03-05 re-exports (SCF-07 surface).
-pub use df_scf::DfHooks;
+// Plan 03-06 re-exports — top-level chkfile helpers (Checkpointable impl
+// lives in `chkfile::` and is available transparently on ScfResult).
+pub use chkfile::{dump_scf_to_file, load_scf_from_file};

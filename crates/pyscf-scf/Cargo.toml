@@ -14,9 +14,12 @@ pyscf-core    = { path = "../pyscf-core" }
 pyscf-algebra = { path = "../pyscf-algebra" }
 pyscf-gto     = { path = "../pyscf-gto" }
 pyscf-runtime = { path = "../pyscf-runtime" }
-pyscf-diis    = { path = "../pyscf-diis" }
-pyscf-df      = { path = "../pyscf-df" }
+pyscf-chkfile = { path = "../pyscf-chkfile" }
+ndarray       = { workspace = true }
 thiserror     = { workspace = true }
 tracing       = { workspace = true }
 # NOTE: pyo3 is FORBIDDEN here (D-01 trait-callback bridge — pyo3 lives in pyscf-py).
-# NOTE: pyscf-chkfile added by plan 03-06. pyscf-df wired by plan 03-05 (SCF-07 surface).
+# NOTE: pyscf-diis, pyscf-df added by plans 03-04 / 03-05. pyscf-chkfile added by 03-06.
+
+[dev-dependencies]
+tempfile = "3"
