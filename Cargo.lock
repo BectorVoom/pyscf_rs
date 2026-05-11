@@ -3527,6 +3527,14 @@ dependencies = [
 [[package]]
 name = "pyscf-scf"
 version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-gto",
+ "pyscf-runtime",
+ "thiserror 2.0.18",
+ "tracing",
+]
 
 [[package]]
 name = "qd"

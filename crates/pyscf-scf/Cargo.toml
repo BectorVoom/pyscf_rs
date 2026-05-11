@@ -4,9 +4,17 @@ version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
-description = "Self-consistent field (RHF/UHF/GHF + DIIS). Implemented in Phase 3."
+description = "Self-consistent field kernels (RHF/UHF/GHF + DIIS + DF-HF). No pyo3 dep — D-01."
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+pyscf-gto     = { path = "../pyscf-gto" }
+pyscf-runtime = { path = "../pyscf-runtime" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+# NOTE: pyo3 is FORBIDDEN here (D-01 trait-callback bridge — pyo3 lives in pyscf-py).
+# NOTE: pyscf-diis, pyscf-df, pyscf-chkfile added by plans 03-04 / 03-05 / 03-06.
