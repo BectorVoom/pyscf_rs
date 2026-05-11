@@ -18,9 +18,13 @@
 //!     propagates `NotYetImplemented{phase:2}` from `pyscf_gto::intor`.
 //!     Plan 03-05 (DF-HF) provides an override path that bypasses
 //!     int2e_sph entirely by routing through pyscf-df's DfIntegrals.
-//!   - DIIS adapter slot in `default_get_fock` is a fixed-point fallback
-//!     (`F = h1e + V_HF`); plan 03-04 replaces it with CDIIS via the
-//!     pyscf-diis crate's DiisAdapter trait.
+//!   - `default_get_fock` builds the BASE Fock (`F = h1e + V_HF`); the
+//!     CDIIS extrapolation step has been hoisted one layer up into
+//!     `crate::kernel_impl::scf_loop`, which calls
+//!     `crate::diis_adapter::diis_step` AFTER `hooks.get_fock(...)`.
+//!     This keeps the SCF-08 hook signature simple and lets any
+//!     OverrideHooks impl share the kernel-loop DIIS without
+//!     reimplementing it.
 
 use pyscf_core::{Density, Mole, PyscfRsError};
 
@@ -143,18 +147,29 @@ pub fn default_get_veff(mol: &Mole, dm: &Density) -> Result<Density, PyscfRsErro
     Ok(Density { nao, data })
 }
 
-/// `F = h1e + V_HF` — DIIS adapter slot.
+/// `F = h1e + V_HF` — BASE Fock (pre-DIIS).
 ///
-/// Plan 03-04 replaces the fixed-point fallback below with CDIIS
-/// extrapolation via the `pyscf-diis::DiisAdapter` trait. Until then,
-/// the function emits a tracing warning after the first cycle so the
-/// DIIS-not-shipped status is visible in logs.
+/// This function builds the plain Roothaan Fock matrix. The CDIIS
+/// extrapolation step lives in `crate::diis_adapter::diis_step` and is
+/// invoked from `crate::kernel_impl::scf_loop` AFTER `hooks.get_fock(...)`,
+/// so an `OverrideHooks` impl that overrides `get_fock` does NOT need to
+/// reimplement DIIS — the cycle loop handles extrapolation around the
+/// hook's return value.
+///
+/// The `_diis_state` parameter is reserved for future use (e.g. passing
+/// the Diis<FockSubspace> handle through the hook). Plan 03-04 keeps it
+/// inert; plan 03-07 (PyO3 bridge) may surface it for Python-side
+/// override implementations.
+///
+/// Source: `pyscf/scf/hf.py:1086-1135` (the upstream `get_fock` slot —
+/// upstream embeds DIIS inside; we hoist it one layer up to the cycle
+/// loop so the SCF-08 hook signature stays simple).
 pub fn default_get_fock(
     h1e: &Density,
     _s1e: &Density,
     vhf: &Density,
     _dm: &Density,
-    cycle: i32,
+    _cycle: i32,
     _diis_state: Option<&Density>,
 ) -> Result<Density, PyscfRsError> {
     let nao = h1e.nao;
@@ -163,13 +178,6 @@ pub fn default_get_fock(
             expected: nao,
             actual: vhf.nao,
         }));
-    }
-    if cycle >= 1 {
-        tracing::warn!(
-            target: "pyscf_scf::fock",
-            cycle = cycle,
-            "DIIS adapter slot — plan 03-04 not yet shipped, fixed-point fallback in use"
-        );
     }
     let mut data = vec![0.0_f64; nao * nao];
     for i in 0..(nao * nao) {

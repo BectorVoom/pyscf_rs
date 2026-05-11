@@ -26,6 +26,9 @@ pub mod rhf;
 pub mod uhf;
 pub mod ghf;
 pub mod error;
+// Plan 03-04 — SCF DIIS adapter (FockSubspace impls DiisStorable +
+// diis_step helper wired into kernel_impl::scf_loop).
+pub mod diis_adapter;
 
 pub use error::ScfError;
 pub use ghf::GHF;
@@ -46,3 +49,6 @@ pub use init_guess::default_get_init_guess;
 pub use occ::default_get_occ;
 pub use rdm::default_make_rdm1;
 pub use scanner::as_scanner;
+
+// Plan 03-04 re-exports.
+pub use diis_adapter::{diis_step, FockSubspace};
