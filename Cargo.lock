@@ -3396,6 +3396,7 @@ dependencies = [
  "pyscf-core",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -3528,10 +3529,15 @@ dependencies = [
 name = "pyscf-scf"
 version = "0.1.0"
 dependencies = [
+ "ndarray",
  "pyscf-algebra",
+ "pyscf-chkfile",
  "pyscf-core",
+ "pyscf-df",
+ "pyscf-diis",
  "pyscf-gto",
  "pyscf-runtime",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
 ]

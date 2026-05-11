@@ -29,6 +29,10 @@ pub mod error;
 // Plan 03-06 — SCF chkfile schema (impl Checkpointable for ScfResult +
 // dump_scf_to_file/load_scf_from_file helpers).
 pub mod chkfile;
+// Plan 03-04 — DIIS adapter (FockSubspace + diis_step).
+pub mod diis_adapter;
+// Plan 03-05 — DF-HF entry (RHF::density_fit + DfHooks).
+pub mod df_scf;
 
 pub use error::ScfError;
 pub use ghf::GHF;
@@ -53,3 +57,9 @@ pub use scanner::as_scanner;
 // Plan 03-06 re-exports — top-level chkfile helpers (Checkpointable impl
 // lives in `chkfile::` and is available transparently on ScfResult).
 pub use chkfile::{dump_scf_to_file, load_scf_from_file};
+
+// Plan 03-04 re-exports — DIIS adapter surface (FockSubspace + diis_step).
+pub use diis_adapter::{diis_step, FockSubspace};
+// Plan 03-05 re-exports — DF-HF entry (DfHooks). RHF::density_fit lives on the
+// RHF impl block in df_scf.rs.
+pub use df_scf::DfHooks;

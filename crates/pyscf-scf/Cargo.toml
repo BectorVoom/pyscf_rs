@@ -15,11 +15,15 @@ pyscf-algebra = { path = "../pyscf-algebra" }
 pyscf-gto     = { path = "../pyscf-gto" }
 pyscf-runtime = { path = "../pyscf-runtime" }
 pyscf-chkfile = { path = "../pyscf-chkfile" }
+# Plans 03-04 (DIIS) + 03-05 (DF) shipped source modules (`diis_adapter.rs` +
+# `df_scf.rs`) but the Cargo.toml dep entries weren't carried into Wave 7's
+# base. Reinstating them here so `cargo build -p pyscf-scf` compiles end-to-end.
+pyscf-diis    = { path = "../pyscf-diis" }
+pyscf-df      = { path = "../pyscf-df" }
 ndarray       = { workspace = true }
 thiserror     = { workspace = true }
 tracing       = { workspace = true }
 # NOTE: pyo3 is FORBIDDEN here (D-01 trait-callback bridge — pyo3 lives in pyscf-py).
-# NOTE: pyscf-diis, pyscf-df added by plans 03-04 / 03-05. pyscf-chkfile added by 03-06.
 
 [dev-dependencies]
 tempfile = "3"
