@@ -103,7 +103,7 @@ Plans:
 - [ ] 03-08-PLAN.md — pyscf-oracle macro body + chkfile round-trip oracle (ORACLE-08 empirical h5py↔hdf5-metno seal — STATE.md blocker; ORACLE-02, ORACLE-08)
 - [ ] 03-09-PLAN.md — CI jobs (maturin-smoke, stride-fuzz, xplat-uhartree Linux x86_64 + macOS aarch64 matrix, python313t-smoke NON-abi3 separate build per RESEARCH Pitfall (NEW); BIND-05, Pitfall 12)
 - [ ] 03-10-PLAN.md — Python test bodies (replace 19 xfail stubs with real ≤1 µHartree / element-wise / bit-identical assertions; verifies SCF-01..14 + BIND-02/04/07/09 + ORACLE-08)
-- [ ] 03-11-PLAN.md — pyscf-scf kernel internals (SCF cycle loop body, Fock build, eig+canonicalize_signs, occ+rdm+energy, '1e' init_guess body, analyze/mulliken/dip, convert helpers, as_scanner; SCF-01..03, SCF-05, SCF-06, SCF-09, SCF-11, SCF-12, SCF-13) — NEW, WARNING 3 split
+- [x] 03-11-PLAN.md — pyscf-scf kernel internals (SCF cycle loop body, Fock build, eig+canonicalize_signs, occ+rdm+energy, '1e' init_guess body, analyze/mulliken/dip, convert helpers, as_scanner; SCF-01..03, SCF-05, SCF-06, SCF-09, SCF-11, SCF-12, SCF-13) — NEW, WARNING 3 split
 **UI hint**: yes
 
 ### Phase 4: DFT
