@@ -25,6 +25,8 @@ pub mod dot;
 pub mod reduce;
 pub mod oracle;
 pub mod host_fallback;
+// Phase 3 plan 03-01 — Pulay DIIS B-matrix LU solve (RESEARCH Open Question 1).
+pub mod solve_linear;
 
 pub use client::AlgebraClient;
 pub use error::AlgebraError;
@@ -40,4 +42,5 @@ pub use host_fallback::{cholesky, eigh, qr, svd};
 pub use oracle::{oracle_dot, oracle_einsum, oracle_sum};
 pub use reduce::reduce_sum;
 pub use scal::scal;
+pub use solve_linear::solve_linear;
 pub use transpose::transpose;

@@ -13,4 +13,15 @@ pub enum AlgebraError {
     NotYetImplemented { phase: u8, what: &'static str },
     #[error("cubecl runtime error: {0}")]
     CubeclRuntime(String),
+    /// Phase 3 plan 03-01 — `solve_linear` shape validation. Distinct from
+    /// `DimensionMismatch` (which carries `Vec<usize>` shapes for tensor
+    /// ops) so the simpler row/col `expected vs actual` flat-slice check
+    /// stays cheap and allocation-friendly.
+    #[error("shape mismatch: expected {expected}, actual {actual}")]
+    ShapeMismatch { expected: String, actual: String },
+    /// Phase 3 plan 03-01 — `solve_linear` singular-matrix indicator.
+    /// faer 0.24 `FullPivLu` does not panic on singular input; the
+    /// solve produces non-finite entries which `solve_linear` detects.
+    #[error("solve_linear: matrix is singular")]
+    Singular,
 }
