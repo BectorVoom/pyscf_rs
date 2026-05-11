@@ -5642,9 +5642,5 @@ name = "cintx"
 version = "0.1.0"
 
 [[patch.unused]]
-name = "libxc_rs"
-version = "0.1.0"
-
-[[patch.unused]]
 name = "xcfun-rs"
 version = "0.1.0"

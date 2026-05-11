@@ -36,8 +36,11 @@ jobs:
       # default branch. cintx + libxc_rs default branch is "main";
       # xcfun_rs default branch is "master" (verified via
       # `gh api repos/BectorVoom/{name}` 2026-05-10).
+      # libxc_rs is excluded — it pulls a ~6h libxc compile and is
+      # not needed until Phase 4 (DFT). Re-add `-p libxc_rs` here
+      # alongside the [patch.crates-io] entry in Cargo.toml.
       - name: bump sibling-crate revs to HEAD
-        run: cargo update -p cintx -p libxc_rs -p xcfun_rs
+        run: cargo update -p cintx -p xcfun_rs
 
       # Verify the cubecl pin still holds after the bump. If a sibling
       # bumped cubecl, this fails immediately with a clear diagnostic.

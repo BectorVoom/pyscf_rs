@@ -91,5 +91,5 @@ debug = 1
 # upstream-fix path) and Phase 2/3 needs CI parity.
 [patch.crates-io]
 cintx     = { path = "../cintx" }
-libxc_rs  = { path = "../libxc_rs" }
+# libxc_rs  = { path = "../libxc_rs" }   # disabled — pulls a ~6h libxc compile; re-enable when Phase 4 (DFT) needs it
 xcfun_rs  = { path = "../xcfun_rs/crates/xcfun-rs", package = "xcfun-rs" }
