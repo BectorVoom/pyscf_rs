@@ -99,8 +99,8 @@ Plans:
 - [x] 03-04-PLAN.md — pyscf-diis crate (CDIIS, SDF-FDS error vector, B-matrix via pyscf-algebra::solve_linear, FockSubspace impl DiisStorable; SCF-04, Pitfall 9 mitigation)
 - [x] 03-05-PLAN.md — pyscf-df crate (DfIntegrals, cholesky_eri, DEFAULT_AUXBASIS, get_jk_df, RHF::density_fit; SCF-07)
 - [x] 03-06-PLAN.md — pyscf-chkfile crate + pyscf-scf chkfile schema + 'chkfile' init_guess mode (D-05/D-06; SCF-10, DIST-05 baseline)
-- [ ] 03-07-PLAN.md — pyscf-py PyO3 bridge (#[pymodule] _native, PyRHF/UHF/GHF, PyOverrideBridge, NumPy converters, create_exception!, abi3-py310 + free-threading features, python/pyscf overlay; BIND-01, BIND-02, BIND-04, BIND-06, BIND-07, BIND-09, SCF-08)
-- [ ] 03-08-PLAN.md — pyscf-oracle macro body + chkfile round-trip oracle (ORACLE-08 empirical h5py↔hdf5-metno seal — STATE.md blocker; ORACLE-02, ORACLE-08)
+- [x] 03-07-PLAN.md — pyscf-py PyO3 bridge (#[pymodule] _native, PyRHF/UHF/GHF, PyOverrideBridge, NumPy converters, create_exception!, abi3-py310 + free-threading features, python/pyscf overlay; BIND-01, BIND-02, BIND-04, BIND-06, BIND-07, BIND-09, SCF-08)
+- [x] 03-08-PLAN.md — pyscf-oracle macro body + chkfile round-trip oracle (ORACLE-08 empirical h5py↔hdf5-metno seal — STATE.md blocker; ORACLE-02, ORACLE-08)
 - [ ] 03-09-PLAN.md — CI jobs (maturin-smoke, stride-fuzz, xplat-uhartree Linux x86_64 + macOS aarch64 matrix, python313t-smoke NON-abi3 separate build per RESEARCH Pitfall (NEW); BIND-05, Pitfall 12)
 - [ ] 03-10-PLAN.md — Python test bodies (replace 19 xfail stubs with real ≤1 µHartree / element-wise / bit-identical assertions; verifies SCF-01..14 + BIND-02/04/07/09 + ORACLE-08)
 - [x] 03-11-PLAN.md — pyscf-scf kernel internals (SCF cycle loop body, Fock build, eig+canonicalize_signs, occ+rdm+energy, '1e' init_guess body, analyze/mulliken/dip, convert helpers, as_scanner; SCF-01..03, SCF-05, SCF-06, SCF-09, SCF-11, SCF-12, SCF-13) — NEW, WARNING 3 split
