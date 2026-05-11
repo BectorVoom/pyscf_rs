@@ -87,13 +87,26 @@ fn three_iterate_pulay_reference() {
 fn ring_buffer_drops_oldest() {
     // Pushing more than `space` iterates must not panic and must remain
     // numerically stable; ring buffer wraps to overwrite the oldest entry.
+    // We use VARYING error vectors so the B-matrix stays well-conditioned
+    // after wrap (identical errors would produce a rank-deficient B and
+    // surface as DiisError::Singular per threat T-3-13).
     let mut diis = Diis::<FlatVec>::new(2);
-    diis.extrapolate(FlatVec(vec![1.0]), vec![0.5]).expect("1");
-    diis.extrapolate(FlatVec(vec![2.0]), vec![0.5]).expect("2");
-    // 3rd push overwrites slot 0 (oldest).
-    let _ = diis.extrapolate(FlatVec(vec![3.0]), vec![0.5]).expect("3");
+    diis.extrapolate(FlatVec(vec![1.0, 0.0]), vec![0.5, 0.0])
+        .expect("1");
+    diis.extrapolate(FlatVec(vec![2.0, 0.0]), vec![0.0, 0.5])
+        .expect("2");
+    // 3rd push overwrites slot 0 (oldest). Use a distinct error vector.
+    let _ = diis
+        .extrapolate(FlatVec(vec![3.0, 0.0]), vec![0.3, 0.4])
+        .expect("3");
     // 4th push overwrites slot 1.
-    let _ = diis.extrapolate(FlatVec(vec![4.0]), vec![0.5]).expect("4");
+    let _ = diis
+        .extrapolate(FlatVec(vec![4.0, 0.0]), vec![0.4, 0.3])
+        .expect("4");
+    // After 4 pushes the buffer holds 2 entries (space-bounded). The Diis
+    // public API exposes len() / is_empty(); verify the bound.
+    assert_eq!(diis.len(), 2, "ring buffer must remain at `space` after overflow");
+    assert!(!diis.is_empty());
 }
 
 #[test]
