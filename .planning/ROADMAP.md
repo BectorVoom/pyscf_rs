@@ -95,7 +95,7 @@ Plans:
 Plans:
 - [x] 03-01-PLAN.md — Workspace scaffolding (+3 crates: pyscf-chkfile/diis/df, pyscf-algebra::solve_linear, pyscf-core::canonicalize_signs; SCF-13)
 - [x] 03-02-PLAN.md — Wave-0 test stubs (pyproject.toml maturin config, python overlay shim, 19 pytest xfail stubs, oracle macro stub, forbid-lazy-static lint; BIND-02 scaffolding, BIND-06)
-- [ ] 03-03-PLAN.md — pyscf-scf trait + struct scaffolding (OverrideHooks trait, RHF/UHF/GHF + 30-attribute floor, InitGuessMode declarations, kernel signature; SCF-01..03, SCF-05, SCF-06, SCF-14) — WARNING 3 split
+- [x] 03-03-PLAN.md — pyscf-scf trait + struct scaffolding (OverrideHooks trait, RHF/UHF/GHF + 30-attribute floor, InitGuessMode declarations, kernel signature; SCF-01..03, SCF-05, SCF-06, SCF-14) — WARNING 3 split
 - [ ] 03-04-PLAN.md — pyscf-diis crate (CDIIS, SDF-FDS error vector, B-matrix via pyscf-algebra::solve_linear, FockSubspace impl DiisStorable; SCF-04, Pitfall 9 mitigation)
 - [ ] 03-05-PLAN.md — pyscf-df crate (DfIntegrals, cholesky_eri, DEFAULT_AUXBASIS, get_jk_df, RHF::density_fit; SCF-07)
 - [ ] 03-06-PLAN.md — pyscf-chkfile crate + pyscf-scf chkfile schema + 'chkfile' init_guess mode (D-05/D-06; SCF-10, DIST-05 baseline)
