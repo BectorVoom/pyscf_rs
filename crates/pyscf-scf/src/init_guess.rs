@@ -27,8 +27,19 @@ pub fn default_get_init_guess(
     }
 }
 
-pub(crate) fn init_guess_by_1e(_mol: &Mole) -> Result<Density, PyscfRsError> {
-    unimplemented!("plan 03-11 — diagonalize h_core, Aufbau-fill, make_rdm1")
+/// `init_guess_by_1e(mol)` — build the initial density by diagonalizing
+/// the one-electron Hamiltonian `h_core = T + V_nuc`, Aufbau-filling the
+/// MOs, and constructing the RDM1. Plan 03-11 fill (SCF-05 partial — '1e'
+/// mode only; minao/atom/huckel stay NotYetImplemented).
+///
+/// Source: `pyscf/scf/hf.py:485-494` — `def init_guess_by_1e(mol)`.
+pub(crate) fn init_guess_by_1e(mol: &Mole) -> Result<Density, PyscfRsError> {
+    let h_core = crate::fock::default_get_hcore(mol)?;
+    let s1e = crate::fock::default_get_ovlp(mol)?;
+    let mut mo = crate::eig::default_eig(&h_core, &s1e)?;
+    let occ = crate::occ::default_get_occ(&mo.energies, mol.nelectron)?;
+    mo.occupations = occ;
+    crate::rdm::default_make_rdm1(&mo)
 }
 
 /// Parse a string mode name (used by oracle Arm 4).

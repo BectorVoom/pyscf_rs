@@ -1,28 +1,179 @@
-//! Fock build. Body filled in plan 03-11 (kernel internals split per WARNING 3).
+//! Fock build — h_core / S / J,K / V_HF / F. Body filled in plan 03-11.
+//!
+//! Source:
+//!   - `pyscf/scf/hf.py:316-345` — `get_hcore` (kin + nuc)
+//!   - `pyscf/scf/hf.py:346-360` — `get_ovlp`
+//!   - `pyscf/scf/hf.py:957-1033` — `get_jk` (J + K via int2e)
+//!   - `pyscf/scf/hf.py:1034-1085` — `get_veff` (J - 0.5K for RHF)
+//!   - `pyscf/scf/hf.py:1086-1135` — `get_fock` (DIIS adapter slot)
+//!
+//! Notes:
+//!   - All AO-basis matrices (h_core, S, D, F, J, K) are symmetric for
+//!     closed-shell RHF, so F-order (intor's output) and row-major
+//!     (`Density.data`'s documented convention) give bit-identical
+//!     buffers. No transpose is needed when copying `IntorOutput.values`
+//!     into `Density.data`.
+//!   - `default_get_jk` requires the Phase 2 arity-4 `int2e_sph` dispatcher
+//!     (plan 02-09 verification rollup). Until that lands the function
+//!     propagates `NotYetImplemented{phase:2}` from `pyscf_gto::intor`.
+//!     Plan 03-05 (DF-HF) provides an override path that bypasses
+//!     int2e_sph entirely by routing through pyscf-df's DfIntegrals.
+//!   - DIIS adapter slot in `default_get_fock` is a fixed-point fallback
+//!     (`F = h1e + V_HF`); plan 03-04 replaces it with CDIIS via the
+//!     pyscf-diis crate's DiisAdapter trait.
+
 use pyscf_core::{Density, Mole, PyscfRsError};
 
-pub fn default_get_hcore(_mol: &Mole) -> Result<Density, PyscfRsError> {
-    unimplemented!("plan 03-11")
+/// `h_core(mol) = T + V_nuc` (1-electron Hamiltonian).
+///
+/// Source: `pyscf/scf/hf.py:316-345`. Returns an `nao×nao` `Density` (this
+/// type is overloaded for any nao×nao matrix in pyscf-core's Phase 1
+/// surface — see `pyscf-core/src/density.rs`).
+pub fn default_get_hcore(mol: &Mole) -> Result<Density, PyscfRsError> {
+    let t = pyscf_gto::intor(mol, "int1e_kin")?;
+    let v = pyscf_gto::intor(mol, "int1e_nuc")?;
+    let nao = mol.nao_nr;
+    if t.values.len() != nao * nao || v.values.len() != nao * nao {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
+            expected: nao * nao,
+            actual: t.values.len(),
+        }));
+    }
+    let mut data = vec![0.0_f64; nao * nao];
+    for k in 0..(nao * nao) {
+        data[k] = t.values[k] + v.values[k];
+    }
+    Ok(Density { nao, data })
 }
-pub fn default_get_ovlp(_mol: &Mole) -> Result<Density, PyscfRsError> {
-    unimplemented!("plan 03-11")
+
+/// `S = int1e_ovlp` (overlap matrix).
+pub fn default_get_ovlp(mol: &Mole) -> Result<Density, PyscfRsError> {
+    let s = pyscf_gto::intor(mol, "int1e_ovlp")?;
+    let nao = mol.nao_nr;
+    if s.values.len() != nao * nao {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
+            expected: nao * nao,
+            actual: s.values.len(),
+        }));
+    }
+    Ok(Density { nao, data: s.values })
 }
+
+/// `(J, K)` build from `int2e_sph` and the density matrix.
+///
+/// J[μν] = Σ_λσ (μν|λσ) D[λσ]
+/// K[μν] = Σ_λσ (μλ|νσ) D[λσ]
+///
+/// Phase 2 status (plan 02-09 verification rollup gap): `pyscf_gto::intor`
+/// returns `NotYetImplemented{phase:2}` for arity-4 ERIs. This function
+/// propagates that error verbatim until the rollup ships. Override path:
+/// implement `OverrideHooks::get_jk` via pyscf-df (plan 03-05) — DfHooks
+/// bypasses int2e_sph entirely.
+///
+/// All λσ-reductions go through `pyscf_algebra::oracle_sum` (Pitfall 9
+/// mitigation) once the ERIs are available.
 pub fn default_get_jk(
-    _mol: &Mole,
-    _dm: &Density,
+    mol: &Mole,
+    dm: &Density,
 ) -> Result<(Density, Density), PyscfRsError> {
-    unimplemented!("plan 03-11")
+    let nao = mol.nao_nr;
+    if dm.nao != nao {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
+            expected: nao,
+            actual: dm.nao,
+        }));
+    }
+    // Fetch (μν|λσ) ERIs. For now this returns NotYetImplemented{phase:2}
+    // (plan 02-09 rollup gap); the `?` propagates that to the kernel
+    // caller, which surfaces a structured error rather than panicking.
+    let eri = pyscf_gto::intor(mol, "int2e")?;
+    let expected = nao * nao * nao * nao;
+    if eri.values.len() != expected {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
+            expected,
+            actual: eri.values.len(),
+        }));
+    }
+    // intor returns F-order `[nao, nao, nao, nao]`. For arity-4 the
+    // exact F-order index of (μ, ν, λ, σ) is `μ + ν*nao + λ*nao^2 + σ*nao^3`.
+    // ERIs are 8-fold symmetric under (μν|λσ) == (νμ|λσ) == (μν|σλ) ==
+    // (λσ|μν), so this layout works regardless of intor's choice between
+    // chemist's and physicist's notation conventions.
+    //
+    // J[μν] = Σ_{λσ} eri[μ,ν,λ,σ] · D[λ,σ]
+    // K[μν] = Σ_{λσ} eri[μ,λ,ν,σ] · D[λ,σ]
+    let mut j_data = vec![0.0_f64; nao * nao];
+    let mut k_data = vec![0.0_f64; nao * nao];
+    let mut j_terms = vec![0.0_f64; nao * nao];
+    let mut k_terms = vec![0.0_f64; nao * nao];
+    let n2 = nao * nao;
+    let n3 = n2 * nao;
+    for mu in 0..nao {
+        for nu in 0..nao {
+            for lambda in 0..nao {
+                for sigma in 0..nao {
+                    // (μν|λσ) F-order index
+                    let i_j = mu + nu * nao + lambda * n2 + sigma * n3;
+                    // (μλ|νσ) for K
+                    let i_k = mu + lambda * nao + nu * n2 + sigma * n3;
+                    let d_ls = dm.data[lambda * nao + sigma];
+                    j_terms[lambda * nao + sigma] = eri.values[i_j] * d_ls;
+                    k_terms[lambda * nao + sigma] = eri.values[i_k] * d_ls;
+                }
+            }
+            // Reduction over (λ, σ) — Pitfall 9 mitigation.
+            j_data[mu * nao + nu] = pyscf_algebra::oracle_sum(&j_terms);
+            k_data[mu * nao + nu] = pyscf_algebra::oracle_sum(&k_terms);
+        }
+    }
+    Ok((
+        Density { nao, data: j_data },
+        Density { nao, data: k_data },
+    ))
 }
-pub fn default_get_veff(_mol: &Mole, _dm: &Density) -> Result<Density, PyscfRsError> {
-    unimplemented!("plan 03-11")
+
+/// `V_HF = J - 0.5 · K` (RHF closed-shell effective potential).
+pub fn default_get_veff(mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError> {
+    let (j, k) = default_get_jk(mol, dm)?;
+    let nao = j.nao;
+    let mut data = vec![0.0_f64; nao * nao];
+    for i in 0..(nao * nao) {
+        data[i] = j.data[i] - 0.5 * k.data[i];
+    }
+    Ok(Density { nao, data })
 }
+
+/// `F = h1e + V_HF` — DIIS adapter slot.
+///
+/// Plan 03-04 replaces the fixed-point fallback below with CDIIS
+/// extrapolation via the `pyscf-diis::DiisAdapter` trait. Until then,
+/// the function emits a tracing warning after the first cycle so the
+/// DIIS-not-shipped status is visible in logs.
 pub fn default_get_fock(
-    _h1e: &Density,
+    h1e: &Density,
     _s1e: &Density,
-    _vhf: &Density,
+    vhf: &Density,
     _dm: &Density,
-    _cycle: i32,
+    cycle: i32,
     _diis_state: Option<&Density>,
 ) -> Result<Density, PyscfRsError> {
-    unimplemented!("plan 03-11")
+    let nao = h1e.nao;
+    if vhf.nao != nao {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
+            expected: nao,
+            actual: vhf.nao,
+        }));
+    }
+    if cycle >= 1 {
+        tracing::warn!(
+            target: "pyscf_scf::fock",
+            cycle = cycle,
+            "DIIS adapter slot — plan 03-04 not yet shipped, fixed-point fallback in use"
+        );
+    }
+    let mut data = vec![0.0_f64; nao * nao];
+    for i in 0..(nao * nao) {
+        data[i] = h1e.data[i] + vhf.data[i];
+    }
+    Ok(Density { nao, data })
 }

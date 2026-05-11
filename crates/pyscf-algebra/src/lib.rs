@@ -27,6 +27,11 @@ pub mod oracle;
 pub mod host_fallback;
 // Phase 3 plan 03-01 — Pulay DIIS B-matrix LU solve (RESEARCH Open Question 1).
 pub mod solve_linear;
+// Phase 3 plan 03-11 — slice-based generalized self-adjoint eigh for SCF.
+// Bridges the algebra-wall (D-04) so pyscf-scf can call a flat-slice API
+// without naming Tensor/AlgebraClient. Mirrors solve_linear's wrapper
+// shape from plan 03-01.
+pub mod eigh_gen;
 
 pub use client::AlgebraClient;
 pub use error::AlgebraError;
@@ -36,6 +41,7 @@ pub use tensor::{BufferId, Tensor};
 
 pub use axpy::axpy;
 pub use dot::dot;
+pub use eigh_gen::eigh_gen;
 pub use gemm::gemm;
 pub use gemv::gemv;
 pub use host_fallback::{cholesky, eigh, qr, svd};
