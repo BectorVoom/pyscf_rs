@@ -8,7 +8,7 @@
 
 ## Overview
 
-pyscf_rs is a pure-Rust rewrite of PySCF that ships as a `pip install`-able wheel preserving the `from pyscf import gto, scf, dft, mp, cc, grad, geomopt` import surface. The architecture is locked: a 15-crate horizontal-layered façade workspace mirroring `cintx`/`xcfun_rs` (with one new member, `pyscf-algebra`, owning all linear algebra), cubecl 0.10.0 as the sole compute primitive (CPU SIMD/CUDA/WGPU/ROCm), faer 0.24 used only for host eigh/Cholesky/QR/SVD behind the algebra crate's surface, PyO3 0.28 for the Python boundary, and PySCF-as-live-oracle in CI. Backend selection is runtime-driven via `PYSCF_BACKEND`; the workspace `gpu` umbrella feature is OFF by default so the standard build is CPU-only. See `docs/manual/Cubecl/` for the cubecl runtime/ComputeClient/tensor-handle pattern that `pyscf-algebra` is built on.
+pyscf_rs is a pure-Rust rewrite of PySCF that ships as a `pip install`-able wheel preserving the `from pyscf import gto, scf, dft, mp, cc, grad, geomopt` import surface. The architecture is locked: a 15-crate horizontal-layered façade workspace mirroring `cintx`/`xcfun_rs` (with one new member, `pyscf-algebra`, owning all linear algebra; Phase 3 grows the workspace to 18 by adding `pyscf-chkfile`, `pyscf-diis`, `pyscf-df`), cubecl 0.10.0 as the sole compute primitive (CPU SIMD/CUDA/WGPU/ROCm), faer 0.24 used only for host eigh/Cholesky/QR/SVD behind the algebra crate's surface, PyO3 0.28 for the Python boundary, and PySCF-as-live-oracle in CI. Backend selection is runtime-driven via `PYSCF_BACKEND`; the workspace `gpu` umbrella feature is OFF by default so the standard build is CPU-only. See `docs/manual/Cubecl/` for the cubecl runtime/ComputeClient/tensor-handle pattern that `pyscf-algebra` is built on.
 
 The dependency DAG dictates phase ordering almost entirely: `core/runtime → kernels → gto → scf → {dft, mp2} → ccsd → grad → geomopt → wheel`. Phases 1–7 walk this critical path with the PyO3 contract folded into Phase 3 (SCF) so subclass-override / NumPy-boundary / GIL-release conventions lock on a small surface (RHF) before DFT's overrideable explosion. Phase 8 is the closing "ship readiness" phase combining GPU backend enable, oracle hardening, and wheel distribution because all three gate on the same artifact (a working CPU baseline across every method) and feed the same goal (validating the 2–5× speedup claim on a real benchmark suite, in a real wheel, on a real CI machine).
 
@@ -90,7 +90,20 @@ Plans:
   4. **PyO3 subclass dispatch works**: a Python user defines `class MyHF(scf.RHF): def get_veff(self, mol, dm): return super().get_veff(mol, dm) + correction(dm)` and the Rust SCF driver calls the Python override (verified by an in-CI assertion that the override is invoked at least once per cycle); the same is true for every overrideable hook (`get_jk`, `get_hcore`, `get_init_guess`, `get_fock`, `get_occ`, `eig`, `make_rdm1`, `energy_elec`, `energy_tot`) — dispatched via `slf.call_method1(py, …)`, never via Rust MRO (BIND-07, SCF-08, Pitfall 7 mitigation).
   5. **PyO3 boundary discipline locked**: every public PyO3 entry point that takes a NumPy array calls `to_owned()` on input that is not `is_standard_layout()`, and a stride-fuzz CI test that calls each entry with `a`, `a.T`, `a[::2]`, `a[:, 1:5]` produces identical answers (BIND-04, Pitfall 5); long compute calls `Python::detach` and a `python3.13t` free-threaded CI build runs the SCF test corpus without deadlocks (BIND-05, Pitfall 6); `pyo3::sync::GILOnceCell` replaces every `lazy_static!` (BIND-06); a Rust panic in any kernel called via FFI surfaces as a Python exception with the original error chain preserved, **never** as a process abort or undefined behavior (BIND-09, Pitfall 14); `from pyscf import scf` works exactly as upstream via `_native.scf` PyO3 submodule + `python/pyscf/__init__.py` re-export shim (BIND-01, BIND-02).
   6. **Oracle harness bootstrap**: the `oracle_check!(method, tolerance, fixture)` macro is implemented in `pyscf-oracle` (dev-deps only); every SCF success-criterion above is asserted via this macro on a curated H2O/benzene/water-trimer corpus; chkfile round-trip oracle (PySCF writes → pyscf-rs reads asserts identical, pyscf-rs writes → PySCF reads runs downstream calc asserts agreement) is in CI (ORACLE-02, ORACLE-08); `mf.analyze()`, `mf.mulliken_pop()`, `mf.mulliken_meta()`, `mf.dip_moment()` produce upstream-matching numbers (SCF-09); cross-module dispatch helpers `mf.to_uhf()`, `mf.to_rhf()`, `mf.to_uks()`, `mf.to_rks()`, `mf.to_ghf()` work (SCF-11) because MP2/CCSD will depend on them; `mf.as_scanner()` returns a callable used by geomopt (SCF-12).
-**Plans**: TBD
+**Plans**: 11 plans across 8 waves (split per checker iteration 1 WARNING 3)
+
+Plans:
+- [ ] 03-01-PLAN.md — Workspace scaffolding (+3 crates: pyscf-chkfile/diis/df, pyscf-algebra::solve_linear, pyscf-core::canonicalize_signs; SCF-13)
+- [ ] 03-02-PLAN.md — Wave-0 test stubs (pyproject.toml maturin config, python overlay shim, 19 pytest xfail stubs, oracle macro stub, forbid-lazy-static lint; BIND-02 scaffolding, BIND-06)
+- [ ] 03-03-PLAN.md — pyscf-scf trait + struct scaffolding (OverrideHooks trait, RHF/UHF/GHF + 30-attribute floor, InitGuessMode declarations, kernel signature; SCF-01..03, SCF-05, SCF-06, SCF-14) — WARNING 3 split
+- [ ] 03-04-PLAN.md — pyscf-diis crate (CDIIS, SDF-FDS error vector, B-matrix via pyscf-algebra::solve_linear, FockSubspace impl DiisStorable; SCF-04, Pitfall 9 mitigation)
+- [ ] 03-05-PLAN.md — pyscf-df crate (DfIntegrals, cholesky_eri, DEFAULT_AUXBASIS, get_jk_df, RHF::density_fit; SCF-07)
+- [ ] 03-06-PLAN.md — pyscf-chkfile crate + pyscf-scf chkfile schema + 'chkfile' init_guess mode (D-05/D-06; SCF-10, DIST-05 baseline)
+- [ ] 03-07-PLAN.md — pyscf-py PyO3 bridge (#[pymodule] _native, PyRHF/UHF/GHF, PyOverrideBridge, NumPy converters, create_exception!, abi3-py310 + free-threading features, python/pyscf overlay; BIND-01, BIND-02, BIND-04, BIND-06, BIND-07, BIND-09, SCF-08)
+- [ ] 03-08-PLAN.md — pyscf-oracle macro body + chkfile round-trip oracle (ORACLE-08 empirical h5py↔hdf5-metno seal — STATE.md blocker; ORACLE-02, ORACLE-08)
+- [ ] 03-09-PLAN.md — CI jobs (maturin-smoke, stride-fuzz, xplat-uhartree Linux x86_64 + macOS aarch64 matrix, python313t-smoke NON-abi3 separate build per RESEARCH Pitfall (NEW); BIND-05, Pitfall 12)
+- [ ] 03-10-PLAN.md — Python test bodies (replace 19 xfail stubs with real ≤1 µHartree / element-wise / bit-identical assertions; verifies SCF-01..14 + BIND-02/04/07/09 + ORACLE-08)
+- [ ] 03-11-PLAN.md — pyscf-scf kernel internals (SCF cycle loop body, Fock build, eig+canonicalize_signs, occ+rdm+energy, '1e' init_guess body, analyze/mulliken/dip, convert helpers, as_scanner; SCF-01..03, SCF-05, SCF-06, SCF-09, SCF-11, SCF-12, SCF-13) — NEW, WARNING 3 split
 **UI hint**: yes
 
 ### Phase 4: DFT
@@ -161,7 +174,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 |-------|----------------|--------|-----------|
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
-| 3. SCF + PyO3 bindings | 0/TBD | Not started | - |
+| 3. SCF + PyO3 bindings | 0/10 | Planned | - |
 | 4. DFT | 0/TBD | Not started | - |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
