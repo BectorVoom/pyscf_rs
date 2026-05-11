@@ -4,15 +4,55 @@ version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
-description = "PySCF live oracle (dev-deps only). Implemented in Phase 3."
+description = "PySCF live oracle harness (dev-deps only — ORACLE-01). Macro body ships in plan 03-08."
 
 [lib]
 path = "src/lib.rs"
 
+[features]
+# OFF by default so `cargo build -p pyscf-oracle` succeeds in any
+# environment, regardless of whether libpython.so is installed
+# (the dev environment ships only libpython.a — see 03-02-SUMMARY.md
+# "Issues Encountered"). The `python` feature opts into:
+#   - pyo3 `auto-initialize` runtime (in-process upstream PySCF driver),
+#   - pyscf-{core,gto,scf,chkfile} body-side compare deps,
+#   - tempfile for chkfile round-trip scratch paths.
+# CI runners with libpython-dev + an installed upstream pyscf turn it
+# on. ORACLE-01 ("release wheels never link Python") stays intact
+# because pyscf-oracle is never a normal dependency of pyscf-py — it
+# lives in dev-deps only.
+#
+# Body-side deps are part of the `python` feature so the default build
+# of pyscf-oracle does NOT pull in pyscf-scf etc. — this isolates
+# oracle's compile health from any in-flight breakage in the SCF wave
+# (e.g., the kernel_impl.rs ↔ pyscf-diis dependency that lands in
+# wave 1 plan 03-04 alongside this plan's wave 7).
+default = []
+python = [
+    "dep:pyo3",
+    "dep:pyscf-core",
+    "dep:pyscf-gto",
+    "dep:pyscf-scf",
+    "dep:pyscf-chkfile",
+    "dep:tempfile",
+]
+
 [dependencies]
+thiserror = { workspace = true }
+
+# Body-side deps required to build pyscf-rs results for comparison.
+# All optional + activated only under the `python` feature so the
+# default build of pyscf-oracle stays freestanding (see [features]).
+pyscf-core    = { path = "../pyscf-core",    optional = true }
+pyscf-gto     = { path = "../pyscf-gto",     optional = true }
+pyscf-scf     = { path = "../pyscf-scf",     optional = true }
+pyscf-chkfile = { path = "../pyscf-chkfile", optional = true }
+tempfile      = { version = "3",             optional = true }
+
+# pyo3 stays optional + feature-gated. Off by default → `cargo build
+# -p pyscf-oracle` succeeds without libpython.so. On under
+# `--features python` → runner.rs's Python::attach arms are available.
+pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 
 [dev-dependencies]
-# ORACLE-01: pyo3 listed ONLY in dev-deps so release wheels never link Python.
-# auto-initialize feature is required for in-process upstream-PySCF driving
-# (per RESEARCH Standard Stack).
-pyo3 = { version = "=0.28.3", features = ["auto-initialize"] }
+# (none — the macro itself + the integration tests sit under feature gates)

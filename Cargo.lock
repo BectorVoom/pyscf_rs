@@ -3396,6 +3396,7 @@ dependencies = [
  "pyscf-core",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -3492,6 +3493,12 @@ name = "pyscf-oracle"
 version = "0.1.0"
 dependencies = [
  "pyo3",
+ "pyscf-chkfile",
+ "pyscf-core",
+ "pyscf-gto",
+ "pyscf-scf",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3528,10 +3535,13 @@ dependencies = [
 name = "pyscf-scf"
 version = "0.1.0"
 dependencies = [
+ "ndarray",
  "pyscf-algebra",
+ "pyscf-chkfile",
  "pyscf-core",
  "pyscf-gto",
  "pyscf-runtime",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
 ]
