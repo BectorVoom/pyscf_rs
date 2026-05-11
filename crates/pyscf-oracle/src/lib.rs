@@ -11,6 +11,10 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::unwrap_used)]
 
+pub mod fixtures;
+
+pub use fixtures::{BENZENE_6_31GS, H2O_CC_PVDZ, H2O_TRIPLET_CCPVDZ, WATER_TRIMER_CC_PVDZ};
+
 /// Stub macro — plan 03-08 fills the body. Call sites compile; runtime panics
 /// with a clear "pending" message so test failures point to the right plan.
 ///

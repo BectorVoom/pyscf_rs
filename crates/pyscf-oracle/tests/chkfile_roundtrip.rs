@@ -1,12 +1,17 @@
-//! ORACLE-08 chkfile round-trip oracle invocation.
+//! ORACLE-08 — chkfile round-trip both directions on H2O/cc-pVDZ.
+//! This IS the h5py↔hdf5-metno empirical seal (STATE.md Blockers/Concerns line 90).
 //!
-//! Phase 3 plan 03-02 ships this stub: the test compiles + exercises the
-//! `oracle_check!` macro at the type-level. Plan 03-08 unmarks `#[ignore]`
-//! once the macro body lands.
-use pyscf_oracle::oracle_check;
+//! `#[ignore]` is retained because `pyo3 auto-initialize` requires a Python
+//! shared-library install (libpython.so) and CPython distribution with
+//! upstream `pyscf` installed; not always present in the dev environment
+//! (see 03-02-SUMMARY.md). On CI runners with `python3.10+` + libpython-dev
+//! + `pip install pyscf`, drop `--ignored` to run.
+#![cfg(feature = "python")]
+
+use pyscf_oracle::{oracle_check, H2O_CC_PVDZ};
 
 #[test]
-#[ignore = "macro body pending — plan 03-08"]
+#[ignore = "requires libpython shared-lib + upstream pyscf importable"]
 fn chkfile_roundtrip_h2o_ccpvdz() {
-    oracle_check!("chkfile_roundtrip", "h2o_ccpvdz", 1e-12);
+    oracle_check!("chkfile_roundtrip", H2O_CC_PVDZ, 1e-12);
 }
