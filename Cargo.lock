@@ -3509,6 +3509,12 @@ name = "pyscf-oracle"
 version = "0.1.0"
 dependencies = [
  "pyo3",
+ "pyscf-chkfile",
+ "pyscf-core",
+ "pyscf-gto",
+ "pyscf-scf",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
