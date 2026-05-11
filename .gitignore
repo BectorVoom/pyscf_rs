@@ -98,3 +98,10 @@ Cargo.lock.local
 !xtask/src/bin/
 !xtask/src/bin/**
 
+# Phase 3 BIND-01 — maturin develop emits the cdylib into the overlay.
+# Source: .planning/phases/03-scf-pyo3-bindings/03-RESEARCH.md §"Runtime State Inventory" line 1058.
+python/pyscf/_native*
+python/pyscf/**/*.so
+python/pyscf/**/*.dylib
+python/pyscf/**/*.pyd
+
