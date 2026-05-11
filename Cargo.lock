@@ -2933,6 +2933,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "numpy"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "778da78c64ddc928ebf5ad9df5edf0789410ff3bdbf3619aed51cd789a6af1e2"
+dependencies = [
+ "libc",
+ "ndarray",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+ "pyo3",
+ "pyo3-build-config",
+ "rustc-hash 2.1.2",
+]
+
+[[package]]
 name = "objc2"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3498,6 +3514,18 @@ dependencies = [
 [[package]]
 name = "pyscf-py"
 version = "0.1.0"
+dependencies = [
+ "ndarray",
+ "numpy",
+ "pyo3",
+ "pyscf-chkfile",
+ "pyscf-core",
+ "pyscf-df",
+ "pyscf-gto",
+ "pyscf-runtime",
+ "pyscf-scf",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "pyscf-rs"

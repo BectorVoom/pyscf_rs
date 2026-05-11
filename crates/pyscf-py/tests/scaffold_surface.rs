@@ -24,8 +24,6 @@ fn pyscf_runtime_error_symbol_exists() {
     // PyscfRsRuntimeError is the bare PyException subclass created by
     // create_exception! per RESEARCH §Pattern 5 (abi3-py310 workaround).
     // We assert the symbol is reachable from the crate root.
-    let _: pyo3::PyTypeInfo;
-    // Compile-time check: name resolves
     use pyscf_py::errors::PyscfRsRuntimeError as _;
 }
 
