@@ -1,0 +1,17 @@
+[package]
+name = "pyscf-df"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Density-fitting (DF) integrals + auxbasis defaults (D-10). Phase 3 fills."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+pyscf-gto     = { path = "../pyscf-gto" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }

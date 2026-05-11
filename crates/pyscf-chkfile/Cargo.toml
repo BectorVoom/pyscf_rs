@@ -1,0 +1,19 @@
+[package]
+name = "pyscf-chkfile"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "HDF5 chkfile primitives + Checkpointable trait (D-06). Sole owner of hdf5-metno."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pyscf-core = { path = "../pyscf-core" }
+hdf5-metno = { workspace = true }
+ndarray    = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+tracing    = { workspace = true }

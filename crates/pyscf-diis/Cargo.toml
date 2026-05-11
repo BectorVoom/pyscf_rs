@@ -1,0 +1,15 @@
+[package]
+name = "pyscf-diis"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Generic Pulay extrapolation (CDIIS) (D-08). Phase 3 fills."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+thiserror     = { workspace = true }

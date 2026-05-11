@@ -15,6 +15,11 @@ members = [
     "crates/pyscf-py",
     "crates/pyscf-oracle",
     "crates/pyscf-bench",
+    # Phase 3 additions (D-06, D-08, D-10): chkfile primitives, generic Pulay
+    # extrapolation, density-fitting integrals. Workspace grows 15 → 18.
+    "crates/pyscf-chkfile",
+    "crates/pyscf-diis",
+    "crates/pyscf-df",
     "xtask",
 ]
 exclude = []
@@ -56,6 +61,13 @@ thiserror       = "=2.0.18"
 serde           = { version = "=1.0", features = ["derive"] }
 serde_json      = "=1.0.149"
 anyhow          = "=1.0.102"
+# Phase 3 — HDF5 chkfile (D-05/D-06). Static feature → satisfies DIST-05 (no system libhdf5).
+hdf5-metno      = { version = "=0.10.0", features = ["static"] }
+# Phase 3 — needed by pyscf-chkfile and pyscf-df for typed array buffers; pyscf-core stays algebra-free.
+ndarray         = "0.16"
+# Phase 3 — needed by pyscf-py (Phase 3 plan 07). Declared at workspace level for consistency.
+pyo3            = { version = "=0.28.3" }
+numpy           = { version = "=0.28.0" }
 # Test utilities.
 approx          = "=0.5.1"
 rstest          = "=0.26.1"
