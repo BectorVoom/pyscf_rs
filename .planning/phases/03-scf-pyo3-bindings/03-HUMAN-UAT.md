@@ -3,7 +3,7 @@ status: partial
 phase: 03-scf-pyo3-bindings
 source: [03-VERIFICATION.md]
 started: 2026-05-12T00:00:00Z
-updated: 2026-05-12T00:00:00Z
+updated: 2026-05-12T01:00:00Z
 ---
 
 ## Current Test
@@ -56,20 +56,20 @@ Code-level gaps identified by verifier that block the µHartree numeric claim (t
   reason: Documented but means cholesky_eri produces all-zero B-buffer; DF-HF kernel converges to (1e + nuc) only, not a real DF-HF energy.
   next: cintx-ops base operator id OR alternate integral path for DF-HF
 - gap: PyOverrideBridge::get_init_guess short-circuits to NoOverrides instead of slf.call_method1
-  status: failed
-  artifact: crates/pyscf-py/src/bridge.rs:93-109
+  status: resolved
+  artifact: crates/pyscf-py/src/bridge.rs:93-127
   reason: BIND-07 / ROADMAP §SC4 names get_init_guess in dispatch list. REVIEW.md WR-01 includes a verbatim fix patch.
-  next: 20-line patch replacing NoOverrides delegate with Python::attach + call_method1
+  resolution: Applied WR-01 patch — get_init_guess now dispatches via Python::attach + call_method1 with mode-string conversion (Minao/Atom/OneElectron/Huckel/Chkfile → "minao"/"atom"/"1e"/"huckel"/"chkfile"); UserDM short-circuits to in-memory density (commit ee48817).
 - gap: init_guess minao/atom/huckel modes return InitGuessNotYetImplemented
   status: failed
   artifact: crates/pyscf-scf/src/init_guess.rs:14-21
   reason: SCF-05 explicitly enumerates all 5 modes. 3 of 5 are stubs. test_scf_init_guess.py xfails them.
   next: Port upstream pyscf init_guess_by_{minao,atom,huckel} bodies (~100-150 lines)
 - gap: PyRHF::kernel does not auto-write chkfile + no PyRHF.from_chk pymethod
-  status: failed
-  artifact: crates/pyscf-py/src/scf.rs:230-275
+  status: resolved
+  artifact: crates/pyscf-py/src/scf.rs:225-310
   reason: SCF-10 promises "mf.chkfile = path writes HDF5 file on convergence". Rust primitives shipped but PyO3 wiring missing.
-  next: Add auto-write check at end of PyRHF::kernel + #[pymethods] from_chk(path) constructor
+  resolution: PyRHF::kernel now auto-writes via pyscf_scf::dump_scf_to_file when self.chkfile is set AND result.converged is true (preserves &result borrow, no MO matrix clone). Mole JSON pulled via Python-side `.dumps()` with native pyscf_gto::dumps fallback. Added #[staticmethod] PyRHF.from_chk(mol, path) constructor that loads ScfResult and populates RhfRust fields (commit 53d5673).
 - gap: mulliken_meta returns NotYetImplemented{phase:3}
   status: failed
   artifact: crates/pyscf-scf/src/analyze.rs
