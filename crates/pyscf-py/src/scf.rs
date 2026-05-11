@@ -224,6 +224,32 @@ impl PyRHF {
         // GIL via py.detach during the Rust compute (D-03 / BIND-05).
         let result = scf_kernel(&mol, &bridge, cfg).map_err(pyscf_to_py)?;
         let e_tot = result.e_tot.0;
+
+        // SCF-10 auto-write chkfile on convergence — done BEFORE the state
+        // mirror below so we can pass `&result` directly to dump_scf_to_file
+        // without cloning the MO matrix.
+        let chkfile_path: Option<std::path::PathBuf> = {
+            let me = slf.borrow();
+            if result.converged { me.inner.chkfile.clone() } else { None }
+        };
+        if let Some(path) = chkfile_path {
+            // Serialize Mole via the Python-side `.dumps()` if available
+            // (preserves upstream-PySCF chkfile schema), else fall back to
+            // the native pyscf_gto::dumps for pure-Rust callers.
+            let mol_json: String = {
+                let me = slf.borrow();
+                let bound = me.py_mol.bind(py);
+                if bound.hasattr("dumps")? {
+                    bound.call_method0("dumps")?.extract::<String>()?
+                } else {
+                    pyscf_gto::dumps(&me.inner.mol).map_err(pyscf_to_py)?
+                }
+            };
+            pyscf_scf::dump_scf_to_file(&path, &mol_json, &result).map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("chkfile dump failed: {e}"))
+            })?;
+        }
+
         // Re-borrow mutably AFTER the bridge is dropped (bridge_slf only
         // borrows the Python object reference, not the Rust struct).
         {
@@ -235,9 +261,6 @@ impl PyRHF {
             me.inner.converged = result.converged;
             me.inner.cycles = result.cycles;
         }
-        // Auto-write chkfile on converged SCF (SCF-10) — deferred:
-        // requires Mole.dumps() through the Python-side mol handle. Plan
-        // 03-10 (pytest oracle wave 2) wires this end-to-end.
         Ok(e_tot)
     }
 
@@ -246,6 +269,30 @@ impl PyRHF {
     fn run<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, Self>> {
         let _ = PyRHF::kernel(slf.clone(), py, None)?;
         Ok(slf)
+    }
+
+    /// `RHF.from_chk(mol, path)` — reconstruct a PyRHF whose MO state is
+    /// loaded from an existing chkfile (SCF-10). The Mole argument is the
+    /// user-supplied Python Mole (held for getter access + future hook
+    /// dispatch); the chkfile path is recorded so subsequent kernel calls
+    /// will auto-overwrite on convergence.
+    #[staticmethod]
+    #[pyo3(signature = (mol, path))]
+    fn from_chk(py: Python<'_>, mol: Py<PyAny>, path: String) -> PyResult<Self> {
+        let mol_inner: Mole = extract_mole_from_pyany(py, &mol)?;
+        let pathbuf = std::path::PathBuf::from(&path);
+        let result = pyscf_scf::load_scf_from_file(&pathbuf).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("chkfile load failed: {e}"))
+        })?;
+        let mut rhf = RhfRust::new(mol_inner);
+        rhf.e_tot = result.e_tot.0;
+        rhf.converged = result.converged;
+        rhf.cycles = result.cycles;
+        rhf.mo_coeff = Some(result.mo_coeff);
+        rhf.mo_energy = Some(result.mo_energy);
+        rhf.mo_occ = Some(result.mo_occ);
+        rhf.chkfile = Some(pathbuf);
+        Ok(PyRHF { inner: rhf, py_mol: mol })
     }
 
     // ───────────────────────────────────────────────────────────────────
