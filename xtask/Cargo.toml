@@ -31,6 +31,13 @@ path = "src/bin/check_dependency_wall.rs"
 name = "check-cubecl-pin"
 path = "src/bin/check_cubecl_pin.rs"
 
+# BIND-06 (Phase 3) — forbid `lazy_static!` under crates/pyscf-py/ so the
+# free-threaded interpreter's no-GIL path never hits `std::sync::Once`.
+# Plan 03-07 satisfies the lint by using `pyo3::sync::PyOnceLock` for caches.
+[[bin]]
+name = "check-forbid-lazy-static"
+path = "src/bin/check_forbid_lazy_static.rs"
+
 [dependencies]
 anyhow         = { workspace = true }
 serde          = { workspace = true }

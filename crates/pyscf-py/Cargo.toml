@@ -4,10 +4,26 @@ version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
-description = "PyO3 abi3-py310 wheel surface. Implemented in Phase 3."
+description = "PyO3 abi3-py310 wheel (BIND-01) + Python 3.13t non-abi3 build (BIND-05)"
+# Checker iteration 1 WARNING 4 — feature-mutex guard. build.rs panics at
+# compile time if both `abi3-py310` and `free-threading` are simultaneously
+# enabled. Cargo features are not natively mutually exclusive; this is the
+# standard workaround. See crates/pyscf-py/build.rs.
+build = "build.rs"
 
 [lib]
 path = "src/lib.rs"
 crate-type = ["cdylib", "rlib"]
 
+# Feature scaffolding (PyO3 dep wiring lives in plan 03-07).
+# CRITICAL: abi3-py310 and free-threading are MUTUALLY EXCLUSIVE.
+# build.rs panics at compile time if both are simultaneously enabled.
+# Source: .planning/phases/03-scf-pyo3-bindings/03-RESEARCH.md
+# §"CRITICAL abi3 vs free-threaded ABI conflict".
+[features]
+default        = ["abi3-py310"]
+abi3-py310     = []
+free-threading = []
+
+# Plan 03-07 will fill [dependencies] with pyo3, numpy, pyscf-scf, ...
 [dependencies]
