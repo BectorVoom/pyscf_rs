@@ -147,7 +147,10 @@ impl RHF {
         Ok(result)
     }
 
-    fn to_kernel_config(&self) -> KernelConfig {
+    /// Convert the SCF struct state into the `KernelConfig` consumed by
+    /// `kernel`. `pub` so pyscf-py (plan 03-07) can build a config from a
+    /// Python-mutated `PyRHF` without re-walking every field.
+    pub fn to_kernel_config(&self) -> KernelConfig {
         KernelConfig {
             conv_tol: self.conv_tol,
             conv_tol_grad: self.conv_tol_grad,

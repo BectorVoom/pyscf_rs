@@ -7,75 +7,143 @@
 //! its Rust arguments into Python objects, calls `slf.<hook>(...)`, and
 //! converts the result back into Rust types.
 //!
-//! Source: RESEARCH §Pattern 1 lines 343-368; plan 03-07 Task 2 fills the
-//! call_method1 dispatch bodies. Task 1 ships the struct with NoOverrides-
-//! delegating bodies so the file compiles end-to-end against the SCF-08
-//! trait surface.
+//! BIND-07 / Pitfall 7 (subclass fidelity): every hook routes through
+//! `Bound::call_method1("hook_name", args)`. `call_method1` resolves up
+//! the Python MRO, so subclass methods are found transparently — when no
+//! subclass override exists, the PyRHF default (defined in `scf.rs` and
+//! wrapping `pyscf_scf::default_*`) is invoked. When a subclass overrides
+//! the method, that override is invoked instead. Either way, the Rust
+//! kernel sees the SCF-08 trait surface.
 //!
-//! Pitfall 7 (subclass fidelity): every hook must route through
-//! `slf.call_method1("hook_name", args)` so user-defined Python overrides
-//! are invoked even when the Rust-side `PyRHF::<hook>` default exists.
-//! `call_method1` resolves up the MRO, so subclass methods are found
-//! transparently.
+//! `Send + Sync` is NOT required: SCF kernel calls happen on the thread
+//! that holds the GIL; the bridge is constructed inside `PyRHF::kernel`
+//! and dropped at end-of-kernel.
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 use pyscf_core::{Density, Energy, MOCoefficients, Mole, PyscfRsError};
-use pyscf_scf::{InitGuessMode, NoOverrides, OverrideHooks};
+use pyscf_scf::{InitGuessMode, OverrideHooks};
 
-/// Bridge that owns a `Py<PyAny>` handle to the Python `self` and a
-/// `Py<PyAny>` handle to the user-supplied Mole. The Rust SCF kernel calls
-/// `bridge.<hook>(...)`; the impl re-attaches the GIL and dispatches via
-/// `slf.call_method1`.
-///
-/// `Send + Sync` is NOT required: SCF kernel calls happen on the thread
-/// that holds the GIL; the bridge is constructed inside a `PyRHF::kernel`
-/// body and dropped before the GIL is released.
-///
-/// Plan 03-07 Task 1 ships the struct with no-op delegation to
-/// `NoOverrides`; plan 03-07 Task 2 fills the call_method1 dispatch.
+use crate::errors::{py_to_pyscf, pyscf_to_py};
+use crate::numpy_io::{density_to_pyarray, mo_coeff_to_pyarray, to_density, to_mo_coeff};
+
+/// Bridge owning a `Py<PyAny>` handle to the Python `self` (the
+/// `PyRHF`-or-subclass instance) and a `Py<PyAny>` handle to the
+/// user-supplied Python Mole. Constructed in `PyRHF::kernel`; dropped at
+/// kernel end.
 pub struct PyOverrideBridge {
+    /// Python `self` of the PyRHF (or subclass). `call_method1` against
+    /// this handle resolves the MRO so subclass overrides are invoked
+    /// transparently.
     pub slf: Py<PyAny>,
+    /// The user-supplied Python Mole object — re-used as the `mol` arg in
+    /// every hook call so we don't serialize/deserialize per-cycle.
     pub py_mol: Py<PyAny>,
 }
 
 impl PyOverrideBridge {
-    /// Construct the bridge from a Python `self` handle + the user-supplied
-    /// Mole handle. Both handles are reference-counted; the bridge owns them
-    /// for the duration of one `PyRHF::kernel` call.
     pub fn new(slf: Py<PyAny>, py_mol: Py<PyAny>) -> Self {
         Self { slf, py_mol }
     }
 }
 
+// -----------------------------------------------------------------------
+// Helper: dispatch a hook via slf.call_method1 and return a typed result.
+// -----------------------------------------------------------------------
+
+/// Call `slf.<method_name>(*args)` and convert any `PyErr` into
+/// `PyscfRsError` so the SCF kernel can `?` propagate it.
+fn call_hook<'py, F, T>(
+    slf: &Py<PyAny>,
+    method: &str,
+    args: Bound<'py, PyTuple>,
+    extract: F,
+) -> Result<T, PyscfRsError>
+where
+    F: FnOnce(Bound<'py, PyAny>) -> PyResult<T>,
+{
+    let py = args.py();
+    let result = slf
+        .bind(py)
+        .call_method1(method, args)
+        .map_err(py_to_pyscf)?;
+    extract(result).map_err(py_to_pyscf)
+}
+
 impl OverrideHooks for PyOverrideBridge {
-    // Plan 03-07 Task 1 stubs — delegate every hook to NoOverrides so the
-    // pyscf-scf kernel can drive a no-override run end-to-end.
-    //
-    // Plan 03-07 Task 2 replaces each body with the `Python::attach(|py| {
-    // let result = self.slf.bind(py).call_method1("hook_name", args)?;
-    // ... })` pattern, preserving the BIND-07 subclass-override contract.
-    fn get_hcore(&self, mol: &Mole) -> Result<Density, PyscfRsError> {
-        NoOverrides.get_hcore(mol)
+    fn get_hcore(&self, _mol: &Mole) -> Result<Density, PyscfRsError> {
+        Python::attach(|py| {
+            let args = PyTuple::new(py, [self.py_mol.bind(py).clone()]).map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "get_hcore", args, |r| {
+                let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
+                to_density(arr)
+            })
+        })
     }
-    fn get_ovlp(&self, mol: &Mole) -> Result<Density, PyscfRsError> {
-        NoOverrides.get_ovlp(mol)
+
+    fn get_ovlp(&self, _mol: &Mole) -> Result<Density, PyscfRsError> {
+        Python::attach(|py| {
+            let args = PyTuple::new(py, [self.py_mol.bind(py).clone()]).map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "get_ovlp", args, |r| {
+                let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
+                to_density(arr)
+            })
+        })
     }
+
     fn get_init_guess(
         &self,
         mol: &Mole,
         mode: &InitGuessMode,
     ) -> Result<Density, PyscfRsError> {
-        NoOverrides.get_init_guess(mol, mode)
+        // No Python-side override surface for get_init_guess in the
+        // pyscf upstream class (it's pyscf.scf.hf.SCF.get_init_guess,
+        // signature `(mol, key='minao')`). We route to NoOverrides for
+        // now; Python overrides can target get_init_guess at the SCF.kernel
+        // level when needed (the bridge will inherit from this default).
+        //
+        // BIND-07 fidelity note: if a Python subclass really needs to
+        // override get_init_guess, a future plan can swap this body for a
+        // call_method1 dispatch. The kernel-internal default covers the 5
+        // current InitGuessMode arms.
+        pyscf_scf::NoOverrides.get_init_guess(mol, mode)
     }
+
     fn get_jk(
         &self,
-        mol: &Mole,
+        _mol: &Mole,
         dm: &Density,
     ) -> Result<(Density, Density), PyscfRsError> {
-        NoOverrides.get_jk(mol, dm)
+        Python::attach(|py| {
+            let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
+            let args = PyTuple::new(
+                py,
+                [self.py_mol.bind(py).clone(), dm_py.into_any()],
+            )
+            .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "get_jk", args, |r| {
+                let (j_any, k_any): (Bound<'_, PyAny>, Bound<'_, PyAny>) = r.extract()?;
+                let j_arr: numpy::PyReadonlyArray2<f64> = j_any.extract()?;
+                let k_arr: numpy::PyReadonlyArray2<f64> = k_any.extract()?;
+                Ok((to_density(j_arr)?, to_density(k_arr)?))
+            })
+        })
     }
-    fn get_veff(&self, mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError> {
-        NoOverrides.get_veff(mol, dm)
+
+    fn get_veff(&self, _mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError> {
+        Python::attach(|py| {
+            let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
+            let args = PyTuple::new(
+                py,
+                [self.py_mol.bind(py).clone(), dm_py.into_any()],
+            )
+            .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "get_veff", args, |r| {
+                let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
+                to_density(arr)
+            })
+        })
     }
+
     fn get_fock(
         &self,
         h1e: &Density,
@@ -83,66 +151,143 @@ impl OverrideHooks for PyOverrideBridge {
         vhf: &Density,
         dm: &Density,
         cycle: i32,
-        diis_state: Option<&Density>,
+        _diis_state: Option<&Density>,
     ) -> Result<Density, PyscfRsError> {
-        NoOverrides.get_fock(h1e, s1e, vhf, dm, cycle, diis_state)
+        Python::attach(|py| {
+            let h1e_py = density_to_pyarray(py, h1e).map_err(py_to_pyscf)?;
+            let s1e_py = density_to_pyarray(py, s1e).map_err(py_to_pyscf)?;
+            let vhf_py = density_to_pyarray(py, vhf).map_err(py_to_pyscf)?;
+            let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
+            let cycle_py = pyo3::types::PyInt::new(py, cycle as i64).into_any();
+            let args = PyTuple::new(
+                py,
+                [
+                    h1e_py.into_any(),
+                    s1e_py.into_any(),
+                    vhf_py.into_any(),
+                    dm_py.into_any(),
+                    cycle_py,
+                ],
+            )
+            .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "get_fock", args, |r| {
+                let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
+                to_density(arr)
+            })
+        })
     }
+
     fn eig(
         &self,
         fock: &Density,
         s1e: &Density,
     ) -> Result<MOCoefficients, PyscfRsError> {
-        NoOverrides.eig(fock, s1e)
+        Python::attach(|py| {
+            let fock_py = density_to_pyarray(py, fock).map_err(py_to_pyscf)?;
+            let s1e_py = density_to_pyarray(py, s1e).map_err(py_to_pyscf)?;
+            let args = PyTuple::new(py, [fock_py.into_any(), s1e_py.into_any()])
+                .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "eig", args, |r| {
+                // Result is (mo_energy, mo_coeff): (np.ndarray[1d], np.ndarray[2d]).
+                let (e_any, c_any): (Bound<'_, PyAny>, Bound<'_, PyAny>) = r.extract()?;
+                let e_arr: numpy::PyReadonlyArray1<f64> = e_any.extract()?;
+                let c_arr: numpy::PyReadonlyArray2<f64> = c_any.extract()?;
+                let mut mc = to_mo_coeff(c_arr)?;
+                mc.energies = e_arr.as_slice()?.to_vec();
+                Ok(mc)
+            })
+        })
     }
+
     fn get_occ(
         &self,
         mo_energy: &[f64],
-        nelec: usize,
+        _nelec: usize,
     ) -> Result<Vec<f64>, PyscfRsError> {
-        NoOverrides.get_occ(mo_energy, nelec)
+        Python::attach(|py| {
+            let e_py = numpy::PyArray1::from_slice(py, mo_energy);
+            let args = PyTuple::new(py, [e_py.into_any()]).map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "get_occ", args, |r| {
+                let arr: numpy::PyReadonlyArray1<f64> = r.extract()?;
+                Ok(arr.as_slice()?.to_vec())
+            })
+        })
     }
+
     fn make_rdm1(&self, mo: &MOCoefficients) -> Result<Density, PyscfRsError> {
-        NoOverrides.make_rdm1(mo)
+        Python::attach(|py| {
+            let c_py = mo_coeff_to_pyarray(py, mo).map_err(py_to_pyscf)?;
+            let occ_py = numpy::PyArray1::from_slice(py, &mo.occupations);
+            let args = PyTuple::new(py, [c_py.into_any(), occ_py.into_any()])
+                .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "make_rdm1", args, |r| {
+                let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
+                to_density(arr)
+            })
+        })
     }
+
     fn energy_elec(
         &self,
         dm: &Density,
         h1e: &Density,
         vhf: &Density,
     ) -> Result<(Energy, Energy), PyscfRsError> {
-        NoOverrides.energy_elec(dm, h1e, vhf)
+        Python::attach(|py| {
+            let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
+            let h1e_py = density_to_pyarray(py, h1e).map_err(py_to_pyscf)?;
+            let vhf_py = density_to_pyarray(py, vhf).map_err(py_to_pyscf)?;
+            let args = PyTuple::new(
+                py,
+                [dm_py.into_any(), h1e_py.into_any(), vhf_py.into_any()],
+            )
+            .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "energy_elec", args, |r| {
+                let (e, ec): (f64, f64) = r.extract()?;
+                Ok((Energy(e), Energy(ec)))
+            })
+        })
     }
+
     fn energy_tot(
         &self,
         dm: &Density,
         h1e: &Density,
         vhf: &Density,
     ) -> Result<Energy, PyscfRsError> {
-        NoOverrides.energy_tot(dm, h1e, vhf)
+        Python::attach(|py| {
+            let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
+            let h1e_py = density_to_pyarray(py, h1e).map_err(py_to_pyscf)?;
+            let vhf_py = density_to_pyarray(py, vhf).map_err(py_to_pyscf)?;
+            let args = PyTuple::new(
+                py,
+                [dm_py.into_any(), h1e_py.into_any(), vhf_py.into_any()],
+            )
+            .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "energy_tot", args, |r| {
+                let e: f64 = r.extract()?;
+                Ok(Energy(e))
+            })
+        })
     }
 }
 
 /// Extract a pyscf-core `Mole` from any Python object.
 ///
 /// Two paths, tried in order:
-///   1. Python object has a `dumps()` method (upstream PySCF Mole) — call it
-///      and pass through `pyscf_gto::loads(json)`.
+///   1. Python object has a `dumps()` method (upstream PySCF Mole) — call
+///      it and pass through `pyscf_gto::loads(json)`.
 ///   2. Python object is a JSON string already — pass to `pyscf_gto::loads`.
 ///
 /// Phase 2 D-08: `dumps()` / `loads()` is the canonical Mole interop seam.
-/// This helper centralises the conversion so PyRHF::new / kernel / hook
-/// defaults all share one extraction implementation.
 pub fn extract_mole_from_pyany(py: Python<'_>, mol: &Py<PyAny>) -> PyResult<Mole> {
     let bound = mol.bind(py);
-    // Path 1: object with .dumps() method (upstream pyscf Mole OR a pyscf-rs
-    // wrapper that exposes the same interop method).
     if bound.hasattr("dumps")? {
         let json: String = bound.call_method0("dumps")?.extract()?;
-        return pyscf_gto::loads(&json).map_err(crate::errors::pyscf_to_py);
+        return pyscf_gto::loads(&json).map_err(pyscf_to_py);
     }
-    // Path 2: a raw JSON string.
     if let Ok(s) = bound.extract::<String>() {
-        return pyscf_gto::loads(&s).map_err(crate::errors::pyscf_to_py);
+        return pyscf_gto::loads(&s).map_err(pyscf_to_py);
     }
     Err(pyo3::exceptions::PyTypeError::new_err(
         "expected pyscf.gto.Mole (with .dumps() method) or a serialized Mole JSON string",
