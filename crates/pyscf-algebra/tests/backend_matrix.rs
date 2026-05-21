@@ -1,7 +1,6 @@
 //! ALG-07: CPU-baseline backend-matrix smoke. GPU rows are Phase 8.
 
 use pyscf_algebra::{axpy, gemm, reduce_sum, select_backend, AlgebraError, Tensor};
-use pyscf_runtime::DType;
 
 fn setup_tracing() { let _ = tracing_subscriber::fmt::try_init(); }
 
@@ -21,9 +20,11 @@ fn primitive_signatures_callable_returning_notyetimplemented() {
     let saved = std::env::var("PYSCF_BACKEND").ok();
     unsafe { std::env::remove_var("PYSCF_BACKEND"); }
     let sel = select_backend().expect("CPU selection");
-    let lhs = Tensor::placeholder(vec![4, 4], DType::F64);
-    let rhs = Tensor::placeholder(vec![4, 4], DType::F64);
-    let mut out = Tensor::placeholder(vec![4, 4], DType::F64);
+    // quick-260522-b06: placeholder now derives DType from the type param
+    // (default f64), so the old two-arg form is gone.
+    let lhs = Tensor::placeholder(vec![4, 4]);
+    let rhs = Tensor::placeholder(vec![4, 4]);
+    let mut out = Tensor::placeholder(vec![4, 4]);
     // Phase 1 primitives return NotYetImplemented — that's the contract.
     // Phase 2 wires the actual cubecl-matmul launch.
     let r = gemm(&sel.client, &lhs, &rhs, &mut out);

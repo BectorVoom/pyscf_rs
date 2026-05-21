@@ -15,6 +15,10 @@ pub mod client;
 pub mod tensor;
 pub mod error;
 pub mod select;
+// quick-260522-b06: device-side precision bridge. The cubecl::Float bound
+// (DeviceScalar) and the ScalarKind -> DType reconciliation (dtype_of) live
+// here — inside the wall — never in pyscf-core or a method crate.
+pub mod scalar;
 
 pub mod gemm;
 pub mod gemv;
@@ -36,6 +40,7 @@ pub mod eigh_gen;
 pub use client::AlgebraClient;
 pub use error::AlgebraError;
 pub use pyscf_runtime::DType;
+pub use scalar::DeviceScalar;
 pub use select::{select_backend, BackendSelection};
 pub use tensor::{BufferId, Tensor};
 
