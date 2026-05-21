@@ -24,6 +24,8 @@ pub mod energy;
 pub mod error;
 pub mod mo;
 pub mod mole;
+// quick-260522-b06: host-only precision generic. Cubecl-free per ALG-06.
+pub mod scalar;
 pub mod traits;
 
 pub use amplitudes::Amplitudes;
@@ -33,6 +35,7 @@ pub use density::Density;
 pub use energy::Energy;
 pub use error::{BasisLoadError, CoreError, EcpLoadError, PyscfRsError};
 pub use mo::MOCoefficients;
+pub use scalar::{Scalar, ScalarKind};
 pub use mole::{
     EcpShell, Mole, NuclearModel, ParsedAtom, ParsedBasis, ParsedEcp, ShellSpec, Unit,
 };

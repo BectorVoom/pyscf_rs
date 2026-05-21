@@ -26,3 +26,8 @@ thiserror     = { workspace = true }
 # and _ecp via serde_json without a hand-rolled mirror type.
 serde         = { workspace = true, features = ["derive"] }
 tracing       = { workspace = true }
+# quick-260522-b06: host-only `Scalar` precision generic. `num-traits` gives
+# the `Float` host bound; `bytemuck::Pod` is needed for byte-level buffer
+# typing. Neither pulls cubecl — the algebra-wall (ALG-06) stays intact.
+num-traits    = { workspace = true }
+bytemuck      = { workspace = true }
