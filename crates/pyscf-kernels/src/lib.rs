@@ -16,5 +16,9 @@
 // rather than the `#![forbid(unsafe_code)]` Phase 1 stub had.
 
 pub mod eval_gto;
+// quick-260522-b06: precision seam. Re-exports DeviceScalar (the in-wall
+// cubecl::Float bound) and documents the f64 kernel default + f32-future seam.
+pub mod scalar;
 
 pub use eval_gto::{eval_gto_sph, EvalGtoBuffers};
+pub use scalar::{DeviceScalar, KernelScalar};

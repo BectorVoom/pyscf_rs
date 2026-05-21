@@ -57,6 +57,9 @@ tracing         = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["fmt"] }
 # Common utility deps.
 bytemuck        = { version = "1", features = ["derive"] }
+# Host-side numeric abstraction for the precision-generic `Scalar` trait
+# (quick-260522-b06). Small, fast-compiling; does NOT pull cubecl/libxc.
+num-traits      = "0.2"
 thiserror       = "=2.0.18"
 serde           = { version = "=1.0", features = ["derive"] }
 serde_json      = "=1.0.149"
