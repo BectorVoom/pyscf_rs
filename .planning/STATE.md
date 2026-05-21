@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 3 context gathered
-last_updated: "2026-05-11T20:58:32.660Z"
-last_activity: 2026-05-11
+last_updated: "2026-05-21T22:55:24.608Z"
+last_activity: 2026-05-22
 progress:
   total_phases: 8
   completed_phases: 1
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 Phase: 4
 Plan: Not started
 Status: Executing Phase 03
-Last activity: 2026-05-11 - Completed quick task 260512-8wb: rewrite cintx#11 as cintx-only Phase 2 task list
+Last activity: 2026-05-22 - Completed quick task 260522-b06: implement f32/f64 precision switching using generics
 
 Progress: [█████████░] 88% (7/7 plans done; verification gaps remain)
 
@@ -96,6 +96,7 @@ None yet.
 |---|-------------|------|--------|-----------|
 | 260512-8jv | Create issue in cintx repository about remaining tasks from pyscf_rs Phase 2 ([cintx#11](https://github.com/BectorVoom/cintx/issues/11)) | 2026-05-11 | 7dcdf08 | [260512-8jv-create-issue-in-cintx-repository-about-r](./quick/260512-8jv-create-issue-in-cintx-repository-about-r/) |
 | 260512-8wb | Rewrite cintx#11 as cintx-only Phase 2 task list (drop pyscf_rs framing) | 2026-05-11 | f53cc0e | [260512-8wb-rewrite-cintx-11-as-cintx-only-phase-2-t](./quick/260512-8wb-rewrite-cintx-11-as-cintx-only-phase-2-t/) |
+| 260522-b06 | implement f32/f64 precision switching using generics | 2026-05-22 | 4c6ab55 | [260522-b06-implement-f32-f64-precision-switching-us](./quick/260522-b06-implement-f32-f64-precision-switching-us/) |
 
 ## Deferred Items
 
