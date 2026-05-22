@@ -6007,10 +6007,12 @@ dependencies = [
  "pyscf-df",
  "pyscf-grids",
  "pyscf-gto",
+ "pyscf-oracle",
  "pyscf-runtime",
  "pyscf-scf",
  "thiserror 2.0.18",
  "tracing",
+ "tracing-subscriber",
  "xcfun-rs",
 ]
 
@@ -6094,6 +6096,7 @@ dependencies = [
  "pyo3",
  "pyscf-chkfile",
  "pyscf-core",
+ "pyscf-dft",
  "pyscf-grids",
  "pyscf-gto",
  "pyscf-scf",

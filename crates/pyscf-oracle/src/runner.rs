@@ -57,6 +57,13 @@ const KNOWN_METHODS: &[&str] = &[
     // vs upstream `dft.gen_grid.Grids`. The fixture name encodes the level as
     // `<base>@levelN` (e.g. "h2o_ccpvdz@level3").
     "grid_weights",
+    // DFT-01 (plan 04-06): RKS / UKS total energy ≤ 1 µHartree vs upstream
+    // `dft.RKS(mol, xc=...).kernel()` / `dft.UKS(...)`. The fixture name
+    // encodes the XC functional as `<base>@<xc>` (e.g. "h2o_ccpvdz@svwn",
+    // "h2o_ccpvdz@b3lyp"). f64 ONLY — these are the bit-exact oracle path
+    // (PYSCF_DTYPE unset); the f32 path is NEVER compared to upstream (D-08).
+    "rks_energy",
+    "uks_energy",
 ];
 
 /// Top-level dispatcher. Resolves the method name to either a known
@@ -108,6 +115,8 @@ mod python_impl {
             "mulliken_pop" => check_mulliken_pop(py, fixture, tol),
             "dip_moment" => check_dip_moment(py, fixture, tol),
             "grid_weights" => check_grid_weights(py, fixture, tol),
+            "rks_energy" => check_rks_energy(py, fixture, tol),
+            "uks_energy" => check_uks_energy(py, fixture, tol),
             other => Err(OracleError::UnknownMethod(other.to_string())),
         })
     }
@@ -706,6 +715,90 @@ mod python_impl {
         }
         Ok(())
     }
+
+    // ── Arm 10 (DFT-01): RKS total energy ────────────────────────────────
+    //
+    // Upstream `dft.RKS(mol, xc=...).kernel()` vs pyscf-rs `RKS::new(mol,
+    // xc).kernel()`, within `tol` µHartree. The fixture name encodes the XC
+    // functional as `<base>@<xc>` (fixtures::xc). f64 ONLY (PYSCF_DTYPE must
+    // be unset — the bit-exact path; D-08). SVWN/PBE/B3LYP exercise the
+    // LDA / GGA / standard-hybrid (hyb-scaled K) branches respectively.
+    fn check_rks_energy(
+        py: Python<'_>,
+        fixture: &str,
+        tol: f64,
+    ) -> Result<(), OracleError> {
+        let xc = fixtures::xc(fixture);
+        let mol = build_pyscf_mol(py, fixture)?;
+        let dft = py
+            .import("pyscf.dft")
+            .map_err(|e| OracleError::Upstream(format!("import dft: {}", e)))?;
+        let mf = dft
+            .call_method1("RKS", (mol,))
+            .map_err(|e| OracleError::Upstream(format!("RKS(): {}", e)))?;
+        mf.setattr("xc", xc)
+            .map_err(|e| OracleError::Upstream(format!("set xc: {}", e)))?;
+        let e_upstream: f64 = mf
+            .call_method0("kernel")
+            .map_err(|e| OracleError::Upstream(format!("kernel: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract f64: {}", e)))?;
+
+        let rust_mol = build_rust_mol(fixture)?;
+        let mut ks = pyscf_dft::RKS::new(rust_mol, xc);
+        ks.kernel()
+            .map_err(|e| OracleError::PyscfRs(format!("RKS kernel: {}", e)))?;
+        let e_rs = ks.e_tot;
+
+        let diff = (e_rs - e_upstream).abs();
+        if diff > tol {
+            return Err(OracleError::Diff {
+                diff,
+                tol,
+                key: format!("rks_energy[{}/{}]", fixture, xc),
+            });
+        }
+        Ok(())
+    }
+
+    // ── Arm 11 (DFT-01): UKS total energy (open shell) ───────────────────
+    fn check_uks_energy(
+        py: Python<'_>,
+        fixture: &str,
+        tol: f64,
+    ) -> Result<(), OracleError> {
+        let xc = fixtures::xc(fixture);
+        let mol = build_pyscf_mol(py, fixture)?;
+        let dft = py
+            .import("pyscf.dft")
+            .map_err(|e| OracleError::Upstream(format!("import dft: {}", e)))?;
+        let mf = dft
+            .call_method1("UKS", (mol,))
+            .map_err(|e| OracleError::Upstream(format!("UKS(): {}", e)))?;
+        mf.setattr("xc", xc)
+            .map_err(|e| OracleError::Upstream(format!("set xc: {}", e)))?;
+        let e_upstream: f64 = mf
+            .call_method0("kernel")
+            .map_err(|e| OracleError::Upstream(format!("kernel: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract f64: {}", e)))?;
+
+        let rust_mol = build_rust_mol(fixture)?;
+        let mut ks = pyscf_dft::UKS::new(rust_mol, xc);
+        ks.kernel()
+            .map_err(|e| OracleError::PyscfRs(format!("UKS kernel: {}", e)))?;
+        let e_rs = ks.e_tot;
+
+        let diff = (e_rs - e_upstream).abs();
+        if diff > tol {
+            return Err(OracleError::Diff {
+                diff,
+                tol,
+                key: format!("uks_energy[{}/{}]", fixture, xc),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -741,8 +834,9 @@ mod tests {
 
     #[test]
     fn known_methods_list_has_all_arms() {
-        // 8 SCF/DF arms (Phase 3) + grid_weights (Phase 4 plan 04-04) = 9.
-        assert_eq!(KNOWN_METHODS.len(), 9);
+        // 8 SCF/DF arms (Phase 3) + grid_weights (04-04) + rks_energy +
+        // uks_energy (04-06) = 11.
+        assert_eq!(KNOWN_METHODS.len(), 11);
         assert!(KNOWN_METHODS.contains(&"scf_rhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_uhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_diis_iter_count"));
@@ -752,5 +846,7 @@ mod tests {
         assert!(KNOWN_METHODS.contains(&"mulliken_pop"));
         assert!(KNOWN_METHODS.contains(&"dip_moment"));
         assert!(KNOWN_METHODS.contains(&"grid_weights"));
+        assert!(KNOWN_METHODS.contains(&"rks_energy"));
+        assert!(KNOWN_METHODS.contains(&"uks_energy"));
     }
 }

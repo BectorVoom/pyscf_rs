@@ -16,6 +16,13 @@ path = "src/lib.rs"
 [features]
 default = []
 libxc   = ["dep:libxc_rs"]
+# CI-only: turn on the live PySCF oracle harness for the DFT-01
+# rks_uks_bitexact energy assertions. Forwards to pyscf-oracle's `python`
+# feature (libpython + an importable upstream pyscf). Off by default so the
+# local `cargo test -p pyscf-dft` build stays freestanding — mirrors the
+# 04-04 pyscf-grids `python` passthrough. Does NOT add a runtime dep (the
+# oracle is a dev-dependency only — ORACLE-01 / PyO3 wall intact for the lib).
+python  = ["pyscf-oracle/python"]
 
 [dependencies]
 # Method-crate deps (path). pyscf-runtime (DType::from_env, D-08) and
@@ -40,3 +47,15 @@ thiserror     = { workspace = true }
 libxc_rs      = { path = "../../../libxc_rs", optional = true }
 
 # NO pyo3 dep here (PyO3 wall) — the Python surface lives in pyscf-py.
+
+[dev-dependencies]
+# Plan 04-06 — DFT-01 RKS/UKS energy oracle. The live-PySCF harness is a
+# DEV dependency only (ORACLE-01: release wheels never link Python); the
+# `rks_energy`/`uks_energy` arms run only under `--features python` on CI
+# with libpython + an importable upstream pyscf. The default `cargo test`
+# build does NOT pull pyo3 (the harness short-circuits to
+# PythonFeatureNotEnabled). pyscf-gto is needed by the structural test layer
+# to build Mole fixtures.
+pyscf-oracle  = { path = "../pyscf-oracle" }
+pyscf-gto     = { path = "../pyscf-gto" }
+tracing-subscriber = { workspace = true }
