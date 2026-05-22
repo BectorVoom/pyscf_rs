@@ -304,7 +304,7 @@ fn grid_1000(centre: [f64; 3]) -> Vec<[f64; 3]> {
 // ── tests ───────────────────────────────────────────────────────────────
 
 #[test]
-fn fixture_exercises_p_and_d_shells() {
+fn eval_gto_lge1_fixture_exercises_p_and_d_shells() {
     let fx = spd_fixture();
     let nbas = fx.bas.len() / BAS_SLOTS;
     let mut has_p = false;
@@ -320,7 +320,7 @@ fn fixture_exercises_p_and_d_shells() {
 }
 
 #[test]
-fn gtoval_sph_matches_independent_reference_on_1000_point_grid() {
+fn eval_gto_lge1_gtoval_sph_matches_reference_on_1000_point_grid() {
     let fx = spd_fixture();
     let coords = grid_1000([0.1, -0.2, 0.3]);
     let (flat, ngrids) = pack_coords(&coords);
@@ -359,7 +359,7 @@ fn gtoval_sph_matches_independent_reference_on_1000_point_grid() {
 }
 
 #[test]
-fn p_shell_sph_components_are_proportional_to_xyz() {
+fn eval_gto_lge1_p_shell_sph_components_proportional_to_xyz() {
     // Convention lock (independent of the radial sum): p sph = (px,py,pz)
     // ∝ (Δx,Δy,Δz) with one shared radial factor. Catches transposed/
     // permuted c2s or wrong AO ordering vs ao_loc (T-04-03).
@@ -395,7 +395,7 @@ fn p_shell_sph_components_are_proportional_to_xyz() {
 }
 
 #[test]
-fn d_shell_sph_ratio_matches_real_solid_harmonics() {
+fn eval_gto_lge1_d_shell_sph_ratio_matches_real_solid_harmonics() {
     // d m=0 (dz2) ∝ −0.31539(x²+y²)+0.63078 z²; d m=+2 (dx²−y²) ∝
     // 0.54627(x²−y²). Their ratio is radial-independent — a pure
     // c2s-matrix / sign check.
