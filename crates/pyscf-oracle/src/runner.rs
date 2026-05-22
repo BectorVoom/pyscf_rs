@@ -69,6 +69,10 @@ const KNOWN_METHODS: &[&str] = &[
     // through the Phase 3 pyscf-df crate (D-10 reuse); the fixture encodes the
     // XC functional as `<base>@<xc>` (e.g. "h2o_ccpvdz@svwn"). f64 ONLY.
     "df_dft_energy",
+    // DFT-07 chkfile (plan 04-08): KsResult dump → h5py-readable on the upstream
+    // /scf schema + the xc/grids metadata, round-tripping both directions (the
+    // ORACLE-08 harness extended to the KS result type, D-06).
+    "ks_chkfile_roundtrip",
 ];
 
 /// Top-level dispatcher. Resolves the method name to either a known
@@ -123,6 +127,7 @@ mod python_impl {
             "rks_energy" => check_rks_energy(py, fixture, tol),
             "uks_energy" => check_uks_energy(py, fixture, tol),
             "df_dft_energy" => check_df_dft_energy(py, fixture, tol),
+            "ks_chkfile_roundtrip" => check_ks_chkfile_roundtrip(py, fixture, tol),
             other => Err(OracleError::UnknownMethod(other.to_string())),
         })
     }
@@ -852,6 +857,131 @@ mod python_impl {
         }
         Ok(())
     }
+
+    // ── Arm 13 (DFT-07 chkfile / ORACLE-08): KS chkfile round-trip ───────
+    // KsResult written by pyscf-rs is h5py-readable on the upstream /scf
+    // schema (+ the xc/grids metadata); a PySCF DFT chkfile is pyscf-rs
+    // -readable. Mirrors `check_chkfile_roundtrip` but for the KS result type.
+    fn check_ks_chkfile_roundtrip(
+        py: Python<'_>,
+        fixture: &str,
+        tol: f64,
+    ) -> Result<(), OracleError> {
+        let xc = fixtures::xc(fixture);
+
+        // Direction (a): PySCF DFT writes → pyscf-rs reads the /scf block.
+        let tmp_a = tempfile::NamedTempFile::new()?;
+        let path_a = tmp_a.path();
+        {
+            let mol = build_pyscf_mol(py, fixture)?;
+            let dft = py
+                .import("pyscf.dft")
+                .map_err(|e| OracleError::Upstream(format!("import dft: {}", e)))?;
+            let mf = dft
+                .call_method1("RKS", (mol,))
+                .map_err(|e| OracleError::Upstream(format!("RKS(): {}", e)))?;
+            mf.setattr("xc", xc)
+                .map_err(|e| OracleError::Upstream(format!("set xc: {}", e)))?;
+            mf.setattr(
+                "chkfile",
+                path_a
+                    .to_str()
+                    .ok_or_else(|| OracleError::Upstream("path_a not utf8".into()))?,
+            )
+            .map_err(|e| OracleError::Upstream(format!("setattr chkfile: {}", e)))?;
+            mf.call_method0("kernel")
+                .map_err(|e| OracleError::Upstream(format!("kernel: {}", e)))?;
+        }
+        // pyscf-rs reads the /scf block PySCF DFT just wrote (the SCF schema is
+        // shared; the KS xc/grids metadata is pyscf-rs's extension and is not
+        // written by upstream, so we read the SCF block here for the e_tot
+        // cross-check).
+        let scf_loaded = pyscf_scf::load_scf_from_file(path_a)
+            .map_err(|e| OracleError::PyscfRs(format!("load_scf_from_file: {}", e)))?;
+        let pyscf_lib = py
+            .import("pyscf.lib.chkfile")
+            .map_err(|e| OracleError::Upstream(format!("import pyscf.lib.chkfile: {}", e)))?;
+        let chk_data = pyscf_lib
+            .call_method1(
+                "load",
+                (
+                    path_a
+                        .to_str()
+                        .ok_or_else(|| OracleError::Upstream("path_a not utf8".into()))?,
+                    "scf",
+                ),
+            )
+            .map_err(|e| OracleError::Upstream(format!("chkfile.load: {}", e)))?;
+        let e_upstream: f64 = chk_data
+            .get_item("e_tot")
+            .map_err(|e| OracleError::Upstream(format!("get e_tot: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract e_tot: {}", e)))?;
+        let diff_a = (scf_loaded.e_tot.0 - e_upstream).abs();
+        if diff_a > tol {
+            return Err(OracleError::Diff {
+                diff: diff_a,
+                tol,
+                key: format!("ks_chkfile_roundtrip[A,{}]", fixture),
+            });
+        }
+
+        // Direction (b): pyscf-rs writes a KsResult → h5py reads /scf/e_tot AND
+        // the KS xc/grids metadata (the h5py-readability seal on the extended
+        // schema). We build a representative KsResult from the loaded SCF block.
+        let tmp_b = tempfile::NamedTempFile::new()?;
+        let path_b = tmp_b.path();
+        let ks_result =
+            pyscf_dft::KsResult::new(scf_loaded, xc, pyscf_dft::GridsMeta::default());
+        pyscf_dft::dump_ks_to_file(path_b, "{}", &ks_result)
+            .map_err(|e| OracleError::PyscfRs(format!("dump_ks_to_file: {}", e)))?;
+
+        // h5py opens the pyscf-rs-written chkfile and reads /scf/e_tot + /scf/xc.
+        let h5py = py
+            .import("h5py")
+            .map_err(|e| OracleError::Upstream(format!("import h5py: {}", e)))?;
+        let f = h5py
+            .call_method1(
+                "File",
+                (
+                    path_b
+                        .to_str()
+                        .ok_or_else(|| OracleError::Upstream("path_b not utf8".into()))?,
+                    "r",
+                ),
+            )
+            .map_err(|e| OracleError::Upstream(format!("h5py.File: {}", e)))?;
+        let scf_grp = f
+            .get_item("scf")
+            .map_err(|e| OracleError::Upstream(format!("h5py['scf']: {}", e)))?;
+        // /scf/e_tot reads back as a scalar (`dataset[()]` — h5py-readable on
+        // the upstream schema). The empty tuple is the scalar index.
+        let empty_idx = pyo3::types::PyTuple::empty(py);
+        let e_dataset = scf_grp
+            .get_item("e_tot")
+            .map_err(|e| OracleError::Upstream(format!("h5py scf/e_tot: {}", e)))?;
+        let e_h5: f64 = e_dataset
+            .call_method1("__getitem__", (empty_idx,))
+            .map_err(|e| OracleError::Upstream(format!("read e_tot scalar: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract e_tot h5: {}", e)))?;
+        // /scf/xc reads back as the DFT metadata (the schema extension).
+        let _xc_h5 = scf_grp
+            .get_item("xc")
+            .map_err(|e| OracleError::Upstream(format!("h5py scf/xc missing: {}", e)))?;
+        f.call_method0("close")
+            .map_err(|e| OracleError::Upstream(format!("h5py close: {}", e)))?;
+
+        let diff_b = (ks_result.scf.e_tot.0 - e_h5).abs();
+        if diff_b > tol {
+            return Err(OracleError::Diff {
+                diff: diff_b,
+                tol,
+                key: format!("ks_chkfile_roundtrip[B,{}]", fixture),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -888,8 +1018,8 @@ mod tests {
     #[test]
     fn known_methods_list_has_all_arms() {
         // 8 SCF/DF arms (Phase 3) + grid_weights (04-04) + rks_energy +
-        // uks_energy (04-06) + df_dft_energy (04-08 Task 1) = 12.
-        assert_eq!(KNOWN_METHODS.len(), 12);
+        // uks_energy (04-06) + df_dft_energy + ks_chkfile_roundtrip (04-08) = 13.
+        assert_eq!(KNOWN_METHODS.len(), 13);
         assert!(KNOWN_METHODS.contains(&"scf_rhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_uhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_diis_iter_count"));
@@ -902,5 +1032,6 @@ mod tests {
         assert!(KNOWN_METHODS.contains(&"rks_energy"));
         assert!(KNOWN_METHODS.contains(&"uks_energy"));
         assert!(KNOWN_METHODS.contains(&"df_dft_energy"));
+        assert!(KNOWN_METHODS.contains(&"ks_chkfile_roundtrip"));
     }
 }
