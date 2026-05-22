@@ -68,3 +68,23 @@ pub enum DftError {
     #[error("XC backend evaluation error: {0}")]
     BackendEval(String),
 }
+
+/// Bridge `DftError` into the workspace-wide `PyscfRsError` so the DFT grid
+/// loop + KS hooks can propagate XC failures through the `?` operator into the
+/// SCF kernel's `Result<_, PyscfRsError>` return type (DFT-01/DFT-08).
+///
+/// `pyscf-core` cannot carry a `#[from] DftError` variant (that would force a
+/// `pyscf-core → pyscf-dft` dependency cycle — pyscf-dft already depends on
+/// pyscf-core), so this `From` impl lives HERE (the orphan rule permits it:
+/// `DftError` is local) and maps onto the existing
+/// `CoreError::BasisParse` string-carrying variant, preserving the full
+/// `DftError` Display message. Mirrors the cross-crate error-bridging
+/// convention the pyscf-core error doc-comment anticipates ("Phases 2-7 add
+/// method-specific variants via `#[from]` conversions").
+impl From<DftError> for pyscf_core::PyscfRsError {
+    fn from(e: DftError) -> Self {
+        pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::BasisParse(format!(
+            "DFT/XC error: {e}"
+        )))
+    }
+}
