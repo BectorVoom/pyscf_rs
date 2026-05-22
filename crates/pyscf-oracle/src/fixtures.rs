@@ -27,6 +27,9 @@ pub const H2O_TRIPLET_CCPVDZ: &str = "h2o_triplet_ccpvdz";
 /// The `<fixture>_<mode>` variant (used by init_guess arm) strips the
 /// trailing `_<mode>` token so the base fixture's atom resolves.
 pub fn atom(name: &str) -> &'static str {
+    // Strip the grid-level suffix `@levelN` (plan 04-04 grid_weights arm) so
+    // the base fixture's geometry resolves.
+    let name = name.split('@').next().unwrap_or(name);
     match name {
         "h2o_ccpvdz" | "h2o_triplet_ccpvdz" => H2O_GEOMETRY,
         "benzene_631gs" => BENZENE_GEOMETRY,
@@ -40,6 +43,7 @@ pub fn atom(name: &str) -> &'static str {
 
 /// Basis-set name for a fixture.
 pub fn basis(name: &str) -> &'static str {
+    let name = name.split('@').next().unwrap_or(name);
     match name {
         "h2o_ccpvdz" | "h2o_triplet_ccpvdz" => "cc-pvdz",
         "benzene_631gs" => "6-31g*",

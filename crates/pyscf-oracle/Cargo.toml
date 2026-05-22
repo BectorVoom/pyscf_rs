@@ -34,6 +34,7 @@ python = [
     "dep:pyscf-gto",
     "dep:pyscf-scf",
     "dep:pyscf-chkfile",
+    "dep:pyscf-grids",
     "dep:tempfile",
 ]
 
@@ -47,6 +48,7 @@ pyscf-core    = { path = "../pyscf-core",    optional = true }
 pyscf-gto     = { path = "../pyscf-gto",     optional = true }
 pyscf-scf     = { path = "../pyscf-scf",     optional = true }
 pyscf-chkfile = { path = "../pyscf-chkfile", optional = true }
+pyscf-grids   = { path = "../pyscf-grids",   optional = true }
 tempfile      = { version = "3",             optional = true }
 
 # pyo3 stays optional + feature-gated. Off by default → `cargo build

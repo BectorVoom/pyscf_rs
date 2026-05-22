@@ -1,9 +1,10 @@
 //! Oracle runner — dispatches methods to per-check helpers, drives Python via
 //! `Python::attach` (pyo3 in dev-deps only — ORACLE-01).
 //!
-//! ALL 8 arms ship with real implementations (checker iteration 1 BLOCKER 1
-//! closure). ROADMAP success criterion 6: every SCF success criterion is
-//! asserted via this macro.
+//! All 8 SCF/DF arms ship with real implementations (checker iteration 1
+//! BLOCKER 1 closure). ROADMAP success criterion 6: every SCF success
+//! criterion is asserted via this macro. Phase 4 plan 04-04 adds a 9th arm,
+//! `grid_weights` (DFT-04/09 byte-for-byte Becke grid compare).
 //!
 //! Build modes:
 //!   - default features (no `python`): only `OracleError` + the dispatch
@@ -39,10 +40,10 @@ pub enum OracleError {
     Io(#[from] std::io::Error),
 }
 
-/// All 8 known method names — recognised by dispatch regardless of whether
+/// All known method names — recognised by dispatch regardless of whether
 /// the `python` feature is enabled. Used to distinguish a genuinely
 /// unknown method (always an error) from a known method that can't run
-/// because Python isn't compiled in.
+/// because Python isn't compiled in. (8 SCF/DF arms + `grid_weights`.)
 const KNOWN_METHODS: &[&str] = &[
     "scf_rhf_energy",
     "scf_uhf_energy",
@@ -52,6 +53,10 @@ const KNOWN_METHODS: &[&str] = &[
     "chkfile_roundtrip",
     "mulliken_pop",
     "dip_moment",
+    // DFT-04 / DFT-09 (plan 04-04): byte-for-byte Becke grid coords + weights
+    // vs upstream `dft.gen_grid.Grids`. The fixture name encodes the level as
+    // `<base>@levelN` (e.g. "h2o_ccpvdz@level3").
+    "grid_weights",
 ];
 
 /// Top-level dispatcher. Resolves the method name to either a known
@@ -102,6 +107,7 @@ mod python_impl {
             "chkfile_roundtrip" => check_chkfile_roundtrip(py, fixture, tol),
             "mulliken_pop" => check_mulliken_pop(py, fixture, tol),
             "dip_moment" => check_dip_moment(py, fixture, tol),
+            "grid_weights" => check_grid_weights(py, fixture, tol),
             other => Err(OracleError::UnknownMethod(other.to_string())),
         })
     }
@@ -597,6 +603,109 @@ mod python_impl {
         }
         Ok(())
     }
+
+    // ── Arm 9: DFT-04/09 Becke grid coords + weights byte-for-byte ──────────
+
+    /// Parse a `<base>@levelN` fixture name into `(base, level)`.
+    fn parse_grid_fixture(fixture: &str) -> (&str, usize) {
+        match fixture.split_once("@level") {
+            Some((base, lvl)) => (base, lvl.parse::<usize>().unwrap_or(3)),
+            None => (fixture, 3),
+        }
+    }
+
+    fn check_grid_weights(
+        py: Python<'_>,
+        fixture: &str,
+        tol: f64,
+    ) -> Result<(), OracleError> {
+        let (base, level) = parse_grid_fixture(fixture);
+
+        // ── Upstream: dft.gen_grid.Grids with class defaults, sort_grids=False ──
+        let mol = build_pyscf_mol(py, base)?;
+        let gen_grid = py
+            .import("pyscf.dft.gen_grid")
+            .map_err(|e| OracleError::Upstream(format!("import gen_grid: {}", e)))?;
+        let grids = gen_grid
+            .call_method1("Grids", (mol,))
+            .map_err(|e| OracleError::Upstream(format!("Grids(): {}", e)))?;
+        grids
+            .setattr("level", level)
+            .map_err(|e| OracleError::Upstream(format!("set level: {}", e)))?;
+        // build(sort_grids=False) — match the pyscf-rs unsorted contract.
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs
+            .set_item("sort_grids", false)
+            .map_err(|e| OracleError::Upstream(format!("kwargs sort_grids: {}", e)))?;
+        grids
+            .call_method("build", (), Some(&kwargs))
+            .map_err(|e| OracleError::Upstream(format!("grids.build: {}", e)))?;
+        let coords_upstream = np_to_vec_f64(
+            &grids
+                .getattr("coords")
+                .map_err(|e| OracleError::Upstream(format!("coords attr: {}", e)))?,
+        )?;
+        let weights_upstream = np_to_vec_f64(
+            &grids
+                .getattr("weights")
+                .map_err(|e| OracleError::Upstream(format!("weights attr: {}", e)))?,
+        )?;
+
+        // ── pyscf-rs: pyscf_grids::Grids with class defaults ──
+        let rust_mol = build_rust_mol(base)?;
+        let mut g = pyscf_grids::Grids::new();
+        g.level = level;
+        let (coords_rs_rows, weights_rs) = g.build(&rust_mol);
+        // Flatten coords row-major to match numpy's (N,3).reshape order.
+        let mut coords_rs = Vec::with_capacity(coords_rs_rows.len() * 3);
+        for row in &coords_rs_rows {
+            coords_rs.extend_from_slice(row);
+        }
+
+        // Shape gate.
+        if coords_rs.len() != coords_upstream.len() {
+            return Err(OracleError::Diff {
+                diff: f64::INFINITY,
+                tol,
+                key: format!(
+                    "grid_weights[{}] coords shape (rs={}, upstream={})",
+                    fixture,
+                    coords_rs.len(),
+                    coords_upstream.len()
+                ),
+            });
+        }
+        if weights_rs.len() != weights_upstream.len() {
+            return Err(OracleError::Diff {
+                diff: f64::INFINITY,
+                tol,
+                key: format!(
+                    "grid_weights[{}] weights shape (rs={}, upstream={})",
+                    fixture,
+                    weights_rs.len(),
+                    weights_upstream.len()
+                ),
+            });
+        }
+
+        let coords_diff = elementwise_max_diff(&coords_rs, &coords_upstream);
+        if coords_diff > tol {
+            return Err(OracleError::Diff {
+                diff: coords_diff,
+                tol,
+                key: format!("grid_weights[{}] coords", fixture),
+            });
+        }
+        let weights_diff = elementwise_max_diff(&weights_rs, &weights_upstream);
+        if weights_diff > tol {
+            return Err(OracleError::Diff {
+                diff: weights_diff,
+                tol,
+                key: format!("grid_weights[{}] weights", fixture),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -631,8 +740,9 @@ mod tests {
     }
 
     #[test]
-    fn known_methods_list_has_all_8_arms() {
-        assert_eq!(KNOWN_METHODS.len(), 8);
+    fn known_methods_list_has_all_arms() {
+        // 8 SCF/DF arms (Phase 3) + grid_weights (Phase 4 plan 04-04) = 9.
+        assert_eq!(KNOWN_METHODS.len(), 9);
         assert!(KNOWN_METHODS.contains(&"scf_rhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_uhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_diis_iter_count"));
@@ -641,5 +751,6 @@ mod tests {
         assert!(KNOWN_METHODS.contains(&"chkfile_roundtrip"));
         assert!(KNOWN_METHODS.contains(&"mulliken_pop"));
         assert!(KNOWN_METHODS.contains(&"dip_moment"));
+        assert!(KNOWN_METHODS.contains(&"grid_weights"));
     }
 }

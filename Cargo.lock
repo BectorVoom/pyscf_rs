@@ -6037,6 +6037,8 @@ version = "0.1.0"
 dependencies = [
  "pyscf-algebra",
  "pyscf-core",
+ "pyscf-gto",
+ "pyscf-oracle",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -6092,6 +6094,7 @@ dependencies = [
  "pyo3",
  "pyscf-chkfile",
  "pyscf-core",
+ "pyscf-grids",
  "pyscf-gto",
  "pyscf-scf",
  "tempfile",

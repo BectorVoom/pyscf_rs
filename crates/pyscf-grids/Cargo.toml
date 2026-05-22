@@ -17,3 +17,16 @@ pyscf-core    = { path = "../pyscf-core" }
 pyscf-algebra = { path = "../pyscf-algebra" }
 thiserror     = { workspace = true }
 tracing       = { workspace = true }
+
+# Dev-only: corpus Mole construction + the PySCF live-oracle harness
+# (ORACLE-01: oracle is dev-deps only — never a normal dep of the wheel).
+# The byte-for-byte grid compare runs under `--features python` (CI only);
+# `pyscf-oracle`'s own `python` feature gates the libpython link.
+[dev-dependencies]
+pyscf-gto    = { path = "../pyscf-gto" }
+pyscf-oracle = { path = "../pyscf-oracle" }
+
+[features]
+# Forward a `python` feature to pyscf-oracle so
+# `cargo test -p pyscf-grids --features python` drives the live oracle.
+python = ["pyscf-oracle/python"]
