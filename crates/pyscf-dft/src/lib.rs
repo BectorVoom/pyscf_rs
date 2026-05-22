@@ -42,6 +42,11 @@ pub mod hooks;
 pub mod rks;
 pub mod uks;
 
+// ── Plan 04-07 Task 2 (DFT-06) ─────────────────────────────────────────────
+// VV10 non-local correlation: the pure-Python _vv10nlc double-loop port +
+// nr_nlc_vxc orchestration over a coarser nlcgrids (Pitfall 4, A1).
+pub mod vv10;
+
 // ── Curated re-export surface (04-06 owns this) ────────────────────────────
 // XC parsing / eval (04-05 modules, surfaced here).
 pub use error::DftError;
@@ -54,6 +59,8 @@ pub use numint::{NrResult, NrUksResult, NumInt, XcType};
 pub use rks::RKS;
 pub use uks::UKS;
 pub use veff::{default_get_veff, KsVeff};
+// VV10 NLC surface (04-07).
+pub use vv10::{nr_nlc_vxc, vv10nlc, NlcCoeffs, NlcResult, Vv10Output};
 // NOTE: `pub mod rks; pub mod uks;` are declared above (Task 1) so the crate
 // compiles atomically; their FULL bodies (RKS/UKS reusing kernel<H>) land in
 // Task 2. Task 1 ships minimal struct skeletons sufficient for the
