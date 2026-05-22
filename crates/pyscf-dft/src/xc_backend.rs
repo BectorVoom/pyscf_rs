@@ -1,0 +1,585 @@
+//! `XcBackend` — the cfg-gated XC evaluation seam (D-03, DFT-03).
+//!
+//! Structural model: `pyscf-algebra::client::AlgebraClient` (client.rs:10-39)
+//! — an enum-of-clients with a `#[cfg(feature = …)]` variant and a
+//! `match self { … }` dispatch. Here the default-compiled variant is `Xcfun`
+//! (routes to the always-building `xcfun_rs`); the `Libxc` variant and ALL
+//! libxc eval code live behind `#[cfg(feature = "libxc")]`, so a default build
+//! never names a `libxc_rs` symbol (Pitfall 5 — `libxc_rs` is 266 kernel
+//! crates, ~6h compile).
+//!
+//! License: Apache-2.0. Requirement: DFT-03 (bit-identical XC eval).
+//!
+//! Family dispatch: the parsed [`XcSpec`] is evaluated over a block of grid
+//! points whose density-derivative input is sized by family —
+//! LDA(rho) / GGA(rho,sigma) / MGGA(rho,sigma,lapl,tau) — mirroring upstream
+//! `eval_xc`'s `rho` row count.
+
+use crate::error::DftError;
+use crate::parser::XcSpec;
+
+/// Functional family — selects the per-point input layout and the backend's
+/// variable encoding (xcfun `Vars`, libxc `Family`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Family {
+    /// Local density approximation: input is `rho` only.
+    Lda,
+    /// Generalized-gradient approximation: input is `(rho, sigma)`.
+    Gga,
+    /// Meta-GGA: input is `(rho, sigma, lapl, tau)`.
+    Mgga,
+}
+
+impl Family {
+    /// Number of per-point input scalars (unpolarized) for this family.
+    /// LDA = 1 (rho), GGA = 2 (rho, sigma), MGGA = 4 (rho, sigma, lapl, tau).
+    pub fn input_width(self) -> usize {
+        match self {
+            Family::Lda => 1,
+            Family::Gga => 2,
+            Family::Mgga => 4,
+        }
+    }
+}
+
+/// One grid block's density-derivative input, family-sized (unpolarized).
+///
+/// The `*_block` slices are per-point columns (length = number of grid points).
+/// LDA reads only `rho`; GGA additionally reads `sigma`; MGGA additionally
+/// reads `lapl` + `tau`. This is the family-dispatch sizing the backend uses to
+/// build the flat per-point input buffer.
+#[derive(Debug, Clone)]
+pub enum RhoBlock<'a> {
+    /// `rho[ip]`.
+    Lda { rho: &'a [f64] },
+    /// `rho[ip]`, `sigma[ip] = |∇rho|²`.
+    Gga { rho: &'a [f64], sigma: &'a [f64] },
+    /// `rho`, `sigma`, `lapl = ∇²rho`, `tau = kinetic energy density`.
+    Mgga {
+        rho: &'a [f64],
+        sigma: &'a [f64],
+        lapl: &'a [f64],
+        tau: &'a [f64],
+    },
+}
+
+impl RhoBlock<'_> {
+    /// The family implied by which density-derivative rows are present.
+    pub fn family(&self) -> Family {
+        match self {
+            RhoBlock::Lda { .. } => Family::Lda,
+            RhoBlock::Gga { .. } => Family::Gga,
+            RhoBlock::Mgga { .. } => Family::Mgga,
+        }
+    }
+
+    /// Number of grid points in the block.
+    pub fn n_points(&self) -> usize {
+        match self {
+            RhoBlock::Lda { rho } => rho.len(),
+            RhoBlock::Gga { rho, .. } => rho.len(),
+            RhoBlock::Mgga { rho, .. } => rho.len(),
+        }
+    }
+}
+
+/// Derivative order requested from the functional (mirrors libxc
+/// `DerivativeOrder` / the xcfun `order` argument): 0 = energy density only,
+/// 1 = + first derivatives (the XC potential), etc.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DerivOrder {
+    /// Exc only.
+    Exc = 0,
+    /// Exc + Vxc (first derivatives).
+    Vxc = 1,
+    /// + second derivatives (fxc).
+    Fxc = 2,
+}
+
+impl DerivOrder {
+    fn as_u32(self) -> u32 {
+        self as u32
+    }
+}
+
+/// XC evaluation output over a grid block (unpolarized).
+///
+/// `exc[ip]` is the energy density per unit volume at point `ip`
+/// (xcfun `output[0]` for `Mode::PartialDerivatives`); `vrho[ip]` is the
+/// first derivative ∂f/∂rho (the LDA/GGA potential). Higher-order derivatives
+/// are returned in the family-specific extra fields when `order >= Vxc`.
+#[derive(Debug, Clone, Default)]
+pub struct XcOutput {
+    /// Per-point XC energy density (`f = rho · e_xc`).
+    pub exc: Vec<f64>,
+    /// Per-point ∂f/∂rho (present when `order >= Vxc`).
+    pub vrho: Vec<f64>,
+    /// Per-point ∂f/∂sigma (GGA/MGGA, `order >= Vxc`).
+    pub vsigma: Vec<f64>,
+}
+
+/// The cfg-gated XC backend seam (D-03). `Xcfun` is the default-compiled
+/// backend; `Libxc` is only present under `--features libxc`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum XcBackend {
+    /// Native-Rust xcfun (`xcfun_rs`) — the DEFAULT backend, always compiled.
+    #[default]
+    Xcfun,
+    /// Native-Rust libxc (`libxc_rs`) — ONLY compiled under `--features libxc`
+    /// (CI-only; the default build never references libxc_rs symbols).
+    #[cfg(feature = "libxc")]
+    Libxc,
+}
+
+impl XcBackend {
+    /// Evaluate the functional `spec` over `rho` at derivative `order`.
+    ///
+    /// Dispatch mirrors `AlgebraClient` (client.rs match-on-self):
+    /// - `Xcfun` → the xcfun_rs path (below).
+    /// - `Libxc` (gated) → the libxc_rs path (in the `#[cfg(feature =
+    ///   "libxc")]` module).
+    /// - When the crate is built WITHOUT `--features libxc`, there is no
+    ///   `Libxc` variant to match, so the dispatch is exhaustive over `Xcfun`
+    ///   alone and never names a libxc_rs symbol.
+    ///
+    /// # Errors
+    /// [`DftError::BackendEval`] on a backend-side failure (unknown functional
+    /// name, buffer mismatch); [`DftError::LibxcFeatureNotEnabled`] is reserved
+    /// for callers that explicitly request the libxc backend in a default
+    /// build (see [`XcBackend::require_libxc`]).
+    pub fn eval(
+        &self,
+        spec: &XcSpec,
+        rho: &RhoBlock<'_>,
+        order: DerivOrder,
+    ) -> Result<XcOutput, DftError> {
+        match self {
+            XcBackend::Xcfun => xcfun_eval(spec, rho, order),
+            #[cfg(feature = "libxc")]
+            XcBackend::Libxc => libxc_impl::libxc_eval(spec, rho, order),
+        }
+    }
+
+    /// Helper for callers that want the libxc backend: returns
+    /// `Err(LibxcFeatureNotEnabled)` in a default build instead of silently
+    /// falling back. The `#[cfg(not(feature = "libxc"))]` arm is the
+    /// "feature off" branch the interface contract names.
+    pub fn require_libxc() -> Result<XcBackend, DftError> {
+        #[cfg(feature = "libxc")]
+        {
+            Ok(XcBackend::Libxc)
+        }
+        #[cfg(not(feature = "libxc"))]
+        {
+            Err(DftError::LibxcFeatureNotEnabled)
+        }
+    }
+}
+
+/// Map an xcfun functional id (0..77, as emitted by `parser::xcfun`) to the
+/// canonical xcfun name accepted by `xcfun_rs::Functional::set`. Only the
+/// parity-corpus subset is mapped; an unmapped id is a clean `BackendEval`
+/// error (never a panic).
+fn xcfun_id_to_name(id: u32) -> Option<&'static str> {
+    Some(match id {
+        0 => "SLATERX",
+        2 => "VWN3C",
+        3 => "VWN5C",
+        4 => "PBEC",
+        5 => "PBEX",
+        6 => "BECKEX",
+        16 => "LYPC",
+        17 => "OPTX",
+        19 => "REVPBEX",
+        20 => "RPBEX",
+        26 => "PW91X",
+        28 => "PW92C",
+        56 => "P86C",
+        77 => "PW91C",
+        _ => return None,
+    })
+}
+
+/// The xcfun_rs (default) evaluation path. Builds a `Functional` from the
+/// parsed spec, picks the family + `Vars`/`Mode`, and runs `eval_vec` over the
+/// block. Family is detected from the spec via `is_gga`/`is_metagga` AND the
+/// supplied `RhoBlock` (they must agree).
+fn xcfun_eval(
+    spec: &XcSpec,
+    rho: &RhoBlock<'_>,
+    order: DerivOrder,
+) -> Result<XcOutput, DftError> {
+    use xcfun_rs::{Functional, Mode, Vars};
+
+    let mut func = Functional::new();
+    for &(id, fac) in spec.components() {
+        let name = xcfun_id_to_name(id).ok_or_else(|| {
+            DftError::BackendEval(format!("xcfun: no name mapping for functional id {id}"))
+        })?;
+        func.set(name, fac)
+            .map_err(|e| DftError::BackendEval(format!("xcfun set('{name}',{fac}): {e:?}")))?;
+    }
+
+    // Family dispatch: pick Vars by the functional's declared dependencies,
+    // cross-checked against the RhoBlock the caller supplied.
+    let detected = if func.is_metagga() {
+        Family::Mgga
+    } else if func.is_gga() {
+        Family::Gga
+    } else {
+        Family::Lda
+    };
+    if detected != rho.family() {
+        return Err(DftError::BackendEval(format!(
+            "xcfun: functional family {:?} does not match supplied RhoBlock family {:?}",
+            detected,
+            rho.family()
+        )));
+    }
+
+    // Spin-resolved Vars per family. The CPU kernel-launch path supports the
+    // spin-resolved (alpha/beta) layouts ONLY — the total-density `N`/`A`
+    // variants are not in `xcfun_kernels::dispatch` (verified empirically:
+    // `Vars::N`/`Vars::A` return `NotConfigured`). For a closed-shell
+    // (spin-unpolarized) block we split the density symmetrically:
+    //   rho_a = rho_b = rho/2,  sigma_{aa,ab,bb} = sigma/4,  tau_{a,b} = tau/2
+    // which reproduces the total-density XC energy (verified: SLATERX at
+    // rho_a=rho_b=0.5 gives the exact total-rho Slater value).
+    //   LDA  -> A_B                          (a, b)
+    //   GGA  -> A_B_GAA_GAB_GBB              (a, b, gaa, gab, gbb)
+    //   MGGA -> A_B_GAA_GAB_GBB_TAUA_TAUB    (a, b, gaa, gab, gbb, taua, taub)
+    let vars = match detected {
+        Family::Lda => Vars::A_B,
+        Family::Gga => Vars::A_B_GAA_GAB_GBB,
+        Family::Mgga => Vars::A_B_GAA_GAB_GBB_TAUA_TAUB,
+    };
+
+    let np = rho.n_points();
+    let mut out = XcOutput {
+        exc: vec![0.0; np],
+        vrho: vec![0.0; np],
+        vsigma: vec![0.0; np],
+    };
+    if np == 0 {
+        return Ok(out);
+    }
+
+    func.eval_setup(vars, Mode::PartialDerivatives, order.as_u32())
+        .map_err(|e| DftError::BackendEval(format!("xcfun eval_setup: {e:?}")))?;
+
+    let inlen = func.input_length();
+    let outlen = func
+        .output_length()
+        .map_err(|e| DftError::BackendEval(format!("xcfun output_length: {e:?}")))?;
+
+    // Build the pitched per-point input buffer with the closed-shell spin
+    // split (eval_vec layout: point p reads density[p*inlen .. p*inlen+inlen]).
+    let mut density = vec![0.0_f64; np * inlen];
+    for ip in 0..np {
+        let base = ip * inlen;
+        match rho {
+            RhoBlock::Lda { rho } => {
+                let half = rho[ip] * 0.5;
+                density[base] = half; // a
+                density[base + 1] = half; // b
+            }
+            RhoBlock::Gga { rho, sigma } => {
+                let half = rho[ip] * 0.5;
+                let quarter = sigma[ip] * 0.25;
+                density[base] = half; // a
+                density[base + 1] = half; // b
+                density[base + 2] = quarter; // gaa
+                density[base + 3] = quarter; // gab
+                density[base + 4] = quarter; // gbb
+            }
+            RhoBlock::Mgga {
+                rho, sigma, tau, ..
+            } => {
+                let half = rho[ip] * 0.5;
+                let quarter = sigma[ip] * 0.25;
+                let tau_half = tau[ip] * 0.5;
+                density[base] = half; // a
+                density[base + 1] = half; // b
+                density[base + 2] = quarter; // gaa
+                density[base + 3] = quarter; // gab
+                density[base + 4] = quarter; // gbb
+                density[base + 5] = tau_half; // taua
+                density[base + 6] = tau_half; // taub
+            }
+        }
+    }
+    let mut out_buf = vec![0.0_f64; np * outlen];
+
+    func.eval_vec(&density, inlen, &mut out_buf, outlen, np)
+        .map_err(|e| DftError::BackendEval(format!("xcfun eval_vec: {e:?}")))?;
+
+    // Output layout (PartialDerivatives): out[0]=energy density,
+    // out[1..inlen+1]=∂/∂x_i (potential). For the spin-resolved layout the
+    // first two derivatives are vrho_a, vrho_b (equal for closed-shell), and
+    // the gradient derivatives follow. We surface vrho_a as the (closed-shell)
+    // density potential and the first gradient derivative as vsigma.
+    for ip in 0..np {
+        let base = ip * outlen;
+        out.exc[ip] = out_buf[base];
+        if order >= DerivOrder::Vxc && outlen > 1 {
+            out.vrho[ip] = out_buf[base + 1]; // ∂f/∂rho_a
+            if detected != Family::Lda && outlen > 3 {
+                // For A_B_GAA_GAB_GBB the order-1 block is
+                // [f, da, db, dgaa, dgab, dgbb]; index 3 = ∂f/∂gaa.
+                out.vsigma[ip] = out_buf[base + 3];
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// libxc_rs (gated) evaluation path. Entirely inside `#[cfg(feature =
+/// "libxc")]` so a default build never references `libxc_rs`.
+#[cfg(feature = "libxc")]
+mod libxc_impl {
+    use super::{DerivOrder, DftError, Family, RhoBlock, XcOutput, XcSpec};
+    use libxc_rs::{
+        BatchEvaluator, DerivativeOrder, Functional, FunctionalId, GgaInput, GgaOutput, LdaInput,
+        LdaOutput, MggaInput, MggaOutput, Spin,
+    };
+
+    fn deriv_order(order: DerivOrder) -> DerivativeOrder {
+        match order {
+            DerivOrder::Exc => DerivativeOrder::Exc,
+            DerivOrder::Vxc => DerivativeOrder::Vxc,
+            DerivOrder::Fxc => DerivativeOrder::Fxc,
+        }
+    }
+
+    /// Evaluate the spec via libxc_rs, summing each component's contribution
+    /// weighted by its factor. Family/derivative dispatch picks
+    /// LdaInput/GgaInput/MggaInput by the libxc functional's `family()`.
+    pub(super) fn libxc_eval(
+        spec: &XcSpec,
+        rho: &RhoBlock<'_>,
+        order: DerivOrder,
+    ) -> Result<XcOutput, DftError> {
+        let np = rho.n_points();
+        let spin = Spin::Unpolarized;
+        let dord = deriv_order(order);
+
+        let mut out = XcOutput {
+            exc: vec![0.0; np],
+            vrho: vec![0.0; np],
+            vsigma: vec![0.0; np],
+        };
+        if np == 0 {
+            return Ok(out);
+        }
+
+        let mut batch = BatchEvaluator::new(spin, np);
+
+        for &(id, fac) in spec.components() {
+            let fid = FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
+                DftError::BackendEval(format!("libxc: functional id {id} out of range"))
+            })?)
+            .map_err(|e| DftError::BackendEval(format!("libxc lookup id {id}: {e:?}")))?;
+            let func = Functional::new(fid, spin)
+                .map_err(|e| DftError::BackendEval(format!("libxc Functional::new: {e:?}")))?;
+
+            // Family dispatch via the functional's declared family.
+            match fid.family() {
+                libxc_rs::Family::Lda => {
+                    let RhoBlock::Lda { rho } = rho else {
+                        return Err(family_mismatch(Family::Lda, rho.family()));
+                    };
+                    let input = LdaInput::new(rho, np, spin)
+                        .map_err(|e| DftError::BackendEval(format!("libxc LdaInput: {e:?}")))?;
+                    let mut zk = vec![0.0; np];
+                    let mut vrho = vec![0.0; np];
+                    let mut o = LdaOutput::new(
+                        Some(&mut zk),
+                        if order >= DerivOrder::Vxc { Some(&mut vrho) } else { None },
+                        None,
+                        None,
+                        None,
+                        np,
+                        spin,
+                    )
+                    .map_err(|e| DftError::BackendEval(format!("libxc LdaOutput: {e:?}")))?;
+                    batch
+                        .evaluate(&func, &input, dord, &mut o)
+                        .map_err(|e| DftError::BackendEval(format!("libxc eval LDA: {e:?}")))?;
+                    for ip in 0..np {
+                        out.exc[ip] += fac * zk[ip] * rho[ip];
+                        out.vrho[ip] += fac * vrho[ip];
+                    }
+                }
+                libxc_rs::Family::Gga => {
+                    let RhoBlock::Gga { rho, sigma } = rho else {
+                        return Err(family_mismatch(Family::Gga, rho.family()));
+                    };
+                    let input = GgaInput::new(rho, sigma, np, spin)
+                        .map_err(|e| DftError::BackendEval(format!("libxc GgaInput: {e:?}")))?;
+                    let mut zk = vec![0.0; np];
+                    let mut vrho = vec![0.0; np];
+                    let mut vsigma = vec![0.0; np];
+                    let want = order >= DerivOrder::Vxc;
+                    let mut o = GgaOutput::new(
+                        Some(&mut zk),
+                        if want { Some(&mut vrho) } else { None },
+                        if want { Some(&mut vsigma) } else { None },
+                        None, None, None, None, None, None, None,
+                        None, None, None, None, None,
+                        np,
+                        spin,
+                    )
+                    .map_err(|e| DftError::BackendEval(format!("libxc GgaOutput: {e:?}")))?;
+                    batch
+                        .evaluate(&func, &input, dord, &mut o)
+                        .map_err(|e| DftError::BackendEval(format!("libxc eval GGA: {e:?}")))?;
+                    for ip in 0..np {
+                        out.exc[ip] += fac * zk[ip] * rho[ip];
+                        out.vrho[ip] += fac * vrho[ip];
+                        out.vsigma[ip] += fac * vsigma[ip];
+                    }
+                }
+                libxc_rs::Family::Mgga => {
+                    let RhoBlock::Mgga { rho, sigma, lapl, tau } = rho else {
+                        return Err(family_mismatch(Family::Mgga, rho.family()));
+                    };
+                    let input = MggaInput::new(rho, sigma, lapl, tau, np, spin)
+                        .map_err(|e| DftError::BackendEval(format!("libxc MggaInput: {e:?}")))?;
+                    let mut zk = vec![0.0; np];
+                    let mut vrho = vec![0.0; np];
+                    let mut vsigma = vec![0.0; np];
+                    let want = order >= DerivOrder::Vxc;
+                    let mut o = MggaOutput {
+                        zk: Some(&mut zk),
+                        vrho: if want { Some(&mut vrho) } else { None },
+                        vsigma: if want { Some(&mut vsigma) } else { None },
+                        ..Default::default()
+                    };
+                    o.validate(np, spin)
+                        .map_err(|e| DftError::BackendEval(format!("libxc MggaOutput: {e:?}")))?;
+                    batch
+                        .evaluate(&func, &input, dord, &mut o)
+                        .map_err(|e| DftError::BackendEval(format!("libxc eval MGGA: {e:?}")))?;
+                    for ip in 0..np {
+                        out.exc[ip] += fac * zk[ip] * rho[ip];
+                        out.vrho[ip] += fac * vrho[ip];
+                        out.vsigma[ip] += fac * vsigma[ip];
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn family_mismatch(want: Family, got: Family) -> DftError {
+        DftError::BackendEval(format!(
+            "libxc: functional family {want:?} does not match supplied RhoBlock family {got:?}"
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::libxc;
+    use crate::parser::xcfun;
+
+    /// Slater LDA exchange has a closed analytic form (unpolarized):
+    ///   f(rho)  = -(3/4)(3/π)^(1/3) · rho^(4/3)        (energy density)
+    ///   vrho    = -(3/π)^(1/3) · rho^(1/3)             (∂f/∂rho)
+    /// This is an independent oracle for the xcfun SLATERX path — no live
+    /// xcfun process required (the analytic value IS the reference).
+    fn slater_ref(rho: f64) -> (f64, f64) {
+        let c = (3.0_f64 / std::f64::consts::PI).cbrt();
+        let f = -0.75 * c * rho.powf(4.0 / 3.0);
+        let v = -c * rho.cbrt();
+        (f, v)
+    }
+
+    #[test]
+    fn xcfun_lda_slater_matches_analytic() {
+        // 'slater,' -> xcfun SLATERX(0), factor 1.
+        let spec = xcfun::parse_xc("slater,").unwrap();
+        let rho_vals = [0.1_f64, 0.5, 1.0, 2.5];
+        let rb = RhoBlock::Lda { rho: &rho_vals };
+        let out = XcBackend::Xcfun.eval(&spec, &rb, DerivOrder::Vxc).unwrap();
+
+        for (ip, &r) in rho_vals.iter().enumerate() {
+            let (f, v) = slater_ref(r);
+            assert!(
+                (out.exc[ip] - f).abs() < 1e-10,
+                "exc[{ip}] rho={r}: got {}, want {f}",
+                out.exc[ip]
+            );
+            assert!(
+                (out.vrho[ip] - v).abs() < 1e-10,
+                "vrho[{ip}] rho={r}: got {}, want {v}",
+                out.vrho[ip]
+            );
+        }
+    }
+
+    #[test]
+    fn xcfun_gga_pbe_x_finite_and_consistent() {
+        // PBE exchange (GGA): assert finite, negative energy density and a
+        // sane sigma-derivative over a small block. (PBEX reduces to Slater at
+        // sigma=0, which we cross-check.)
+        let spec = xcfun::parse_xc("pbe,").unwrap(); // PBEX only, X part
+        let rho_vals = [0.1_f64, 0.5, 1.0];
+        let sigma_vals = [0.0_f64, 0.0, 0.0]; // sigma=0 -> reduces to Slater-like
+        let rb = RhoBlock::Gga {
+            rho: &rho_vals,
+            sigma: &sigma_vals,
+        };
+        let out = XcBackend::Xcfun.eval(&spec, &rb, DerivOrder::Vxc).unwrap();
+
+        for (ip, &r) in rho_vals.iter().enumerate() {
+            assert!(out.exc[ip].is_finite(), "exc[{ip}] finite");
+            assert!(out.exc[ip] < 0.0, "PBE-X energy density is negative");
+            // At sigma=0 the PBE exchange enhancement factor is 1, so the
+            // energy density equals Slater exchange exactly.
+            let (f, _) = slater_ref(r);
+            assert!(
+                (out.exc[ip] - f).abs() < 1e-9,
+                "PBE-X at sigma=0 should equal Slater: exc[{ip}]={}, slater={f}",
+                out.exc[ip]
+            );
+            assert!(out.vrho[ip].is_finite());
+            assert!(out.vsigma[ip].is_finite());
+        }
+    }
+
+    #[test]
+    fn family_mismatch_is_clean_error() {
+        // A GGA functional fed an LDA block must error, not panic.
+        let spec = xcfun::parse_xc("pbe,").unwrap();
+        let rho_vals = [0.5_f64];
+        let rb = RhoBlock::Lda { rho: &rho_vals };
+        assert!(matches!(
+            XcBackend::Xcfun.eval(&spec, &rb, DerivOrder::Vxc),
+            Err(DftError::BackendEval(_))
+        ));
+    }
+
+    #[test]
+    fn require_libxc_default_build_returns_feature_not_enabled() {
+        // In a default build (no --features libxc) this MUST be the
+        // feature-not-enabled error, never a libxc_rs symbol reference.
+        #[cfg(not(feature = "libxc"))]
+        assert!(matches!(
+            XcBackend::require_libxc(),
+            Err(DftError::LibxcFeatureNotEnabled)
+        ));
+        #[cfg(feature = "libxc")]
+        assert!(matches!(XcBackend::require_libxc(), Ok(XcBackend::Libxc)));
+    }
+
+    #[test]
+    fn libxc_spec_routes_to_libxc_ids() {
+        // The libxc parser produces libxc ids (B88=106). The backend's libxc
+        // path (gated) consumes them; here we just assert the parser side
+        // (the default build's contract: libxc spec ids != xcfun spec ids).
+        let spec = libxc::parse_xc("blyp").unwrap();
+        assert_eq!(spec.components(), &[(106, 1.0), (131, 1.0)]);
+    }
+}

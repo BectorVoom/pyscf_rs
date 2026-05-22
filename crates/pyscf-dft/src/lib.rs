@@ -8,6 +8,6 @@
 // owned by plan 04-06's lib.rs wiring; this plan exposes the modules directly
 // (`pyscf_dft::parser::libxc::parse_xc`) so the integration tests can drive
 // them and 04-06 can layer re-exports on top without a wave conflict.
-// `xc_backend` is added by Task 2 of this same plan.
 pub mod error;
 pub mod parser;
+pub mod xc_backend;
