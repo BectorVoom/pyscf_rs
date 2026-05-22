@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 4 context updated (D-08 precision switch added)
-last_updated: "2026-05-22T03:04:02.299Z"
-last_activity: 2026-05-22 -- Phase 04 planning complete
+last_updated: "2026-05-22T03:10:24.900Z"
+last_activity: 2026-05-22 -- Phase 04 execution started
 progress:
   total_phases: 8
   completed_phases: 1
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 
 Phase: 04 (dft) — EXECUTING
 Plan: 1 of 10
-Status: Ready to execute
-Last activity: 2026-05-22 -- Phase 04 planning complete
+Status: Executing Phase 04
+Last activity: 2026-05-22 -- Phase 04 execution started
 
 Progress: [█████████░] 88% (7/7 plans done; verification gaps remain)
 
@@ -89,6 +89,7 @@ None yet.
 - **CCSD(T) deferral pressure** is real (~30–40% of CCSD users want it). v1.x P1 entry on the roadmap signals deferral is intentional; expect a feature request within weeks of v1 release.
 - **`faer-ext 0.7.1` ↔ `faer 0.24.0` compatibility** needs build verification in Phase 1; if it fails, either bump faer-ext upstream or drop the dependency and round-trip via `Vec<f64>`.
 - **h5py ↔ hdf5-metno chkfile round-trip** robustness needs empirical seal in Phase 3 (ORACLE-08 round-trip oracle).
+- **libxc_rs per-functional feature gate — `PENDING_LIBXC_RS_FEATURE_GATE`** (Phase 04 plan 04-02, user checkpoint 2026-05-22 → *keep pending*). The sibling `~/Documents/workspace/libxc_rs` repo still unconditionally path-deps all 266 `libxc-kernel-*` crates (~6h compile). Deferred as a separate cross-repo workstream (its own PR/issue), mirroring the Phase 2 cintx-ECP coordination (cintx#11). The xcfun-default DFT path (04-04..04-08) is independent and proceeds; the `--features libxc` bit-exact assertions (04-05/04-06/04-09) and the dedicated libxc CI job (04-10) stay `#[cfg(feature="libxc")]`-gated and CI-only until this lands. Never trigger a default `cargo build` on libxc_rs.
 
 ### Quick Tasks Completed
 
