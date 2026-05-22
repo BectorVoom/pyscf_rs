@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 4 context gathered
-last_updated: "2026-05-22T02:21:25.221Z"
-last_activity: 2026-05-22 -- Phase 4 planning complete
+stopped_at: Phase 4 context updated (D-08 precision switch added)
+last_updated: "2026-05-22T02:43:42.996Z"
+last_activity: 2026-05-22 -- Phase 04 execution started
 progress:
   total_phases: 8
   completed_phases: 1
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 03 — scf-pyo3-bindings
+**Current focus:** Phase 04 — dft
 
 ## Current Position
 
-Phase: 4
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-05-22 -- Phase 4 planning complete
+Phase: 04 (dft) — EXECUTING
+Plan: 1 of 10
+Status: Executing Phase 04
+Last activity: 2026-05-22 -- Phase 04 execution started
 
 Progress: [█████████░] 88% (7/7 plans done; verification gaps remain)
 
@@ -114,6 +114,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-22T01:35:52.616Z
-Stopped at: Phase 4 context gathered
+Last session: 2026-05-22T02:43:42.993Z
+Stopped at: Phase 4 context updated (D-08 precision switch added)
 Resume file: .planning/phases/04-dft/04-CONTEXT.md
