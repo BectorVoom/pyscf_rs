@@ -36,6 +36,12 @@ pyscf-df      = { path = "../pyscf-df" }
 pyscf-grids   = { path = "../pyscf-grids" }
 pyscf-chkfile = { path = "../pyscf-chkfile" }
 pyscf-runtime = { path = "../pyscf-runtime" }
+# Plan 04-08 — the KS chkfile F-order mo_coeff view (chkfile.rs builds an
+# ArrayView2 with explicit F-strides for write_dataset_f_order, Pitfall 8).
+# Mirrors pyscf-scf::chkfile's ndarray use; NOT an hdf5 dep (D-05 intact —
+# pyscf-chkfile remains the sole owner of hdf5-metno; ndarray is the array
+# view crate the chkfile primitives already take as input).
+ndarray       = { workspace = true }
 # Default XC backend: native-Rust xcfun (always compiled). Redirected to the
 # sibling path via the workspace [patch.crates-io] xcfun_rs entry.
 xcfun-rs      = "0.1.0"
@@ -70,3 +76,8 @@ libxc_rs      = { path = "../../../libxc_rs", optional = true }
 pyscf-oracle  = { path = "../pyscf-oracle" }
 pyscf-gto     = { path = "../pyscf-gto" }
 tracing-subscriber = { workspace = true }
+# Plan 04-08 — KS chkfile round-trip scratch paths (ks_chkfile_roundtrip.rs +
+# the chkfile.rs inline tests). Mirrors pyscf-scf's `tempfile = "3"` dev-dep
+# for the SCF chkfile tests. NO new runtime dep (D-05: pyscf-chkfile remains
+# the sole owner of hdf5-metno; pyscf-dft does NOT add an hdf5-metno dep).
+tempfile      = "3"

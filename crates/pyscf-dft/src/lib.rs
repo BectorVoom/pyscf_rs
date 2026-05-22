@@ -47,6 +47,12 @@ pub mod uks;
 // nr_nlc_vxc orchestration over a coarser nlcgrids (Pitfall 4, A1).
 pub mod vv10;
 
+// ── Plan 04-08 Task 1 (DFT-07) ─────────────────────────────────────────────
+// DF-DFT: RKS::density_fit + DfKsHooks routing the Coulomb-J build through
+// the Phase 3 pyscf-df crate (cholesky_eri/get_jk_df, D-10 reuse — no new DF
+// crate); the Vxc/K parts stay on the standard grid-loop/get_jk path.
+pub mod df_dft;
+
 // ── Curated re-export surface (04-06 owns this) ────────────────────────────
 // XC parsing / eval (04-05 modules, surfaced here).
 pub use error::DftError;
@@ -61,6 +67,8 @@ pub use uks::UKS;
 pub use veff::{default_get_veff, KsVeff};
 // VV10 NLC surface (04-07).
 pub use vv10::{nr_nlc_vxc, vv10nlc, NlcCoeffs, NlcResult, Vv10Output};
+// DF-DFT surface (04-08 Task 1, DFT-07).
+pub use df_dft::DfKsHooks;
 // NOTE: `pub mod rks; pub mod uks;` are declared above (Task 1) so the crate
 // compiles atomically; their FULL bodies (RKS/UKS reusing kernel<H>) land in
 // Task 2. Task 1 ships minimal struct skeletons sufficient for the

@@ -64,6 +64,11 @@ const KNOWN_METHODS: &[&str] = &[
     // (PYSCF_DTYPE unset); the f32 path is NEVER compared to upstream (D-08).
     "rks_energy",
     "uks_energy",
+    // DFT-07 (plan 04-08): DF-DFT total energy ≤ 1 µHartree vs upstream
+    // `dft.RKS(mol, xc=...).density_fit().kernel()`. The Coulomb-J build routes
+    // through the Phase 3 pyscf-df crate (D-10 reuse); the fixture encodes the
+    // XC functional as `<base>@<xc>` (e.g. "h2o_ccpvdz@svwn"). f64 ONLY.
+    "df_dft_energy",
 ];
 
 /// Top-level dispatcher. Resolves the method name to either a known
@@ -117,6 +122,7 @@ mod python_impl {
             "grid_weights" => check_grid_weights(py, fixture, tol),
             "rks_energy" => check_rks_energy(py, fixture, tol),
             "uks_energy" => check_uks_energy(py, fixture, tol),
+            "df_dft_energy" => check_df_dft_energy(py, fixture, tol),
             other => Err(OracleError::UnknownMethod(other.to_string())),
         })
     }
@@ -799,6 +805,53 @@ mod python_impl {
         }
         Ok(())
     }
+
+    // ── Arm 12 (DFT-07): DF-DFT total energy ─────────────────────────────
+    // `dft.RKS(mol, xc).density_fit().kernel()` — the Coulomb-J build routes
+    // through the Phase 3 pyscf-df crate (D-10 reuse); the Vxc/K stay standard.
+    fn check_df_dft_energy(
+        py: Python<'_>,
+        fixture: &str,
+        tol: f64,
+    ) -> Result<(), OracleError> {
+        let xc = fixtures::xc(fixture);
+        let mol = build_pyscf_mol(py, fixture)?;
+        let dft = py
+            .import("pyscf.dft")
+            .map_err(|e| OracleError::Upstream(format!("import dft: {}", e)))?;
+        let mf = dft
+            .call_method1("RKS", (mol,))
+            .map_err(|e| OracleError::Upstream(format!("RKS(): {}", e)))?;
+        mf.setattr("xc", xc)
+            .map_err(|e| OracleError::Upstream(format!("set xc: {}", e)))?;
+        // .density_fit() returns the DF-wrapped method object.
+        let mf_df = mf
+            .call_method0("density_fit")
+            .map_err(|e| OracleError::Upstream(format!("density_fit(): {}", e)))?;
+        let e_upstream: f64 = mf_df
+            .call_method0("kernel")
+            .map_err(|e| OracleError::Upstream(format!("kernel: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract f64: {}", e)))?;
+
+        let rust_mol = build_rust_mol(fixture)?;
+        let mut ks = pyscf_dft::RKS::new(rust_mol, xc)
+            .density_fit(None)
+            .map_err(|e| OracleError::PyscfRs(format!("RKS::density_fit: {}", e)))?;
+        ks.kernel_df()
+            .map_err(|e| OracleError::PyscfRs(format!("RKS kernel_df: {}", e)))?;
+        let e_rs = ks.e_tot;
+
+        let diff = (e_rs - e_upstream).abs();
+        if diff > tol {
+            return Err(OracleError::Diff {
+                diff,
+                tol,
+                key: format!("df_dft_energy[{}/{}]", fixture, xc),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -835,8 +888,8 @@ mod tests {
     #[test]
     fn known_methods_list_has_all_arms() {
         // 8 SCF/DF arms (Phase 3) + grid_weights (04-04) + rks_energy +
-        // uks_energy (04-06) = 11.
-        assert_eq!(KNOWN_METHODS.len(), 11);
+        // uks_energy (04-06) + df_dft_energy (04-08 Task 1) = 12.
+        assert_eq!(KNOWN_METHODS.len(), 12);
         assert!(KNOWN_METHODS.contains(&"scf_rhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_uhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_diis_iter_count"));
@@ -848,5 +901,6 @@ mod tests {
         assert!(KNOWN_METHODS.contains(&"grid_weights"));
         assert!(KNOWN_METHODS.contains(&"rks_energy"));
         assert!(KNOWN_METHODS.contains(&"uks_energy"));
+        assert!(KNOWN_METHODS.contains(&"df_dft_energy"));
     }
 }
