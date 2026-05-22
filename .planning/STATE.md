@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 04-08-PLAN.md (DF-DFT via pyscf-df get_jk_df J-build DFT-07/D-10 reuse; impl Checkpointable for KsResult with xc/grids metadata D-06)"
+stopped_at: "Phase 04 executed (10/10 plans) — verification gaps_found (3/5): 4 BLOCKERs (UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key); gap closure required before phase complete"
 last_updated: "2026-05-22T10:49:47.844Z"
 last_activity: "2026-05-22 -- Completed 04-08 (RKS::density_fit + DfKsHooks routing the Coulomb-J build through pyscf_df::get_jk_df (J_df/K_standard split) while Vxc/K stay standard DFT-07/D-10; KsResult wraps ScfResult + impl Checkpointable with xc/grids schema metadata via pyscf-chkfile primitives, no own hdf5-metno dep D-05/D-06; DFT-07 energy + ORACLE-08 h5py gates CI-only)"
 progress:
   total_phases: 8
-  completed_phases: 2
+  completed_phases: 1
   total_plans: 40
   completed_plans: 38
-  percent: 25
+  percent: 13
 ---
 
 # Project State
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 
 Phase: 04 (dft) — EXECUTING
 Plan: 04-08 complete (Wave 5 — DF-DFT RKS::density_fit + DfKsHooks Coulomb-J via pyscf_df::get_jk_df DFT-07/D-10; KsResult impl Checkpointable with xc/grids metadata D-06)
-Status: Executing Phase 04
+Status: Phase 04 verification = gaps_found (3/5 criteria; 4 BLOCKERs) — gap closure required before complete
 Last activity: 2026-05-22 -- Completed 04-08 (DF-DFT via pyscf-df get_jk_df J-build, J_df/K_standard split, Vxc/K stay standard DFT-07/D-10; KsResult wraps ScfResult + Checkpointable with xc/grids schema metadata via pyscf-chkfile primitives, no own hdf5-metno dep D-05/D-06; DFT-07 energy + ORACLE-08 h5py gates CI-only)
 
 Progress: [█████████░] 95% (38/40 plans done across all phases; Phase 04: 10/10 plans summarized)
