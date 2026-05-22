@@ -59,8 +59,8 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **DFT-02**: XC string parser handles all upstream forms — single name (`'b3lyp'`), comma form (`'pbe,pbe'`), shorthands (`'lda'` → `'lda,vwn'`), explicit weights (`'.5*HF + .5*B88,LYP'`), aliases from `XC_ALIAS` (Phase 4 plan 04-05 — libxc-default + xcfun-alternate `parse_xc` ports, 23 parity assertions)
 - [x] **DFT-03**: libxc functional evaluation routes through `libxc_rs`; xcfun routes through `xcfun_rs`; both produce identical numbers to the upstream C libraries (Phase 4 plan 04-05 — `XcBackend` cfg-gated seam; xcfun-default path bit-exact to analytic Slater LDA; the libxc-side bit-exact assertions are `#[cfg(feature="libxc")]`-gated/CI-only per `PENDING_LIBXC_RS_FEATURE_GATE`, 04-02)
 - [x] **DFT-04**: `Grids` class with `level`, `atom_grid`, `prune`, `radi_method`, `becke_scheme`, `atomic_radii` controls; default Becke partitioning + Treutler radial + Lebedev angular reproduce upstream weights byte-for-byte (port `pyscf/dft/gen_grid.py`)
-- [ ] **DFT-05**: Range-separated hybrids (`omega`, `alpha`, `beta`) use cintx's `int2e_lr_*` and `int2e_sr_*` integral families
-- [ ] **DFT-06**: VV10 non-local correlation (`mf.nlc = 'VV10'`, `mf.nlcgrids`) produces upstream-matching energies
+- [x] **DFT-05**: Range-separated hybrids (`omega`, `alpha`, `beta`) compute long/short-range exact-exchange K via the range-coulomb `env[8]` (`PTR_RANGE_OMEGA`) set/restore around the standard `int2e` — NOT distinct `int2e_lr_*`/`int2e_sr_*` symbols (RESEARCH CORRECTION / Pitfall 1: those do not exist in cintx; the standard `int2e` reads `env[8]`). Phase 4 plan 04-07 — `pyscf-gto::range_coulomb` (`OmegaGuard`/`intor_with_omega`/`get_k_with_omega`) + `veff::default_get_veff` RSH branch (`vk = hyb·K + (alpha−hyb)·K_lr`, rks.py:108-129). Open Question A5 resolved: cintx safe API has no `env[8]` setter, so the slot is owned at the pyscf-gto layer; the numerical RSH ERI + CAM-B3LYP energy assertion are CI-gated behind a cintx#11-style gap-closure (safe-API `env[8]` reader + arity-4 `int2e`).
+- [x] **DFT-06**: VV10 non-local correlation (`mf.nlc = 'VV10'`, `mf.nlcgrids`) produces upstream-matching energies via the ported pure-Python `_vv10nlc` double-loop (numint.py:526-538, Pitfall 4: NOT C `VXC_vv10nlc`) over a coarser `nlcgrids`; Phase 4 plan 04-07 — `vv10::vv10nlc`/`nr_nlc_vxc`, inner reductions via `oracle_sum`, bare-VV10 default Bvv=5.9/Cvv=0.0093 (A1). The bit-exact VV10 RKS energy is CI-gated behind the Phase-2 ERI/init-guess gap.
 - [ ] **DFT-07**: DF-DFT (`dft.RKS(mol).density_fit()`) works
 - [x] **DFT-08**: All SCF subclass-override hooks (SCF-08) re-validate at the DFT level (DFT adds `get_veff`, `define_xc_`, custom-functional hooks) (Phase 4 plan 04-06 — `KsOverrideHooks` extends `OverrideHooks` with `get_veff_ks` + `define_xc_`; `NoKsOverrides` + `KsHooks` impls; the callable `define_xc_` form returns `NotYetImplemented` per D-02; pyscf-dft stays pyo3-free. The Python-side subclass-override dispatch re-validation lands with the 04-09 PyO3 bridge.)
 - [x] **DFT-09**: `mf.grids.level = N` for N ∈ {0, 1, …, 9} matches upstream grid sizes
@@ -288,8 +288,8 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | DFT-02 | Phase 4 | Complete |
 | DFT-03 | Phase 4 | Complete |
 | DFT-04 | Phase 4 | Complete |
-| DFT-05 | Phase 4 | Pending |
-| DFT-06 | Phase 4 | Pending |
+| DFT-05 | Phase 4 | Complete |
+| DFT-06 | Phase 4 | Complete |
 | DFT-07 | Phase 4 | Pending |
 | DFT-08 | Phase 4 | Complete |
 | DFT-09 | Phase 4 | Complete |

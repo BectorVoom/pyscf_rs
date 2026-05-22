@@ -154,7 +154,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 04-07-PLAN.md — RSH via env[8] range-coulomb (NOT int2e_lr/sr symbols) + VV10 NLC double-loop port (DFT-05, DFT-06)
+- [x] 04-07-PLAN.md — RSH via env[8] range-coulomb (NOT int2e_lr/sr symbols) + VV10 NLC double-loop port (DFT-05, DFT-06)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 5/10 | In Progress|  |
+| 4. DFT | 7/10 | In Progress|  |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
