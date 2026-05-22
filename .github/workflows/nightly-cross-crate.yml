@@ -1,11 +1,16 @@
 # Nightly cross-crate matrix per ORACLE-05 + CONTEXT D-14.
 #
 # Mechanism: bump the pinned [patch.crates-io] sibling-crate revs to
-# current default-branch HEAD via `cargo update -p cintx -p libxc_rs
-# -p xcfun_rs`, rebuild + test the workspace under --features gpu,
-# and run check-cubecl-pin to confirm the cubecl 0.10.0 lockstep
-# survived. Failure blocks merge of any sibling-crate cubecl bump
-# until pyscf-rs is fixed in lockstep.
+# current default-branch HEAD via `cargo update -p cintx -p xcfun_rs`,
+# rebuild + test the workspace under --features gpu, and run
+# check-cubecl-pin to confirm the cubecl 0.10.0 lockstep survived.
+# Failure blocks merge of any sibling-crate cubecl bump until pyscf-rs
+# is fixed in lockstep.
+#
+# NOTE: `-p libxc_rs` is intentionally NOT in the bump set — it stays
+# excluded pending 04-02 (PENDING_LIBXC_RS_FEATURE_GATE) because the
+# sibling repo still path-deps all 266 kernels (~6h compile). See the
+# step comment below. Re-add it (and `--features libxc`) when 04-02 lands.
 #
 # Reference: ROADMAP success criterion 4 (Pitfall 3 + 15 mitigation).
 name: nightly-cross-crate
@@ -36,9 +41,20 @@ jobs:
       # default branch. cintx + libxc_rs default branch is "main";
       # xcfun_rs default branch is "master" (verified via
       # `gh api repos/BectorVoom/{name}` 2026-05-10).
-      # libxc_rs is excluded — it pulls a ~6h libxc compile and is
-      # not needed until Phase 4 (DFT). Re-add `-p libxc_rs` here
-      # alongside the [patch.crates-io] entry in Cargo.toml.
+      #
+      # libxc_rs STAYS EXCLUDED pending 04-02 (PENDING_LIBXC_RS_FEATURE_GATE).
+      # The [patch.crates-io] libxc_rs entry is now re-enabled in Cargo.toml
+      # (plan 04-10) but is INERT — gated behind pyscf-dft's off-by-default
+      # `libxc` feature. We deliberately do NOT add `-p libxc_rs` to this
+      # matrix: the sibling libxc_rs repo still unconditionally path-deps all
+      # 266 `libxc-kernel-*` crates, so `cargo update -p libxc_rs` + the build
+      # steps below would force the ~6h libxc compile into the nightly run.
+      # Re-add `-p libxc_rs` here (and `--features libxc` to the build/test
+      # steps) ONLY once 04-02 lands the per-functional feature gate that makes
+      # the libxc build tractable (corpus-subset kernels). Until then, the
+      # cubecl-0.10.0 lockstep is verified across cintx + xcfun_rs only; the
+      # libxc lockstep is verified on-demand via the (also-disabled)
+      # `dft-libxc-bitexact` job in ci.yml.
       - name: bump sibling-crate revs to HEAD
         run: cargo update -p cintx -p xcfun_rs
 

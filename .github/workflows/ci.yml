@@ -321,3 +321,80 @@ jobs:
           assert mf.converged, 'SCF failed under python3.13t (deadlock?)'
           print(f'OK 3.13t SCF e_tot = {mf.e_tot}')
           "
+
+  # ── Phase 4 plan 04-10 ─────────────────────────────────────────────
+  # DFT-03/DFT-11 CI surface: the gated libxc bit-exact job + the
+  # wgpu-no-f64-fallback (DFT-11) job. See 04-10-PLAN.md.
+
+  # DISABLED pending 04-02 (PENDING_LIBXC_RS_FEATURE_GATE): without libxc_rs
+  # per-functional features this --features libxc job compiles all 266 kernels
+  # (~6h). The sibling ~/Documents/workspace/libxc_rs repo still unconditionally
+  # path-deps every `libxc-kernel-*` crate; until the per-functional feature
+  # gate from plan 04-02 lands there, this job MUST NOT run on push/PR (it would
+  # freeze CI for hours). It is gated `if: false` AND scoped to
+  # `workflow_dispatch` only so it never auto-triggers. This is the ONLY job
+  # that uses `--features libxc`; it is the dedicated, heavily-cached home for
+  # the gated libxc compile (the [patch.crates-io] libxc_rs entry is inert in
+  # every other job). Enable (flip `if: false` → a real gate, e.g.
+  # `if: github.event_name == 'workflow_dispatch'`) when 04-02 lands.
+  dft-libxc-bitexact:
+    name: DFT libxc bit-exact (DISABLED pending 04-02 PENDING_LIBXC_RS_FEATURE_GATE)
+    # HARD GATE: never run automatically. 04-02's per-functional feature gate is
+    # PENDING, so `--features libxc` here would compile all 266 libxc kernels
+    # (~6h). Keep `if: false` until PENDING_LIBXC_RS_FEATURE_GATE is resolved.
+    if: false
+    # Manual-trigger only even once `if:` is relaxed — the libxc compile is too
+    # heavy for the push/PR path; it is a dedicated, on-demand, cached job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      # Heavy caching of the libxc_rs build artifacts (the 266-kernel compile is
+      # the cost this job exists to amortise across runs).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Distinct cache key so the multi-hour libxc artifacts do not evict
+          # the default-build cache shared by every other job.
+          key: dft-libxc-bitexact
+      # The ONLY `--features libxc` invocation in CI. It forwards ONLY the
+      # corpus-subset per-functional features once 04-02 lands them (until then
+      # this job stays disabled — see the `if: false` above). The bit-exact
+      # assertions live in pyscf-dft's gated test files (04-05/04-06/04-07).
+      - name: cargo test --features libxc (gated bit-exact corpus)
+        run: |
+          cargo test --features libxc -p pyscf-dft --locked -- --test-threads=1 \
+            xc_eval_bitexact libxc_functional_smoke cam_b3lyp_h2o_rsh rks_uks_bitexact
+
+  # ACTIVE — DFT-11 WGPU f64 honesty. Does NOT touch libxc (default features
+  # only), so it is safe to run on every push/PR. On a shader-f64-less /
+  # emulated runner (the ubuntu-latest default has no GPU adapter advertising
+  # shader-f64), the DEFAULT-f64 path must fall back to CPU-f64 with a warning
+  # and produce correct numbers — NEVER silently degrade to f32. The
+  # `wgpu_f64_fallback` test (04-10) asserts this in-process (it forces the CPU
+  # substrate via XCFUN_FORCE_BACKEND=cpu so the assertion is deterministic on
+  # any runner; a genuinely shader-f64-less runner reaches the same Backend::Cpu
+  # without the override). The optional second step ALSO exercises the explicit
+  # D-08 escape hatch (PYSCF_DTYPE=f32) run-to-completion only (no oracle
+  # compare).
+  wgpu-no-f64-fallback:
+    name: wgpu-no-f64-fallback (DFT-11 — CPU-f64 fallback + warn, never silent f32)
+    runs-on: ubuntu-latest
+    needs: [build-default]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      # DFT-11 default-f64 honesty: CPU-f64 fallback + warn, CPU-correct numbers.
+      - name: DFT-11 default-f64 CPU fallback (no silent f32)
+        run: cargo test -p pyscf-dft --locked wgpu_f64_fallback -- --test-threads=1
+      # D-08 explicit escape hatch: PYSCF_DTYPE=f32 runs to completion on the
+      # (shader-f64-less) adapter. RUN-TO-COMPLETION ONLY — no oracle compare,
+      # no tolerance gate (f32 is never bit-exact compared to upstream).
+      - name: D-08 explicit f32 escape hatch (run-to-completion only)
+        env:
+          PYSCF_DTYPE: f32
+        run: cargo test -p pyscf-dft --locked dtype_f32_smoke -- --test-threads=1
