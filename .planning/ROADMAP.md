@@ -8,7 +8,7 @@
 
 ## Overview
 
-pyscf_rs is a pure-Rust rewrite of PySCF that ships as a `pip install`-able wheel preserving the `from pyscf import gto, scf, dft, mp, cc, grad, geomopt` import surface. The architecture is locked: an 18-crate horizontal-layered façade workspace mirroring `cintx`/`xcfun_rs` (Phase 1 shipped 15 with `pyscf-algebra` owning all linear algebra; Phase 3 grew the workspace to 18 by adding `pyscf-chkfile`, `pyscf-diis`, `pyscf-df`), cubecl 0.10.0 as the sole compute primitive (CPU SIMD/CUDA/WGPU/ROCm), faer 0.24 used only for host eigh/Cholesky/QR/SVD behind the algebra crate's surface, PyO3 0.28 for the Python boundary, and PySCF-as-live-oracle in CI. Backend selection is runtime-driven via `PYSCF_BACKEND`; the workspace `gpu` umbrella feature is OFF by default so the standard build is CPU-only. See `docs/manual/Cubecl/` for the cubecl runtime/ComputeClient/tensor-handle pattern that `pyscf-algebra` is built on.
+pyscf_rs is a pure-Rust rewrite of PySCF that ships as a `pip install`-able wheel preserving the `from pyscf import gto, scf, dft, mp, cc, grad, geomopt` import surface. The architecture is locked: a 19-crate horizontal-layered façade workspace mirroring `cintx`/`xcfun_rs` (Phase 1 shipped 15 with `pyscf-algebra` owning all linear algebra; Phase 3 grew the workspace to 18 by adding `pyscf-chkfile`, `pyscf-diis`, `pyscf-df`; Phase 4 added `pyscf-grids` → 19), cubecl 0.10.0 as the sole compute primitive (CPU SIMD/CUDA/WGPU/ROCm), faer 0.24 used only for host eigh/Cholesky/QR/SVD behind the algebra crate's surface, PyO3 0.28 for the Python boundary, and PySCF-as-live-oracle in CI. Backend selection is runtime-driven via `PYSCF_BACKEND`; the workspace `gpu` umbrella feature is OFF by default so the standard build is CPU-only. See `docs/manual/Cubecl/` for the cubecl runtime/ComputeClient/tensor-handle pattern that `pyscf-algebra` is built on.
 
 The dependency DAG dictates phase ordering almost entirely: `core/runtime → kernels → gto → scf → {dft, mp2} → ccsd → grad → geomopt → wheel`. Phases 1–7 walk this critical path with the PyO3 contract folded into Phase 3 (SCF) so subclass-override / NumPy-boundary / GIL-release conventions lock on a small surface (RHF) before DFT's overrideable explosion. Phase 8 is the closing "ship readiness" phase combining GPU backend enable, oracle hardening, and wheel distribution because all three gate on the same artifact (a working CPU baseline across every method) and feed the same goal (validating the 2–5× speedup claim on a real benchmark suite, in a real wheel, on a real CI machine).
 
@@ -139,9 +139,9 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 04-01-PLAN.md — Workspace scaffold: register pyscf-grids (18→19 member), wire pyscf-dft deps + off-by-default `libxc` feature (D-03), 10 Wave-0 test scaffolds covering DFT-01..11 (D-05)
-- [ ] 04-02-PLAN.md — libxc_rs D-04 cross-crate gap-closure (status: PENDING_LIBXC_RS_FEATURE_GATE; per-functional `[features]` + cfg-gated dispatch in the sibling repo — cintx-ECP precedent) (DFT-03)
-- [ ] 04-03-PLAN.md — eval_gto l≥1 + GTOval_sph_deriv1 in pyscf-kernels (the Phase 2 D-04 deferral; ρ/∇ρ for non-H molecules) (DFT-01, DFT-10)
+- [x] 04-01-PLAN.md — Workspace scaffold: register pyscf-grids (18→19 member), wire pyscf-dft deps + off-by-default `libxc` feature (D-03), 10 Wave-0 test scaffolds covering DFT-01..11 (D-05)
+- [x] 04-02-PLAN.md — libxc_rs D-04 cross-crate gap-closure (status: PENDING_LIBXC_RS_FEATURE_GATE; per-functional `[features]` + cfg-gated dispatch in the sibling repo — cintx-ECP precedent) (DFT-03)
+- [x] 04-03-PLAN.md — eval_gto l≥1 + GTOval_sph_deriv1 in pyscf-kernels (the Phase 2 D-04 deferral; ρ/∇ρ for non-H molecules) (DFT-01, DFT-10)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 0/10 | Planned (10 plans, 5 waves; 18→19 workspace member: pyscf-grids) | - |
+| 4. DFT | 3/10 | In Progress|  |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
