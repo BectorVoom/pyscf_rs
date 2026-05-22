@@ -49,15 +49,23 @@ created: 2026-05-22
 | DFT-02 | XC-string parser parity vs `libxc.py:parse_xc` (single/comma/shorthand/weights/alias) | unit parity | `cargo test -p pyscf-dft parse_xc_parity` | ❌ W0 | ⬜ pending |
 | DFT-03 | libxc routes to `libxc_rs` / xcfun to `xcfun_rs`; bit-identical to C | oracle (gated, CI only) | `cargo test --features libxc -p pyscf-dft xc_eval_bitexact` | ❌ W0 | ⬜ pending |
 | DFT-03 | ~100-functional libxc smoke (corpus subset) | smoke (gated, CI only) | `cargo test --features libxc -p pyscf-dft libxc_functional_smoke` | ❌ W0 | ⬜ pending |
-| DFT-01 | RKS/UKS total energy ≤1 µHartree (SVWN/PBE/B3LYP) under release-oracle | oracle energy | `cargo test --profile release-oracle -p pyscf-dft rks_uks_bitexact` | ❌ W0 | ⬜ pending |
+| DFT-01 | RKS/UKS total energy ≤1 µHartree (SVWN/PBE/B3LYP) under release-oracle | oracle energy (f64 only) | `cargo test --profile release-oracle -p pyscf-dft rks_uks_bitexact` | ❌ W0 | ⬜ pending |
 | DFT-05 | CAM-B3LYP / H2O range-separated-hybrid parity fixture | oracle energy (gated) | `cargo test --features libxc -p pyscf-dft cam_b3lyp_h2o_rsh` | ❌ W0 | ⬜ pending |
 | DFT-06 | VV10 non-local-correlation energy match (`mf.nlc='VV10'`) | oracle energy | `cargo test -p pyscf-dft vv10_energy_match` | ❌ W0 | ⬜ pending |
 | DFT-07 | DF-DFT `dft.RKS(mol).density_fit()` matches upstream | oracle energy | `cargo test -p pyscf-dft df_dft_match` | ❌ W0 | ⬜ pending |
 | DFT-08 | Subclass `get_veff` + `define_xc_` overrides invoked every cycle | PyO3 dispatch assertion | `pytest python/tests/test_dft_override.py` (maturin build) | ❌ W0 | ⬜ pending |
 | DFT-10 | `NumInt` signatures (`eval_xc`/`eval_rho`/`nr_rks`/`nr_uks`) match upstream | API/signature + numeric | `cargo test -p pyscf-dft numint_signatures` | ❌ W0 | ⬜ pending |
-| DFT-11 | wgpu→CPU fallback with warning on `shader-f64`-less device | CI job (special runner) | `wgpu-no-f64-fallback` CI job: `dft.RKS(mol).run()`, assert warning + CPU-correct | ❌ W0 | ⬜ pending |
+| DFT-11 | wgpu→CPU fallback with warning on `shader-f64`-less device (default f64, never silent f32) | CI job (special runner) | `wgpu-no-f64-fallback` CI job: `dft.RKS(mol).run()`, assert warning + CPU-correct | ❌ W0 | ⬜ pending |
+| DFT-11 / D-08 | `PYSCF_DTYPE=f32` DFT path runs end-to-end (RKS completes + below-bit-exact warn!); **smoke ONLY — NO oracle compare, NO tolerance gate** (D-08) | smoke (runs-to-completion) | `cargo test -p pyscf-dft dtype_f32_smoke` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+
+> **D-08 note (Dimension 8 / precision coverage):** the f32 precision switch is
+> covered by exactly ONE narrow runs-end-to-end **smoke** (`dtype_f32_smoke`,
+> owned by 04-06). f32 is **never** compared to the upstream oracle and carries
+> **no numeric-parity tolerance gate** in v1 (a loose chemical-accuracy f32 bound
+> is a Deferred Idea, not a v1 gate). The oracle/bit-exact rows (DFT-01, DFT-03,
+> DFT-04/09) stay **f64-only** under `release-oracle`.
 
 ---
 
@@ -65,10 +73,11 @@ created: 2026-05-22
 
 - [ ] `crates/pyscf-grids/tests/grid_weights_level_sweep.rs` — byte-for-byte vs upstream, level 0..9, corpus (DFT-04/09)
 - [ ] `crates/pyscf-dft/tests/parse_xc_parity.rs` — vs `libxc.py:parse_xc` (DFT-02)
-- [ ] `crates/pyscf-dft/tests/rks_uks_bitexact.rs` — SVWN/PBE/B3LYP ≤1µHa (DFT-01)
+- [ ] `crates/pyscf-dft/tests/rks_uks_bitexact.rs` — SVWN/PBE/B3LYP ≤1µHa, f64 only (DFT-01)
 - [ ] `crates/pyscf-dft/tests/xc_eval_bitexact.rs` + `libxc_functional_smoke.rs` — gated, CI-only (DFT-03)
 - [ ] `crates/pyscf-dft/tests/cam_b3lyp_h2o_rsh.rs` (DFT-05), `vv10_energy_match.rs` (DFT-06), `df_dft_match.rs` (DFT-07)
 - [ ] `crates/pyscf-dft/tests/numint_signatures.rs` (DFT-10)
+- [ ] `crates/pyscf-dft/tests/dtype_f32_smoke.rs` — `PYSCF_DTYPE=f32` RKS runs-end-to-end smoke; NO oracle compare / NO tolerance gate (DFT-11 / D-08)
 - [ ] `python/tests/test_dft_override.py` — subclass override assertion (DFT-08)
 - [ ] Oracle fixtures: upstream PySCF energies/grids generated under matched threading (`RAYON_NUM_THREADS=1`, `lib.num_threads(1)`, release-oracle) — extend the Phase 3 fixture corpus with DFT cases
 - [ ] CI jobs: `--features libxc` DFT bit-exact (cached); `wgpu-no-f64-fallback` (special/emulated device); re-enable `libxc_rs` in `nightly-cross-crate.yml`
@@ -80,7 +89,7 @@ created: 2026-05-22
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| WGPU CPU-fallback warning on `shader-f64`-less hardware | DFT-11 | Requires a device (or emulation) lacking the `shader-f64` Vulkan extension; not reproducible on standard CI runners | Run the dedicated `wgpu-no-f64-fallback` CI job on the special/emulated runner; assert the `tracing::warn!` fallback message is emitted AND the energy matches CPU-correct numbers |
+| WGPU CPU-fallback warning on `shader-f64`-less hardware | DFT-11 | Requires a device (or emulation) lacking the `shader-f64` Vulkan extension; not reproducible on standard CI runners | Run the dedicated `wgpu-no-f64-fallback` CI job on the special/emulated runner; assert the `tracing::warn!` fallback message is emitted AND the energy matches CPU-correct numbers. Optionally also set `PYSCF_DTYPE=f32` and run `dtype_f32_smoke` to exercise the explicit escape hatch run-to-completion (no oracle compare — D-08) |
 
 *All other phase behaviors have automated verification.*
 
