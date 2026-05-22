@@ -9,4 +9,34 @@ description = "Density functional theory (RKS/UKS + Becke grids). Implemented in
 [lib]
 path = "src/lib.rs"
 
+# Off-by-default optional libxc backend — model: pyscf-kernels/Cargo.toml
+# [features] block + xcfun-rs/Cargo.toml. Pitfall 5: the libxc_rs dep MUST be
+# optional or every default build pulls libxc_rs's 266 kernel crates (~6h
+# freeze). Default features carry NO libxc — xcfun-rs is the default XC backend.
+[features]
+default = []
+libxc   = ["dep:libxc_rs"]
+
 [dependencies]
+# Method-crate deps (path). pyscf-runtime (DType::from_env, D-08) and
+# pyscf-algebra (the DeviceScalar matmul element bound, D-08) are the precision
+# seam D-08 reuses — D-08 adds NO new dependency.
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+pyscf-gto     = { path = "../pyscf-gto" }
+pyscf-scf     = { path = "../pyscf-scf" }
+pyscf-df      = { path = "../pyscf-df" }
+pyscf-grids   = { path = "../pyscf-grids" }
+pyscf-chkfile = { path = "../pyscf-chkfile" }
+pyscf-runtime = { path = "../pyscf-runtime" }
+# Default XC backend: native-Rust xcfun (always compiled). Redirected to the
+# sibling path via the workspace [patch.crates-io] xcfun_rs entry.
+xcfun-rs      = "0.1.0"
+tracing       = { workspace = true }
+thiserror     = { workspace = true }
+# Optional libxc backend (off by default — see [features] above). The
+# [patch.crates-io] libxc_rs entry stays commented until 04-09 wires the
+# libxc CI gate; nothing references libxc_rs in the default dep graph.
+libxc_rs      = { path = "../../../libxc_rs", optional = true }
+
+# NO pyo3 dep here (PyO3 wall) — the Python surface lives in pyscf-py.

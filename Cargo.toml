@@ -20,6 +20,8 @@ members = [
     "crates/pyscf-chkfile",
     "crates/pyscf-diis",
     "crates/pyscf-df",
+    # Phase 4 addition (D-05): Becke molecular grids crate. Workspace grows 18 → 19.
+    "crates/pyscf-grids",
     "xtask",
 ]
 exclude = []
