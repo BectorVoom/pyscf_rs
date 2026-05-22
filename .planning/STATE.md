@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-07-PLAN.md (RSH range-coulomb env[8] + VV10 NLC double-loop, DFT-05/06)
-last_updated: "2026-05-22T09:32:17.048Z"
-last_activity: 2026-05-22 -- Completed 04-07 (range-coulomb env[8] set/restore + RSH get_veff branch DFT-05; VV10 _vv10nlc double-loop port over coarser nlcgrids DFT-06; A5 resolved = cintx safe API has no env[8] setter, cintx#11 gap-closure tracked)
+stopped_at: "Completed 04-08-PLAN.md (DF-DFT via pyscf-df get_jk_df J-build DFT-07/D-10 reuse; impl Checkpointable for KsResult with xc/grids metadata D-06)"
+last_updated: "2026-05-22T10:49:47.844Z"
+last_activity: "2026-05-22 -- Completed 04-08 (RKS::density_fit + DfKsHooks routing the Coulomb-J build through pyscf_df::get_jk_df (J_df/K_standard split) while Vxc/K stay standard DFT-07/D-10; KsResult wraps ScfResult + impl Checkpointable with xc/grids schema metadata via pyscf-chkfile primitives, no own hdf5-metno dep D-05/D-06; DFT-07 energy + ORACLE-08 h5py gates CI-only)"
 progress:
   total_phases: 8
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 40
-  completed_plans: 35
-  percent: 13
+  completed_plans: 38
+  percent: 25
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 04 (dft) — EXECUTING
-Plan: 04-07 complete (Wave 4 — RSH range-coulomb env[8] + RSH get_veff branch DFT-05; VV10 NLC double-loop over coarser nlcgrids DFT-06)
+Plan: 04-08 complete (Wave 5 — DF-DFT RKS::density_fit + DfKsHooks Coulomb-J via pyscf_df::get_jk_df DFT-07/D-10; KsResult impl Checkpointable with xc/grids metadata D-06)
 Status: Executing Phase 04
-Last activity: 2026-05-22 -- Completed 04-07 (range-coulomb env[8] set/restore + RSH get_veff branch DFT-05; VV10 _vv10nlc double-loop port over coarser nlcgrids DFT-06; A5 resolved = cintx safe API has no env[8] setter, cintx#11 gap-closure tracked)
+Last activity: 2026-05-22 -- Completed 04-08 (DF-DFT via pyscf-df get_jk_df J-build, J_df/K_standard split, Vxc/K stay standard DFT-07/D-10; KsResult wraps ScfResult + Checkpointable with xc/grids schema metadata via pyscf-chkfile primitives, no own hdf5-metno dep D-05/D-06; DFT-07 energy + ORACLE-08 h5py gates CI-only)
 
-Progress: [█████████░] 88% (35/40 plans done across all phases; Phase 04: 7/10 plans summarized)
+Progress: [█████████░] 95% (38/40 plans done across all phases; Phase 04: 10/10 plans summarized)
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Progress: [█████████░] 88% (35/40 plans done across all phas
 | Phase 04 P04-05 | 16min | 2 tasks | 9 files |
 | Phase 04 P04-06 | 23min | 2 tasks | 14 files |
 | Phase 04 P04-07 | 12min | 2 tasks | 9 files |
+| Phase 04 P04-08 | 14min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,7 @@ Recent decisions affecting current work:
 - [Phase 04]: XC parsers + XcBackend seam (DFT-02/03) — libxc-default parse_xc (D-01, inline const XC_CODES/XC_ALIAS, part-aware possible_*_for fuzzy lookup, depth-bounded compound expansion T-04-05b) + xcfun-alternate parse_xc (0..77 ids, X/C/XC suffix fallback, LR_HF-zeroing tail). XcBackend cfg-gated enum mirrors AlgebraClient: Xcfun default-compiled, #[cfg(libxc)] Libxc in a gated submodule (default build never names a libxc_rs symbol). xcfun eval uses spin-resolved Vars (A_B/A_B_GAA_GAB_GBB/+TAU) with closed-shell rho/2 split (CPU launch supports spin-resolved only; Vars::N/A => NotConfigured). DFT-02 oracle = hand-transcribed parity table (PyO3-wall: no pyo3 dep in pyscf-dft); SLATERX bit-exact 1e-10 vs analytic. libxc NEVER compiled (cargo tree default = 0 libxc_rs).
 - [Phase 04]: RKS/UKS core (DFT-01/08/10/11, D-07/D-08) — NumInt grid loop (nr_rks/nr_uks/eval_rho/eval_xc, upstream numint.py signatures) is algebra-orchestrated (AO via pyscf_gto::eval_gto behind the wall; dense ρ/Vxc contractions as host loops; Exc/nelec via oracle_sum) with NO #[cube] kernel (D-07; Tensor-API gemm/axpy stay NotYetImplemented{phase:2}, so the grid loop follows the Phase-3 SCF/DF inline-loop precedent). PARSE XC IN THE XCFUN NAMESPACE (default backend) — xcfun exposes the standard-hybrid mixing in hyb[0] (b3lyp→0.2); the libxc parser folds it inside compound id 402 (hyb=0), so using libxc::parse_xc would silently break hybrid_coeff AND feed libxc ids into the xcfun id→name map. D-08: NumInt reads DType::from_env() at construction + read-only dtype() accessor; f32/f64 enum-match dispatch of the matmul chain (F64 arm = unchanged bit-exact default; F32 casts ρ→f64 at the XcBackend::eval boundary since eval_gto/xcfun are f64-host) + one below-bit-exact tracing::warn!; no set_precision, no f32 tolerance gate. KS get_veff = J+Vxc−hyb·K (RSH omega!=0 seam → 04-07); KsHooks overrides energy_elec = Tr(D·h1e)+Ecoul+Exc via a per-cycle Exc cache (the SCF energy_elec signature has no mol). RKS/UKS reuse the Phase 3 kernel<H> verbatim. DFT-01 bit-exact energy gate is the CI-only --features python rks_energy/uks_energy oracle arms (live convergence needs working arity-3/4 ERIs = the Phase-2 int2e_sph/int3c2e_sph rollup gap, currently NotYetImplemented; minao init guess also not yet implemented) + an always-on structural layer; the RKS/UKS drivers are complete and converge once working ERIs land. From<DftError> for PyscfRsError bridge in pyscf-dft (no pyscf-core dep cycle). pyscf-dft stays pyo3-free + cubecl-free; libxc NEVER compiled.
 - [Phase 04]: RSH range-coulomb + VV10 NLC (DFT-05/06) — RSH via the env[8] (PTR_RANGE_OMEGA) mechanism: pyscf-gto::range_coulomb OmegaGuard (RAII set/restore of Mole._env[8], restore-on-drop incl. error/unwind path, T-04-07a) + intor_with_omega + get_k_with_omega drive the STANDARD int2e (NOT phantom int2e_lr_/int2e_sr_ symbols, Pitfall 1). veff::default_get_veff RSH branch (rks.py:108-129): omega!=0 → vk = hyb·K + (alpha−hyb)·K_lr via get_k_with_omega(+omega) on an Arc-backed Mole clone (shared &Mole needs no &mut, omega local + auto-restored). KsVeff gained half_tr_d_vxc so the energy cache is RSH-correct (the old `veff−J+hyb·K` Vxc reconstruction is wrong once vk carries the LR term — Rule-1 bug fix). OPEN QUESTION A5 RESOLVED: cintx safe API (ExecutionOptions/OperatorEnvParams) has f12_zeta (env[9]) + grids_params but NO range_omega (env[8]) setter, AND arity-4 int2e is NotYetImplemented{phase:2} — so the env[8] set/restore contract is owned at the pyscf-gto layer (complete+tested) and the numerical RSH ERI flips on only via a cintx#11-style gap-closure (safe-API env[8] reader + arity-4 int2e). VV10 (DFT-06) ports the pure-Python _vv10nlc double-loop (numint.py:526-538, Pitfall 4: NOT C VXC_vv10nlc) over a coarser nlcgrids (a separate Grids instance): per outer point double-loop over inner vv grid → F/U/W via oracle_sum (T-04-07b), exc/vrho/vsigma per numint.py:552-554; nr_nlc_vxc orchestrates (outer==inner==nlcgrids, excsum=oracle_dot(den,exc), symmetrized GGA Vxc). NlcCoeffs hardcodes only the bare 'VV10' default (5.9/0.0093, A1); per-functional → libxc nlc_coeff. CAM-B3LYP is libxc-only on the corpus (xcfun XC_CODES has no entry; libxc id 433) — the always-on RSH test uses an xcfun-namespace RSH(0.19*HF+0.46*LR_HF(0.33)+0.81*LYP); CAM-B3LYP/VV10 energy gates CI-gated. libxc NEVER compiled.
+- [Phase ?]: [Phase 04]: DF-DFT + KsResult chkfile (DFT-07, D-10/D-06 reuse) — RKS::density_fit precomputes pyscf_df B integrals; DfKsHooks routes the Coulomb-J build through get_jk_df ((J_df, K_standard) split, T-04-08b) while Vxc/K stay standard, so get_veff_ks is identical to the non-DF KS path. KsResult wraps ScfResult: on-disk /scf group byte-identical to the SCF schema (upstream from_chk compat) PLUS xc/grids_level/grids_scheme metadata; impl Checkpointable via pyscf_chkfile primitives + the re-exported hdf5 alias (NO own hdf5-metno dep, D-05); load bounded/validated, never panics (T-04-08). ndarray added (F-order view, not hdf5). DFT-07 energy + ORACLE-08 h5py gates CI-only behind the Phase-2 int3c2e_sph gap + libpython/h5py; structural + Rust-Rust round-trip layers always-on. libxc NEVER compiled.
 
 ### Pending Todos
 
@@ -124,6 +126,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-22T09:32:17.048Z
+Last session: 2026-05-22T10:49:21.311Z
 Stopped at: Completed 04-07-PLAN.md (RSH range-coulomb env[8] + RSH get_veff branch DFT-05; VV10 _vv10nlc double-loop over coarser nlcgrids DFT-06; A5 resolved, cintx#11 env[8]/arity-4 gap-closure tracked)
 Resume file: None
