@@ -145,7 +145,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 04-04-PLAN.md — pyscf-grids byte-exact: Lebedev generator + radial schemes + Becke partition (pure-Python port) — owns Pitfall 10; level 0..9 byte-for-byte (DFT-04, DFT-09)
+- [x] 04-04-PLAN.md — pyscf-grids byte-exact: Lebedev generator + radial schemes + Becke partition (pure-Python port) — owns Pitfall 10; level 0..9 byte-for-byte (DFT-04, DFT-09)
 - [ ] 04-05-PLAN.md — XC parsers (libxc default + xcfun alternate, parse_xc port) + XcBackend cfg-gated seam + xcfun/libxc eval (DFT-02, DFT-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 3/10 | In Progress|  |
+| 4. DFT | 4/10 | In Progress|  |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |

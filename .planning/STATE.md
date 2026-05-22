@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 4 context updated (D-08 precision switch added)
-last_updated: "2026-05-22T03:10:24.900Z"
+last_updated: "2026-05-22T04:07:47.341Z"
 last_activity: 2026-05-22 -- Phase 04 execution started
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 40
-  completed_plans: 28
+  completed_plans: 32
   percent: 13
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 04 (dft) — EXECUTING
-Plan: 1 of 10
+Plan: 04-04 complete (Wave 2 — pyscf-grids byte-exact grids)
 Status: Executing Phase 04
-Last activity: 2026-05-22 -- Phase 04 execution started
+Last activity: 2026-05-22 -- Completed 04-04 (pyscf-grids: Lebedev/radial/Becke partition, DFT-04/09)
 
-Progress: [█████████░] 88% (7/7 plans done; verification gaps remain)
+Progress: [████████░░] 80% (32/40 plans done across all phases; Phase 04: 4/10 plans summarized)
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Progress: [█████████░] 88% (7/7 plans done; verification gap
 *Updated after each plan completion*
 | Phase 02 P01 | 12min | 3 tasks | 13 files |
 | Phase 02 P02 | 8min | 2 tasks | 9 files |
+| Phase 04 P04-04 | 16min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,7 @@ Recent decisions affecting current work:
 - [Phase 02]: pyscf-gto uses direct per-member cintx path-deps (cintx-core, cintx-rs, cintx-compat, cintx-ops, cintx-runtime) — workspace [patch.crates-io] cintx redirect alone is insufficient for subcrate consumers
 - [Phase 02]: cubecl 0.10.0 ArrayArg::from_raw_parts signature is (Handle, usize) by value — no vectorization arg, no turbofish (older 0.9-era README sketch is stale)
 - [Phase 02]: [Phase 02]: Mole >=30 attribute floor + format_atom 4-of-5 atom-input forms shipped via pyscf_gto::M(MoleBuildArgs); 5th Callable form returns NotYetImplemented{phase:3}; Local raw_atm_layout slot constants in pyscf-core::basis_set are TEMPORARY (02-04 deletes once cintx-compat dep lands)
+- [Phase 04]: pyscf-grids byte-exact Becke grids (DFT-04/09) — generator-port Lebedev (SphGenOh + inline LEBEDEV_SEEDS, D-06, no codegen/build.rs), Treutler-Ahlrichs class-default radial, get_partition pure-Python fallback with pbecke.sum(axis=0) through oracle_sum (Pitfall 10). DFT-09 count sweep matches upstream level 0..9; DFT-04 byte-for-byte coords+weights is a CI-only grid_weights oracle arm (--features python).
 
 ### Pending Todos
 
@@ -115,6 +117,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-22T02:43:42.993Z
+Last session: 2026-05-22T04:07:33.236Z
 Stopped at: Phase 4 context updated (D-08 precision switch added)
-Resume file: .planning/phases/04-dft/04-CONTEXT.md
+Resume file: None

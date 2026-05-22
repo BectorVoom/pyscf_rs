@@ -58,12 +58,12 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [ ] **DFT-01**: `dft.RKS(mol, xc='b3lyp')` and `dft.UKS(mol, xc=...)` converge bit-exact to upstream PySCF on the test corpus under `release-oracle`
 - [ ] **DFT-02**: XC string parser handles all upstream forms — single name (`'b3lyp'`), comma form (`'pbe,pbe'`), shorthands (`'lda'` → `'lda,vwn'`), explicit weights (`'.5*HF + .5*B88,LYP'`), aliases from `XC_ALIAS`
 - [ ] **DFT-03**: libxc functional evaluation routes through `libxc_rs`; xcfun routes through `xcfun_rs`; both produce identical numbers to the upstream C libraries
-- [ ] **DFT-04**: `Grids` class with `level`, `atom_grid`, `prune`, `radi_method`, `becke_scheme`, `atomic_radii` controls; default Becke partitioning + Treutler radial + Lebedev angular reproduce upstream weights byte-for-byte (port `pyscf/dft/gen_grid.py`)
+- [x] **DFT-04**: `Grids` class with `level`, `atom_grid`, `prune`, `radi_method`, `becke_scheme`, `atomic_radii` controls; default Becke partitioning + Treutler radial + Lebedev angular reproduce upstream weights byte-for-byte (port `pyscf/dft/gen_grid.py`)
 - [ ] **DFT-05**: Range-separated hybrids (`omega`, `alpha`, `beta`) use cintx's `int2e_lr_*` and `int2e_sr_*` integral families
 - [ ] **DFT-06**: VV10 non-local correlation (`mf.nlc = 'VV10'`, `mf.nlcgrids`) produces upstream-matching energies
 - [ ] **DFT-07**: DF-DFT (`dft.RKS(mol).density_fit()`) works
 - [ ] **DFT-08**: All SCF subclass-override hooks (SCF-08) re-validate at the DFT level (DFT adds `get_veff`, `define_xc_`, custom-functional hooks)
-- [ ] **DFT-09**: `mf.grids.level = N` for N ∈ {0, 1, …, 9} matches upstream grid sizes
+- [x] **DFT-09**: `mf.grids.level = N` for N ∈ {0, 1, …, 9} matches upstream grid sizes
 - [ ] **DFT-10**: `numint.NumInt` exposes `eval_xc`, `eval_rho`, `nr_rks`, `nr_uks` matching upstream signatures (port from `pyscf/dft/numint.py`)
 - [ ] **DFT-11**: cubecl WGPU backend is feature-gated on the `shader-f64` Vulkan extension; runtime falls back to CPU with a warning when unavailable
 
@@ -287,12 +287,12 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | DFT-01 | Phase 4 | Pending |
 | DFT-02 | Phase 4 | Pending |
 | DFT-03 | Phase 4 | Pending |
-| DFT-04 | Phase 4 | Pending |
+| DFT-04 | Phase 4 | Complete |
 | DFT-05 | Phase 4 | Pending |
 | DFT-06 | Phase 4 | Pending |
 | DFT-07 | Phase 4 | Pending |
 | DFT-08 | Phase 4 | Pending |
-| DFT-09 | Phase 4 | Pending |
+| DFT-09 | Phase 4 | Complete |
 | DFT-10 | Phase 4 | Pending |
 | DFT-11 | Phase 4 | Pending |
 | MP2-01 | Phase 5 | Pending |
@@ -364,6 +364,7 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | DIST-06 | Phase 8 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 113 total (10 FOUND + 11 GTO + 14 SCF + 11 DFT + 8 MP2 + 11 CCSD + 10 GRAD + 7 GEOMOPT + 9 BIND + 9 ORACLE + 7 PERF + 6 DIST)
 - Mapped to phases: 113 / 113 ✓
 - Unmapped: 0
