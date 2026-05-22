@@ -146,7 +146,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 04-04-PLAN.md — pyscf-grids byte-exact: Lebedev generator + radial schemes + Becke partition (pure-Python port) — owns Pitfall 10; level 0..9 byte-for-byte (DFT-04, DFT-09)
-- [ ] 04-05-PLAN.md — XC parsers (libxc default + xcfun alternate, parse_xc port) + XcBackend cfg-gated seam + xcfun/libxc eval (DFT-02, DFT-03)
+- [x] 04-05-PLAN.md — XC parsers (libxc default + xcfun alternate, parse_xc port) + XcBackend cfg-gated seam + xcfun/libxc eval — 23 parser-parity + bit-exact Slater LDA; libxc path #[cfg(libxc)]-gated/CI-only, never compiled (DFT-02, DFT-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

@@ -56,8 +56,8 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 ### Density functional theory (DFT)
 
 - [ ] **DFT-01**: `dft.RKS(mol, xc='b3lyp')` and `dft.UKS(mol, xc=...)` converge bit-exact to upstream PySCF on the test corpus under `release-oracle`
-- [ ] **DFT-02**: XC string parser handles all upstream forms — single name (`'b3lyp'`), comma form (`'pbe,pbe'`), shorthands (`'lda'` → `'lda,vwn'`), explicit weights (`'.5*HF + .5*B88,LYP'`), aliases from `XC_ALIAS`
-- [ ] **DFT-03**: libxc functional evaluation routes through `libxc_rs`; xcfun routes through `xcfun_rs`; both produce identical numbers to the upstream C libraries
+- [x] **DFT-02**: XC string parser handles all upstream forms — single name (`'b3lyp'`), comma form (`'pbe,pbe'`), shorthands (`'lda'` → `'lda,vwn'`), explicit weights (`'.5*HF + .5*B88,LYP'`), aliases from `XC_ALIAS` (Phase 4 plan 04-05 — libxc-default + xcfun-alternate `parse_xc` ports, 23 parity assertions)
+- [x] **DFT-03**: libxc functional evaluation routes through `libxc_rs`; xcfun routes through `xcfun_rs`; both produce identical numbers to the upstream C libraries (Phase 4 plan 04-05 — `XcBackend` cfg-gated seam; xcfun-default path bit-exact to analytic Slater LDA; the libxc-side bit-exact assertions are `#[cfg(feature="libxc")]`-gated/CI-only per `PENDING_LIBXC_RS_FEATURE_GATE`, 04-02)
 - [x] **DFT-04**: `Grids` class with `level`, `atom_grid`, `prune`, `radi_method`, `becke_scheme`, `atomic_radii` controls; default Becke partitioning + Treutler radial + Lebedev angular reproduce upstream weights byte-for-byte (port `pyscf/dft/gen_grid.py`)
 - [ ] **DFT-05**: Range-separated hybrids (`omega`, `alpha`, `beta`) use cintx's `int2e_lr_*` and `int2e_sr_*` integral families
 - [ ] **DFT-06**: VV10 non-local correlation (`mf.nlc = 'VV10'`, `mf.nlcgrids`) produces upstream-matching energies
@@ -285,8 +285,8 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | SCF-13 | Phase 3 | Pending |
 | SCF-14 | Phase 3 | Pending |
 | DFT-01 | Phase 4 | Pending |
-| DFT-02 | Phase 4 | Pending |
-| DFT-03 | Phase 4 | Pending |
+| DFT-02 | Phase 4 | Complete |
+| DFT-03 | Phase 4 | Complete |
 | DFT-04 | Phase 4 | Complete |
 | DFT-05 | Phase 4 | Pending |
 | DFT-06 | Phase 4 | Pending |

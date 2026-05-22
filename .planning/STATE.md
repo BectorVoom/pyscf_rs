@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 4 context updated (D-08 precision switch added)
-last_updated: "2026-05-22T04:07:47.341Z"
-last_activity: 2026-05-22 -- Phase 04 execution started
+stopped_at: Completed 04-05-PLAN.md (XC parsers + XcBackend cfg-gated seam)
+last_updated: "2026-05-22T08:37:00.000Z"
+last_activity: "2026-05-22 -- Completed 04-05 (XC parsers libxc/xcfun + XcBackend cfg-gated seam, DFT-02/03)"
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 40
-  completed_plans: 32
-  percent: 13
+  completed_plans: 33
+  percent: 14
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 04 (dft) — EXECUTING
-Plan: 04-04 complete (Wave 2 — pyscf-grids byte-exact grids)
+Plan: 04-05 complete (Wave 2 — XC parsers libxc/xcfun + XcBackend cfg-gated seam)
 Status: Executing Phase 04
-Last activity: 2026-05-22 -- Completed 04-04 (pyscf-grids: Lebedev/radial/Becke partition, DFT-04/09)
+Last activity: 2026-05-22 -- Completed 04-05 (XC parsers + XcBackend seam, DFT-02/03)
 
-Progress: [████████░░] 80% (32/40 plans done across all phases; Phase 04: 4/10 plans summarized)
+Progress: [████████░░] 83% (33/40 plans done across all phases; Phase 04: 5/10 plans summarized)
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Progress: [████████░░] 80% (32/40 plans done across all phas
 | Phase 02 P01 | 12min | 3 tasks | 13 files |
 | Phase 02 P02 | 8min | 2 tasks | 9 files |
 | Phase 04 P04-04 | 16min | 2 tasks | 12 files |
+| Phase 04 P04-05 | 16min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,7 @@ Recent decisions affecting current work:
 - [Phase 02]: cubecl 0.10.0 ArrayArg::from_raw_parts signature is (Handle, usize) by value — no vectorization arg, no turbofish (older 0.9-era README sketch is stale)
 - [Phase 02]: [Phase 02]: Mole >=30 attribute floor + format_atom 4-of-5 atom-input forms shipped via pyscf_gto::M(MoleBuildArgs); 5th Callable form returns NotYetImplemented{phase:3}; Local raw_atm_layout slot constants in pyscf-core::basis_set are TEMPORARY (02-04 deletes once cintx-compat dep lands)
 - [Phase 04]: pyscf-grids byte-exact Becke grids (DFT-04/09) — generator-port Lebedev (SphGenOh + inline LEBEDEV_SEEDS, D-06, no codegen/build.rs), Treutler-Ahlrichs class-default radial, get_partition pure-Python fallback with pbecke.sum(axis=0) through oracle_sum (Pitfall 10). DFT-09 count sweep matches upstream level 0..9; DFT-04 byte-for-byte coords+weights is a CI-only grid_weights oracle arm (--features python).
+- [Phase 04]: XC parsers + XcBackend seam (DFT-02/03) — libxc-default parse_xc (D-01, inline const XC_CODES/XC_ALIAS, part-aware possible_*_for fuzzy lookup, depth-bounded compound expansion T-04-05b) + xcfun-alternate parse_xc (0..77 ids, X/C/XC suffix fallback, LR_HF-zeroing tail). XcBackend cfg-gated enum mirrors AlgebraClient: Xcfun default-compiled, #[cfg(libxc)] Libxc in a gated submodule (default build never names a libxc_rs symbol). xcfun eval uses spin-resolved Vars (A_B/A_B_GAA_GAB_GBB/+TAU) with closed-shell rho/2 split (CPU launch supports spin-resolved only; Vars::N/A => NotConfigured). DFT-02 oracle = hand-transcribed parity table (PyO3-wall: no pyo3 dep in pyscf-dft); SLATERX bit-exact 1e-10 vs analytic. libxc NEVER compiled (cargo tree default = 0 libxc_rs).
 
 ### Pending Todos
 
@@ -117,6 +119,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-22T04:07:33.236Z
-Stopped at: Phase 4 context updated (D-08 precision switch added)
+Last session: 2026-05-22T08:37:00.000Z
+Stopped at: Completed 04-05-PLAN.md (XC parsers + XcBackend cfg-gated seam, DFT-02/03)
 Resume file: None
