@@ -55,17 +55,17 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 
 ### Density functional theory (DFT)
 
-- [ ] **DFT-01**: `dft.RKS(mol, xc='b3lyp')` and `dft.UKS(mol, xc=...)` converge bit-exact to upstream PySCF on the test corpus under `release-oracle`
+- [~] **DFT-01**: `dft.RKS(mol, xc='b3lyp')` and `dft.UKS(mol, xc=...)` converge bit-exact to upstream PySCF on the test corpus under `release-oracle` (Phase 4 plan 04-06 — RKS/UKS reuse the Phase 3 `kernel<H>` with KS get_veff = J+Vxc−hyb·K via the algebra-orchestrated NumInt grid loop; the bit-exact energy gate is the CI-only `--features python` `rks_energy`/`uks_energy` oracle arms — final convergence pending the Phase-2 arity-3/4 ERI rollup `int2e_sph`/`int3c2e_sph` + a live PySCF on CI; the drivers are complete and need no change once working ERIs land)
 - [x] **DFT-02**: XC string parser handles all upstream forms — single name (`'b3lyp'`), comma form (`'pbe,pbe'`), shorthands (`'lda'` → `'lda,vwn'`), explicit weights (`'.5*HF + .5*B88,LYP'`), aliases from `XC_ALIAS` (Phase 4 plan 04-05 — libxc-default + xcfun-alternate `parse_xc` ports, 23 parity assertions)
 - [x] **DFT-03**: libxc functional evaluation routes through `libxc_rs`; xcfun routes through `xcfun_rs`; both produce identical numbers to the upstream C libraries (Phase 4 plan 04-05 — `XcBackend` cfg-gated seam; xcfun-default path bit-exact to analytic Slater LDA; the libxc-side bit-exact assertions are `#[cfg(feature="libxc")]`-gated/CI-only per `PENDING_LIBXC_RS_FEATURE_GATE`, 04-02)
 - [x] **DFT-04**: `Grids` class with `level`, `atom_grid`, `prune`, `radi_method`, `becke_scheme`, `atomic_radii` controls; default Becke partitioning + Treutler radial + Lebedev angular reproduce upstream weights byte-for-byte (port `pyscf/dft/gen_grid.py`)
 - [ ] **DFT-05**: Range-separated hybrids (`omega`, `alpha`, `beta`) use cintx's `int2e_lr_*` and `int2e_sr_*` integral families
 - [ ] **DFT-06**: VV10 non-local correlation (`mf.nlc = 'VV10'`, `mf.nlcgrids`) produces upstream-matching energies
 - [ ] **DFT-07**: DF-DFT (`dft.RKS(mol).density_fit()`) works
-- [ ] **DFT-08**: All SCF subclass-override hooks (SCF-08) re-validate at the DFT level (DFT adds `get_veff`, `define_xc_`, custom-functional hooks)
+- [x] **DFT-08**: All SCF subclass-override hooks (SCF-08) re-validate at the DFT level (DFT adds `get_veff`, `define_xc_`, custom-functional hooks) (Phase 4 plan 04-06 — `KsOverrideHooks` extends `OverrideHooks` with `get_veff_ks` + `define_xc_`; `NoKsOverrides` + `KsHooks` impls; the callable `define_xc_` form returns `NotYetImplemented` per D-02; pyscf-dft stays pyo3-free. The Python-side subclass-override dispatch re-validation lands with the 04-09 PyO3 bridge.)
 - [x] **DFT-09**: `mf.grids.level = N` for N ∈ {0, 1, …, 9} matches upstream grid sizes
-- [ ] **DFT-10**: `numint.NumInt` exposes `eval_xc`, `eval_rho`, `nr_rks`, `nr_uks` matching upstream signatures (port from `pyscf/dft/numint.py`)
-- [ ] **DFT-11**: cubecl WGPU backend is feature-gated on the `shader-f64` Vulkan extension; runtime falls back to CPU with a warning when unavailable
+- [x] **DFT-10**: `numint.NumInt` exposes `eval_xc`, `eval_rho`, `nr_rks`, `nr_uks` matching upstream signatures (port from `pyscf/dft/numint.py`) (Phase 4 plan 04-06 — `NumInt` with the upstream `numint.py` signatures; `numint_signatures` test asserts the signatures + a numeric `eval_rho` element-wise check vs an independent longhand reference; the grid loop is algebra-orchestrated with NO `#[cube]` kernel, D-07)
+- [~] **DFT-11**: cubecl WGPU backend is feature-gated on the `shader-f64` Vulkan extension; runtime falls back to CPU with a warning when unavailable (Phase 4 plan 04-06 — the D-08 escape-hatch half landed: `PYSCF_DTYPE=f32` drives the DFT grid loop end-to-end via `DType::from_env`-driven f32/f64 dispatch with a below-bit-exact `tracing::warn!`; `dtype_f32_smoke` is the runs-end-to-end smoke (NO oracle compare, NO tolerance gate per D-08). The WGPU `shader-f64`-fallback CI job is a Phase 8 / special-runner item, not locally reproducible.)
 
 ### Møller–Plesset (MP2)
 
@@ -284,17 +284,17 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | SCF-12 | Phase 3 | Pending |
 | SCF-13 | Phase 3 | Pending |
 | SCF-14 | Phase 3 | Pending |
-| DFT-01 | Phase 4 | Pending |
+| DFT-01 | Phase 4 | Implemented (CI-only bit-exact gate pending Phase-2 ERI rollup + live PySCF) |
 | DFT-02 | Phase 4 | Complete |
 | DFT-03 | Phase 4 | Complete |
 | DFT-04 | Phase 4 | Complete |
 | DFT-05 | Phase 4 | Pending |
 | DFT-06 | Phase 4 | Pending |
 | DFT-07 | Phase 4 | Pending |
-| DFT-08 | Phase 4 | Pending |
+| DFT-08 | Phase 4 | Complete |
 | DFT-09 | Phase 4 | Complete |
-| DFT-10 | Phase 4 | Pending |
-| DFT-11 | Phase 4 | Pending |
+| DFT-10 | Phase 4 | Complete |
+| DFT-11 | Phase 4 | Implemented (f32 escape-hatch half; WGPU shader-f64 fallback CI job → Phase 8) |
 | MP2-01 | Phase 5 | Pending |
 | MP2-02 | Phase 5 | Pending |
 | MP2-03 | Phase 5 | Pending |

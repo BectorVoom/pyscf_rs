@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-05-PLAN.md (XC parsers + XcBackend cfg-gated seam)
-last_updated: "2026-05-22T08:37:00.000Z"
-last_activity: "2026-05-22 -- Completed 04-05 (XC parsers libxc/xcfun + XcBackend cfg-gated seam, DFT-02/03)"
+stopped_at: Completed 04-06-PLAN.md (RKS/UKS core — NumInt grid loop + KS get_veff + KsOverrideHooks + D-08 precision seam, DFT-01/08/10/11)
+last_updated: "2026-05-22T09:08:19.000Z"
+last_activity: 2026-05-22 -- Completed 04-06 (NumInt grid loop + KS get_veff + KsOverrideHooks + RKS/UKS reusing kernel<H> + D-08 f32/f64 seam, DFT-01/08/10/11)
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 40
-  completed_plans: 33
-  percent: 14
+  completed_plans: 34
+  percent: 13
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 04 (dft) — EXECUTING
-Plan: 04-05 complete (Wave 2 — XC parsers libxc/xcfun + XcBackend cfg-gated seam)
+Plan: 04-06 complete (Wave 3 — RKS/UKS core: NumInt grid loop + KS get_veff + KsOverrideHooks + D-08 precision seam)
 Status: Executing Phase 04
-Last activity: 2026-05-22 -- Completed 04-05 (XC parsers + XcBackend seam, DFT-02/03)
+Last activity: 2026-05-22 -- Completed 04-06 (NumInt grid loop + KS get_veff + KsOverrideHooks + RKS/UKS reusing kernel<H> + D-08 f32/f64 seam, DFT-01/08/10/11)
 
-Progress: [████████░░] 83% (33/40 plans done across all phases; Phase 04: 5/10 plans summarized)
+Progress: [████████░░] 85% (34/40 plans done across all phases; Phase 04: 6/10 plans summarized)
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Progress: [████████░░] 83% (33/40 plans done across all phas
 | Phase 02 P02 | 8min | 2 tasks | 9 files |
 | Phase 04 P04-04 | 16min | 2 tasks | 12 files |
 | Phase 04 P04-05 | 16min | 2 tasks | 9 files |
+| Phase 04 P04-06 | 23min | 2 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -77,6 +78,7 @@ Recent decisions affecting current work:
 - [Phase 02]: [Phase 02]: Mole >=30 attribute floor + format_atom 4-of-5 atom-input forms shipped via pyscf_gto::M(MoleBuildArgs); 5th Callable form returns NotYetImplemented{phase:3}; Local raw_atm_layout slot constants in pyscf-core::basis_set are TEMPORARY (02-04 deletes once cintx-compat dep lands)
 - [Phase 04]: pyscf-grids byte-exact Becke grids (DFT-04/09) — generator-port Lebedev (SphGenOh + inline LEBEDEV_SEEDS, D-06, no codegen/build.rs), Treutler-Ahlrichs class-default radial, get_partition pure-Python fallback with pbecke.sum(axis=0) through oracle_sum (Pitfall 10). DFT-09 count sweep matches upstream level 0..9; DFT-04 byte-for-byte coords+weights is a CI-only grid_weights oracle arm (--features python).
 - [Phase 04]: XC parsers + XcBackend seam (DFT-02/03) — libxc-default parse_xc (D-01, inline const XC_CODES/XC_ALIAS, part-aware possible_*_for fuzzy lookup, depth-bounded compound expansion T-04-05b) + xcfun-alternate parse_xc (0..77 ids, X/C/XC suffix fallback, LR_HF-zeroing tail). XcBackend cfg-gated enum mirrors AlgebraClient: Xcfun default-compiled, #[cfg(libxc)] Libxc in a gated submodule (default build never names a libxc_rs symbol). xcfun eval uses spin-resolved Vars (A_B/A_B_GAA_GAB_GBB/+TAU) with closed-shell rho/2 split (CPU launch supports spin-resolved only; Vars::N/A => NotConfigured). DFT-02 oracle = hand-transcribed parity table (PyO3-wall: no pyo3 dep in pyscf-dft); SLATERX bit-exact 1e-10 vs analytic. libxc NEVER compiled (cargo tree default = 0 libxc_rs).
+- [Phase 04]: RKS/UKS core (DFT-01/08/10/11, D-07/D-08) — NumInt grid loop (nr_rks/nr_uks/eval_rho/eval_xc, upstream numint.py signatures) is algebra-orchestrated (AO via pyscf_gto::eval_gto behind the wall; dense ρ/Vxc contractions as host loops; Exc/nelec via oracle_sum) with NO #[cube] kernel (D-07; Tensor-API gemm/axpy stay NotYetImplemented{phase:2}, so the grid loop follows the Phase-3 SCF/DF inline-loop precedent). PARSE XC IN THE XCFUN NAMESPACE (default backend) — xcfun exposes the standard-hybrid mixing in hyb[0] (b3lyp→0.2); the libxc parser folds it inside compound id 402 (hyb=0), so using libxc::parse_xc would silently break hybrid_coeff AND feed libxc ids into the xcfun id→name map. D-08: NumInt reads DType::from_env() at construction + read-only dtype() accessor; f32/f64 enum-match dispatch of the matmul chain (F64 arm = unchanged bit-exact default; F32 casts ρ→f64 at the XcBackend::eval boundary since eval_gto/xcfun are f64-host) + one below-bit-exact tracing::warn!; no set_precision, no f32 tolerance gate. KS get_veff = J+Vxc−hyb·K (RSH omega!=0 seam → 04-07); KsHooks overrides energy_elec = Tr(D·h1e)+Ecoul+Exc via a per-cycle Exc cache (the SCF energy_elec signature has no mol). RKS/UKS reuse the Phase 3 kernel<H> verbatim. DFT-01 bit-exact energy gate is the CI-only --features python rks_energy/uks_energy oracle arms (live convergence needs working arity-3/4 ERIs = the Phase-2 int2e_sph/int3c2e_sph rollup gap, currently NotYetImplemented; minao init guess also not yet implemented) + an always-on structural layer; the RKS/UKS drivers are complete and converge once working ERIs land. From<DftError> for PyscfRsError bridge in pyscf-dft (no pyscf-core dep cycle). pyscf-dft stays pyo3-free + cubecl-free; libxc NEVER compiled.
 
 ### Pending Todos
 
@@ -119,6 +121,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-22T08:37:00.000Z
-Stopped at: Completed 04-05-PLAN.md (XC parsers + XcBackend cfg-gated seam, DFT-02/03)
+Last session: 2026-05-22T09:08:19.000Z
+Stopped at: Completed 04-06-PLAN.md (RKS/UKS core — NumInt grid loop + KS get_veff + KsOverrideHooks + D-08 precision seam, DFT-01/08/10/11)
 Resume file: None

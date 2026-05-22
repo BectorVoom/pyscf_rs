@@ -150,7 +150,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 04-06-PLAN.md — RKS/UKS core: NumInt grid loop (D-07) + KS get_veff + KsOverrideHooks; bit-exact SVWN/PBE/B3LYP reusing the Phase 3 kernel<H> (DFT-01, DFT-08, DFT-10)
+- [x] 04-06-PLAN.md — RKS/UKS core: algebra-orchestrated NumInt grid loop (nr_rks/nr_uks/eval_rho/eval_xc, D-07, no #[cube]) + KS get_veff = J+Vxc−hyb·K + KsOverrideHooks + RKS/UKS reusing the Phase 3 kernel<H>; D-08 PYSCF_DTYPE f32/f64 dispatch + read-only dtype() + below-bit-exact warn (f64 default unchanged); CI-only rks_energy/uks_energy oracle arms + always-on structural layer + f32 runs-end-to-end smoke; pyscf-dft stays pyo3-free + cubecl-free, libxc never compiled (DFT-01, DFT-08, DFT-10, DFT-11)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 4/10 | In Progress|  |
+| 4. DFT | 5/10 | In Progress|  |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
