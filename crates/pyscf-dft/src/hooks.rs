@@ -217,22 +217,15 @@ impl<'a> KsHooks<'a> {
     fn ks_veff(&self, mol: &Mole, dm: &Density) -> Result<KsVeff, PyscfRsError> {
         let (j, k) = self.get_jk(mol, dm)?;
         let bundle = default_get_veff(self.ni, mol, self.grids, self.xc_code, dm, &j, &k)?;
-        // Recover the Vxc-only matrix from the bundle: veff = J + Vxc − hyb·K,
-        // so Vxc = veff − J + hyb·K. Then 0.5·Tr(D·Vxc) is the energy term that
-        // `energy_elec` must subtract from 0.5·Tr(D·vhf) (replacing it by Exc).
-        let hyb = self
-            .ni
-            .hybrid_coeff(self.xc_code, mol.spin)
-            .map_err(PyscfRsError::from)?;
-        let n = dm.data.len();
-        let mut vxc = vec![0.0_f64; n];
-        for i in 0..n {
-            vxc[i] = bundle.veff.data[i] - j.data[i] + hyb * k.data[i];
-        }
-        let half_tr_d_vxc = 0.5 * pyscf_algebra::oracle_dot(&dm.data, &vxc);
+        // The energy term `energy_elec` subtracts from 0.5·Tr(D·vhf)
+        // (replacing it by Exc) is 0.5·Tr(D·Vxc). `default_get_veff` computes
+        // it from the GENUINE Vxc (nr.vmat) and surfaces it as
+        // `bundle.half_tr_d_vxc`. This is correct for both standard-hybrid
+        // and RSH veff — we no longer reconstruct Vxc as `veff − J + hyb·K`
+        // (which would be wrong once vk carries the RSH long-range term).
         *self.cache.borrow_mut() = Some(KsEnergyCache {
             exc: bundle.exc,
-            half_tr_d_vxc,
+            half_tr_d_vxc: bundle.half_tr_d_vxc,
             dm_fingerprint: dm_fingerprint(dm),
         });
         Ok(bundle)

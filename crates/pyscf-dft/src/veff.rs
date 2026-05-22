@@ -1,9 +1,22 @@
-//! KS effective potential — `get_veff = J + Vxc − hyb·K` (DFT-01).
+//! KS effective potential — `get_veff = J + Vxc − hyb·K` (DFT-01) with the
+//! range-separated-hybrid (RSH, omega ≠ 0) SR/LR branch (DFT-05).
 //!
 //! Source: `pyscf/dft/rks.py:get_veff` (37-140) — the J + Vxc − hyb·K linear
-//! combination. The standard-hybrid (omega = 0) form is implemented here;
-//! the range-separated-hybrid (RSH, omega ≠ 0) branch is DEFERRED to 04-07
-//! (a clearly-marked seam below).
+//! combination + the RSH branch (rks.py:108-129). The standard-hybrid
+//! (omega = 0) form and the RSH (omega ≠ 0) form are both implemented here
+//! (04-07 fills the RSH branch the 04-06 seam reserved).
+//!
+//! ## RSH branch (DFT-05, rks.py:108-129)
+//! `(omega, alpha, hyb) = rsh_coeff(xc, spin)`:
+//!   - `omega == 0` ⇒ standard hybrid: `vk = hyb·K` (the 04-06 path).
+//!   - `omega != 0` ⇒ `vk = hyb·K + (alpha − hyb)·K_lr`, where `K_lr` is the
+//!     long-range exact-exchange matrix built with `env[8] = +omega`
+//!     (`erf(ωr)/r`) via `pyscf_gto::get_k_with_omega`. The screened K is
+//!     formed on a *clone* of the Mole (Arc-backed, cheap) so the shared
+//!     `&Mole` here needs no `&mut`, and the omega never leaks (the clone's
+//!     `_env[8]` mutation is local + RAII-restored by `intor_with_omega`).
+//!     Pitfall 1: this uses the standard `int2e` + env[8], NOT phantom
+//!     `int2e_lr_*`/`int2e_sr_*` symbols.
 //!
 //! Structural template: `pyscf-scf::fock::default_get_veff` (fock.rs:140-148)
 //! — the inline element loop (NOT `pyscf_algebra::axpy`, which is Tensor-API
@@ -15,24 +28,27 @@ use pyscf_grids::Grids;
 
 use crate::numint::NumInt;
 
-/// `get_veff(ks, mol, dm) = J + Vxc − hyb·K` (standard hybrid, omega = 0).
+/// `get_veff(ks, mol, dm) = J + Vxc − vk` where `vk = hyb·K` (standard
+/// hybrid, omega = 0) or `vk = hyb·K + (alpha − hyb)·K_lr` (RSH, omega ≠ 0).
 ///
 /// - `J`, `K` come from the supplied `(j, k)` pair (the caller fetches them
 ///   via the SCF `get_jk` hook, which for the corpus routes through the DF
 ///   J/K builder — `int2e_sph` arity-4 stays `NotYetImplemented{phase:2}`).
 /// - `Vxc` + `Exc` come from `NumInt::nr_rks` over the grid.
-/// - `hyb` is the standard-hybrid HF-exchange mixing coefficient
-///   (`NumInt::hybrid_coeff`); for a pure functional (SVWN/PBE) `hyb = 0` so
-///   the `−hyb·K` term vanishes and `K` need not be built.
+/// - `(omega, alpha, hyb) = rsh_coeff(xc, spin)`. For a pure functional
+///   (SVWN/PBE) `hyb = omega = 0` so the exact-exchange term vanishes and
+///   `K` need not be built.
 ///
-/// Returns `(veff, exc, vj_minus_hybk_ecoul)` where `exc` is the XC energy
-/// (`∫ ε_xc ρ`) the KS `energy_elec` needs, and the third value is the
-/// Coulomb (+ exact-exchange) energy contribution `0.5·Tr(D·(J − hyb·K))`.
+/// Returns `(veff, exc, ecoul, nelec)` where `exc` is the XC energy
+/// (`∫ ε_xc ρ`) the KS `energy_elec` needs, and `ecoul` is the Coulomb
+/// (+ exact-exchange) energy contribution `0.5·Tr(D·(J − vk))`.
 ///
-/// # RSH seam
-/// The range-separated branch (`omega ≠ 0`: split K into SR/LR with the
-/// screened ERI) is DEFERRED to 04-07 (DFT-05). This function asserts
-/// `omega == 0` is honored by only consuming the standard `hyb·K`.
+/// # RSH branch (DFT-05, rks.py:108-129)
+/// When `omega != 0` the long-range exact-exchange matrix `K_lr` is built
+/// via `pyscf_gto::get_k_with_omega(mol_clone, dm, +omega)` (env[8] = +omega
+/// ⇒ `erf(ωr)/r`), formed on an Arc-backed clone so the shared `&Mole` needs
+/// no `&mut` and the omega is restored locally (no leak — T-04-07a). The
+/// exchange potential becomes `vk = hyb·K + (alpha − hyb)·K_lr`.
 #[allow(clippy::too_many_arguments)]
 pub fn default_get_veff(
     ni: &NumInt,
@@ -51,37 +67,67 @@ pub fn default_get_veff(
         }));
     }
 
-    // hyb (standard-hybrid HF-exchange mixing). RSH branch (omega != 0):
-    // DFT-05, filled by 04-07 — this plan does the hyb-scaled-K
-    // standard-hybrid form only.
-    let (omega, _alpha, hyb) = ni.rsh_coeff(xc_code, mol.spin).map_err(PyscfRsError::from)?;
-    debug_assert!(
-        omega == 0.0,
-        "RSH (omega != 0) is deferred to 04-07; default_get_veff handles omega=0 only"
-    );
+    // (omega, alpha, hyb): the range-separation triple (rsh_coeff).
+    //   omega == 0  → standard hybrid: vk = hyb·K.
+    //   omega != 0  → RSH: vk = hyb·K + (alpha − hyb)·K_lr  (rks.py:108-129).
+    let (omega, alpha, hyb) = ni.rsh_coeff(xc_code, mol.spin).map_err(PyscfRsError::from)?;
 
     // Vxc + Exc from the numerical-integration grid loop.
     let nr = ni.nr_rks(mol, grids, xc_code, dm, 0, 1, mol.max_memory, None)?;
 
-    // veff = J + Vxc − hyb·K (inline loop — matches fock.rs:144-146 template).
-    let mut veff = vec![0.0_f64; nao * nao];
+    // Build the exact-exchange potential vk.
+    //   - standard hybrid (omega == 0): vk = hyb·K.
+    //   - RSH (omega != 0): vk = hyb·K + (alpha − hyb)·K_lr, where K_lr is the
+    //     long-range (env[8] = +omega, erf(ωr)/r) exact-exchange matrix.
+    //     Pitfall 1: get_k_with_omega uses the standard int2e + env[8], NOT a
+    //     phantom int2e_lr_/int2e_sr_ symbol. The screened K is built on a
+    //     clone so the omega mutation is local + RAII-restored (no leak).
+    let mut vk = vec![0.0_f64; nao * nao];
     for i in 0..(nao * nao) {
-        veff[i] = j.data[i] + nr.vmat.data[i] - hyb * k.data[i];
+        vk[i] = hyb * k.data[i];
+    }
+    if omega != 0.0 {
+        let mut mol_lr = mol.clone();
+        let k_lr = pyscf_gto::get_k_with_omega(&mut mol_lr, dm, omega)?;
+        if k_lr.nao != nao {
+            return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
+                expected: nao,
+                actual: k_lr.nao,
+            }));
+        }
+        let lr_coeff = alpha - hyb;
+        for i in 0..(nao * nao) {
+            vk[i] += lr_coeff * k_lr.data[i];
+        }
     }
 
-    // Coulomb (+ exact-exchange) energy contribution: 0.5·Tr(D·(J − hyb·K)).
+    // veff = J + Vxc − vk (inline loop — matches fock.rs:144-146 template).
+    let mut veff = vec![0.0_f64; nao * nao];
+    for i in 0..(nao * nao) {
+        veff[i] = j.data[i] + nr.vmat.data[i] - vk[i];
+    }
+
+    // Coulomb (+ exact-exchange) energy contribution: 0.5·Tr(D·(J − vk)).
     // (The XC energy is carried separately in `exc` — it is NOT 0.5·Tr(D·Vxc).)
     let mut jk = vec![0.0_f64; nao * nao];
     for i in 0..(nao * nao) {
-        jk[i] = j.data[i] - hyb * k.data[i];
+        jk[i] = j.data[i] - vk[i];
     }
     let e_coul = 0.5 * pyscf_algebra::oracle_dot(&dm.data, &jk);
+
+    // 0.5·Tr(D·Vxc) — the pure-XC energy term `energy_elec` subtracts from
+    // 0.5·Tr(D·vhf) (replacing it with Exc). Computed here from the GENUINE
+    // Vxc (nr.vmat) so it is correct for both standard-hybrid and RSH veff
+    // (the caller can no longer reconstruct Vxc by `veff − J + hyb·K` once vk
+    // carries the LR term).
+    let half_tr_d_vxc = 0.5 * pyscf_algebra::oracle_dot(&dm.data, &nr.vmat.data);
 
     Ok(KsVeff {
         veff: Density { nao, data: veff },
         exc: nr.excsum,
         ecoul: e_coul,
         nelec: nr.nelec,
+        half_tr_d_vxc,
     })
 }
 
@@ -90,14 +136,18 @@ pub fn default_get_veff(
 /// electron count (for diagnostics / nelec sanity).
 #[derive(Debug, Clone)]
 pub struct KsVeff {
-    /// `J + Vxc − hyb·K`.
+    /// `J + Vxc − vk` where `vk = hyb·K (+ (alpha−hyb)·K_lr for RSH)`.
     pub veff: Density,
     /// `Exc = ∫ ε_xc ρ` — the XC energy.
     pub exc: f64,
-    /// `Ecoul = 0.5·Tr(D·(J − hyb·K))` — Coulomb + exact-exchange energy.
+    /// `Ecoul = 0.5·Tr(D·(J − vk))` — Coulomb + exact-exchange energy.
     pub ecoul: f64,
     /// `∫ ρ` — integrated electron count.
     pub nelec: f64,
+    /// `0.5·Tr(D·Vxc)` — the pure-XC energy term (from the genuine `nr.vmat`).
+    /// Surfaced so the KS `energy_elec` cache need not reconstruct Vxc from
+    /// the veff (which now carries the RSH LR exchange term).
+    pub half_tr_d_vxc: f64,
 }
 
 #[cfg(test)]

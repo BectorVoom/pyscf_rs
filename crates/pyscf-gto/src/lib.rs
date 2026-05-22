@@ -18,6 +18,7 @@ pub mod intor; // Plan 02-05 — GTO-06 (mol.intor(name) dispatcher).
 pub mod layout_table; // Wave 0 (plan 02-01); consumed by intor.rs in 02-05.
 pub mod make_env; // Plan 02-04 — GTO-04 (flat-array projection, D-03).
 pub mod projection; // Plan 02-04 — GTO-11 (zero-copy cintx_core::BasisSet build).
+pub mod range_coulomb; // Plan 04-07 — DFT-05 (range-coulomb env[8] set/restore for RSH).
 pub mod set_geom; // Plan 02-08 — GTO-10 (in-place geometry mutation, Pattern 5).
 pub mod types;
 
@@ -34,6 +35,7 @@ pub use format_basis::format_basis;
 pub use format_ecp::{format_ecp, make_ecp_env};
 pub use intor::{intor, intor_with_auxmol, IntorOutput};
 pub use pyscf_core::{Mole, Unit};
+pub use range_coulomb::{get_k_with_omega, intor_with_omega, PTR_RANGE_OMEGA};
 pub use set_geom::set_geom_;
 pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
 
