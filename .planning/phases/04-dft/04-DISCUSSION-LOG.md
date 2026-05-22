@@ -5,7 +5,7 @@
 
 **Date:** 2026-05-22
 **Phase:** 04-dft
-**Areas discussed:** XC backend routing, libxc compile cost, Grid crate & data, NumInt hot path
+**Areas discussed:** XC backend routing, libxc compile cost, Grid crate & data, NumInt hot path, Precision switching (added in 2026-05-22 update)
 
 ---
 
@@ -101,6 +101,32 @@
 
 ---
 
+## Precision switching (added 2026-05-22 update → D-08)
+
+### Q1 — How f32 relates to the bit-exact / oracle path
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| f32 = opt-in fast path | f64 stays default + the ONLY bit-exact/oracle path; f32 is opt-in lower-precision/faster/lower-memory, does NOT meet µHartree, and is the escape hatch for f64-less WGPU adapters (Phase 1 D-09 / DFT-11). | ✓ |
+| f32 validated to loose tol | Same, plus an f32 DFT regression at a documented looser (~mHartree) tolerance. | |
+| f32 is just a smoke test | f32 compiles/runs (one smoke test), no numeric commitment, tightening deferred. | |
+
+**User's choice:** f32 = opt-in fast path
+**Notes:** Bit-exact contract (DFT-01 ≤1 µHartree, DFT-04/09 byte-exact grids) is inherently f64; oracle suite stays f64. f32 is a real supported mode (notably the f64-less-WGPU escape hatch for DFT-11), ships with a runs-end-to-end smoke test, no tolerance gate; a loose f32 sanity bound is a Deferred Idea.
+
+### Q2 — User-facing switch surface
+
+| Option | Description | Selected |
+|--------|-------------|----------|
+| Env var + read-only accessor | DFT honors `PYSCF_DTYPE` (reuse Phase 1 `DType::from_env`) AND exposes a function to query the active precision (Rust on NumInt/KS + Python binding). Env value is source of truth. | ✓ |
+| Env var only | DFT path just reads the existing resolver; no new function. | |
+| Accessor with override | Env var + a per-object runtime override (`mf.set_precision('f32')`); env is only the default. More surface + test burden. | |
+
+**User's choice:** Env var + read-only accessor
+**Notes:** Reuses the already-shipped seam (Phase 1 D-08 `PYSCF_DTYPE` resolver + quick-task-260522-b06 `Tensor<T>`/`DeviceScalar`); no new env var or dep. Per-object override deferred.
+
+---
+
 ## Claude's Discretion
 
 - Grid blksize / chunking — mirror `numint.py` MEM-driven blksize; log `PYSCF_MAX_MEMORY` at entry, no hard enforcement (Phase 6 owns that).
@@ -121,3 +147,5 @@
 - DKS/GKS/r-numint relativistic DFT, DFT+U, SAP, symmetry-adapted KS — out of v1 DFT scope.
 - GPU per-backend DFT regression — Phase 8 (ORACLE-07).
 - On-device libxc XC eval — Phase 8 (libxc_rs is cubecl-cpu-only).
+- Per-object precision override (`mf.set_precision('f32')`) — past v1 (D-08); env var + read-only accessor only.
+- f32 numeric-parity regression (loose tolerance bound) — past v1 (D-08); oracle suite stays f64.

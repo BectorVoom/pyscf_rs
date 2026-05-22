@@ -1,7 +1,8 @@
 # Phase 4: DFT - Context
 
 **Gathered:** 2026-05-22
-**Status:** Ready for planning
+**Updated:** 2026-05-22 — added D-08 (f32/f64 precision switch via `PYSCF_DTYPE`)
+**Status:** Ready for re-planning (D-08 added — existing 10 plans predate it and need a replan)
 
 <domain>
 ## Phase Boundary
@@ -52,6 +53,16 @@ A user runs `dft.RKS(mol, xc='b3lyp').run()` (and `dft.UKS`) on the test corpus 
 
 - **D-07: Orchestrate the `nr_rks`/`nr_uks` grid loop in `pyscf-dft` via `pyscf-algebra`; no new bespoke DFT cubecl kernels in v1.** The grid loop (eval AO on grid → ρ = AO·D → eval XC → Vxc = AOᵀ·(w·v·AO) → accumulate Exc) reuses the existing `eval_gto` cubecl kernel (`pyscf-kernels`, Phase 2 D-04 — the deferred `l≥1` eval_gto variants land in this phase) for AO-on-grid, does the ρ-contraction and Vxc back-contraction as `gemm`/weighted-`gemm` through `pyscf-algebra`, and routes per-block XC evaluation to `libxc_rs`/`xcfun_rs`. No fused DFT grid kernels are written now; any fused cubecl XC-grid kernel is deferred to Phase 8 if profiling shows the matmul chain is the bottleneck. Mirrors the Phase 3 `pyscf-df` precedent (D-10: "no new kernel — just Cholesky + matmul via algebra"), respects the algebra wall, and avoids front-loading the optimization the 2–5× target (Phase 8) is meant to own. Note: `libxc_rs` is CPU-host-only (cubecl-cpu), so a future GPU grid path would force a host round-trip per block for libxc XC eval; `xcfun_rs` has on-device `eval_vec` — relevant for Phase 8, not v1.
 
+### Precision switching: f32/f64 via `PYSCF_DTYPE` (DFT-10, DFT-11, cross-cutting)
+
+- **D-08: The DFT compute path honors the existing `PYSCF_DTYPE` precision seam at runtime; f64 is the bit-exact default, f32 is an opt-in fast/low-memory mode.** Phase 4 threads the precision seam that **already exists** — Phase 1 D-08's `PYSCF_DTYPE`→`DType{F32,F64}` resolver (`pyscf-runtime/src/backend.rs:DType::from_env`, default `F64`, case-insensitive) + quick-task-260522-b06's generic `Tensor<T: Scalar = f64>` / `DeviceScalar` (impl `f32`/`f64`) seam (`pyscf-core/src/scalar.rs`, `pyscf-algebra/src/scalar.rs`, `pyscf-kernels/src/scalar.rs`) — through the DFT NumInt grid loop + RKS/UKS so the active scalar type is selected at runtime from `PYSCF_DTYPE`. **No new env var** (reuse `DType::from_env()`), **no new dep** (`pyscf-runtime`/`pyscf-algebra` already in the `pyscf-dft` dep set). Precision is selected through `pyscf-algebra`/`pyscf-runtime`, never hand-rolled — same algebra-wall discipline as backend selection.
+
+  - **f64 is the default and the ONLY bit-exact/oracle-validated path.** DFT-01 (≤1 µHartree), DFT-04/09 (byte-exact grid weights, Pitfall 10), the parser-parity test, and the `--features libxc` bit-exact CI job all run **f64** under `release-oracle`. f32 is **never** compared to the upstream oracle for energy parity and explicitly does NOT meet the µHartree bar.
+
+  - **f32 is an opt-in fast / lower-memory mode and the f64-less-WGPU escape hatch.** `PYSCF_DTYPE=f32` switches the DFT path to f32. This is the honest fallback for adapters lacking the `shader-f64` Vulkan extension — Phase 1 D-09 hard-errors on `wgpu`+`f64` without `shader-f64`, and DFT-11 owns the WGPU f64 hole; f32 lets DFT run there. Emit a `tracing::warn!` at DFT kernel entry when f32 is active, noting it is below the bit-exact bar. **No numeric-parity tolerance is committed for f32 in v1** (user declined a loose-tolerance f32 regression): f32 ships with a runs-end-to-end **smoke test only**, mirroring quick-task-260522-b06's single narrow f32 smoke test. A loose (~chemical-accuracy) f32 sanity bound is a Deferred Idea, not a v1 gate.
+
+  - **User-facing switch = env var + read-only accessor.** The user switches precision via `PYSCF_DTYPE` (the single source of truth). Phase 4 additionally exposes a **read-only accessor** to query the resolved precision: a Rust method on the `NumInt` / KS object returning the active `DType`, surfaced through the Python binding (readable on `mf` / `mf._numint`). **No per-object runtime override** (`set_precision(...)`) in v1 — user declined that surface; deferred. Continue the Phase 3 ALG-08 convention of logging `backend=<…> dtype=<…>` at DFT kernel entry.
+
 ### Claude's Discretion
 
 The following are not user-decided — researcher/planner picks the implementation within the locked decisions above:
@@ -65,6 +76,7 @@ The following are not user-decided — researcher/planner picks the implementati
 - **`KsResult` chkfile** — `impl Checkpointable for KsResult` in a `pyscf-dft::chkfile` module via `pyscf-chkfile` HDF5 primitives (Phase 3 D-06 pattern); add `xc`/`grids` metadata to the schema.
 - **`KsOverrideHooks` trait** — extend the Phase 3 `OverrideHooks` trait shape with the DFT hooks (`get_veff`, `define_xc_`, and the inherited SCF hooks); `pyscf-dft` stays pyo3-free, `pyscf-py` provides the `PyOverrideBridge` impl (Phase 3 D-01). `to_uks`/`to_rks` (Phase 3 stubs returning `NotYetImplemented{phase:4}`) get wired to real KS targets.
 - **Phase MVP sequencing** — core path (RKS/UKS + grids + XC parser + libxc eval, bit-exact on SVWN/PBE/B3LYP) first; range-separated (DFT-05), VV10 (DFT-06), DF-DFT (DFT-07) as follow-on plans. Planner finalizes wave structure + the corpus-functional list driving D-04's libxc subset.
+- **f32 grid-loop boundary (D-08 implementation)** — `libxc_rs` (f64 host-only) and `xcfun_rs` evaluate XC in f64, so an f32 DFT path is f32 only for the AO-eval / ρ-contraction / Vxc back-contraction matmul chain (the `pyscf-algebra` `gemm` path); ρ is cast to f64 at the XC-eval boundary and v cast back. Whether to monomorphize both `Tensor<f32>`/`Tensor<f64>` paths and dispatch at NumInt entry (mirroring the `AlgebraClient` enum-match), and the exact cast boundary, is researcher/planner's to finalize from what the sibling XC crates accept. The default-f64 path is unaffected.
 
 </decisions>
 
@@ -124,6 +136,13 @@ The following are not user-decided — researcher/planner picks the implementati
 - `xtask/src/lints/algebra_wall.rs` — extend allowlist for `pyscf-grids` (algebra dep) + `pyscf-dft` (algebra dep, no direct cubecl)
 - `.github/workflows/ci.yml` + `nightly-cross-crate.yml` — add the `--features libxc` DFT bit-exact job + the `shader-f64`-less WGPU fallback job (DFT-11); re-enable `libxc_rs` in the nightly cross-crate matrix
 
+### Precision seam (this repo — already shipped; D-08 threads it through DFT)
+- `crates/pyscf-runtime/src/backend.rs` — `DType{F32,F64}` + `DType::from_env()` (Phase 1 D-08; default `F64`, case-insensitive `PYSCF_DTYPE`); **the resolver the DFT path reads (D-08)**
+- `crates/pyscf-algebra/src/select.rs` — `PYSCF_BACKEND`+`PYSCF_DTYPE`→`AlgebraClient` resolver + the D-09 `wgpu`+`f64`-without-`shader-f64` hard-error (the f32 escape-hatch driver for DFT-11)
+- `crates/pyscf-algebra/src/scalar.rs` + `crates/pyscf-core/src/scalar.rs` + `crates/pyscf-kernels/src/scalar.rs` — `Scalar` (host) / `DeviceScalar` (`f32`/`f64`) trait seam + `Tensor<T: Scalar = f64>` (quick-task-260522-b06); **the generic seam the DFT compute path threads (D-08)**
+- `docs/env-vars.md` — `PYSCF_DTYPE` (values `f32`/`f64`, default `f64`, resolution priority); **update with the DFT read-only accessor + the f32-below-bit-exact `warn!` note (D-08)**
+- `.planning/quick/260522-b06-implement-f32-f64-precision-switching-us/260522-b06-PLAN.md` — the generic-precision quick task that established the `DType` enum + `Tensor<T>` seam (D-08's foundation)
+
 ### Cubecl + numerics reference docs (this repo)
 - `docs/manual/Cubecl/cubecl_matmul_gemm_example.md` — authoritative for `pyscf_algebra::gemm` calls in the ρ / Vxc contractions
 - `docs/manual/Cubecl/Cubecl_multi_ compute.md` — runtime/ComputeClient pattern for any future fused grid kernel (Phase 8)
@@ -147,6 +166,7 @@ The following are not user-decided — researcher/planner picks the implementati
 - **`pyscf-chkfile` primitives + `Checkpointable` trait** (Phase 3 D-06) — `KsResult` impls `Checkpointable`; `/mol` group reuses Phase 2 `mol.dumps()` JSON.
 - **`xcfun_rs` GPU dispatch + ERF/shader-f64 auto-fallback** (its GPU-05) — DFT-11's XC-eval-portion fallback delegates here rather than re-implementing the probe.
 - **`canonicalize_signs`** (`pyscf-core`, SCF-13) — KS post-eigh sign canonicalization (cross-platform vendor stability, Pitfall 4/12).
+- **Precision seam** (Phase 1 D-08 + quick-task-260522-b06) — `PYSCF_DTYPE`→`DType{F32,F64}` resolver (`DType::from_env`, default F64) + generic `Tensor<T: Scalar = f64>` / `DeviceScalar`(f32/f64). DFT threads it (D-08): f64 = default/bit-exact, f32 = opt-in fast path / WGPU-f64 escape hatch. No new env var or dep needed.
 
 ### Established Patterns
 - **Algebra wall** — `pyscf-dft` + new `pyscf-grids` depend on `pyscf-algebra` only, never `cubecl-*` directly; xtask lint extended to both.
@@ -190,6 +210,8 @@ The following are not user-decided — researcher/planner picks the implementati
 - **GPU per-backend DFT regression** — Phase 8 (ORACLE-07); Phase 4 ships CPU-backend correctness + the DFT-11 WGPU-fallback honesty check only.
 - **On-device libxc XC eval** — `libxc_rs` is cubecl-cpu-only; a GPU grid path forcing host round-trips for libxc XC is a Phase 8 concern (`xcfun_rs` already supports on-device `eval_vec`).
 - **xcfun_rs as a default-shipped second backend in the wheel** — v1 ships xcfun_rs compiled by default (D-03) but its functional coverage (79) is narrower than libxc; broadening which backend the wheel defaults to per-functional is a post-v1 tuning question.
+- **Per-object precision override** (`mf.set_precision('f32')` runtime override) — deferred past v1 (D-08); the env-var `PYSCF_DTYPE` + a read-only accessor is the v1 surface.
+- **f32 numeric-parity regression** (a loose ~chemical-accuracy tolerance bound for the f32 DFT path) — deferred (D-08); v1 f32 ships with a runs-end-to-end smoke test only, no tolerance gate. The oracle/bit-exact suite stays f64.
 
 ### Reviewed Todos (not folded)
 None — the todo cross-reference scan returned 0 matches for Phase 4.
@@ -200,3 +222,4 @@ None — the todo cross-reference scan returned 0 matches for Phase 4.
 
 *Phase: 04-dft*
 *Context gathered: 2026-05-22*
+*Updated 2026-05-22: added D-08 (f32/f64 precision switch via `PYSCF_DTYPE` — f64 default/bit-exact, f32 opt-in fast path + read-only accessor)*
