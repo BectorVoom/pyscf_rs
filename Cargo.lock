@@ -6013,6 +6013,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "xcfun-gpu",
  "xcfun-rs",
 ]
 

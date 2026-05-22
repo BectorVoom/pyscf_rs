@@ -39,6 +39,17 @@ pyscf-runtime = { path = "../pyscf-runtime" }
 # Default XC backend: native-Rust xcfun (always compiled). Redirected to the
 # sibling path via the workspace [patch.crates-io] xcfun_rs entry.
 xcfun-rs      = "0.1.0"
+# DFT-11 WGPU f64-honesty delegation target. `xcfun-gpu` is ALREADY in the
+# default dep graph transitively (xcfun-rs → xcfun-gpu); this direct entry only
+# makes `auto_backend` / `error_routing::must_fall_back_to_cpu` / `Backend`
+# nameable at the `xc_backend.rs` XC-eval seam so the WGPU shader-f64 probe is
+# DELEGATED, never re-implemented (DFT-11, Pitfall 6). `default-features = false`
+# adds NO cubecl features beyond what xcfun-rs's default `cpu` already pulls;
+# the two functions used (`auto_backend`, `must_fall_back_to_cpu`) are pure /
+# cfg-gated and never compile a GPU runtime in the CPU-only default build. NOT
+# a cubecl-* crate, so the ALG-06 dependency-wall lint (FORBIDDEN_DEPS) permits
+# it; cubecl containment is unchanged (no new direct cubecl-* dep).
+xcfun-gpu     = { path = "../../../xcfun_rs/crates/xcfun-gpu", default-features = false }
 tracing       = { workspace = true }
 thiserror     = { workspace = true }
 # Optional libxc backend (off by default — see [features] above). The

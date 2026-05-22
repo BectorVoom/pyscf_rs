@@ -14,9 +14,52 @@
 //! points whose density-derivative input is sized by family —
 //! LDA(rho) / GGA(rho,sigma) / MGGA(rho,sigma,lapl,tau) — mirroring upstream
 //! `eval_xc`'s `rho` row count.
+//!
+//! # WGPU f64 honesty (DFT-11) and the D-08 f32 escape hatch
+//!
+//! Requirement DFT-11 closes the "WGPU-f64-hole" honesty gap (Pitfall 6 / the
+//! Pitfall-3 silent-precision-degradation re-validation) at the XC-eval seam.
+//! Two paths must NEVER be confused:
+//!
+//! 1. **Default f64 + a wgpu adapter without `shader-f64`** → the pipeline
+//!    falls back to **CPU-f64** and emits a single [`tracing::warn!`], it
+//!    NEVER silently downgrades to f32 (that would lie to the chemistry user).
+//!    The XC-eval-portion capability decision is DELEGATED to `xcfun_rs`'s
+//!    existing probe — [`xcfun_gpu::auto_backend`] selects the runtime and
+//!    [`xcfun_gpu::error_routing::must_fall_back_to_cpu`] routes ERF-bearing
+//!    (range-separated) functionals on `Wgpu`/`Metal` to CPU. We do NOT
+//!    re-implement a `shader-f64` probe here (see [`xc_eval_substrate`]).
+//!    `libxc_rs` is CPU-host-only by construction, so its XC-eval path is
+//!    ALWAYS CPU regardless of the selected GPU runtime.
+//!
+//! 2. **User-set `PYSCF_DTYPE=f32`** → the SEPARATE, EXPLICIT opt-in escape
+//!    hatch (D-08). When a user deliberately sets `PYSCF_DTYPE=f32`, the
+//!    04-06 `NumInt` f32 matmul chain runs and the below-bit-exact
+//!    `tracing::warn!` fires at kernel entry. This is HONEST (user-requested)
+//!    precision, NOT a silent degradation — it is the only way to actually run
+//!    DFT *on the GPU* of a `shader-f64`-less wgpu adapter (the f64 path on
+//!    that adapter is hard-errored in `pyscf-algebra::select` per D-09; f32
+//!    lets the user opt past that). The explicit-f32 case is therefore NEVER
+//!    treated as a "silent degradation to block" — it is the documented
+//!    escape hatch (see `docs/env-vars.md` and [`pipeline_fallback`]).
+//!
+//! The pipeline-level wgpu→CPU fallback reuses Phase 1's `PYSCF_BACKEND`
+//! resolver model (`pyscf_runtime::BackendKind` + the unrecognised-backend
+//! "fall back to CPU + warn" pattern, mirrored from `pyscf-algebra::select`).
 
 use crate::error::DftError;
 use crate::parser::XcSpec;
+
+// DFT-11 delegation targets — the EXISTING xcfun_rs shader-f64/ERF probe, NOT
+// a re-implementation. `Backend` is the runtime discriminator; `auto_backend`
+// is the priority-chain selector (env override → ROCm → CUDA → Metal-f64 →
+// Wgpu-f64 → CPU); `must_fall_back_to_cpu` routes ERF-bearing functionals on
+// Wgpu/Metal to the CPU substrate. `Dependency` (re-exported by xcfun-rs from
+// xcfun-core) is the functional capability bitset these consume.
+use xcfun_gpu::Backend as XcfunBackend;
+use xcfun_gpu::auto_backend;
+use xcfun_gpu::error_routing::must_fall_back_to_cpu;
+use xcfun_rs::Dependency;
 
 /// Functional family — selects the per-point input layout and the backend's
 /// variable encoding (xcfun `Vars`, libxc `Family`).
@@ -174,6 +217,105 @@ impl XcBackend {
             Err(DftError::LibxcFeatureNotEnabled)
         }
     }
+}
+
+/// Where the XC-eval portion actually runs after the DFT-11 honesty decision.
+///
+/// This is the *substrate* the per-block XC evaluation lands on, distinct from
+/// the precision (`DType`) the surrounding matmul chain uses. The default-f64
+/// honesty contract is: a `shader-f64`-less wgpu/metal adapter NEVER silently
+/// computes f32 XC energies — it falls back to [`Cpu`](XcEvalSubstrate::Cpu).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XcEvalSubstrate {
+    /// The XC eval runs on the CPU substrate (always f64-correct). This is the
+    /// honest fallback for a `shader-f64`-less GPU adapter under default f64,
+    /// and is ALWAYS the substrate for the CPU-host-only `libxc_rs` path.
+    Cpu,
+    /// The XC eval runs on the selected GPU runtime (probe reported f64
+    /// capability and no ERF→CPU routing was required).
+    Gpu,
+}
+
+/// DFT-11 — decide the XC-eval substrate by **delegating** to `xcfun_rs`'s
+/// existing probe. This re-implements NOTHING: it calls
+/// [`xcfun_gpu::auto_backend`] (the priority-chain selector that already gates
+/// `Wgpu` on the `shader-f64` Vulkan extension and `Metal` on hardware f64)
+/// and [`xcfun_gpu::error_routing::must_fall_back_to_cpu`] (ERF-bearing
+/// range-separated functionals on `Wgpu`/`Metal` → CPU).
+///
+/// `deps` is the functional's capability bitset (from
+/// `xcfun_rs::Functional::dependencies`-derived flags, e.g. `Dependency::ERF`
+/// for range-separated functionals). Returns [`XcEvalSubstrate::Cpu`] whenever
+/// the resolved backend is the CPU substrate OR an ERF-fallback is required;
+/// otherwise [`XcEvalSubstrate::Gpu`].
+///
+/// On the common case / CI default (no `shader-f64` device, no
+/// `XCFUN_FORCE_BACKEND`), `auto_backend()` returns `Backend::Cpu`, so this
+/// returns `Cpu` — the honest default-f64 fallback. NEVER returns a path that
+/// silently computes f32 for an f64 request.
+pub fn xc_eval_substrate(deps: Dependency) -> XcEvalSubstrate {
+    let backend = auto_backend();
+    // ERF-bearing functionals on wgpu/metal route to CPU (range-separation
+    // needs f64; WGSL has no f64 type) — delegated, not re-implemented.
+    if must_fall_back_to_cpu(deps, backend) {
+        return XcEvalSubstrate::Cpu;
+    }
+    match backend {
+        XcfunBackend::Cpu => XcEvalSubstrate::Cpu,
+        // Wgpu/Metal are only ever returned by auto_backend() when the
+        // shader-f64 / hardware-f64 probe PASSED (the gate is inside
+        // auto_backend), so an f64 XC eval there is honest.
+        XcfunBackend::Wgpu
+        | XcfunBackend::Metal
+        | XcfunBackend::Cuda
+        | XcfunBackend::Rocm => XcEvalSubstrate::Gpu,
+    }
+}
+
+/// The pipeline-level wgpu→CPU honesty fallback (DFT-11), reusing Phase 1's
+/// `PYSCF_BACKEND` resolver model. Reads `PYSCF_BACKEND`; when the user
+/// explicitly requested `wgpu`/`metal` but [`xc_eval_substrate`] reports the
+/// XC eval cannot run there at f64 (the `shader-f64`-less adapter case) AND the
+/// active precision is **f64** (`f64_requested == true`), emits a single clear
+/// [`tracing::warn!`] (mirroring `pyscf-algebra::select`'s uncompiled-backend
+/// warning) and returns [`XcEvalSubstrate::Cpu`] — the eval then runs on CPU
+/// producing correct f64 numbers, NEVER a silent f32 downgrade.
+///
+/// `f64_requested` is `true` when the active `PYSCF_DTYPE` is f64 (the default).
+/// When the user has explicitly set `PYSCF_DTYPE=f32` (`f64_requested == false`)
+/// this is the D-08 escape hatch: the f32 run is the user's honest, warned
+/// opt-in (handled by the 04-06 `NumInt` f32 matmul chain + its below-bit-exact
+/// warn), NOT a silent degradation — so NO additional fallback warning fires
+/// here and the (already-warned) f32 path proceeds.
+///
+/// Returns the resolved substrate for the XC eval. `deps` is the functional
+/// capability bitset (forwarded to [`xc_eval_substrate`]).
+pub fn pipeline_fallback(deps: Dependency, f64_requested: bool) -> XcEvalSubstrate {
+    let requested = std::env::var("PYSCF_BACKEND").ok();
+    let normalised = requested.as_deref().unwrap_or("auto").to_ascii_lowercase();
+    let explicit_gpu = matches!(normalised.as_str(), "wgpu" | "metal");
+
+    let substrate = xc_eval_substrate(deps);
+
+    if substrate == XcEvalSubstrate::Cpu && explicit_gpu && f64_requested {
+        // Default-f64 honesty path: the user asked for a GPU adapter but it
+        // lacks shader-f64 for the requested f64 precision. Fall back to CPU
+        // with a warning — NEVER silently compute f32 (DFT-11 / Pitfall 6).
+        // This mirrors Phase 1 `pyscf-algebra::select`'s uncompiled/unavailable
+        // backend warn-and-fall-back-to-CPU model (PYSCF_BACKEND resolver).
+        tracing::warn!(
+            target: "pyscf_dft::xc_backend",
+            backend = %normalised,
+            "PYSCF_BACKEND={normalised} requested but the adapter lacks shader-f64 for the \
+             requested f64 precision; the XC eval falls back to CPU-f64 (correct numbers) \
+             rather than silently degrading to f32. Set PYSCF_DTYPE=f32 to opt explicitly \
+             into the (below-bit-exact) f32 GPU path (D-08), or PYSCF_BACKEND=cpu/auto."
+        );
+    }
+    // When f64_requested == false (PYSCF_DTYPE=f32) the f32 opt-in is the
+    // honest, already-warned escape hatch (D-08) — do NOT emit a fallback warn
+    // and do NOT block it; the 04-06 NumInt f32 chain owns that warning.
+    substrate
 }
 
 /// Map an xcfun functional id (0..77, as emitted by `parser::xcfun`) to the
