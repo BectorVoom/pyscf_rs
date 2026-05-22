@@ -6114,6 +6114,8 @@ dependencies = [
  "pyscf-chkfile",
  "pyscf-core",
  "pyscf-df",
+ "pyscf-dft",
+ "pyscf-grids",
  "pyscf-gto",
  "pyscf-runtime",
  "pyscf-scf",

@@ -21,6 +21,8 @@
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 use pyscf_core::{Density, Energy, MOCoefficients, Mole, PyscfRsError};
+use pyscf_dft::{KsOverrideHooks, KsVeff, NumInt, XcSpec};
+use pyscf_grids::Grids;
 use pyscf_scf::{InitGuessMode, OverrideHooks};
 
 use crate::errors::{py_to_pyscf, pyscf_to_py};
@@ -286,6 +288,69 @@ impl OverrideHooks for PyOverrideBridge {
                 let e: f64 = r.extract()?;
                 Ok(Energy(e))
             })
+        })
+    }
+}
+
+// -----------------------------------------------------------------------
+// KS extension (DFT-08): PyOverrideBridge ALSO impls KsOverrideHooks so the
+// KS SCF surface dispatches the two KS-specific seams through the SAME
+// `slf.call_method1` MRO path (Pitfall 7). The inherited 11-method SCF
+// surface is provided by the `impl OverrideHooks` above — including
+// `get_veff`, which the KS cycle drives every iteration (its MRO resolution
+// finds a Python subclass `get_veff` override transparently, else the PyRKS
+// default KS `J + Vxc − hyb·K` #[pymethod]).
+// -----------------------------------------------------------------------
+
+impl KsOverrideHooks for PyOverrideBridge {
+    /// KS effective potential. Reuses the `get_veff` template (the same
+    /// `slf.call_method1("get_veff", (mol, dm))` dispatch as the inherited
+    /// SCF hook — Pitfall 7) to obtain the (possibly subclass-overridden)
+    /// effective potential matrix, then folds the consistent Exc/Ecoul energy
+    /// terms from the Rust grid loop into the `KsVeff` bundle. Dispatch is via
+    /// MRO, NEVER Rust dispatch.
+    fn get_veff_ks(
+        &self,
+        ni: &NumInt,
+        mol: &Mole,
+        grids: &Grids,
+        xc_code: &str,
+        dm: &Density,
+        j: &Density,
+        k: &Density,
+    ) -> Result<KsVeff, PyscfRsError> {
+        // Energy decomposition (Exc/Ecoul/half_tr_d_vxc) from the Rust grid
+        // loop — consistent with the active xc + dm.
+        let mut bundle = pyscf_dft::default_get_veff(ni, mol, grids, xc_code, dm, j, k)?;
+        // The effective-potential MATRIX comes from the Python `get_veff`
+        // override (or the PyRKS default), dispatched via call_method1 (MRO).
+        let veff = Python::attach(|py| {
+            let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
+            let args = PyTuple::new(py, [self.py_mol.bind(py).clone(), dm_py.into_any()])
+                .map_err(py_to_pyscf)?;
+            call_hook(&self.slf, "get_veff", args, |r| {
+                let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
+                to_density(arr)
+            })
+        })?;
+        bundle.veff = veff;
+        Ok(bundle)
+    }
+
+    /// `define_xc_(description)` — string-recombination form (D-02). Packages
+    /// the string and dispatches `slf.call_method1("define_xc_", (description,))`
+    /// (MRO — a subclass override of `define_xc_` is invoked transparently).
+    /// The Python side returns the resolved hybrid coefficient; we route the
+    /// description through the Rust parser to build the canonical `XcSpec`.
+    fn define_xc_(&self, description: &str) -> Result<XcSpec, PyscfRsError> {
+        Python::attach(|py| {
+            let desc_py = pyo3::types::PyString::new(py, description).into_any();
+            let args = PyTuple::new(py, [desc_py]).map_err(py_to_pyscf)?;
+            // Dispatch via MRO; the Python return value (hyb coeff) is observed
+            // for the subclass-override-invoked assertion but the canonical
+            // spec is the Rust parser result (string form, D-02).
+            let _hyb: f64 = call_hook(&self.slf, "define_xc_", args, |r| r.extract())?;
+            pyscf_dft::parser::xcfun::parse_xc(description).map_err(PyscfRsError::from)
         })
     }
 }

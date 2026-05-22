@@ -7,6 +7,7 @@ here, and `from pyscf import scf` resolves to the overlay submodule which
 re-exports `pyscf._native.scf` (RHF/UHF/GHF).
 """
 from pyscf._native import scf  # type: ignore[attr-defined]
+from pyscf._native import dft  # type: ignore[attr-defined]
 from pyscf._native import PyscfRsRuntimeError as _PyscfRsBase  # type: ignore[attr-defined]
 
 
@@ -31,4 +32,4 @@ class PyscfRsError(_PyscfRsBase):  # type: ignore[misc, valid-type]
         return self.args[2] if len(self.args) > 2 else []
 
 
-__all__ = ["scf", "PyscfRsError"]
+__all__ = ["scf", "dft", "PyscfRsError"]

@@ -45,7 +45,9 @@ pub use uhf::UHF;
 // Plan 03-11 re-exports — the `default_*` free fns + convert/analyze/
 // scanner surface 03-03 deliberately omitted (bodies didn't exist yet).
 pub use analyze::{analyze, dip_moment, mulliken_meta, mulliken_pop, MullikenResult};
-pub use convert::{to_ghf, to_rhf, to_rks_stub, to_uhf, to_uks_stub};
+pub use convert::{
+    to_ghf, to_rhf, to_rks, to_rks_stub, to_uhf, to_uks, to_uks_stub, KsConversion,
+};
 pub use eig::default_eig;
 pub use energy::{default_energy_elec, default_energy_tot};
 pub use fock::{default_get_fock, default_get_hcore, default_get_jk, default_get_ovlp, default_get_veff};

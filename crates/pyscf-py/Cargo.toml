@@ -36,5 +36,12 @@ pyscf-gto     = { path = "../pyscf-gto" }
 pyscf-runtime = { path = "../pyscf-runtime" }
 pyscf-chkfile = { path = "../pyscf-chkfile" }
 pyscf-df      = { path = "../pyscf-df" }
+# Plan 04-09 (DFT-08 / D-08): the DFT PyO3 boundary wraps pyscf-dft's
+# RKS/UKS + KsOverrideHooks + NumInt::dtype(). pyscf-dft stays pyo3-free
+# (the PyO3 wall) — pyscf-py is the sole crate that names pyo3. pyscf-grids
+# is needed for the `Grids` type in the KsOverrideHooks::get_veff_ks seam.
+# NOTE: default features only — `libxc` is NOT enabled (266-kernel ~6h build).
+pyscf-dft     = { path = "../pyscf-dft" }
+pyscf-grids   = { path = "../pyscf-grids" }
 ndarray       = { workspace = true }
 thiserror     = { workspace = true }

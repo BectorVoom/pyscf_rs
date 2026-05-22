@@ -506,12 +506,29 @@ impl PyRHF {
         )
     }
 
-    fn to_uks(slf: PyRef<'_, Self>) -> PyResult<()> {
-        pyscf_scf::to_uks_stub(&slf.inner).map_err(pyscf_to_py)
+    /// `mf.to_uks(xc=...)` — RHF → UKS conversion (DFT-11). Wired to the real
+    /// `pyscf_dft::UKS` target via the `pyscf_scf::to_uks` KsConversion seam
+    /// (the Phase 3 `NotYetImplemented{phase:4}` stub is retired). The carried
+    /// scalar SCF settings are copied; MO coefficients are not (same
+    /// convention as to_uhf).
+    #[pyo3(signature = (xc="LDA,VWN"))]
+    fn to_uks(slf: PyRef<'_, Self>, xc: &str) -> PyResult<Py<crate::dft::PyUKS>> {
+        let conv = pyscf_scf::to_uks(&slf.inner).map_err(pyscf_to_py)?;
+        let py = slf.py();
+        let py_mol = slf.py_mol.clone_ref(py);
+        let inner = crate::dft::uks_from_conversion(conv, xc);
+        Py::new(py, crate::dft::PyUKS { inner, py_mol })
     }
 
-    fn to_rks(slf: PyRef<'_, Self>) -> PyResult<()> {
-        pyscf_scf::to_rks_stub(&slf.inner).map_err(pyscf_to_py)
+    /// `mf.to_rks(xc=...)` — RHF → RKS conversion (DFT-11). Wired to the real
+    /// `pyscf_dft::RKS` target via the `pyscf_scf::to_rks` KsConversion seam.
+    #[pyo3(signature = (xc="LDA,VWN"))]
+    fn to_rks(slf: PyRef<'_, Self>, xc: &str) -> PyResult<Py<crate::dft::PyRKS>> {
+        let conv = pyscf_scf::to_rks(&slf.inner).map_err(pyscf_to_py)?;
+        let py = slf.py();
+        let py_mol = slf.py_mol.clone_ref(py);
+        let inner = crate::dft::rks_from_conversion(conv, xc);
+        Py::new(py, crate::dft::PyRKS { inner, py_mol })
     }
 
     // analyze / mulliken_pop / dip_moment hold a PyRef so they can't take
