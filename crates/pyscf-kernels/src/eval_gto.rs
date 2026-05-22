@@ -425,3 +425,191 @@ fn eval_gto_sph_cpu(
 
     EvalGtoBuffers { values: out, shape: vec![ngrids, nao] }
 }
+
+/// Evaluate `GTOval_sph_deriv1` on the grid: the AO value plus the three
+/// Cartesian gradient components (∂/∂x, ∂/∂y, ∂/∂z) per AO per grid
+/// point. Output is the deriv-variant layout `[4, ngrids, nao]`: a flat
+/// buffer where component `c ∈ {0=value, 1=∂x, 2=∂y, 3=∂z}` occupies
+/// `values[c*ngrids*nao ..]` and within each component the index is the
+/// F-order `g + ao*ngrids` (same as the scalar variants).
+///
+/// This is the GGA grid-loop input (∇ρ → σ = |∇ρ|²). Public surface uses
+/// `pyscf-algebra` types only (AlgebraClient) so `pyscf-gto`'s wrapper
+/// imports it without naming `cubecl::*` (algebra wall / D-04).
+#[allow(clippy::too_many_arguments)]
+pub fn eval_gto_sph_deriv1(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+) -> EvalGtoBuffers {
+    let kind = client.kind();
+    if kind != BackendKind::Cpu {
+        tracing::warn!(
+            backend = ?kind,
+            "eval_gto_deriv1: backend not yet wired (Phase 8 GPU enable); falling back to CPU"
+        );
+    }
+    eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc, nao)
+}
+
+/// CPU-host deriv1 kernel. Mirrors `eval_gto_sph_cpu` for the value and
+/// adds the analytic gradient via the upstream
+/// `GTOshell_eval_grid_ip_cart` general-l stencil:
+///   ∂/∂q [q^lq · m̃ · R] = (−2α) Σ_p c·exp · q · (x^lx y^ly z^lz)
+///                        + R · lq · q^(lq−1) · (other two monomials)
+/// where the first term is the radial-derivative chain rule
+/// (`exps_2a = Σ −2α c exp`) and the second is the monomial-power
+/// derivative. The c2s transform is applied to each of the 4 components.
+#[allow(clippy::too_many_arguments)]
+fn eval_gto_sph_deriv1_cpu(
+    coords_host: &[f64],
+    ngrids: usize,
+    atm_host: &[i32],
+    bas_host: &[i32],
+    env_host: &[f64],
+    ao_loc_host: &[i32],
+    nao: usize,
+) -> EvalGtoBuffers {
+    debug_assert_eq!(
+        coords_host.len(),
+        ngrids * 3,
+        "coords flat buffer must be ngrids*3 (got {} for ngrids={})",
+        coords_host.len(),
+        ngrids
+    );
+    debug_assert!(
+        bas_host.len() % BAS_SLOTS == 0,
+        "bas length {} not a multiple of BAS_SLOTS={}",
+        bas_host.len(),
+        BAS_SLOTS
+    );
+
+    let nbas = bas_host.len() / BAS_SLOTS;
+    let comp_stride = ngrids * nao;
+    let out_len = 4 * comp_stride;
+    if comp_stride == 0 {
+        return EvalGtoBuffers { values: Vec::new(), shape: vec![4, ngrids, nao] };
+    }
+    let mut out = vec![0.0_f64; out_len];
+
+    /// derivative of the monomial power: lq * q^(lq-1), and 0 for lq==0.
+    #[inline]
+    fn dpow(q: f64, lq: u32) -> f64 {
+        if lq == 0 {
+            0.0
+        } else {
+            lq as f64 * q.powi(lq as i32 - 1)
+        }
+    }
+
+    for g in 0..ngrids {
+        let gx = coords_host[g];
+        let gy = coords_host[g + ngrids];
+        let gz = coords_host[g + 2 * ngrids];
+
+        for shell_idx in 0..nbas {
+            let bas_row = shell_idx * BAS_SLOTS;
+            let atom_id = bas_host[bas_row + ATOM_OF] as usize;
+            let l = bas_host[bas_row + ANG_OF] as u32;
+            let nprim = bas_host[bas_row + NPRIM_OF] as usize;
+            let nctr = bas_host[bas_row + NCTR_OF] as usize;
+            let ptr_exp = bas_host[bas_row + PTR_EXP] as usize;
+            let ptr_coeff = bas_host[bas_row + PTR_COEFF] as usize;
+
+            let ptr_coord = atm_host[atom_id * ATM_SLOTS + PTR_COORD] as usize;
+            let ax = env_host[ptr_coord];
+            let ay = env_host[ptr_coord + 1];
+            let az = env_host[ptr_coord + 2];
+            let dx = gx - ax;
+            let dy = gy - ay;
+            let dz = gz - az;
+            let r2 = dx * dx + dy * dy + dz * dz;
+
+            let fac1 = common_fac_sp(l);
+            let powers = cart_powers(l);
+            let ncart_l = ncart(l);
+            let nsph_l = nsph(l);
+            let ao_off = ao_loc_host[shell_idx] as usize;
+
+            // monomial geometric factors (radial-independent).
+            let mut mono = vec![0.0_f64; ncart_l];
+            for (ci, &(lx, ly, lz)) in powers.iter().enumerate() {
+                mono[ci] = dx.powi(lx as i32) * dy.powi(ly as i32) * dz.powi(lz as i32);
+            }
+
+            let mut cval = vec![0.0_f64; ncart_l];
+            let mut cdx = vec![0.0_f64; ncart_l];
+            let mut cdy = vec![0.0_f64; ncart_l];
+            let mut cdz = vec![0.0_f64; ncart_l];
+
+            for c_idx in 0..nctr {
+                // Ordered, FMA-free radial e = Σ c·exp and e2a = Σ −2α·c·exp.
+                // > 2 prims → oracle_sum (Pitfall 3 / FOUND-06).
+                let (radial, radial_2a) = if nprim > 2 {
+                    let mut e_terms = Vec::with_capacity(nprim);
+                    let mut e2a_terms = Vec::with_capacity(nprim);
+                    for p_idx in 0..nprim {
+                        let alpha = env_host[ptr_exp + p_idx];
+                        let coef = env_host[ptr_coeff + c_idx * nprim + p_idx];
+                        let g0 = coef * (-alpha * r2).exp();
+                        e_terms.push(g0);
+                        e2a_terms.push(-2.0 * alpha * g0);
+                    }
+                    (oracle_sum(&e_terms), oracle_sum(&e2a_terms))
+                } else {
+                    let mut e = 0.0_f64;
+                    let mut e2a = 0.0_f64;
+                    for p_idx in 0..nprim {
+                        let alpha = env_host[ptr_exp + p_idx];
+                        let coef = env_host[ptr_coeff + c_idx * nprim + p_idx];
+                        let g0 = coef * (-alpha * r2).exp();
+                        e += g0;
+                        e2a += -2.0 * alpha * g0;
+                    }
+                    (e, e2a)
+                };
+                let radial = radial * fac1;
+                let radial_2a = radial_2a * fac1;
+
+                for (ci, &(lx, ly, lz)) in powers.iter().enumerate() {
+                    let m = mono[ci];
+                    cval[ci] = m * radial;
+                    cdx[ci] = radial_2a * dx * m
+                        + radial * dpow(dx, lx) * dy.powi(ly as i32) * dz.powi(lz as i32);
+                    cdy[ci] = radial_2a * dy * m
+                        + radial * dx.powi(lx as i32) * dpow(dy, ly) * dz.powi(lz as i32);
+                    cdz[ci] = radial_2a * dz * m
+                        + radial * dx.powi(lx as i32) * dy.powi(ly as i32) * dpow(dz, lz);
+                }
+
+                // cart → sph per component, written into the 4 component blocks.
+                for m_idx in 0..nsph_l {
+                    let ao_idx = ao_off + c_idx * nsph_l + m_idx;
+                    let off = g + ao_idx * ngrids;
+                    let mut v = 0.0_f64;
+                    let mut vx = 0.0_f64;
+                    let mut vy = 0.0_f64;
+                    let mut vz = 0.0_f64;
+                    for ci in 0..ncart_l {
+                        let t = c2s_coeff(l, m_idx, ci);
+                        v += t * cval[ci];
+                        vx += t * cdx[ci];
+                        vy += t * cdy[ci];
+                        vz += t * cdz[ci];
+                    }
+                    out[off] = v;
+                    out[comp_stride + off] = vx;
+                    out[2 * comp_stride + off] = vy;
+                    out[3 * comp_stride + off] = vz;
+                }
+            }
+        }
+    }
+
+    EvalGtoBuffers { values: out, shape: vec![4, ngrids, nao] }
+}

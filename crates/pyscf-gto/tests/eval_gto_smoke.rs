@@ -91,9 +91,32 @@ fn output_shape_matches_ngrids_times_nao() {
 }
 
 #[test]
-fn deriv1_returns_not_yet_implemented_phase_4() {
+fn deriv1_sph_returns_four_component_result() {
+    // Phase 4 plan 04-03 landed GTOval_sph_deriv1; it no longer returns
+    // NotYetImplemented. Element-wise parity is gated by
+    // tests/eval_gto_deriv1_oracle.rs — here we just confirm the shape
+    // and that component 0 equals the plain GTOval_sph value.
     let mol = h_at_origin_sto3g();
-    let r = eval_gto(&mol, "GTOval_sph_deriv1", &[[0.0, 0.0, 0.0]]);
+    let coords = [[0.0, 0.0, 0.0_f64], [0.0, 0.0, 0.5]];
+    let d1 = eval_gto(&mol, "GTOval_sph_deriv1", &coords).expect("deriv1 ok");
+    assert_eq!(d1.shape, vec![4, 2, mol.nao_nr]);
+    assert_eq!(d1.values.len(), 4 * 2 * mol.nao_nr);
+
+    let val = eval_gto(&mol, "GTOval_sph", &coords).expect("value ok");
+    for idx in 0..(2 * mol.nao_nr) {
+        assert_eq!(
+            d1.values[idx].to_bits(),
+            val.values[idx].to_bits(),
+            "deriv1 component 0 must equal GTOval_sph at idx {idx}"
+        );
+    }
+}
+
+#[test]
+fn deriv1_cart_returns_not_yet_implemented_phase_4() {
+    // Cartesian deriv1 stays deferred (needs cart ao_loc).
+    let mol = h_at_origin_sto3g();
+    let r = eval_gto(&mol, "GTOval_cart_deriv1", &[[0.0, 0.0, 0.0]]);
     match r {
         Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 4, what }) => {
             assert!(what.contains("deriv1"), "what = {}", what);
