@@ -159,7 +159,7 @@ Plans:
 **Wave 5** *(blocked on Wave 4 completion)*
 
 - [ ] 04-08-PLAN.md — DF-DFT (reuse pyscf-df, D-10) + KsResult chkfile (Phase 3 D-06) (DFT-07)
-- [ ] 04-09-PLAN.md — PyO3 bridge: PyRKS/PyUKS + dft submodule + KsOverrideHooks bridge + overlay; subclass-override re-validation (DFT-08)
+- [x] 04-09-PLAN.md — PyO3 bridge: PyRKS/PyUKS + dft submodule + KsOverrideHooks bridge + overlay; subclass-override re-validation (DFT-08)
 - [ ] 04-10-PLAN.md — WGPU f64 honesty (delegate to xcfun_rs + Phase 1 resolver) + dedicated cached `--features libxc` bit-exact CI job + wgpu-no-f64 CI job + nightly cross-crate re-enable (DFT-03, DFT-11)
 
 ### Phase 5: MP2
@@ -231,7 +231,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 7/10 | In Progress|  |
+| 4. DFT | 8/10 | In Progress|  |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
