@@ -12,10 +12,11 @@
 //! so all downstream consumers (libcint via cintx-compat AND the typed cintx
 //! BasisSet) see the same coefficient values.
 
+use cintx_core::ecp::{EcpChannel, EcpShell as CintxEcpShell, ECP_LMAX};
 use cintx_core::{
     Atom as CintxAtom, BasisSet, NuclearModel as CintxNuc, Representation, Shell as CintxShell,
 };
-use pyscf_core::{CoreError, ParsedAtom, ParsedBasis, PyscfRsError};
+use pyscf_core::{CoreError, ParsedAtom, ParsedBasis, ParsedEcp, PyscfRsError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -28,6 +29,144 @@ pub fn build_cintx_basis_set(
     basis: &HashMap<String, ParsedBasis>,
     cart: bool,
 ) -> Result<Arc<BasisSet>, PyscfRsError> {
+    let (cintx_atoms, cintx_shells) = build_atoms_and_shells(atoms, basis, cart)?;
+
+    let atoms_arc: Arc<[CintxAtom]> = Arc::from(cintx_atoms.into_boxed_slice());
+    let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(cintx_shells.into_boxed_slice());
+
+    let basis_set = BasisSet::try_new(atoms_arc, shells_arc).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx BasisSet::try_new failed: {e}"
+        )))
+    })?;
+
+    Ok(Arc::new(basis_set))
+}
+
+/// GTO-05 (eval half, plan 02-10): build an ECP-augmented `Arc<BasisSet>`.
+///
+/// Identical AO-shell + atom construction to [`build_cintx_basis_set`], but
+/// additionally projects `mol._ecp` (per-element `ParsedEcp`) into typed
+/// `cintx_core::ecp::EcpShell`s and attaches them via
+/// `BasisSet::try_new_with_ecp`. The cintx safe-API ECP preflight
+/// (`SessionRequest::query_workspace`) requires `basis.ecp_shells()` to be
+/// non-empty for the four `int1e_ecp_*` operators (else
+/// `FacadeError::MissingEcpBasis`); the non-ECP `build_cintx_basis_set`
+/// stored in `mol.basis_set` carries an empty ECP slab, so the
+/// `CintxEcpEngine` builds this augmented view on demand.
+///
+/// ECP-shell projection mirrors `make_ecp_env`'s `_ecpbas` row grouping:
+/// one cintx `EcpShell` per `(atom, channel, distinct n_power)` block, so
+/// each carries clean per-radial-power exponent/coefficient slabs. The
+/// pyscf-core `EcpShell.l` sentinel (`-1` = local/UL channel; `0..=ECP_LMAX`
+/// = projector) maps onto `EcpChannel::Local` / `EcpChannel::Projected(l)`.
+pub fn build_cintx_basis_set_with_ecp(
+    atoms: &[ParsedAtom],
+    basis: &HashMap<String, ParsedBasis>,
+    ecp: &HashMap<String, ParsedEcp>,
+    cart: bool,
+) -> Result<Arc<BasisSet>, PyscfRsError> {
+    let (cintx_atoms, cintx_shells) = build_atoms_and_shells(atoms, basis, cart)?;
+
+    // Project per-element ParsedEcp into typed cintx EcpShells, keyed by the
+    // same first-alpha-uppercase element-symbol convention make_ecp_env uses.
+    let mut ecp_shells: Vec<Arc<CintxEcpShell>> = Vec::new();
+    for (atom_id, (sym, _)) in atoms.iter().enumerate() {
+        let alpha: String = sym.chars().take_while(|c| c.is_alphabetic()).collect();
+        let upper = alpha.to_ascii_uppercase();
+        let parsed = match ecp.get(&upper) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        for channel in &parsed.channels {
+            // Map the pyscf-core l sentinel onto the cintx EcpChannel enum.
+            let cintx_channel = if channel.l < 0 {
+                EcpChannel::Local
+            } else {
+                let l = channel.l as u8;
+                if l > ECP_LMAX {
+                    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "ECP projector l={l} for symbol '{upper}' exceeds ECP_LMAX={ECP_LMAX}"
+                    ))));
+                }
+                EcpChannel::Projected(l)
+            };
+
+            // Group primitives by distinct n_power, first-occurrence order —
+            // exactly as make_ecp_env emits one _ecpbas row per group.
+            let mut seen_orders: Vec<i32> = Vec::new();
+            for &np in &channel.n_powers {
+                if !seen_orders.contains(&np) {
+                    seen_orders.push(np);
+                }
+            }
+            for &order in &seen_orders {
+                let mut exps_buf: Vec<f64> = Vec::new();
+                let mut coefs_buf: Vec<f64> = Vec::new();
+                for ((np, exp), coef) in channel
+                    .n_powers
+                    .iter()
+                    .zip(channel.exponents.iter())
+                    .zip(channel.coeffs.iter())
+                {
+                    if *np == order {
+                        exps_buf.push(*exp);
+                        coefs_buf.push(*coef);
+                    }
+                }
+                if exps_buf.is_empty() {
+                    continue;
+                }
+
+                let nprim = exps_buf.len() as u16;
+                let exps_arc: Arc<[f64]> = Arc::from(exps_buf.into_boxed_slice());
+                let coeffs_arc: Arc<[f64]> = Arc::from(coefs_buf.into_boxed_slice());
+
+                let shell = CintxEcpShell::try_new(
+                    atom_id as u32,
+                    cintx_channel,
+                    order as i16,
+                    nprim,
+                    1, // nctr — one contraction per radial-power block
+                    0, // so_type — scalar (spin-orbit out of scope per Phase 19 D-12)
+                    exps_arc,
+                    coeffs_arc,
+                )
+                .map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx EcpShell::try_new failed for atom {atom_id} symbol '{upper}' \
+                         (l={} n_power={order}): {e}",
+                        channel.l
+                    )))
+                })?;
+                ecp_shells.push(Arc::new(shell));
+            }
+        }
+    }
+
+    let atoms_arc: Arc<[CintxAtom]> = Arc::from(cintx_atoms.into_boxed_slice());
+    let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(cintx_shells.into_boxed_slice());
+    let ecp_arc: Arc<[Arc<CintxEcpShell>]> = Arc::from(ecp_shells.into_boxed_slice());
+
+    let basis_set = BasisSet::try_new_with_ecp(atoms_arc, shells_arc, ecp_arc).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx BasisSet::try_new_with_ecp failed: {e}"
+        )))
+    })?;
+
+    Ok(Arc::new(basis_set))
+}
+
+/// Shared atom + AO-shell construction for the ECP and non-ECP basis-set
+/// builders. Extracted by plan 02-10 so the ECP-augmented variant reuses
+/// the exact same typed AO projection (Pitfall 4 first-occurrence order,
+/// make_env-matching contraction normalisation).
+fn build_atoms_and_shells(
+    atoms: &[ParsedAtom],
+    basis: &HashMap<String, ParsedBasis>,
+    cart: bool,
+) -> Result<(Vec<CintxAtom>, Vec<Arc<CintxShell>>), PyscfRsError> {
     let representation = if cart {
         Representation::Cart
     } else {
@@ -113,14 +252,5 @@ pub fn build_cintx_basis_set(
         }
     }
 
-    let atoms_arc: Arc<[CintxAtom]> = Arc::from(cintx_atoms.into_boxed_slice());
-    let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(cintx_shells.into_boxed_slice());
-
-    let basis_set = BasisSet::try_new(atoms_arc, shells_arc).map_err(|e| {
-        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-            "cintx BasisSet::try_new failed: {e}"
-        )))
-    })?;
-
-    Ok(Arc::new(basis_set))
+    Ok((cintx_atoms, cintx_shells))
 }
