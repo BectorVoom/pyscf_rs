@@ -25,6 +25,7 @@ pub mod mp2;
 pub mod rdm;
 pub mod ump2;
 
+pub use dfmp2::{DFRMP2, DFUMP2, df_ao2mo, dfrmp2_kernel, dfump2_kernel};
 pub use error::Mp2Error;
 pub use frozen::Frozen;
 pub use helpers::{get_e_hf, get_frozen_mask, get_nmo, get_nocc, mo_without_core};
