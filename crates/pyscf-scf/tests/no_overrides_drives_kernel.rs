@@ -1,25 +1,19 @@
-//! Plan 03-11 Task 1 RED — smoke that `NoOverrides + kernel` drives an
+//! Plan 03-11 Task 1 — smoke that `NoOverrides + kernel` drives an
 //! end-to-end SCF on a minimal H2 fixture.
 //!
-//! `#[ignore]`'d because `int2e_sph` (the arity-4 ERI dispatcher in
-//! pyscf-gto) is `NotYetImplemented{phase:2}` per the Phase 2 plan
-//! 02-09 verification rollup gap-closure. Plan 03-10 (oracle harness)
-//! unignores this once int2e_sph lands or once DF-HF (plan 03-05)
-//! provides an alternative override path.
-//!
-//! Until then, plan 03-11 ships:
-//!   - The kernel cycle loop body (verbatim port of pyscf/scf/hf.py:48-244).
-//!   - default_get_jk that propagates int2e_sph's NotYetImplemented error.
-//!   - All other defaults (eig, occ, rdm, energy_*, init_guess_by_1e,
-//!     analyze, convert, scanner) are real bodies — see the unit tests in
-//!     kernel_internals_unit.rs.
+//! ALWAYS-ON since 03-12: the `int2e_sph` arity-4 dispatch gap that blocked
+//! this (`NotYetImplemented{phase:2}`) is closed (05-08), so `default_get_jk`
+//! builds a real Fock matrix and the kernel converges. Uses the `1e` init
+//! guess — the default `minao` guess lands in plan 03-13. The kernel cycle
+//! loop is a verbatim port of `pyscf/scf/hf.py:48-244`; eig/occ/rdm/energy_*/
+//! init_guess_by_1e/analyze/convert/scanner are real bodies (unit-tested in
+//! kernel_internals_unit.rs).
 
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
-use pyscf_scf::{KernelConfig, NoOverrides, kernel};
+use pyscf_scf::{InitGuessMode, KernelConfig, NoOverrides, kernel};
 
 #[test]
-#[ignore = "needs pyscf-gto int2e_sph arity-4 dispatch — unignore in plan 03-10"]
 fn h2_no_overrides_converges() {
     let mol = M(MoleBuildArgs {
         atom: AtomInput::String("H 0 0 0; H 0 0 1.4".into()),
@@ -28,7 +22,13 @@ fn h2_no_overrides_converges() {
         ..Default::default()
     })
     .expect("build H2");
-    let result = kernel(&mol, &NoOverrides, KernelConfig::default()).expect("converge");
+    // 1e (hcore) init guess — the default `minao` mode is NotYetImplemented
+    // until plan 03-13.
+    let cfg = KernelConfig {
+        init_guess: InitGuessMode::OneElectron,
+        ..Default::default()
+    };
+    let result = kernel(&mol, &NoOverrides, cfg).expect("converge");
     assert!(result.converged);
     assert!(
         result.cycles <= 30,
