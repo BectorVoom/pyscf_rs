@@ -242,8 +242,8 @@ mod tests {
                     for i in 0..np {
                         let mut acc = 0.0_f64;
                         for r in 0..nao {
-                            acc += o2[i + j * np + r * np * nq + s * np * nq * nao]
-                                * c_r[r + k * nao];
+                            acc +=
+                                o2[i + j * np + r * np * nq + s * np * nq * nao] * c_r[r + k * nao];
                         }
                         o3[i + j * np + k * np * nq + s * np * nq * nr] = acc;
                     }
@@ -258,8 +258,8 @@ mod tests {
                     for i in 0..np {
                         let mut acc = 0.0_f64;
                         for s in 0..nao {
-                            acc += o3[i + j * np + k * np * nq + s * np * nq * nr]
-                                * c_s[s + l * nao];
+                            acc +=
+                                o3[i + j * np + k * np * nq + s * np * nq * nr] * c_s[s + l * nao];
                         }
                         out[i + j * np + k * np * nq + l * np * nq * nr] = acc;
                     }
@@ -339,13 +339,9 @@ mod tests {
         let c_r = mk(-0.4, nr);
         let c_s = mk(0.9, ns);
 
-        let got = quarter_transform(
-            &eri, nao, &c_p, np, &c_q, nq, &c_r, nr, &c_s, ns,
-        )
-        .expect("nontrivial transform");
-        let want = reference_einsum(
-            &eri, nao, &c_p, np, &c_q, nq, &c_r, nr, &c_s, ns,
-        );
+        let got = quarter_transform(&eri, nao, &c_p, np, &c_q, nq, &c_r, nr, &c_s, ns)
+            .expect("nontrivial transform");
+        let want = reference_einsum(&eri, nao, &c_p, np, &c_q, nq, &c_r, nr, &c_s, ns);
         assert_eq!(got.len(), np * nq * nr * ns);
         assert_eq!(got.len(), want.len());
         for (idx, (a, b)) in got.iter().zip(want.iter()).enumerate() {
