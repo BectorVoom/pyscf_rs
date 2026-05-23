@@ -181,10 +181,23 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
             layout,
             &full_name,
         ),
-        3 | 4 => Err(PyscfRsError::NotYetImplemented {
-            phase: 2,
-            what: "arity 3/4 intors (int2e/int3c2e dispatch) — gated by 02-09 \
-                   verification rollup; 02-05 ships arity-2 only",
+        4 => evaluate_arity4(
+            descriptor,
+            operator,
+            representation,
+            basis_ref,
+            nbas,
+            nao,
+            layout,
+            &full_name,
+        ),
+        // Plain arity-3 through `intor(mol, name)` is not an MP2/DF path:
+        // `int3c2e_sph` (μν|P) needs the auxiliary basis as its third center
+        // and is dispatched via `intor_with_auxmol` (see `evaluate_int3c2e_with_auxmol`).
+        3 => Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "single-mol arity-3 intors — int3c2e_sph (μν|P) uses \
+                   intor_with_auxmol(mol, name, auxmol) for the orbital×aux 3-center",
         }),
         n => Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
             "unsupported arity {n} for intor '{full_name}' (libcint maxes at 4)",
@@ -398,6 +411,149 @@ fn stitch_arity2_block(
         ))));
     }
     Ok(())
+}
+
+/// Arity-4 dispatch: iterate `(i, j, k, l)` shell quadruples over the
+/// molecule basis, evaluate the `(ij|kl)` block per quad via `SessionRequest`,
+/// and stitch each per-quad F-order block into the global F-order
+/// `[nao, nao, nao, nao]` output buffer.
+///
+/// F-order layout (matches `pyscf_ao2mo::transform`'s documented `eri_ao`
+/// convention): element `(p, q, r, s)` lives at
+/// `p + q*nao + r*nao^2 + s*nao^3`. cintx returns each shell-quad block in
+/// F-order with the first index fastest (libcint convention, cintx api.rs:531).
+///
+/// Scalar (1-component) only — `int2e_sph`/`int2e_cart`. Component-leading
+/// arity-4 integrals (`int2e_ip1_sph`/`int2e_ip2_sph` gradients) are Phase 7
+/// and return `NotYetImplemented{phase:7}` rather than producing a wrong shape.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_arity4(
+    descriptor: &'static OperatorDescriptor,
+    operator: OperatorId,
+    representation: Representation,
+    basis: &CintxBasisSet,
+    nbas: usize,
+    nao: usize,
+    layout: IntorLayout,
+    intor_name: &str,
+) -> Result<IntorOutput, PyscfRsError> {
+    let _ = descriptor; // descriptor read for arity in the dispatcher; future-proof.
+
+    // int2e is scalar; component-leading arity-4 (gradients) is Phase 7.
+    if matches!(layout, IntorLayout::ComponentLeadingFOrder { .. }) {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 7,
+            what: "component-leading arity-4 integrals (int2e_ip1/ip2 gradients) — Phase 7",
+        });
+    }
+
+    let total_elements = nao
+        .checked_mul(nao)
+        .and_then(|n| n.checked_mul(nao))
+        .and_then(|n| n.checked_mul(nao))
+        .ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "intor '{intor_name}': nao={nao} overflows the arity-4 buffer size (nao^4)",
+            )))
+        })?;
+    let shape = vec![nao, nao, nao, nao];
+    let mut out = vec![0.0f64; total_elements];
+
+    let meta = basis.meta();
+    let shell_offsets: Vec<usize> = (0..nbas)
+        .map(|s| meta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
+
+    let nao2 = nao * nao;
+    let nao3 = nao2 * nao;
+
+    // Iterate (i, j, k, l) shell quadruples.
+    for i in 0..nbas {
+        for j in 0..nbas {
+            for k in 0..nbas {
+                for l in 0..nbas {
+                    let shells = basis.shell_tuple_for_indices([i, j, k, l]).map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "shell_tuple_for_indices(i={i}, j={j}, k={k}, l={l}) failed for \
+                             '{intor_name}': {e}",
+                        )))
+                    })?;
+
+                    let request = SessionRequest::new(
+                        operator,
+                        representation,
+                        basis,
+                        shells,
+                        ExecutionOptions::default(),
+                    );
+                    let outcome = request
+                        .query_workspace()
+                        .map_err(|e| {
+                            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                                "cintx workspace query failed for '{intor_name}' shell quad \
+                                 ({i},{j},{k},{l}): {e}",
+                            )))
+                        })?
+                        .evaluate()
+                        .map_err(|e| {
+                            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                                "cintx evaluate failed for '{intor_name}' shell quad \
+                                 ({i},{j},{k},{l}): {e}",
+                            )))
+                        })?;
+
+                    let ni = shell_counts[i];
+                    let nj = shell_counts[j];
+                    let nk = shell_counts[k];
+                    let nl = shell_counts[l];
+                    let oi = shell_offsets[i];
+                    let oj = shell_offsets[j];
+                    let ok = shell_offsets[k];
+                    let ol = shell_offsets[l];
+
+                    let block = &outcome.tensor.owned_values;
+                    let expected = ni * nj * nk * nl;
+                    // Never panic / never zero-substitute on a shape surprise
+                    // (T-05-08-FFI; the Phase-4 CR-02 lesson) — propagate a
+                    // descriptive error instead.
+                    if block.len() != expected {
+                        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx returned {} elements for shell quad ({i},{j},{k},{l}) of \
+                             '{intor_name}', expected {} (ni={ni}, nj={nj}, nk={nk}, nl={nl}, \
+                             extents={:?})",
+                            block.len(),
+                            expected,
+                            outcome.tensor.extents,
+                        ))));
+                    }
+
+                    // Per-quad block F-order [ni,nj,nk,nl] (i fastest), stitched
+                    // into global F-order [nao,nao,nao,nao] (p fastest).
+                    for ll in 0..nl {
+                        for kk in 0..nk {
+                            for jj in 0..nj {
+                                for ii in 0..ni {
+                                    let b = ii + jj * ni + kk * ni * nj + ll * ni * nj * nk;
+                                    let o = (oi + ii)
+                                        + (oj + jj) * nao
+                                        + (ok + kk) * nao2
+                                        + (ol + ll) * nao3;
+                                    out[o] = block[b];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(IntorOutput {
+        values: out,
+        shape,
+        layout,
+    })
 }
 
 /// Compute the named integral over `mol` using `auxmol` as the auxiliary
