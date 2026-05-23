@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Phase 04 executed (10/10 plans) — verification gaps_found (3/5): 4 BLOCKERs (UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key); gap closure required before phase complete"
-last_updated: "2026-05-22T10:49:47.844Z"
-last_activity: "2026-05-22 -- Completed 04-08 (RKS::density_fit + DfKsHooks routing the Coulomb-J build through pyscf_df::get_jk_df (J_df/K_standard split) while Vxc/K stay standard DFT-07/D-10; KsResult wraps ScfResult + impl Checkpointable with xc/grids schema metadata via pyscf-chkfile primitives, no own hdf5-metno dep D-05/D-06; DFT-07 energy + ORACLE-08 h5py gates CI-only)"
+stopped_at: "Phase 04 gap-closure planned (4 plans: 04-11..04-14) — 2 waves; ready to execute gap plans"
+last_updated: "2026-05-23T00:00:00.000Z"
+last_activity: "2026-05-23 -- Gap-closure plans 04-11..04-14 created and verified (CR-01 UKS open-shell, CR-02 f32 NumericOverflow, CR-03 l>4 panic→Result, CR-04 non-injective cache fingerprint→u64 hash)"
 progress:
   total_phases: 8
   completed_phases: 1
-  total_plans: 40
+  total_plans: 44
   completed_plans: 38
   percent: 13
 ---
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 
 ## Current Position
 
-Phase: 04 (dft) — EXECUTING
-Plan: 04-08 complete (Wave 5 — DF-DFT RKS::density_fit + DfKsHooks Coulomb-J via pyscf_df::get_jk_df DFT-07/D-10; KsResult impl Checkpointable with xc/grids metadata D-06)
-Status: Phase 04 verification = gaps_found (3/5 criteria; 4 BLOCKERs) — gap closure required before complete
-Last activity: 2026-05-22 -- Completed 04-08 (DF-DFT via pyscf-df get_jk_df J-build, J_df/K_standard split, Vxc/K stay standard DFT-07/D-10; KsResult wraps ScfResult + Checkpointable with xc/grids schema metadata via pyscf-chkfile primitives, no own hdf5-metno dep D-05/D-06; DFT-07 energy + ORACLE-08 h5py gates CI-only)
+Phase: 04 (dft) — EXECUTING (gap closure)
+Plan: Gap-closure plans 04-11..04-14 planned and verified (Wave 6: 04-11 CR-03/04-12 CR-04/04-13 CR-02 parallel; Wave 7: 04-14 CR-01)
+Status: Phase 04 gap-closure plans ready to execute — 4 plans in 2 waves
+Last activity: 2026-05-23 -- Gap-closure plans 04-11..04-14 created and verified (CR-01 UKS open-shell wiring via UksKsHooks+nr_uks rewrite; CR-02 f32 silent zeros → NumericOverflow propagation; CR-03 l>4 panic → Result<_,PyscfRsError>; CR-04 Σ|D| cache key → u64 DefaultHasher content hash)
 
 Progress: [█████████░] 95% (38/40 plans done across all phases; Phase 04: 10/10 plans summarized)
 
