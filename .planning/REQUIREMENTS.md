@@ -25,16 +25,16 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 ### Molecular structure & integrals (GTO)
 
 - [x] **GTO-01**: `pyscf.M(...)` factory and `gto.Mole` class accept all 5 atom-input forms (string, list-of-tuples, list-of-lists, file path, geom callable)
-- [ ] **GTO-02**: `mol.basis = ...` accepts all 11 input forms (string name, dict, list, ECP-bcc, F12, dyall, ANO, def2, parsed Gaussian-94, NWChem, and auto-segmented)
-- [ ] **GTO-03**: All 207 built-in basis-set files in `pyscf/gto/basis/` resolve correctly; `gto.parse(...)` handles user-supplied Gaussian-94/NWChem text
-- [ ] **GTO-04**: `mol.build()` produces identical internal arrays (`_atm`, `_bas`, `_env`, `ao_loc_nr`, `nao_nr`) to upstream PySCF for the test corpus
+- [x] **GTO-02**: `mol.basis = ...` accepts all 11 input forms (string name, dict, list, ECP-bcc, F12, dyall, ANO, def2, parsed Gaussian-94, NWChem, and auto-segmented)
+- [x] **GTO-03**: All 207 built-in basis-set files in `pyscf/gto/basis/` resolve correctly; `gto.parse(...)` handles user-supplied Gaussian-94/NWChem text
+- [x] **GTO-04**: `mol.build()` produces identical internal arrays (`_atm`, `_bas`, `_env`, `ao_loc_nr`, `nao_nr`) to upstream PySCF for the test corpus
 - [x] **GTO-05**: ECP loading and `int1e_ecp` evaluation match upstream PySCF bit-exact under the `release-oracle` profile — loading shipped 02-07; evaluation closed 02-10 (cintx-backed `CintxEcpEngine`; in-tree Cu/LANL2DZ finite/non-zero/symmetric gate green; cintx pins atol=1e-12 vs nr_ecp at source; upstream byte-identity pytest `tests/oracle/test_ecp_int1e.py` shipped, gated on the oracle venv)
-- [ ] **GTO-06**: `mol.intor(name, ...)` is a thin wrapper over `cintx` covering all integral families upstream PySCF supports for the in-scope methods
-- [ ] **GTO-07**: `eval_gto(mol, eval_name, coords, ...)` for grid evaluation supports `GTOval`, `GTOval_sph`, `GTOval_deriv1`, `GTOval_deriv2`, `GTOval_ip` (gradient), and `GTOval_ig` (magnetic)
+- [x] **GTO-06**: `mol.intor(name, ...)` is a thin wrapper over `cintx` covering all integral families upstream PySCF supports for the in-scope methods
+- [x] **GTO-07**: `eval_gto(mol, eval_name, coords, ...)` for grid evaluation supports `GTOval`, `GTOval_sph`, `GTOval_deriv1`, `GTOval_deriv2`, `GTOval_ip` (gradient), and `GTOval_ig` (magnetic)
 - [x] **GTO-08**: `Mole` exposes the ≥30 attribute floor (`atom`, `basis`, `charge`, `spin`, `nelectron`, `natm`, `nbas`, `nao_nr`, `nao_2c`, `ao_loc_nr`, `ao_labels`, `cart`, `verbose`, `max_memory`, `unit`, `output`, `_atm`, `_bas`, `_env`, …) with semantics matching upstream
-- [ ] **GTO-09**: `mol.dumps()` / `mol.loads()` round-trip Mole state via JSON; `mol.copy()` is deep-copy
-- [ ] **GTO-10**: `mol.set_geom_(new_atom)` mutates geometry in place, preserves basis, returns `self`
-- [ ] **GTO-11**: Integration of `cintx` is via `pyscf-core::BasisSet` re-exporting `cintx_core::BasisSet` (zero-copy); pyscf-rs does not maintain a parallel basis structure
+- [x] **GTO-09**: `mol.dumps()` / `mol.loads()` round-trip Mole state via JSON; `mol.copy()` is deep-copy
+- [x] **GTO-10**: `mol.set_geom_(new_atom)` mutates geometry in place, preserves basis, returns `self`
+- [x] **GTO-11**: Integration of `cintx` is via `pyscf-core::BasisSet` re-exporting `cintx_core::BasisSet` (zero-copy); pyscf-rs does not maintain a parallel basis structure
 
 ### Self-consistent field (SCF)
 
@@ -260,16 +260,16 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | FOUND-09 | Phase 1 | Complete |
 | FOUND-10 | Phase 1 | Complete |
 | GTO-01 | Phase 2 | Complete |
-| GTO-02 | Phase 2 | Pending |
-| GTO-03 | Phase 2 | Pending |
-| GTO-04 | Phase 2 | Pending |
+| GTO-02 | Phase 2 | Complete |
+| GTO-03 | Phase 2 | Complete |
+| GTO-04 | Phase 2 | Complete |
 | GTO-05 | Phase 2 | Complete (02-07 loading + 02-10 eval) |
-| GTO-06 | Phase 2 | Pending |
-| GTO-07 | Phase 2 | Pending |
+| GTO-06 | Phase 2 | Complete |
+| GTO-07 | Phase 2 | Complete |
 | GTO-08 | Phase 2 | Complete |
-| GTO-09 | Phase 2 | Pending |
-| GTO-10 | Phase 2 | Pending |
-| GTO-11 | Phase 2 | Pending |
+| GTO-09 | Phase 2 | Complete |
+| GTO-10 | Phase 2 | Complete |
+| GTO-11 | Phase 2 | Complete |
 | SCF-01 | Phase 3 | Pending |
 | SCF-02 | Phase 3 | Pending |
 | SCF-03 | Phase 3 | Pending |
