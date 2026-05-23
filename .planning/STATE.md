@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Phase 04 gap-closure planned (4 plans: 04-11..04-14) — 2 waves; ready to execute gap plans"
-last_updated: "2026-05-23T00:00:00.000Z"
-last_activity: "2026-05-23 -- Gap-closure plans 04-11..04-14 created and verified (CR-01 UKS open-shell, CR-02 f32 NumericOverflow, CR-03 l>4 panic→Result, CR-04 non-injective cache fingerprint→u64 hash)"
+stopped_at: "Completed 04-11-PLAN.md (CR-03: c2s_coeff l>4 panic → Result<f64,PyscfRsError>; eval_gto_sph/deriv1 Result-propagating; never-panic FOUND-07 restored). Wave 6 remaining: 04-12 CR-04, 04-13 CR-02; Wave 7: 04-14 CR-01"
+last_updated: "2026-05-23T04:42:00.000Z"
+last_activity: "2026-05-23 -- 04-11 executed: c2s_coeff for l>4 (h-shells/cc-pV5Z) now returns Err(NotYetImplemented{phase:4}) instead of panicking through the PyO3 boundary; Result threaded through eval_gto_sph/eval_gto_sph_deriv1 and the pyscf-gto wrapper"
 progress:
   total_phases: 8
   completed_phases: 1
   total_plans: 44
-  completed_plans: 38
-  percent: 13
+  completed_plans: 39
+  percent: 89
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 04 (dft) — EXECUTING (gap closure)
-Plan: Gap-closure plans 04-11..04-14 planned and verified (Wave 6: 04-11 CR-03/04-12 CR-04/04-13 CR-02 parallel; Wave 7: 04-14 CR-01)
-Status: Phase 04 gap-closure plans ready to execute — 4 plans in 2 waves
-Last activity: 2026-05-23 -- Gap-closure plans 04-11..04-14 created and verified (CR-01 UKS open-shell wiring via UksKsHooks+nr_uks rewrite; CR-02 f32 silent zeros → NumericOverflow propagation; CR-03 l>4 panic → Result<_,PyscfRsError>; CR-04 Σ|D| cache key → u64 DefaultHasher content hash)
+Plan: 04-11 (CR-03) DONE. Remaining gap-closure: Wave 6 — 04-12 CR-04, 04-13 CR-02; Wave 7 — 04-14 CR-01
+Status: Phase 04 gap-closure in progress — 1 of 4 gap plans complete (04-11)
+Last activity: 2026-05-23 -- 04-11 executed: c2s_coeff l>4 panic → Result<f64,PyscfRsError> (FOUND-07 never-panic restored for cc-pV5Z/ANO bases through the PyO3 boundary); eval_gto_sph/eval_gto_sph_deriv1 + pyscf-gto wrapper Result-propagating
 
-Progress: [█████████░] 95% (38/40 plans done across all phases; Phase 04: 10/10 plans summarized)
+Progress: [█████████░] 89% (39/44 plans done across all phases; Phase 04 gap closure: 1/4 gap plans done)
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [█████████░] 95% (38/40 plans done across all phas
 | Phase 04 P04-06 | 23min | 2 tasks | 14 files |
 | Phase 04 P04-07 | 12min | 2 tasks | 9 files |
 | Phase 04 P04-08 | 14min | 2 tasks | 7 files |
+| Phase 04 P04-11 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,7 @@ Recent decisions affecting current work:
 - [Phase 04]: XC parsers + XcBackend seam (DFT-02/03) — libxc-default parse_xc (D-01, inline const XC_CODES/XC_ALIAS, part-aware possible_*_for fuzzy lookup, depth-bounded compound expansion T-04-05b) + xcfun-alternate parse_xc (0..77 ids, X/C/XC suffix fallback, LR_HF-zeroing tail). XcBackend cfg-gated enum mirrors AlgebraClient: Xcfun default-compiled, #[cfg(libxc)] Libxc in a gated submodule (default build never names a libxc_rs symbol). xcfun eval uses spin-resolved Vars (A_B/A_B_GAA_GAB_GBB/+TAU) with closed-shell rho/2 split (CPU launch supports spin-resolved only; Vars::N/A => NotConfigured). DFT-02 oracle = hand-transcribed parity table (PyO3-wall: no pyo3 dep in pyscf-dft); SLATERX bit-exact 1e-10 vs analytic. libxc NEVER compiled (cargo tree default = 0 libxc_rs).
 - [Phase 04]: RKS/UKS core (DFT-01/08/10/11, D-07/D-08) — NumInt grid loop (nr_rks/nr_uks/eval_rho/eval_xc, upstream numint.py signatures) is algebra-orchestrated (AO via pyscf_gto::eval_gto behind the wall; dense ρ/Vxc contractions as host loops; Exc/nelec via oracle_sum) with NO #[cube] kernel (D-07; Tensor-API gemm/axpy stay NotYetImplemented{phase:2}, so the grid loop follows the Phase-3 SCF/DF inline-loop precedent). PARSE XC IN THE XCFUN NAMESPACE (default backend) — xcfun exposes the standard-hybrid mixing in hyb[0] (b3lyp→0.2); the libxc parser folds it inside compound id 402 (hyb=0), so using libxc::parse_xc would silently break hybrid_coeff AND feed libxc ids into the xcfun id→name map. D-08: NumInt reads DType::from_env() at construction + read-only dtype() accessor; f32/f64 enum-match dispatch of the matmul chain (F64 arm = unchanged bit-exact default; F32 casts ρ→f64 at the XcBackend::eval boundary since eval_gto/xcfun are f64-host) + one below-bit-exact tracing::warn!; no set_precision, no f32 tolerance gate. KS get_veff = J+Vxc−hyb·K (RSH omega!=0 seam → 04-07); KsHooks overrides energy_elec = Tr(D·h1e)+Ecoul+Exc via a per-cycle Exc cache (the SCF energy_elec signature has no mol). RKS/UKS reuse the Phase 3 kernel<H> verbatim. DFT-01 bit-exact energy gate is the CI-only --features python rks_energy/uks_energy oracle arms (live convergence needs working arity-3/4 ERIs = the Phase-2 int2e_sph/int3c2e_sph rollup gap, currently NotYetImplemented; minao init guess also not yet implemented) + an always-on structural layer; the RKS/UKS drivers are complete and converge once working ERIs land. From<DftError> for PyscfRsError bridge in pyscf-dft (no pyscf-core dep cycle). pyscf-dft stays pyo3-free + cubecl-free; libxc NEVER compiled.
 - [Phase 04]: RSH range-coulomb + VV10 NLC (DFT-05/06) — RSH via the env[8] (PTR_RANGE_OMEGA) mechanism: pyscf-gto::range_coulomb OmegaGuard (RAII set/restore of Mole._env[8], restore-on-drop incl. error/unwind path, T-04-07a) + intor_with_omega + get_k_with_omega drive the STANDARD int2e (NOT phantom int2e_lr_/int2e_sr_ symbols, Pitfall 1). veff::default_get_veff RSH branch (rks.py:108-129): omega!=0 → vk = hyb·K + (alpha−hyb)·K_lr via get_k_with_omega(+omega) on an Arc-backed Mole clone (shared &Mole needs no &mut, omega local + auto-restored). KsVeff gained half_tr_d_vxc so the energy cache is RSH-correct (the old `veff−J+hyb·K` Vxc reconstruction is wrong once vk carries the LR term — Rule-1 bug fix). OPEN QUESTION A5 RESOLVED: cintx safe API (ExecutionOptions/OperatorEnvParams) has f12_zeta (env[9]) + grids_params but NO range_omega (env[8]) setter, AND arity-4 int2e is NotYetImplemented{phase:2} — so the env[8] set/restore contract is owned at the pyscf-gto layer (complete+tested) and the numerical RSH ERI flips on only via a cintx#11-style gap-closure (safe-API env[8] reader + arity-4 int2e). VV10 (DFT-06) ports the pure-Python _vv10nlc double-loop (numint.py:526-538, Pitfall 4: NOT C VXC_vv10nlc) over a coarser nlcgrids (a separate Grids instance): per outer point double-loop over inner vv grid → F/U/W via oracle_sum (T-04-07b), exc/vrho/vsigma per numint.py:552-554; nr_nlc_vxc orchestrates (outer==inner==nlcgrids, excsum=oracle_dot(den,exc), symmetrized GGA Vxc). NlcCoeffs hardcodes only the bare 'VV10' default (5.9/0.0093, A1); per-functional → libxc nlc_coeff. CAM-B3LYP is libxc-only on the corpus (xcfun XC_CODES has no entry; libxc id 433) — the always-on RSH test uses an xcfun-namespace RSH(0.19*HF+0.46*LR_HF(0.33)+0.81*LYP); CAM-B3LYP/VV10 energy gates CI-gated. libxc NEVER compiled.
+- [Phase 04]: Gap closure CR-03 (04-11) — `c2s_coeff` in `pyscf-kernels::eval_gto` was `fn(u32,usize,usize)->f64` with an unconditional `panic!` on l>4 (h-shells: cc-pV5Z, ANO). Through the PyO3 panic→exception bridge this still aborts the Python process (FOUND-07 never-panic violation). Converted to `-> Result<f64, PyscfRsError>`: l<=4 arms wrapped in `Ok(...)` (FROZEN libcint coeffs byte-unchanged), l>4 wildcard returns `Err(NotYetImplemented{phase:4})`. `?`-propagated through `eval_gto_sph_cpu`/`eval_gto_sph_deriv1_cpu` and the public `eval_gto_sph`/`eval_gto_sph_deriv1` (now `Result`-returning). `pyscf_gto::eval_gto` was ALREADY `Result`-returning, so its public signature is unchanged — `numint.rs` `eval_gto_block` and every other downstream consumer compile untouched; only the two internal `?` additions and 3 integration-test `.expect(...)` were needed. No new dependency; libxc never compiled.
 - [Phase ?]: [Phase 04]: DF-DFT + KsResult chkfile (DFT-07, D-10/D-06 reuse) — RKS::density_fit precomputes pyscf_df B integrals; DfKsHooks routes the Coulomb-J build through get_jk_df ((J_df, K_standard) split, T-04-08b) while Vxc/K stay standard, so get_veff_ks is identical to the non-DF KS path. KsResult wraps ScfResult: on-disk /scf group byte-identical to the SCF schema (upstream from_chk compat) PLUS xc/grids_level/grids_scheme metadata; impl Checkpointable via pyscf_chkfile primitives + the re-exported hdf5 alias (NO own hdf5-metno dep, D-05); load bounded/validated, never panics (T-04-08). ndarray added (F-order view, not hdf5). DFT-07 energy + ORACLE-08 h5py gates CI-only behind the Phase-2 int3c2e_sph gap + libpython/h5py; structural + Rust-Rust round-trip layers always-on. libxc NEVER compiled.
 
 ### Pending Todos
@@ -126,6 +128,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-22T10:49:21.311Z
-Stopped at: Completed 04-07-PLAN.md (RSH range-coulomb env[8] + RSH get_veff branch DFT-05; VV10 _vv10nlc double-loop over coarser nlcgrids DFT-06; A5 resolved, cintx#11 env[8]/arity-4 gap-closure tracked)
+Last session: 2026-05-23T04:42:00.000Z
+Stopped at: Completed 04-11-PLAN.md (CR-03: c2s_coeff l>4 panic → Result<f64,PyscfRsError>; eval_gto_sph/deriv1 + pyscf-gto wrapper Result-propagating; FOUND-07 never-panic restored for cc-pV5Z/ANO bases)
 Resume file: None
