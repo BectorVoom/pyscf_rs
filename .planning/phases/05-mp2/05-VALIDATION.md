@@ -24,13 +24,19 @@ pyscf-gto dispatch that consumes them. Resulting numeric status:
 | `int3c2e_sph` orbital×aux | (GTO/infra) | ✅ green | `pyscf-gto/tests/int3c2e_auxmol.rs` (finite, non-zero, bra-symmetric) |
 | In-core RMP2 numeric path | MP2-01 | ✅ green | `pyscf-mp2/tests/mp2_numeric_smoke.rs` (finite e_corr ≤ 0, thread-invariant) |
 | `default_ao2mo` (real int2e) | MP2-01/05 | ✅ green | `rmp2_structural::default_ao2mo_succeeds_after_cintx11_closure` |
-| Conventional DF-MP2 numeric | MP2-04 | ⚠️ blocked | int3c2e ships; blocked on Phase-3 rank-revealing DF-metric Cholesky (`(P|Q)` ill-conditioned) — see `pyscf-df/tests/df_integrals_shape.rs` |
+| Conventional DF-MP2 numeric | MP2-04 | ✅ green (05-09) | `mp2_numeric_smoke.rs` (finite e_corr ≤ 0, -0.04424 ≈ in-core -0.04428); DF B reconstructs exact int2e to 1.7e-3 |
+| DF-metric robustness | MP2-04 | ✅ green (05-09) | `pyscf_algebra::df_metric_fit` rank-revealing eigh fit; cc-pvdz-jkfit + weigend `(P|Q)` now build (`df_integrals_shape.rs`) |
 | Upstream-PySCF byte-identity (all arms) | MP2-01..05 | 🔬 human-verify / CI-gated | `mp2-oracle-upstream-manual` (workflow_dispatch); sandbox lacks numpy/PySCF |
 
-**Out of scope (deliberately not chased):** the DF `(P|Q)` Cholesky robustness
-(Phase-3/DF), Phase-3 DF-HF numeric, Phase-4 bit-exact RKS/UKS, RSH ranged-`int2e`
-(needs cintx safe-API `env[8]` omega threading), `make_rdm2` AO back-transform
-(Phase-7), native RI-MP2 relaxed RDM CPHF.
+**05-09 update:** the DF `(P|Q)` Cholesky robustness gap (recorded as blocked in
+05-08) is CLOSED — `pyscf_algebra::df_metric_fit` adds the rank-revealing eigh
+fallback (PySCF `LINEAR_DEP_THRESHOLD` route), so DF-MP2 (MP2-04) numeric is now
+fully lit up in-tree. DF-HF (Phase-3) also benefits (same `cholesky_eri`) but has
+its own SCF closure.
+
+**Out of scope (deliberately not chased):** Phase-4 bit-exact RKS/UKS, RSH
+ranged-`int2e` (needs cintx safe-API `env[8]` omega threading), `make_rdm2` AO
+back-transform (Phase-7), native RI-MP2 relaxed RDM CPHF.
 
 ---
 

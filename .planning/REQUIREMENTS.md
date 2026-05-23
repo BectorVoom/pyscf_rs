@@ -78,13 +78,16 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **MP2-07**: `mp2.as_scanner()` works (used by gradients and geomopt)
 - [x] **MP2-08**: MP2 helpers (`get_nocc`, `get_nmo`, `get_frozen_mask`, `get_e_hf`, `_mo_without_core`) are exported because CCSD imports them
 
-> **Numeric closure (plan 05-08, 2026-05-23):** the cintx#11 ERI gate is closed —
-> cintx ships arity-4 `int2e` + arity-3 `int3c2e_sph`, wired in pyscf-gto. The
-> in-core RMP2 numeric path is now proven always-on in-tree (MP2-01; finite
-> e_corr ≤ 0). DF-MP2 numeric (MP2-04) is unblocked at the `int3c2e` layer but
-> still needs a Phase-3 rank-revealing DF-metric Cholesky for the `(P|Q)` metric.
-> Upstream-PySCF byte-identity for all arms is the CI-gated (`workflow_dispatch`)
-> / human-verify arm (sandbox lacks numpy/PySCF). See `phases/05-mp2/05-08-PLAN.md`.
+> **Numeric closure (plans 05-08 + 05-09, 2026-05-23):** the cintx#11 ERI gate is
+> closed — cintx ships arity-4 `int2e` + arity-3 `int3c2e_sph`, wired in pyscf-gto
+> (05-08). In-core RMP2 (MP2-01) AND conventional DF-MP2 (MP2-04) numeric paths
+> are now proven always-on in-tree (finite e_corr ≤ 0; DF-MP2 -0.04424 ≈ in-core
+> -0.04428; DF B reconstructs exact int2e to 1.7e-3). 05-09 added the
+> rank-revealing DF-metric fit (`pyscf_algebra::df_metric_fit`, PySCF
+> `LINEAR_DEP_THRESHOLD` route) so ill-conditioned `(P|Q)` metrics (cc-pvdz-jkfit,
+> weigend) build cleanly. Upstream-PySCF byte-identity for all arms is the
+> CI-gated (`workflow_dispatch`) / human-verify arm (sandbox lacks numpy/PySCF).
+> See `phases/05-mp2/05-08-PLAN.md` + `05-09-PLAN.md`.
 
 ### Coupled cluster (CCSD)
 
