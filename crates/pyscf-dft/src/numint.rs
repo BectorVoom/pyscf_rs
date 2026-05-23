@@ -54,6 +54,64 @@ use crate::xc_backend::{DerivOrder, RhoBlock, XcBackend};
 /// table (SLATERX/VWN are LDA; BECKEX/LYPC/PBEX/PBEC are GGA).
 const XCFUN_GGA_IDS: &[u32] = &[4, 5, 6, 16, 17, 19, 20, 26, 56, 77];
 
+/// CR-02 gap-closure: honest f64→scalar cast for the low-precision path.
+///
+/// `S::from(x)` (num-traits `NumCast`/`ToPrimitive`) does NOT return `None`
+/// on f32 overflow — it returns `Some(f32::INFINITY)`. The old
+/// `unwrap_or_else(S::zero)` therefore never tripped on overflow; it silently
+/// propagated `inf` (or, on the `to_f64()` back-cast, `0.0`). Either way the
+/// "honest f32 path" lied. This helper flags BOTH failure modes:
+///   1. `None` (defensive — covers future low-precision `Scalar`s),
+///   2. `Some(non-finite)` produced from a *finite* `x` (the real overflow).
+///
+/// The f64 default path is preserved bit-for-bit: for `S = f64` the cast is the
+/// identity, so a finite `x` always maps to itself and a non-finite `x` is
+/// passed through unchanged — exactly what the old `S::from(x)` produced (the
+/// `unwrap_or_else(S::zero)` arm was dead for f64 since `f64::from` never
+/// returns `None`). Only a *narrowing* cast (F32) that turns a finite `x` into
+/// a non-finite `s` is flagged as overflow.
+#[inline]
+fn cast_finite<S: pyscf_core::Scalar>(x: f64, context: &'static str) -> Result<S, PyscfRsError> {
+    // `S::from` returns `None` for an unrepresentable narrowing (defensive for
+    // future scalars); `ok_or` maps that to NumericOverflow (the error value is
+    // a cheap struct literal — no closure needed, satisfies clippy).
+    let s = S::from(x).ok_or(PyscfRsError::NumericOverflow { context })?;
+    // Only an overflow we INTRODUCED is an error: x was finite but the narrowed
+    // value is not (the real f32 overflow mode — `f32::from(1e40)` is
+    // `Some(inf)`, NOT `None`). A non-finite `x` (already inf/NaN upstream) is
+    // propagated faithfully so we never raise a false flag for the f64 path.
+    if x.is_finite() && !s.is_finite() {
+        return Err(PyscfRsError::NumericOverflow { context });
+    }
+    Ok(s)
+}
+
+/// CR-02 gap-closure: honest scalar→f64 back-cast for the low-precision path.
+///
+/// `t.to_f64()` returns `Some(inf)` (not `None`) when `t` is `f32::INFINITY`,
+/// so a silent `unwrap_or(0.0)` masked overflow. In the F32 path every input to
+/// the matmul chain is already proven finite by [`cast_finite`], so a
+/// non-finite `t` here can only mean the f32 *accumulation* overflowed — a
+/// genuine precision failure the f64 path would not have hit, which we flag.
+///
+/// For `S = f64` the back-cast is the identity and behaviour is unchanged from
+/// the old `t.to_f64().unwrap_or(0.0)` (which, for f64, was simply `t`): a
+/// non-finite f64 is passed through, never flagged.
+#[inline]
+fn back_to_f64<S: pyscf_core::Scalar>(t: S, context: &'static str) -> Result<f64, PyscfRsError> {
+    // Only the narrowing (non-F64) path treats a non-finite accumulator as an
+    // introduced overflow. The f64 default path is left bit-identical.
+    if S::KIND != pyscf_core::ScalarKind::F64 && !t.is_finite() {
+        return Err(PyscfRsError::NumericOverflow { context });
+    }
+    // `to_f64` comes from the `num_traits::ToPrimitive` supertrait of
+    // `Scalar: num_traits::Float` — callable as a method without naming the
+    // crate (avoids adding a num-traits dep to pyscf-dft). f32/f64 → f64 is
+    // always representable; `ok_or` is defensive for future scalars whose
+    // `to_f64` could fail (cheap struct literal — no closure needed).
+    t.to_f64().ok_or(PyscfRsError::NumericOverflow { context })
+}
+
 /// The functional "type" upstream `numint.py` keys the grid loop on
 /// (`'LDA'` / `'GGA'` / `'MGGA'` / `'HF'`). Selects how many AO components
 /// `eval_gto` returns and which density-derivative rows `eval_rho` builds.
@@ -455,27 +513,46 @@ impl NumInt {
                 for g in 0..ngrids {
                     let w = weights[g];
                     // LDA term: w · vrho · φ_μ · φ_ν, evaluated in S.
-                    let phi_mu = S::from(ao_at(&ao, 0, g, mu)).unwrap_or_else(S::zero);
-                    let phi_nu = S::from(ao_at(&ao, 0, g, nu)).unwrap_or_else(S::zero);
-                    let wv = S::from(w * 0.5 * xc_out.vrho[g]).unwrap_or_else(S::zero);
+                    let phi_mu = cast_finite::<S>(
+                        ao_at(&ao, 0, g, mu),
+                        "φ_μ exceeds f32::MAX in Vxc back-contraction",
+                    )?;
+                    let phi_nu = cast_finite::<S>(
+                        ao_at(&ao, 0, g, nu),
+                        "φ_ν exceeds f32::MAX in Vxc back-contraction",
+                    )?;
+                    let wv = cast_finite::<S>(
+                        w * 0.5 * xc_out.vrho[g],
+                        "vrho weight wv exceeds f32::MAX in Vxc back-contraction",
+                    )?;
                     let mut t = wv * phi_mu * phi_nu;
                     // GGA gradient back-contraction (numint.py:_gga_grad):
                     // 2·w·vsigma·(∇ρ·∇φ_μ)·φ_ν symmetrized. v1 corpus PBE/
                     // B3LYP exercise this; we add the symmetric gradient term.
                     if let (XcType::Gga, Some((dx, dy, dz))) = (xctype, grad.as_ref()) {
-                        let wvs = S::from(2.0 * w * xc_out.vsigma[g]).unwrap_or_else(S::zero);
-                        let gphi_mu = S::from(
+                        let wvs = cast_finite::<S>(
+                            2.0 * w * xc_out.vsigma[g],
+                            "vsigma gradient term wvs exceeds f32::MAX in Vxc back-contraction",
+                        )?;
+                        let gphi_mu = cast_finite::<S>(
                             dx[g] * ao_at(&ao, 1, g, mu)
                                 + dy[g] * ao_at(&ao, 2, g, mu)
                                 + dz[g] * ao_at(&ao, 3, g, mu),
-                        )
-                        .unwrap_or_else(S::zero);
+                            "gphi_mu GGA gradient projection exceeds f32::MAX in Vxc back-contraction",
+                        )?;
                         // 0.5 factor folds with the symmetrization (vmat += V + Vᵀ).
-                        t = t + wvs * gphi_mu * phi_nu * S::from(0.5).unwrap_or_else(S::zero);
+                        let half = cast_finite::<S>(
+                            0.5,
+                            "GGA symmetrization 0.5 factor cast in Vxc back-contraction",
+                        )?;
+                        t = t + wvs * gphi_mu * phi_nu * half;
                     }
                     // Cast the per-point contribution back to f64 for the
                     // oracle_sum reduction (XC boundary + reduction are f64).
-                    vrow_terms[g] = t.to_f64().unwrap_or(0.0);
+                    vrow_terms[g] = back_to_f64::<S>(
+                        t,
+                        "Vxc element cast back to f64 overflows in nr_rks_inner",
+                    )?;
                 }
                 let contrib = oracle_sum(&vrow_terms);
                 // Symmetrize: vmat += V + Vᵀ (upstream numint.py:1160).
@@ -511,31 +588,45 @@ impl NumInt {
         let ao_at = |buf: &[f64], comp: usize, g: usize, mu: usize| -> f64 {
             buf[comp * ngrids * nao + (g + mu * ngrids)]
         };
-        let contract = |comp_l: usize, comp_r: usize, scale: f64| -> Vec<f64> {
-            let mut out = vec![0.0_f64; ngrids];
-            // `g` is the grid index passed into the `ao_at` closure.
-            #[allow(clippy::needless_range_loop)]
-            for g in 0..ngrids {
-                let mut acc = S::zero();
-                for mu in 0..nao {
-                    let a_mu = S::from(ao_at(ao, comp_l, g, mu)).unwrap_or_else(S::zero);
-                    for nu in 0..nao {
-                        let d = S::from(dm.data[mu * nao + nu]).unwrap_or_else(S::zero);
-                        let a_nu = S::from(ao_at(ao, comp_r, g, nu)).unwrap_or_else(S::zero);
-                        acc = acc + a_mu * d * a_nu;
+        let contract =
+            |comp_l: usize, comp_r: usize, scale: f64| -> Result<Vec<f64>, PyscfRsError> {
+                let mut out = vec![0.0_f64; ngrids];
+                // `g` is the grid index passed into the `ao_at` closure.
+                #[allow(clippy::needless_range_loop)]
+                for g in 0..ngrids {
+                    let mut acc = S::zero();
+                    for mu in 0..nao {
+                        let a_mu = cast_finite::<S>(
+                            ao_at(ao, comp_l, g, mu),
+                            "AO value a_mu exceeds f32::MAX in eval_rho_scalar",
+                        )?;
+                        for nu in 0..nao {
+                            let d = cast_finite::<S>(
+                                dm.data[mu * nao + nu],
+                                "density matrix element D[μν] exceeds f32::MAX in eval_rho_scalar",
+                            )?;
+                            let a_nu = cast_finite::<S>(
+                                ao_at(ao, comp_r, g, nu),
+                                "AO value a_nu exceeds f32::MAX in eval_rho_scalar",
+                            )?;
+                            acc = acc + a_mu * d * a_nu;
+                        }
                     }
+                    let acc_f64 = back_to_f64::<S>(
+                        acc,
+                        "rho accumulator overflows f32 then cast to f64 in eval_rho_scalar",
+                    )?;
+                    out[g] = scale * acc_f64;
                 }
-                out[g] = scale * acc.to_f64().unwrap_or(0.0);
-            }
-            out
-        };
+                Ok(out)
+            };
         match xctype {
-            XcType::Lda => Ok((contract(0, 0, 1.0), None)),
+            XcType::Lda => Ok((contract(0, 0, 1.0)?, None)),
             XcType::Gga => {
-                let rho = contract(0, 0, 1.0);
-                let dx = contract(1, 0, 2.0);
-                let dy = contract(2, 0, 2.0);
-                let dz = contract(3, 0, 2.0);
+                let rho = contract(0, 0, 1.0)?;
+                let dx = contract(1, 0, 2.0)?;
+                let dy = contract(2, 0, 2.0)?;
+                let dz = contract(3, 0, 2.0)?;
                 Ok((rho, Some((dx, dy, dz))))
             }
         }
