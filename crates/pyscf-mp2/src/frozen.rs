@@ -6,7 +6,7 @@
 //!   - `frozen=int`     → the inner-most `n` orbitals frozen (`moidx[:n] = False`)
 //!   - `frozen=list`    → the listed orbital indices frozen (`moidx[list] = False`)
 //!   - `frozen='auto'`  → chemcore element→core-count table
-//!                        (`pyscf/cc/ccsd.py:set_frozen` → `pyscf/data/elements.py:chemcore`)
+//!     (`pyscf/cc/ccsd.py:set_frozen` → `pyscf/data/elements.py:chemcore`)
 //!   - `frozen='window'`→ energy-window form (`mo_e < emin` or `mo_e > emax`)
 //!
 //! The resolved mask is the active-orbital mask: `true` = active, `false` =
@@ -19,29 +19,25 @@ use std::sync::OnceLock;
 
 /// Frozen-core specification. Mirrors upstream `mp.frozen`:
 /// `None` / `int` / `list[int]` / `'auto'` / `'window'`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Frozen {
-    /// No orbitals frozen (`frozen=None`).
+    /// No orbitals frozen (`frozen=None`). The default.
+    #[default]
     None,
     /// Freeze the inner-most `n` orbitals (`frozen=int`; `moidx[:n] = False`).
     Count(usize),
     /// Freeze the listed orbital indices (`frozen=list`; `moidx[list] = False`).
     List(Vec<usize>),
-    /// Auto chemcore (`frozen='auto'`): the per-atom core-electron count is
-    /// looked up in the chemcore table and summed; the frozen-orbital count is
-    /// `sum(core_electrons) / 2`. Carries the per-atom atomic numbers `Z`
-    /// (extracted from the `Mole` by the caller / bridge).
+    /// Auto chemcore (`frozen='auto'`): the per-atom frozen-core ORBITAL count
+    /// is looked up in the chemcore table and summed (no ÷2; the table encodes
+    /// orbitals, not electrons — see [`chemcore_count`]). The per-atom atomic
+    /// numbers `Z` are supplied to [`frozen_mask`] by the caller (the kernel
+    /// extracts them from `refr.mol.atom_charges()`).
     Auto,
     /// Energy-window form (`frozen='window'`): freeze MOs whose energy is below
     /// `emin` or above `emax`. Upstream default window is `(-1000.0, 1000.0)`
     /// (`pyscf/cc/ccsd.py:set_frozen`).
     Window { emin: f64, emax: f64 },
-}
-
-impl Default for Frozen {
-    fn default() -> Self {
-        Frozen::None
-    }
 }
 
 /// Per-element chemical-core ORBITAL counts, indexed by atomic number `Z`
@@ -68,8 +64,7 @@ fn chemcore_table() -> &'static HashMap<u32, usize> {
             0, 0, // 1-2:  H  He
             0, 0, 1, 1, 1, 1, 1, 1, // 3-10:  Li Be B C N O F Ne
             1, 1, 5, 5, 5, 5, 5, 5, // 11-18: Na Mg Al Si P S Cl Ar
-            5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9, 9, 9, 9,
-            9, // 19-36: K..Kr
+            5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 9, 9, 9, 9, 9, 9, // 19-36: K..Kr
             9, 9, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 18, 18, 18, 18, 18,
             18, // 37-54: Rb..Xe
             18, 18, // 55-56: Cs Ba

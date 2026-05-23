@@ -28,3 +28,5 @@ pub mod ump2;
 pub use error::Mp2Error;
 pub use frozen::Frozen;
 pub use helpers::{get_e_hf, get_frozen_mask, get_nmo, get_nocc, mo_without_core};
+pub use hooks::{ChemistsEris, Mp2OverrideHooks, NoMp2Overrides};
+pub use mp2::{Mp2Reference, Mp2Result, default_ao2mo, default_energy, rmp2_kernel, scs_energy};
