@@ -36,6 +36,9 @@ pub mod solve_linear;
 // without naming Tensor/AlgebraClient. Mirrors solve_linear's wrapper
 // shape from plan 03-01.
 pub mod eigh_gen;
+// Phase 5 plan 05-09 — rank-revealing DF/RI 2-center metric fit (eigh route)
+// for ill-conditioned (P|Q) auxiliary metrics that a plain Cholesky rejects.
+pub mod df_metric;
 
 pub use client::AlgebraClient;
 pub use error::AlgebraError;
@@ -45,6 +48,7 @@ pub use select::{BackendSelection, select_backend};
 pub use tensor::{BufferId, Tensor};
 
 pub use axpy::axpy;
+pub use df_metric::{DF_METRIC_LINEAR_DEP, df_metric_fit};
 pub use dot::dot;
 pub use eigh_gen::eigh_gen;
 pub use gemm::gemm;
