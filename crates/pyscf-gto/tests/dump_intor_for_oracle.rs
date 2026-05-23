@@ -15,11 +15,15 @@
 //!   - `PYSCF_RS_ORACLE_BASIS` : basis name
 //!   - `PYSCF_RS_ORACLE_INTOR` : intor symbol (e.g. `"int1e_ovlp_sph"`)
 //!   - `PYSCF_RS_ORACLE_OUT`   : output JSON path
+//!   - `PYSCF_RS_ORACLE_ECP`   : (optional, plan 02-10) ECP name
+//!     (e.g. `"lanl2dz"`). When set + non-empty, the Mole is built with
+//!     this ECP so `int1e_ecp` byte-identity vs upstream can be checked by
+//!     `tests/oracle/test_ecp_int1e.py`.
 
 #![cfg(feature = "release-oracle-tests")]
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor};
+use pyscf_gto::{AtomInput, BasisInput, EcpInput, M, MoleBuildArgs, intor};
 use std::path::PathBuf;
 
 #[test]
@@ -30,9 +34,16 @@ fn dump_intor_for_oracle() {
     let intor_name = std::env::var("PYSCF_RS_ORACLE_INTOR").expect("PYSCF_RS_ORACLE_INTOR env var");
     let out = std::env::var("PYSCF_RS_ORACLE_OUT").expect("PYSCF_RS_ORACLE_OUT env var");
 
+    // Plan 02-10: optional ECP. Absent / empty → no ECP (legacy behaviour).
+    let ecp = match std::env::var("PYSCF_RS_ORACLE_ECP") {
+        Ok(name) if !name.is_empty() => EcpInput::Name(name),
+        _ => EcpInput::None,
+    };
+
     let mol = M(MoleBuildArgs {
         atom: AtomInput::String(atom),
         basis: BasisInput::Name(basis),
+        ecp,
         unit: Unit::Bohr,
         ..Default::default()
     })
