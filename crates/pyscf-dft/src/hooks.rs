@@ -191,8 +191,10 @@ struct KsEnergyCache {
     /// `0.5·Tr(D·Vxc)` — the part of `0.5·Tr(D·vhf)` that must be replaced by
     /// `Exc` to get the correct KS 2e energy.
     half_tr_d_vxc: f64,
-    /// Cheap fingerprint of the `dm` the cache was computed for (sum of |D|).
-    dm_fingerprint: f64,
+    /// Injective content fingerprint of the `dm` the cache was computed for
+    /// (a `u64` hash of the raw `f64` bits — CR-04). Cache hits require exact
+    /// equality, so a changed density NEVER returns a stale `Exc`.
+    dm_fingerprint: u64,
 }
 
 impl<'a> KsHooks<'a> {
@@ -228,12 +230,29 @@ impl<'a> KsHooks<'a> {
     }
 }
 
-/// Cheap fingerprint of a density matrix — the oracle_sum of |D|. Used only to
-/// confirm the energy cache matches the `dm` being scored (not a hash; a
-/// mismatch just triggers a fresh grid-loop recompute).
-fn dm_fingerprint(dm: &Density) -> f64 {
-    let abs: Vec<f64> = dm.data.iter().map(|v| v.abs()).collect();
-    pyscf_algebra::oracle_sum(&abs)
+/// Injective content fingerprint of a density matrix (CR-04). Hashes each
+/// element's raw `f64` bit pattern (`v.to_bits()`) into a `u64` via the stdlib
+/// `DefaultHasher` — no new crate dependency.
+///
+/// The old `Σ|D|` (L1-norm) key was NON-INJECTIVE: two distinct density
+/// matrices with the same L1 norm collide, so at µHartree convergence
+/// (where the 1µH bit-exact gate operates) a genuine step-to-step change in
+/// `Exc` could be masked by an unchanged `Σ|D|`, returning a STALE XC energy.
+/// Hashing the bit pattern makes distinct densities produce distinct keys, so
+/// the cache-hit guard (`==`) only fires for a genuinely identical `dm`; any
+/// difference triggers a fresh grid-loop recompute (the safety-net fallback).
+///
+/// Hashing the bits (not the value) is deliberate: bit-exact comparison means
+/// `-0.0 != 0.0` and distinct NaN payloads hash differently — the cache only
+/// reuses an `Exc` when the density is byte-for-byte the same one it scored.
+fn dm_fingerprint(dm: &Density) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    for &v in &dm.data {
+        v.to_bits().hash(&mut h);
+    }
+    h.finish()
 }
 
 impl OverrideHooks for KsHooks<'_> {
@@ -299,7 +318,10 @@ impl OverrideHooks for KsHooks<'_> {
         let (exc, half_tr_d_vxc) = {
             let cache = self.cache.borrow();
             match cache.as_ref() {
-                Some(c) if (c.dm_fingerprint - dm_fingerprint(dm)).abs() < 1e-12 => {
+                // CR-04: exact `u64` equality on the injective content hash —
+                // NOT a float approximation. Any change to the density (even
+                // below µHartree) misses the cache and recomputes the grid loop.
+                Some(c) if c.dm_fingerprint == dm_fingerprint(dm) => {
                     (c.exc, c.half_tr_d_vxc)
                 }
                 // Cache miss (cold call / dm changed): recompute the grid loop.
