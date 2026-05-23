@@ -29,6 +29,7 @@ pub mod bridge;
 pub mod caches;
 pub mod dft;
 pub mod errors;
+pub mod mp;
 pub mod numpy_io;
 pub mod scf;
 
@@ -62,6 +63,13 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let dft_mod = PyModule::new(py, "dft")?;
     crate::dft::register(py, &dft_mod)?;
     m.add_submodule(&dft_mod)?;
+
+    // Plan 05-07 (MP2 / D-07/D-08) — `mp` submodule containing
+    // PyRMP2/PyUMP2/PyDFMP2 + the MP2() factory + PyMp2Scanner. The Python
+    // overlay `python/pyscf/mp/__init__.py` re-exports `pyscf._native.mp.*`.
+    let mp_mod = PyModule::new(py, "mp")?;
+    crate::mp::register(py, &mp_mod)?;
+    m.add_submodule(&mp_mod)?;
 
     Ok(())
 }

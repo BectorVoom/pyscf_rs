@@ -6143,6 +6143,7 @@ dependencies = [
  "pyscf-dft",
  "pyscf-grids",
  "pyscf-gto",
+ "pyscf-mp2",
  "pyscf-runtime",
  "pyscf-scf",
  "thiserror 2.0.18",
