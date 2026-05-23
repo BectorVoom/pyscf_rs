@@ -14,7 +14,7 @@
 //! coverage of new code paths.
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 /// Ten representative basis names — the PR-CI floor. Each MUST resolve
 /// in the ALIAS table AND have a `.dat` file on disk that supports H.
@@ -62,9 +62,7 @@ fn representative_bases_build_h_mol() {
             Ok(mol) => {
                 // Sanity: the build must populate _atm + ao_loc_nr.
                 if mol.nao_nr == 0 {
-                    failures.push(format!(
-                        "{basis}: build succeeded but nao_nr == 0 (no AOs)"
-                    ));
+                    failures.push(format!("{basis}: build succeeded but nao_nr == 0 (no AOs)"));
                 }
                 if !mol._built {
                     failures.push(format!("{basis}: _built == false after M(...)"));

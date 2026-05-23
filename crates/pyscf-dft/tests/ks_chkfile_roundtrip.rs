@@ -26,9 +26,9 @@
 //!    h5py-readable on the upstream `/scf` schema + the `xc`/`grids` extension.
 //!    Runs only under `--features python` (libpython + importable pyscf+h5py).
 
-use pyscf_chkfile::{primitives, Checkpointable};
+use pyscf_chkfile::{Checkpointable, primitives};
 use pyscf_core::{Energy, MOCoefficients};
-use pyscf_dft::{dump_ks_to_file, load_ks_from_file, GridsMeta, KsResult};
+use pyscf_dft::{GridsMeta, KsResult, dump_ks_to_file, load_ks_from_file};
 use pyscf_scf::ScfResult;
 
 fn sample_ks_result() -> KsResult {
@@ -205,6 +205,6 @@ fn no_own_hdf5_metno_dep_d05_sole_owner() {
 #[test]
 #[ignore = "ORACLE-08 KS chkfile h5py seal — run on CI with --features python + libpython + upstream pyscf + h5py"]
 fn ks_chkfile_roundtrip() {
-    use pyscf_oracle::{oracle_check, H2O_CC_PVDZ};
+    use pyscf_oracle::{H2O_CC_PVDZ, oracle_check};
     oracle_check!("ks_chkfile_roundtrip", H2O_CC_PVDZ, 1e-12);
 }

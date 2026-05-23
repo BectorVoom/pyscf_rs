@@ -7,5 +7,8 @@ pub fn gemv(
     _x: &Tensor,
     _y: &mut Tensor,
 ) -> Result<(), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented { phase: 2, what: "gemv (delegates to gemm)" })
+    Err(AlgebraError::NotYetImplemented {
+        phase: 2,
+        what: "gemv (delegates to gemm)",
+    })
 }

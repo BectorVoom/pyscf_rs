@@ -182,7 +182,13 @@ mod tests {
     #[test]
     fn sg1_prune_buckets() {
         let r_atom = sg1_radii(1) + 1e-200; // H
-        let rads = vec![0.1 * r_atom, 0.3 * r_atom, 0.7 * r_atom, 2.0 * r_atom, 5.0 * r_atom];
+        let rads = vec![
+            0.1 * r_atom,
+            0.3 * r_atom,
+            0.7 * r_atom,
+            2.0 * r_atom,
+            5.0 * r_atom,
+        ];
         let out = sg1_prune(1, &rads, 0);
         // LEB_NGRID = [6,38,86,194,86] by place 0..4.
         assert_eq!(out, vec![6, 38, 86, 194, 86]);

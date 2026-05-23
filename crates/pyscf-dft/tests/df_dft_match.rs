@@ -54,7 +54,7 @@ mod structural {
     use pyscf_core::{Mole, Unit};
     use pyscf_dft::{DfKsHooks, KsOverrideHooks, NumInt, RKS};
     use pyscf_grids::Grids;
-    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
     use pyscf_scf::OverrideHooks;
 
     fn h2o() -> Mole {

@@ -2,7 +2,7 @@
 //! routes through `intor` and the `EcpEngine` trait.
 
 use pyscf_core::{EcpEngine, PyscfRsError, Unit};
-use pyscf_gto::{intor, AtomInput, BasisInput, EcpEngineNotAvailable, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, EcpEngineNotAvailable, M, MoleBuildArgs, intor};
 
 fn h_mol() -> pyscf_core::Mole {
     M(MoleBuildArgs {
@@ -10,11 +10,7 @@ fn h_mol() -> pyscf_core::Mole {
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     })
     .expect("H/STO-3G build")
@@ -62,10 +58,7 @@ fn engine_ipnuc_returns_phase_7_not_yet_implemented() {
     let stub = EcpEngineNotAvailable;
     let r = stub.ecp_int1e_ipnuc(&mol, "int1e_ecp_ipnuc");
     assert!(
-        matches!(
-            r,
-            Err(PyscfRsError::NotYetImplemented { phase: 7, .. })
-        ),
+        matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 7, .. })),
         "got {:?}",
         r
     );

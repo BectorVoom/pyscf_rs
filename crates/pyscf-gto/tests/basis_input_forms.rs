@@ -3,7 +3,7 @@
 //! `ParsedBasis` map honouring first-occurrence order (Pitfall 4).
 
 use pyscf_core::{ParsedAtom, Unit};
-use pyscf_gto::{format_basis, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, format_basis};
 use std::collections::HashMap;
 
 fn h2o_atoms() -> Vec<ParsedAtom> {
@@ -26,7 +26,11 @@ fn name_form_resolves_sto3g() {
         "O STO-3G has ≥ 2 shells, got {}",
         parsed["O"].shells.len()
     );
-    assert_eq!(parsed["H"].shells.len(), 1, "H STO-3G has exactly 1 (1s) shell");
+    assert_eq!(
+        parsed["H"].shells.len(),
+        1,
+        "H STO-3G has exactly 1 (1s) shell"
+    );
 }
 
 #[test]
@@ -76,7 +80,11 @@ fn nwchem_text_form() {
     assert_eq!(parsed["H"].shells.len(), 1);
     assert_eq!(parsed["H"].shells[0].l, 0);
     assert_eq!(parsed["H"].shells[0].exponents.len(), 3);
-    approx::assert_abs_diff_eq!(parsed["H"].shells[0].exponents[0], 3.42525091, epsilon = 1e-9);
+    approx::assert_abs_diff_eq!(
+        parsed["H"].shells[0].exponents[0],
+        3.42525091,
+        epsilon = 1e-9
+    );
 }
 
 #[test]
@@ -96,10 +104,7 @@ fn first_occurrence_order_for_unique_symbols() {
 
 #[test]
 fn unknown_basis_name_errors() {
-    let r = format_basis(
-        &BasisInput::Name("totally-fake-basis".into()),
-        &h2o_atoms(),
-    );
+    let r = format_basis(&BasisInput::Name("totally-fake-basis".into()), &h2o_atoms());
     assert!(matches!(
         r,
         Err(pyscf_core::PyscfRsError::BasisLoad(
@@ -117,11 +122,7 @@ fn full_pipeline_h2_sto3g_via_M() {
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     })
     .unwrap();

@@ -17,7 +17,11 @@ fn corpus(n: usize) -> Vec<f64> {
             // associativity guarantees. Sums to a non-trivial value
             // (not zero) so the bit-pattern of the result is
             // distinguishable.
-            if i % 2 == 0 { f * 1e-3 } else { -f * 1e-3 + 1.0 }
+            if i % 2 == 0 {
+                f * 1e-3
+            } else {
+                -f * 1e-3 + 1.0
+            }
         })
         .collect()
 }
@@ -33,7 +37,11 @@ fn oracle_sum_deterministic_within_process() {
     let xs = corpus(10_000);
     let s1 = oracle_sum(&xs);
     let s2 = oracle_sum(&xs);
-    assert_eq!(s1.to_bits(), s2.to_bits(), "oracle_sum not deterministic in-process");
+    assert_eq!(
+        s1.to_bits(),
+        s2.to_bits(),
+        "oracle_sum not deterministic in-process"
+    );
 }
 
 /// Pairwise base case (chunk=128) and a longer input both work.
@@ -65,7 +73,7 @@ fn oracle_sum_distinguishes_orderings() {
     // For pathological inputs these differ in low bits — that's a
     // FEATURE of pairwise (sums are NOT permutation-invariant). The
     // determinism guarantee is per-input.
-    let _ = (s_fwd, s_rev);  // Just verify both are finite.
+    let _ = (s_fwd, s_rev); // Just verify both are finite.
     assert!(s_fwd.is_finite() && s_rev.is_finite());
 }
 
@@ -102,7 +110,8 @@ fn oracle_sum_documented_thread_invariance() {
     for _ in 0..10 {
         let s = oracle_sum(&xs);
         assert_eq!(
-            s.to_bits(), canonical.to_bits(),
+            s.to_bits(),
+            canonical.to_bits(),
             "oracle_sum produced different bit pattern on repeated call — \
              algorithm is NOT deterministic by construction (Pitfall 2 SHOWSTOPPER)"
         );

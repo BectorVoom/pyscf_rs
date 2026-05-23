@@ -30,12 +30,12 @@ pub mod types;
 pub use basis::{load_basis, parse as parse_basis};
 pub use dumps_loads::{dumps, loads};
 pub use ecp_engine_stub::EcpEngineNotAvailable;
-pub use eval_gto::{eval_gto, EvalGtoOutput};
+pub use eval_gto::{EvalGtoOutput, eval_gto};
 pub use format_basis::format_basis;
 pub use format_ecp::{format_ecp, make_ecp_env};
-pub use intor::{intor, intor_with_auxmol, IntorOutput};
+pub use intor::{IntorOutput, intor, intor_with_auxmol};
 pub use pyscf_core::{Mole, Unit};
-pub use range_coulomb::{get_k_with_omega, intor_with_omega, PTR_RANGE_OMEGA};
+pub use range_coulomb::{PTR_RANGE_OMEGA, get_k_with_omega, intor_with_omega};
 pub use set_geom::set_geom_;
 pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
 
@@ -86,10 +86,7 @@ pub fn M(args: MoleBuildArgs) -> Result<Mole, pyscf_core::PyscfRsError> {
 /// Plan 02-04 will extend this to also call `format_basis` + `make_env`
 /// (the cintx flat-array projection). Plan 02-07 will extend with
 /// `format_ecp` + `make_ecp_env`.
-pub fn build_from(
-    mol: &mut Mole,
-    args: MoleBuildArgs,
-) -> Result<(), pyscf_core::PyscfRsError> {
+pub fn build_from(mol: &mut Mole, args: MoleBuildArgs) -> Result<(), pyscf_core::PyscfRsError> {
     // Echo user input for `dumps()` round-trip later.
     mol.atom = format!("{:?}", args.atom);
     mol.basis = format!("{:?}", args.basis);
@@ -108,8 +105,7 @@ pub fn build_from(
     mol.topgroup = "C1".to_string();
 
     // GTO-01: format_atom.
-    let parsed_atoms =
-        format_atom::format_atom(&args.atom, args.unit, args.origin, args.axes)?;
+    let parsed_atoms = format_atom::format_atom(&args.atom, args.unit, args.origin, args.axes)?;
     mol.natm = parsed_atoms.len();
     mol._atom = parsed_atoms;
 
@@ -165,12 +161,7 @@ pub fn build_from(
     let parsed_ecp = format_ecp::format_ecp(&args.ecp, &mol._atom)?;
     mol._ecp = parsed_ecp;
     if !mol._ecp.is_empty() {
-        mol._ecpbas = format_ecp::make_ecp_env(
-            &mol._atom,
-            &mol._ecp,
-            &mut mol._atm,
-            &mut mol._env,
-        );
+        mol._ecpbas = format_ecp::make_ecp_env(&mol._atom, &mol._ecp, &mut mol._atm, &mut mol._env);
 
         // Recompute `nelectron` because CHARGE_OF was decremented for
         // ECP atoms.

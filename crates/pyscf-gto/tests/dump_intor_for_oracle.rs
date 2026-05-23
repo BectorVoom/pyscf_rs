@@ -19,7 +19,7 @@
 #![cfg(feature = "release-oracle-tests")]
 
 use pyscf_core::Unit;
-use pyscf_gto::{intor, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor};
 use std::path::PathBuf;
 
 #[test]
@@ -27,8 +27,7 @@ use std::path::PathBuf;
 fn dump_intor_for_oracle() {
     let atom = std::env::var("PYSCF_RS_ORACLE_ATOM").expect("PYSCF_RS_ORACLE_ATOM env var");
     let basis = std::env::var("PYSCF_RS_ORACLE_BASIS").expect("PYSCF_RS_ORACLE_BASIS env var");
-    let intor_name =
-        std::env::var("PYSCF_RS_ORACLE_INTOR").expect("PYSCF_RS_ORACLE_INTOR env var");
+    let intor_name = std::env::var("PYSCF_RS_ORACLE_INTOR").expect("PYSCF_RS_ORACLE_INTOR env var");
     let out = std::env::var("PYSCF_RS_ORACLE_OUT").expect("PYSCF_RS_ORACLE_OUT env var");
 
     let mol = M(MoleBuildArgs {

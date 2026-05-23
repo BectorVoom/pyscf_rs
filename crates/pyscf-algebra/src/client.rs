@@ -29,9 +29,12 @@ impl AlgebraClient {
     pub fn kind(&self) -> BackendKind {
         match self {
             Self::Cpu(_) => BackendKind::Cpu,
-            #[cfg(feature = "cuda")] Self::Cuda(_) => BackendKind::Cuda,
-            #[cfg(feature = "wgpu")] Self::Wgpu(_) => BackendKind::Wgpu,
-            #[cfg(feature = "rocm")] Self::Rocm(_) => BackendKind::Rocm,
+            #[cfg(feature = "cuda")]
+            Self::Cuda(_) => BackendKind::Cuda,
+            #[cfg(feature = "wgpu")]
+            Self::Wgpu(_) => BackendKind::Wgpu,
+            #[cfg(feature = "rocm")]
+            Self::Rocm(_) => BackendKind::Rocm,
         }
     }
 

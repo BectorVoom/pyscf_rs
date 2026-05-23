@@ -18,11 +18,7 @@ pub trait OverrideHooks {
         mol: &Mole,
         mode: &crate::InitGuessMode,
     ) -> Result<Density, PyscfRsError>;
-    fn get_jk(
-        &self,
-        mol: &Mole,
-        dm: &Density,
-    ) -> Result<(Density, Density), PyscfRsError>;
+    fn get_jk(&self, mol: &Mole, dm: &Density) -> Result<(Density, Density), PyscfRsError>;
     fn get_veff(&self, mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError>;
     fn get_fock(
         &self,
@@ -33,16 +29,8 @@ pub trait OverrideHooks {
         cycle: i32,
         diis_state: Option<&Density>,
     ) -> Result<Density, PyscfRsError>;
-    fn eig(
-        &self,
-        fock: &Density,
-        s1e: &Density,
-    ) -> Result<MOCoefficients, PyscfRsError>;
-    fn get_occ(
-        &self,
-        mo_energy: &[f64],
-        nelec: usize,
-    ) -> Result<Vec<f64>, PyscfRsError>;
+    fn eig(&self, fock: &Density, s1e: &Density) -> Result<MOCoefficients, PyscfRsError>;
+    fn get_occ(&self, mo_energy: &[f64], nelec: usize) -> Result<Vec<f64>, PyscfRsError>;
     fn make_rdm1(&self, mo: &MOCoefficients) -> Result<Density, PyscfRsError>;
     fn energy_elec(
         &self,
@@ -74,11 +62,7 @@ impl OverrideHooks for NoOverrides {
     ) -> Result<Density, PyscfRsError> {
         crate::init_guess::default_get_init_guess(mol, mode)
     }
-    fn get_jk(
-        &self,
-        mol: &Mole,
-        dm: &Density,
-    ) -> Result<(Density, Density), PyscfRsError> {
+    fn get_jk(&self, mol: &Mole, dm: &Density) -> Result<(Density, Density), PyscfRsError> {
         crate::fock::default_get_jk(mol, dm)
     }
     fn get_veff(&self, mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError> {
@@ -95,18 +79,10 @@ impl OverrideHooks for NoOverrides {
     ) -> Result<Density, PyscfRsError> {
         crate::fock::default_get_fock(h1e, s1e, vhf, dm, cycle, diis_state)
     }
-    fn eig(
-        &self,
-        fock: &Density,
-        s1e: &Density,
-    ) -> Result<MOCoefficients, PyscfRsError> {
+    fn eig(&self, fock: &Density, s1e: &Density) -> Result<MOCoefficients, PyscfRsError> {
         crate::eig::default_eig(fock, s1e)
     }
-    fn get_occ(
-        &self,
-        mo_energy: &[f64],
-        nelec: usize,
-    ) -> Result<Vec<f64>, PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[f64], nelec: usize) -> Result<Vec<f64>, PyscfRsError> {
         crate::occ::default_get_occ(mo_energy, nelec)
     }
     fn make_rdm1(&self, mo: &MOCoefficients) -> Result<Density, PyscfRsError> {

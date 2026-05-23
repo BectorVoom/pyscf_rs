@@ -15,7 +15,7 @@
 //! the base operator id AND flips from synthetic to real evaluation.
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 #[test]
 #[ignore = "cintx-ops int3c2e_sph base symbol missing; plan 03-10 unignores"]

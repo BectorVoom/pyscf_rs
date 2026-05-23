@@ -265,10 +265,9 @@ pub fn xc_eval_substrate(deps: Dependency) -> XcEvalSubstrate {
         // Wgpu/Metal are only ever returned by auto_backend() when the
         // shader-f64 / hardware-f64 probe PASSED (the gate is inside
         // auto_backend), so an f64 XC eval there is honest.
-        XcfunBackend::Wgpu
-        | XcfunBackend::Metal
-        | XcfunBackend::Cuda
-        | XcfunBackend::Rocm => XcEvalSubstrate::Gpu,
+        XcfunBackend::Wgpu | XcfunBackend::Metal | XcfunBackend::Cuda | XcfunBackend::Rocm => {
+            XcEvalSubstrate::Gpu
+        }
     }
 }
 
@@ -346,11 +345,7 @@ fn xcfun_id_to_name(id: u32) -> Option<&'static str> {
 /// parsed spec, picks the family + `Vars`/`Mode`, and runs `eval_vec` over the
 /// block. Family is detected from the spec via `is_gga`/`is_metagga` AND the
 /// supplied `RhoBlock` (they must agree).
-fn xcfun_eval(
-    spec: &XcSpec,
-    rho: &RhoBlock<'_>,
-    order: DerivOrder,
-) -> Result<XcOutput, DftError> {
+fn xcfun_eval(spec: &XcSpec, rho: &RhoBlock<'_>, order: DerivOrder) -> Result<XcOutput, DftError> {
     use xcfun_rs::{Functional, Mode, Vars};
 
     let mut func = Functional::new();
@@ -536,7 +531,11 @@ mod libxc_impl {
                     let mut vrho = vec![0.0; np];
                     let mut o = LdaOutput::new(
                         Some(&mut zk),
-                        if order >= DerivOrder::Vxc { Some(&mut vrho) } else { None },
+                        if order >= DerivOrder::Vxc {
+                            Some(&mut vrho)
+                        } else {
+                            None
+                        },
                         None,
                         None,
                         None,
@@ -566,8 +565,18 @@ mod libxc_impl {
                         Some(&mut zk),
                         if want { Some(&mut vrho) } else { None },
                         if want { Some(&mut vsigma) } else { None },
-                        None, None, None, None, None, None, None,
-                        None, None, None, None, None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
                         np,
                         spin,
                     )
@@ -582,7 +591,13 @@ mod libxc_impl {
                     }
                 }
                 libxc_rs::Family::Mgga => {
-                    let RhoBlock::Mgga { rho, sigma, lapl, tau } = rho else {
+                    let RhoBlock::Mgga {
+                        rho,
+                        sigma,
+                        lapl,
+                        tau,
+                    } = rho
+                    else {
                         return Err(family_mismatch(Family::Mgga, rho.family()));
                     };
                     let input = MggaInput::new(rho, sigma, lapl, tau, np, spin)

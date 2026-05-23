@@ -19,6 +19,6 @@ pub mod cdiis;
 pub mod error;
 pub mod storable;
 
-pub use cdiis::{err_vec_scf, Diis};
+pub use cdiis::{Diis, err_vec_scf};
 pub use error::DiisError;
 pub use storable::DiisStorable;

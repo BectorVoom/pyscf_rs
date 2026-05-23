@@ -6,5 +6,8 @@ pub fn transpose(
     _x: &Tensor,
     _out: &mut Tensor,
 ) -> Result<(), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented { phase: 2, what: "transpose #[cube] kernel" })
+    Err(AlgebraError::NotYetImplemented {
+        phase: 2,
+        what: "transpose #[cube] kernel",
+    })
 }

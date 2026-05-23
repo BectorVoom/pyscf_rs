@@ -63,7 +63,10 @@ fn tie_break_to_lowest_index() {
     // c[1,0] = -0.8 < 0 → flip whole col. Conversely if we wrongly used >=,
     // we'd pick row 3 (c[3,0] = +0.8 > 0) → no flip. We assert the FLIP.
     let mut c = vec![0.0; 4]; // nao=4, nmo=1
-    c[0] = 0.1; c[1] = -0.8; c[2] = 0.2; c[3] = 0.8;
+    c[0] = 0.1;
+    c[1] = -0.8;
+    c[2] = 0.2;
+    c[3] = 0.8;
     canonicalize_signs(&mut c, 4, 1);
     // After tie-break-to-lowest: col flipped (because c[1] < 0).
     assert!((c[0] - -0.1).abs() < 1e-15);

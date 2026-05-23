@@ -170,12 +170,7 @@ impl RKS {
         // Disjoint immutable borrows for the KS hooks; the kernel runs to
         // completion before we write the result back to mutable fields.
         let result = {
-            let hooks = crate::hooks::KsHooks::new(
-                &self._numint,
-                &self.mol,
-                &self.grids,
-                &self.xc,
-            );
+            let hooks = crate::hooks::KsHooks::new(&self._numint, &self.mol, &self.grids, &self.xc);
             pyscf_scf::kernel(&self.mol, &hooks, cfg)?
         };
         self.mo_coeff = Some(result.mo_coeff.clone());
@@ -217,13 +212,11 @@ impl RKS {
 mod tests {
     use super::*;
     use pyscf_core::Unit;
-    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
     fn h2o() -> Mole {
         M(MoleBuildArgs {
-            atom: AtomInput::String(
-                "O 0 0 0; H 0 0 0.96; H 0 0.93 -0.24".into(),
-            ),
+            atom: AtomInput::String("O 0 0 0; H 0 0 0.96; H 0 0.93 -0.24".into()),
             basis: BasisInput::Name("sto-3g".into()),
             unit: Unit::Ang,
             ..Default::default()
@@ -253,7 +246,11 @@ mod tests {
         assert_eq!(ks.dtype(), DType::from_env());
         // In the default CI/test environment PYSCF_DTYPE is unset → F64.
         if std::env::var("PYSCF_DTYPE").is_err() {
-            assert_eq!(ks.dtype(), DType::F64, "default precision must be F64 (D-08)");
+            assert_eq!(
+                ks.dtype(),
+                DType::F64,
+                "default precision must be F64 (D-08)"
+            );
         }
         // (No set_precision method exists — enforced by the absence of any
         // mutable-precision method on RKS; the source assertion lives in the

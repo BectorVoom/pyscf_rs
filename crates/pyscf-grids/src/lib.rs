@@ -20,12 +20,12 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::unwrap_used)]
 
+pub mod lebedev;
+pub mod levels;
+pub mod partition;
+pub mod prune;
 pub mod radial;
 pub mod radii;
-pub mod lebedev;
-pub mod prune;
-pub mod partition;
-pub mod levels;
 
 use std::collections::BTreeMap;
 use std::f64::consts::PI;

@@ -166,7 +166,7 @@ pub fn to_rks_stub(rhf: &RHF) -> Result<KsConversion, PyscfRsError> {
 mod tests {
     use super::*;
     use pyscf_core::Unit;
-    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
     fn h2o() -> Mole {
         M(MoleBuildArgs {

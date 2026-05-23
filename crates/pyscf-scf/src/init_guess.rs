@@ -2,13 +2,10 @@
 //! Plan 03-11 ships the '1e' body; minao/atom/huckel stay NotYetImplemented
 //! until a Phase 3 follow-up plan or Phase 4 dependency lands.
 //! Plan 03-06 ships the `Chkfile(path)` body (`init_guess_by_chkfile`).
-use crate::{chkfile::load_scf_from_file, error::ScfError, InitGuessMode};
+use crate::{InitGuessMode, chkfile::load_scf_from_file, error::ScfError};
 use pyscf_core::{Density, Mole, PyscfRsError};
 
-pub fn default_get_init_guess(
-    mol: &Mole,
-    mode: &InitGuessMode,
-) -> Result<Density, PyscfRsError> {
+pub fn default_get_init_guess(mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
     match mode {
         InitGuessMode::Minao => {
             Err(ScfError::InitGuessNotYetImplemented("minao", "03-03 follow-up").into())

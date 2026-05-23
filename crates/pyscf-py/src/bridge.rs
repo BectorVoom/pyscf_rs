@@ -92,11 +92,7 @@ impl OverrideHooks for PyOverrideBridge {
         })
     }
 
-    fn get_init_guess(
-        &self,
-        _mol: &Mole,
-        mode: &InitGuessMode,
-    ) -> Result<Density, PyscfRsError> {
+    fn get_init_guess(&self, _mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
         // BIND-07 / Pitfall 7: dispatch through `slf.call_method1` so
         // a Python subclass override of `get_init_guess(mol, key)` is
         // invoked transparently via MRO resolution. The pyscf upstream
@@ -128,18 +124,11 @@ impl OverrideHooks for PyOverrideBridge {
         })
     }
 
-    fn get_jk(
-        &self,
-        _mol: &Mole,
-        dm: &Density,
-    ) -> Result<(Density, Density), PyscfRsError> {
+    fn get_jk(&self, _mol: &Mole, dm: &Density) -> Result<(Density, Density), PyscfRsError> {
         Python::attach(|py| {
             let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
-            let args = PyTuple::new(
-                py,
-                [self.py_mol.bind(py).clone(), dm_py.into_any()],
-            )
-            .map_err(py_to_pyscf)?;
+            let args = PyTuple::new(py, [self.py_mol.bind(py).clone(), dm_py.into_any()])
+                .map_err(py_to_pyscf)?;
             call_hook(&self.slf, "get_jk", args, |r| {
                 let (j_any, k_any): (Bound<'_, PyAny>, Bound<'_, PyAny>) = r.extract()?;
                 let j_arr: numpy::PyReadonlyArray2<f64> = j_any.extract()?;
@@ -152,11 +141,8 @@ impl OverrideHooks for PyOverrideBridge {
     fn get_veff(&self, _mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError> {
         Python::attach(|py| {
             let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
-            let args = PyTuple::new(
-                py,
-                [self.py_mol.bind(py).clone(), dm_py.into_any()],
-            )
-            .map_err(py_to_pyscf)?;
+            let args = PyTuple::new(py, [self.py_mol.bind(py).clone(), dm_py.into_any()])
+                .map_err(py_to_pyscf)?;
             call_hook(&self.slf, "get_veff", args, |r| {
                 let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
                 to_density(arr)
@@ -197,16 +183,12 @@ impl OverrideHooks for PyOverrideBridge {
         })
     }
 
-    fn eig(
-        &self,
-        fock: &Density,
-        s1e: &Density,
-    ) -> Result<MOCoefficients, PyscfRsError> {
+    fn eig(&self, fock: &Density, s1e: &Density) -> Result<MOCoefficients, PyscfRsError> {
         Python::attach(|py| {
             let fock_py = density_to_pyarray(py, fock).map_err(py_to_pyscf)?;
             let s1e_py = density_to_pyarray(py, s1e).map_err(py_to_pyscf)?;
-            let args = PyTuple::new(py, [fock_py.into_any(), s1e_py.into_any()])
-                .map_err(py_to_pyscf)?;
+            let args =
+                PyTuple::new(py, [fock_py.into_any(), s1e_py.into_any()]).map_err(py_to_pyscf)?;
             call_hook(&self.slf, "eig", args, |r| {
                 // Result is (mo_energy, mo_coeff): (np.ndarray[1d], np.ndarray[2d]).
                 let (e_any, c_any): (Bound<'_, PyAny>, Bound<'_, PyAny>) = r.extract()?;
@@ -219,11 +201,7 @@ impl OverrideHooks for PyOverrideBridge {
         })
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[f64],
-        _nelec: usize,
-    ) -> Result<Vec<f64>, PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[f64], _nelec: usize) -> Result<Vec<f64>, PyscfRsError> {
         Python::attach(|py| {
             let e_py = numpy::PyArray1::from_slice(py, mo_energy);
             let args = PyTuple::new(py, [e_py.into_any()]).map_err(py_to_pyscf)?;
@@ -238,8 +216,8 @@ impl OverrideHooks for PyOverrideBridge {
         Python::attach(|py| {
             let c_py = mo_coeff_to_pyarray(py, mo).map_err(py_to_pyscf)?;
             let occ_py = numpy::PyArray1::from_slice(py, &mo.occupations);
-            let args = PyTuple::new(py, [c_py.into_any(), occ_py.into_any()])
-                .map_err(py_to_pyscf)?;
+            let args =
+                PyTuple::new(py, [c_py.into_any(), occ_py.into_any()]).map_err(py_to_pyscf)?;
             call_hook(&self.slf, "make_rdm1", args, |r| {
                 let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
                 to_density(arr)
@@ -257,11 +235,8 @@ impl OverrideHooks for PyOverrideBridge {
             let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
             let h1e_py = density_to_pyarray(py, h1e).map_err(py_to_pyscf)?;
             let vhf_py = density_to_pyarray(py, vhf).map_err(py_to_pyscf)?;
-            let args = PyTuple::new(
-                py,
-                [dm_py.into_any(), h1e_py.into_any(), vhf_py.into_any()],
-            )
-            .map_err(py_to_pyscf)?;
+            let args = PyTuple::new(py, [dm_py.into_any(), h1e_py.into_any(), vhf_py.into_any()])
+                .map_err(py_to_pyscf)?;
             call_hook(&self.slf, "energy_elec", args, |r| {
                 let (e, ec): (f64, f64) = r.extract()?;
                 Ok((Energy(e), Energy(ec)))
@@ -279,11 +254,8 @@ impl OverrideHooks for PyOverrideBridge {
             let dm_py = density_to_pyarray(py, dm).map_err(py_to_pyscf)?;
             let h1e_py = density_to_pyarray(py, h1e).map_err(py_to_pyscf)?;
             let vhf_py = density_to_pyarray(py, vhf).map_err(py_to_pyscf)?;
-            let args = PyTuple::new(
-                py,
-                [dm_py.into_any(), h1e_py.into_any(), vhf_py.into_any()],
-            )
-            .map_err(py_to_pyscf)?;
+            let args = PyTuple::new(py, [dm_py.into_any(), h1e_py.into_any(), vhf_py.into_any()])
+                .map_err(py_to_pyscf)?;
             call_hook(&self.slf, "energy_tot", args, |r| {
                 let e: f64 = r.extract()?;
                 Ok(Energy(e))

@@ -24,7 +24,7 @@
 //! Security (T-04-05a/b): pure string→spec mapping; depth-bounded expansion.
 
 use crate::error::DftError;
-use crate::parser::{remove_dup, Component, XcSpec, MAX_EXPANSION_DEPTH};
+use crate::parser::{Component, MAX_EXPANSION_DEPTH, XcSpec, remove_dup};
 
 #[derive(Clone, Copy)]
 enum Resolved {
@@ -65,12 +65,14 @@ const XC_CODES: &[(&str, Resolved)] = &[
     ("PBE0", Resolved::Expand(".25*HF + .75*PBEX + PBEC")),
     ("PBE1PBE", Resolved::Expand("PBE0")),
     ("B3LYP", Resolved::Expand("B3LYPG")),
-    ("B3LYPG", Resolved::Expand(
-        ".2*HF + .08*SLATER + .72*B88 + .81*LYP + .19*VWN3C",
-    )),
-    ("B3LYP5", Resolved::Expand(
-        ".2*HF + .08*SLATER + .72*B88 + .81*LYP + .19*VWN5C",
-    )),
+    (
+        "B3LYPG",
+        Resolved::Expand(".2*HF + .08*SLATER + .72*B88 + .81*LYP + .19*VWN3C"),
+    ),
+    (
+        "B3LYP5",
+        Resolved::Expand(".2*HF + .08*SLATER + .72*B88 + .81*LYP + .19*VWN5C"),
+    ),
 ];
 
 /// xcfun `XC_ALIAS` (xcfun.py:240-291). UPPERCASE keys.

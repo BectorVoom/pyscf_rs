@@ -44,36 +44,102 @@ pub struct IntorEntry {
 /// Phase 7 (gradients) extends with derivative families if any are missing.
 pub const INTOR_LAYOUTS: &[IntorEntry] = &[
     // ── 1e overlap / kinetic / nuclear-attraction (1-component, F-order) ──
-    IntorEntry { name: "int1e_ovlp_sph",   layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int1e_ovlp_cart",  layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int1e_kin_sph",    layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int1e_kin_cart",   layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int1e_nuc_sph",    layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int1e_nuc_cart",   layout: IntorLayout::ScalarFOrder },
+    IntorEntry {
+        name: "int1e_ovlp_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int1e_ovlp_cart",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int1e_kin_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int1e_kin_cart",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int1e_nuc_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int1e_nuc_cart",
+        layout: IntorLayout::ScalarFOrder,
+    },
     // ── 1e dipole (3-component, leading) — Phase 4/5 properties ──────────
-    IntorEntry { name: "int1e_r_sph",      layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
-    IntorEntry { name: "int1e_r_cart",     layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
+    IntorEntry {
+        name: "int1e_r_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int1e_r_cart",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
     // ── 1e gradient families (3-component, leading) — SCF analytic Fock
     //    derivative + Phase 7 gradients ─────────────────────────────────
-    IntorEntry { name: "int1e_ipovlp_sph", layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
-    IntorEntry { name: "int1e_ipkin_sph",  layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
-    IntorEntry { name: "int1e_ipnuc_sph",  layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
-    IntorEntry { name: "int1e_iprinv_sph", layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
+    IntorEntry {
+        name: "int1e_ipovlp_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int1e_ipkin_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int1e_ipnuc_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int1e_iprinv_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
     // ── 2e Coulomb (1-component, F-order, 4D) ─────────────────────────────
-    IntorEntry { name: "int2e_sph",        layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int2e_cart",       layout: IntorLayout::ScalarFOrder },
+    IntorEntry {
+        name: "int2e_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int2e_cart",
+        layout: IntorLayout::ScalarFOrder,
+    },
     // ── 2e gradient (3-component, leading) — Phase 7 ──────────────────────
-    IntorEntry { name: "int2e_ip1_sph",    layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
-    IntorEntry { name: "int2e_ip2_sph",    layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
+    IntorEntry {
+        name: "int2e_ip1_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int2e_ip2_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
     // ── 3-center (DF / density-fitting auxiliary basis) ───────────────────
-    IntorEntry { name: "int3c2e_sph",      layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int3c2e_cart",     layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int3c2e_ip1_sph",  layout: IntorLayout::ComponentLeadingFOrder { components: 3 } },
+    IntorEntry {
+        name: "int3c2e_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int3c2e_cart",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int3c2e_ip1_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
     // ── 2-center auxiliary (DF metric) ────────────────────────────────────
-    IntorEntry { name: "int2c2e_sph",      layout: IntorLayout::ScalarFOrder },
-    IntorEntry { name: "int2c2e_cart",     layout: IntorLayout::ScalarFOrder },
+    IntorEntry {
+        name: "int2c2e_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int2c2e_cart",
+        layout: IntorLayout::ScalarFOrder,
+    },
     // ── grids (DFT NumInt path; Phase 4) ──────────────────────────────────
-    IntorEntry { name: "int1e_grids_sph",  layout: IntorLayout::ScalarFOrder },
+    IntorEntry {
+        name: "int1e_grids_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
 ];
 
 /// Lookup by name (linear scan; fast enough for ~25 entries).
@@ -83,7 +149,10 @@ pub const INTOR_LAYOUTS: &[IntorEntry] = &[
 /// out with `IntorNotInScope { name }` rather than passing through to
 /// cintx (so an upstream rename gets caught here, not deep in libcint).
 pub fn lookup(name: &str) -> Option<IntorLayout> {
-    INTOR_LAYOUTS.iter().find(|e| e.name == name).map(|e| e.layout)
+    INTOR_LAYOUTS
+        .iter()
+        .find(|e| e.name == name)
+        .map(|e| e.layout)
 }
 
 #[cfg(test)]

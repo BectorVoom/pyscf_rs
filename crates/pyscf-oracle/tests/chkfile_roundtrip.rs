@@ -8,7 +8,7 @@
 //! + `pip install pyscf`, drop `--ignored` to run.
 #![cfg(feature = "python")]
 
-use pyscf_oracle::{oracle_check, H2O_CC_PVDZ};
+use pyscf_oracle::{H2O_CC_PVDZ, oracle_check};
 
 #[test]
 #[ignore = "requires libpython shared-lib + upstream pyscf importable"]

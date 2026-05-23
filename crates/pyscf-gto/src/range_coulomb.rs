@@ -42,7 +42,7 @@
 
 use pyscf_core::{Density, Mole, PyscfRsError};
 
-use crate::intor::{intor, IntorOutput};
+use crate::intor::{IntorOutput, intor};
 
 /// libcint global-param slot for the range-separation omega
 /// (`PTR_RANGE_OMEGA = 8`). Defined locally because `pyscf_core::raw_layout`
@@ -146,27 +146,27 @@ pub fn intor_with_omega(
 ///
 /// Returns the K matrix as a [`Density`]. Like [`intor_with_omega`] the
 /// numerical values depend on the cintx env[8] + arity-4 gap (cintx#11).
-pub fn get_k_with_omega(
-    mol: &mut Mole,
-    dm: &Density,
-    omega: f64,
-) -> Result<Density, PyscfRsError> {
+pub fn get_k_with_omega(mol: &mut Mole, dm: &Density, omega: f64) -> Result<Density, PyscfRsError> {
     let nao = mol.nao_nr;
     if dm.nao != nao {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-            expected: nao,
-            actual: dm.nao,
-        }));
+        return Err(PyscfRsError::Core(
+            pyscf_core::CoreError::DimensionMismatch {
+                expected: nao,
+                actual: dm.nao,
+            },
+        ));
     }
     // Ranged ERIs: standard int2e with env[8] = omega (set/restored by the
     // guard inside intor_with_omega). Pitfall 1: NOT int2e_lr_/int2e_sr_.
     let eri = intor_with_omega(mol, "int2e", omega)?;
     let expected = nao * nao * nao * nao;
     if eri.values.len() != expected {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-            expected,
-            actual: eri.values.len(),
-        }));
+        return Err(PyscfRsError::Core(
+            pyscf_core::CoreError::DimensionMismatch {
+                expected,
+                actual: eri.values.len(),
+            },
+        ));
     }
     // K[μν] = Σ_{λσ} eri[μ,λ,ν,σ] · D[λ,σ] — the same 8-fold-symmetric
     // contraction as fock.rs:108-130, on the omega-screened ERIs.

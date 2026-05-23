@@ -11,10 +11,7 @@ use crate::{AlgebraClient, AlgebraError, Tensor};
 
 /// Self-adjoint eigendecomposition. Returns (eigenvalues, eigenvectors).
 /// Phase 3 wires `faer::Mat::self_adjoint_eigen(Side::Lower)` per RESEARCH §9.
-pub fn eigh(
-    _client: &AlgebraClient,
-    _matrix: &Tensor,
-) -> Result<(Vec<f64>, Tensor), AlgebraError> {
+pub fn eigh(_client: &AlgebraClient, _matrix: &Tensor) -> Result<(Vec<f64>, Tensor), AlgebraError> {
     Err(AlgebraError::NotYetImplemented {
         phase: 3,
         what: "eigh — Phase 3 wires faer::Mat::self_adjoint_eigen with Vec<f64> round-trip",
@@ -22,10 +19,7 @@ pub fn eigh(
 }
 
 /// Cholesky LLT (positive-definite only). Phase 3 wires `faer::Mat::llt`.
-pub fn cholesky(
-    _client: &AlgebraClient,
-    _matrix: &Tensor,
-) -> Result<Tensor, AlgebraError> {
+pub fn cholesky(_client: &AlgebraClient, _matrix: &Tensor) -> Result<Tensor, AlgebraError> {
     Err(AlgebraError::NotYetImplemented {
         phase: 3,
         what: "cholesky — Phase 3 wires faer::Mat::llt",
@@ -33,10 +27,7 @@ pub fn cholesky(
 }
 
 /// QR (no pivot). Phase 6 (CCSD intermediate canonicalization) wires.
-pub fn qr(
-    _client: &AlgebraClient,
-    _matrix: &Tensor,
-) -> Result<(Tensor, Tensor), AlgebraError> {
+pub fn qr(_client: &AlgebraClient, _matrix: &Tensor) -> Result<(Tensor, Tensor), AlgebraError> {
     Err(AlgebraError::NotYetImplemented {
         phase: 6,
         what: "qr — Phase 6 wires faer::Mat::qr",

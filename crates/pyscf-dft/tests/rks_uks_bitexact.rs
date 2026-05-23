@@ -55,7 +55,7 @@ fn rks_uks_bitexact() {
 mod structural {
     use pyscf_core::{Mole, Unit};
     use pyscf_dft::{NumInt, RKS, UKS};
-    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
     use pyscf_runtime::DType;
 
     fn h2o() -> Mole {
@@ -105,7 +105,11 @@ mod structural {
     #[test]
     fn rks_dtype_readonly_no_setter() {
         let ks = RKS::new(h2o(), "svwn");
-        assert_eq!(ks.dtype(), ks._numint.dtype(), "dtype() delegates to _numint");
+        assert_eq!(
+            ks.dtype(),
+            ks._numint.dtype(),
+            "dtype() delegates to _numint"
+        );
         assert_eq!(ks.dtype(), DType::from_env(), "reflects the env resolver");
         // (There is no `set_precision`/`set_dtype` on RKS — D-08 deferred. This
         //  is enforced structurally: no such pub fn exists. Asserting its
@@ -120,7 +124,10 @@ mod structural {
         let ni = NumInt::new();
         let (omega, _alpha, hyb) = ni.rsh_coeff("b3lyp", 0).expect("b3lyp rsh_coeff");
         assert!((hyb - 0.2).abs() < 1e-9, "B3LYP standard-hybrid hyb = 0.2");
-        assert!(omega.abs() < 1e-12, "B3LYP omega = 0 (standard hybrid; RSH → 04-07)");
+        assert!(
+            omega.abs() < 1e-12,
+            "B3LYP omega = 0 (standard hybrid; RSH → 04-07)"
+        );
         // SVWN/PBE are pure functionals — hyb = 0, no K term.
         assert!(ni.hybrid_coeff("svwn", 0).expect("svwn").abs() < 1e-12);
         assert!(ni.hybrid_coeff("pbe", 0).expect("pbe").abs() < 1e-12);

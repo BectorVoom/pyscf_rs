@@ -17,7 +17,7 @@ use cubecl::Runtime;
 #[test]
 fn cubecl_matmul_symbol_exists() {
     // Construct a CPU client to confirm runtime construction works.
-    let device = cubecl_cpu::CpuDevice::default();
+    let device = cubecl_cpu::CpuDevice;
     let _client = cubecl_cpu::CpuRuntime::client(&device);
     // The fact that this test compiles AND links is the proof: the
     // cubecl-matmul crate's symbols and types are visible. Rustdoc-

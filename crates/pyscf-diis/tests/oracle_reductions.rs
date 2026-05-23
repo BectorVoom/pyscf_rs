@@ -77,11 +77,8 @@ fn extrapolation_is_bit_identical_across_runs() {
 #[test]
 fn oracle_dot_used_in_cdiis_module() {
     // Source-level guard: cdiis.rs MUST contain at least one oracle_dot call.
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/cdiis.rs"
-    ))
-    .expect("read cdiis.rs");
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/cdiis.rs"))
+        .expect("read cdiis.rs");
     assert!(
         src.contains("oracle_dot"),
         "cdiis.rs must invoke oracle_dot (Pitfall 9 mitigation — B-matrix inner products)"
@@ -92,11 +89,8 @@ fn oracle_dot_used_in_cdiis_module() {
 fn oracle_sum_used_in_cdiis_module() {
     // Source-level guard: cdiis.rs MUST contain at least one oracle_sum call
     // for the extrapolated iterate's cross-iterate reduction.
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/cdiis.rs"
-    ))
-    .expect("read cdiis.rs");
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/cdiis.rs"))
+        .expect("read cdiis.rs");
     assert!(
         src.contains("oracle_sum"),
         "cdiis.rs must invoke oracle_sum (Pitfall 9 mitigation — extrapolated-iterate sums)"

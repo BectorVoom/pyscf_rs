@@ -35,14 +35,14 @@
 use std::sync::{Arc, Mutex};
 
 use pyscf_core::{Mole, Unit};
-use pyscf_dft::xc_backend::{pipeline_fallback, xc_eval_substrate, XcEvalSubstrate};
 use pyscf_dft::NumInt;
+use pyscf_dft::xc_backend::{XcEvalSubstrate, pipeline_fallback, xc_eval_substrate};
 use pyscf_grids::Grids;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 use pyscf_runtime::DType;
 use tracing::subscriber::with_default;
-use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
 use xcfun_rs::Dependency;
 
 /// Records every `WARN`-level event whose target is `pyscf_dft::xc_backend`
@@ -59,10 +59,11 @@ impl<S: tracing::Subscriber> Layer<S> for FallbackWarnCatcher {
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
         let meta = event.metadata();
-        if *meta.level() == tracing::Level::WARN && meta.target() == "pyscf_dft::xc_backend" {
-            if let Ok(mut g) = self.saw_fallback_warn.lock() {
-                *g = true;
-            }
+        if *meta.level() == tracing::Level::WARN
+            && meta.target() == "pyscf_dft::xc_backend"
+            && let Ok(mut g) = self.saw_fallback_warn.lock()
+        {
+            *g = true;
         }
     }
 }
@@ -150,8 +151,15 @@ fn wgpu_f64_fallback() {
     let (substrate, f64_requested, resolved, dtype, nr) = outcome;
 
     // The DEFAULT precision is f64 (the honesty path, NOT the f32 escape hatch).
-    assert!(f64_requested, "default precision is f64 (PYSCF_DTYPE unset → D-08 default)");
-    assert_eq!(dtype, DType::F64, "NumInt resolves to F64 (no silent f32 downgrade)");
+    assert!(
+        f64_requested,
+        "default precision is f64 (PYSCF_DTYPE unset → D-08 default)"
+    );
+    assert_eq!(
+        dtype,
+        DType::F64,
+        "NumInt resolves to F64 (no silent f32 downgrade)"
+    );
 
     // The delegated probe resolves to the CPU substrate on a shader-f64-less
     // device (here forced via XCFUN_FORCE_BACKEND=cpu / the CI default).

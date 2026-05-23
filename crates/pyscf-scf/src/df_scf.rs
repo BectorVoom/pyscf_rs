@@ -19,7 +19,7 @@
 //! `#[ignore]`'d until plan 03-10 runs the full DF-HF energy assertion).
 
 use pyscf_core::{CoreError, Density, Energy, MOCoefficients, Mole, PyscfRsError};
-use pyscf_df::{cholesky_eri, default_jkfit, DfIntegrals};
+use pyscf_df::{DfIntegrals, cholesky_eri, default_jkfit};
 
 use crate::{InitGuessMode, OverrideHooks, RHF};
 
@@ -62,10 +62,10 @@ impl RHF {
 /// through to `weigend` (universal fallback), which is the documented behaviour.
 fn extract_basis_name(basis_field: &str) -> String {
     // Pattern: `Name("cc-pvdz")` → `cc-pvdz`.
-    if let Some(rest) = basis_field.strip_prefix("Name(\"") {
-        if let Some(name) = rest.strip_suffix("\")") {
-            return name.to_string();
-        }
+    if let Some(rest) = basis_field.strip_prefix("Name(\"")
+        && let Some(name) = rest.strip_suffix("\")")
+    {
+        return name.to_string();
     }
     basis_field.to_string()
 }

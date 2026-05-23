@@ -109,11 +109,7 @@ mod python_impl {
     use pyo3::prelude::*;
     use pyo3::types::PyAnyMethods;
 
-    pub(super) fn dispatch(
-        method: &str,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    pub(super) fn dispatch(method: &str, fixture: &str, tol: f64) -> Result<(), OracleError> {
         Python::attach(|py| match method {
             "scf_rhf_energy" => check_scf_rhf_energy(py, fixture, tol),
             "scf_uhf_energy" => check_scf_uhf_energy(py, fixture, tol),
@@ -196,11 +192,7 @@ mod python_impl {
 
     // ── Arm 1: RHF energy ────────────────────────────────────────────────
 
-    fn check_scf_rhf_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_scf_rhf_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -233,11 +225,7 @@ mod python_impl {
 
     // ── Arm 2: UHF energy ────────────────────────────────────────────────
 
-    fn check_scf_uhf_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_scf_uhf_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -270,11 +258,7 @@ mod python_impl {
 
     // ── Arm 3: DIIS iteration count (|Δcycles| ≤ tol; integer-ish tol) ───
 
-    fn check_diis_iter_count(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_diis_iter_count(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -314,11 +298,7 @@ mod python_impl {
 
     // ── Arm 4: init_guess first-iteration density ────────────────────────
 
-    fn check_init_guess(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_init_guess(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         // Fixture is "<base>_<mode>" e.g. "h2o_ccpvdz_minao". The base
         // (without the `_<mode>` suffix) is what we hand both sides.
         let mode = fixtures::init_guess_mode(fixture);
@@ -373,11 +353,7 @@ mod python_impl {
 
     // ── Arm 5: DF-HF energy ──────────────────────────────────────────────
 
-    fn check_df_hf_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_df_hf_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -418,11 +394,7 @@ mod python_impl {
 
     // ── Arm 6: ORACLE-08 chkfile round-trip (both directions) ────────────
 
-    fn check_chkfile_roundtrip(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_chkfile_roundtrip(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         // Direction (a): PySCF writes → pyscf-rs reads.
         let tmp_a = tempfile::NamedTempFile::new()?;
         let path_a = tmp_a.path();
@@ -520,11 +492,7 @@ mod python_impl {
 
     // ── Arm 7: Mulliken population (atom-resolved charges) ───────────────
 
-    fn check_mulliken_pop(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_mulliken_pop(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -575,11 +543,7 @@ mod python_impl {
 
     // ── Arm 8: Dipole moment (3-vector) ──────────────────────────────────
 
-    fn check_dip_moment(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_dip_moment(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -634,11 +598,7 @@ mod python_impl {
         }
     }
 
-    fn check_grid_weights(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_grid_weights(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let (base, level) = parse_grid_fixture(fixture);
 
         // ── Upstream: dft.gen_grid.Grids with class defaults, sort_grids=False ──
@@ -734,11 +694,7 @@ mod python_impl {
     // functional as `<base>@<xc>` (fixtures::xc). f64 ONLY (PYSCF_DTYPE must
     // be unset — the bit-exact path; D-08). SVWN/PBE/B3LYP exercise the
     // LDA / GGA / standard-hybrid (hyb-scaled K) branches respectively.
-    fn check_rks_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_rks_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let xc = fixtures::xc(fixture);
         let mol = build_pyscf_mol(py, fixture)?;
         let dft = py
@@ -773,11 +729,7 @@ mod python_impl {
     }
 
     // ── Arm 11 (DFT-01): UKS total energy (open shell) ───────────────────
-    fn check_uks_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_uks_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let xc = fixtures::xc(fixture);
         let mol = build_pyscf_mol(py, fixture)?;
         let dft = py
@@ -814,11 +766,7 @@ mod python_impl {
     // ── Arm 12 (DFT-07): DF-DFT total energy ─────────────────────────────
     // `dft.RKS(mol, xc).density_fit().kernel()` — the Coulomb-J build routes
     // through the Phase 3 pyscf-df crate (D-10 reuse); the Vxc/K stay standard.
-    fn check_df_dft_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_df_dft_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let xc = fixtures::xc(fixture);
         let mol = build_pyscf_mol(py, fixture)?;
         let dft = py
@@ -931,8 +879,7 @@ mod python_impl {
         // schema). We build a representative KsResult from the loaded SCF block.
         let tmp_b = tempfile::NamedTempFile::new()?;
         let path_b = tmp_b.path();
-        let ks_result =
-            pyscf_dft::KsResult::new(scf_loaded, xc, pyscf_dft::GridsMeta::default());
+        let ks_result = pyscf_dft::KsResult::new(scf_loaded, xc, pyscf_dft::GridsMeta::default());
         pyscf_dft::dump_ks_to_file(path_b, "{}", &ks_result)
             .map_err(|e| OracleError::PyscfRs(format!("dump_ks_to_file: {}", e)))?;
 

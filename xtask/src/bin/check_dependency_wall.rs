@@ -103,9 +103,7 @@ fn main() -> Result<ExitCode> {
         for v in &violations {
             eprintln!("  - {v}");
         }
-        eprintln!(
-            "\nFix: route through pyscf-algebra's public surface (Tensor + free fns)."
-        );
+        eprintln!("\nFix: route through pyscf-algebra's public surface (Tensor + free fns).");
         eprintln!("Reference: docs/manual/Cubecl/ + RESEARCH.md Architecture Patterns.");
         Ok(ExitCode::from(2))
     }
@@ -122,7 +120,10 @@ fn workspace_root() -> Result<PathBuf> {
             }
         }
         if !p.pop() {
-            bail!("no [workspace] root found from {:?}", std::env::current_dir()?);
+            bail!(
+                "no [workspace] root found from {:?}",
+                std::env::current_dir()?
+            );
         }
     }
 }

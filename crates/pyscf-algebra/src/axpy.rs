@@ -8,5 +8,8 @@ pub fn axpy(
     _x: &Tensor,
     _y: &mut Tensor,
 ) -> Result<(), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented { phase: 2, what: "axpy #[cube] kernel" })
+    Err(AlgebraError::NotYetImplemented {
+        phase: 2,
+        what: "axpy #[cube] kernel",
+    })
 }

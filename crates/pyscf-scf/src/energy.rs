@@ -36,10 +36,7 @@ pub fn default_energy_elec(
             },
         ));
     }
-    if dm.data.len() != nao * nao
-        || h1e.data.len() != nao * nao
-        || vhf.data.len() != nao * nao
-    {
+    if dm.data.len() != nao * nao || h1e.data.len() != nao * nao || vhf.data.len() != nao * nao {
         return Err(pyscf_core::PyscfRsError::Core(
             pyscf_core::CoreError::DimensionMismatch {
                 expected: nao * nao,

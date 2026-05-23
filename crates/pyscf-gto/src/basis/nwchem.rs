@@ -28,11 +28,7 @@ use pyscf_core::{BasisLoadError, ParsedBasis, ShellSpec};
 /// Parse NWChem / Gaussian-94 text for one element symbol.
 /// Only shells matching `symbol` (case-insensitive) are kept. Shells for
 /// other elements are skipped silently.
-pub fn parse_nwchem(
-    text: &str,
-    symbol: &str,
-    source: &str,
-) -> Result<ParsedBasis, BasisLoadError> {
+pub fn parse_nwchem(text: &str, symbol: &str, source: &str) -> Result<ParsedBasis, BasisLoadError> {
     let symbol_upper = symbol.to_ascii_uppercase();
 
     // Per-l accumulator: each entry is one ShellSpec for that angular momentum.
@@ -73,10 +69,7 @@ pub fn parse_nwchem(
 
         // Decide if the line is a header (alphabetic first char) or a primitive
         // row (numeric first char).
-        let first_alpha = tokens[0]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_alphabetic());
+        let first_alpha = tokens[0].chars().next().is_some_and(|c| c.is_alphabetic());
 
         if first_alpha {
             // Flush any pending shell before starting a new one.
@@ -143,9 +136,11 @@ pub fn parse_nwchem(
             if !active_for_symbol {
                 continue; // skip primitives for other elements' blocks
             }
-            let normalised: String = line.replace('D', "e").replace('d', "e");
-            let cols: Result<Vec<f64>, _> =
-                normalised.split_whitespace().map(|s| s.parse::<f64>()).collect();
+            let normalised: String = line.replace(['D', 'd'], "e");
+            let cols: Result<Vec<f64>, _> = normalised
+                .split_whitespace()
+                .map(|s| s.parse::<f64>())
+                .collect();
             let cols = cols.map_err(|_| BasisLoadError::Parse {
                 file: source.into(),
                 line: i + 1,

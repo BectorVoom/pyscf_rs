@@ -15,8 +15,8 @@
 //!     kernel_internals_unit.rs.
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
-use pyscf_scf::{kernel, KernelConfig, NoOverrides};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
+use pyscf_scf::{KernelConfig, NoOverrides, kernel};
 
 #[test]
 #[ignore = "needs pyscf-gto int2e_sph arity-4 dispatch — unignore in plan 03-10"]
@@ -30,7 +30,10 @@ fn h2_no_overrides_converges() {
     .expect("build H2");
     let result = kernel(&mol, &NoOverrides, KernelConfig::default()).expect("converge");
     assert!(result.converged);
-    assert!(result.cycles <= 30, "H2/STO-3G should converge in ≤30 cycles");
+    assert!(
+        result.cycles <= 30,
+        "H2/STO-3G should converge in ≤30 cycles"
+    );
     assert!(
         result.e_tot.0 > -2.0 && result.e_tot.0 < -1.0,
         "H2/STO-3G total energy should be ~ -1.117 Hartree, got {}",
@@ -59,8 +62,10 @@ fn kernel_propagates_jk_not_yet_implemented() {
             // failure (minao mode is also not yet implemented). Both are
             // acceptable: the kernel is well-formed, the gap is documented.
             assert!(
-                msg.contains("not yet implemented") || msg.contains("NotYetImplemented")
-                    || msg.contains("int2e") || msg.contains("minao")
+                msg.contains("not yet implemented")
+                    || msg.contains("NotYetImplemented")
+                    || msg.contains("int2e")
+                    || msg.contains("minao")
                     || msg.contains("init_guess"),
                 "expected NotYetImplemented-flavoured error, got: {}",
                 msg

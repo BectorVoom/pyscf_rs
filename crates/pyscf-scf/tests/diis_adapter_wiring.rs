@@ -8,7 +8,7 @@
 //!     is REMOVED from fock.rs
 //!   - pyscf-diis dep is declared in pyscf-scf/Cargo.toml
 use pyscf_diis::DiisStorable;
-use pyscf_scf::{diis_step, FockSubspace};
+use pyscf_scf::{FockSubspace, diis_step};
 
 #[test]
 fn fock_subspace_impls_diis_storable() {
@@ -56,10 +56,16 @@ fn diis_step_is_noop_before_start_cycle() {
     let s = vec![1.0, 0.0, 0.0, 1.0]; // 2x2 identity
     let d = vec![1.0, 0.0, 0.0, 1.0];
     let f = vec![0.5, 0.1, 0.1, 0.5];
-    let out = diis_step(&mut diis, &s, &d, &f, 2, /*cycle=*/ 0, /*start=*/ 1)
-        .expect("noop should succeed");
+    let out = diis_step(
+        &mut diis, &s, &d, &f, 2, /*cycle=*/ 0, /*start=*/ 1,
+    )
+    .expect("noop should succeed");
     assert_eq!(out, f, "cycle < start_cycle must return Fock unchanged");
-    assert_eq!(diis.len(), 0, "no iterate should be pushed before start_cycle");
+    assert_eq!(
+        diis.len(),
+        0,
+        "no iterate should be pushed before start_cycle"
+    );
 }
 
 #[test]
@@ -70,8 +76,10 @@ fn diis_step_extrapolates_at_start_cycle() {
     let s = vec![1.0, 0.0, 0.0, 1.0];
     let d = vec![1.0, 0.0, 0.0, 1.0];
     let f = vec![0.5, 0.1, 0.1, 0.5];
-    let out = diis_step(&mut diis, &s, &d, &f, 2, /*cycle=*/ 1, /*start=*/ 1)
-        .expect("extrapolate single iterate");
+    let out = diis_step(
+        &mut diis, &s, &d, &f, 2, /*cycle=*/ 1, /*start=*/ 1,
+    )
+    .expect("extrapolate single iterate");
     // n=1: c[0] = 1, extrapolated F = current F.
     for (i, &v) in out.iter().enumerate() {
         assert!(
@@ -89,11 +97,8 @@ fn diis_step_extrapolates_at_start_cycle() {
 fn fock_source_no_longer_warns_about_unshipped_plan() {
     // Plan 03-04 done-criteria: the `plan 03-04 not yet shipped` warning is
     // removed from fock.rs.
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/fock.rs"
-    ))
-    .expect("read fock.rs");
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/fock.rs"))
+        .expect("read fock.rs");
     assert!(
         !src.contains("plan 03-04 not yet shipped"),
         "fock.rs must no longer reference 'plan 03-04 not yet shipped' (DIIS adapter shipped)"
@@ -102,11 +107,8 @@ fn fock_source_no_longer_warns_about_unshipped_plan() {
 
 #[test]
 fn pyscf_diis_dep_is_declared() {
-    let cargo = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/Cargo.toml"
-    ))
-    .expect("read Cargo.toml");
+    let cargo = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .expect("read Cargo.toml");
     assert!(
         cargo.contains("pyscf-diis"),
         "pyscf-scf/Cargo.toml must depend on pyscf-diis after plan 03-04"

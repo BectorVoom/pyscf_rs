@@ -12,10 +12,7 @@ pub enum BackendError {
     },
 
     #[error("memory limit exceeded: requested {requested} bytes, limit {limit} bytes")]
-    MemoryLimitExceeded {
-        requested: usize,
-        limit: usize,
-    },
+    MemoryLimitExceeded { requested: usize, limit: usize },
 
     #[error("backend not compiled in: {0}")]
     FeatureNotEnabled(&'static str),

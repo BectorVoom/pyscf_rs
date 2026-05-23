@@ -12,7 +12,7 @@
 pub mod cpu;
 #[cfg(feature = "cuda")]
 pub mod cuda;
-#[cfg(feature = "wgpu")]
-pub mod wgpu;
 #[cfg(feature = "rocm")]
 pub mod hip;
+#[cfg(feature = "wgpu")]
+pub mod wgpu;

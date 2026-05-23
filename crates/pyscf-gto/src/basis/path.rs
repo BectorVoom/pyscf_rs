@@ -49,11 +49,13 @@ pub fn basis_dir() -> Result<&'static PathBuf, BasisLoadError> {
         None
     });
 
-    resolved.as_ref().ok_or_else(|| BasisLoadError::PathNotFound {
-        tried: "PYSCF_BASIS_PATH env, CARGO_MANIFEST_DIR/../../pyscf/gto/basis, \
+    resolved
+        .as_ref()
+        .ok_or_else(|| BasisLoadError::PathNotFound {
+            tried: "PYSCF_BASIS_PATH env, CARGO_MANIFEST_DIR/../../pyscf/gto/basis, \
                 CARGO_MANIFEST_DIR/../pyscf/gto/basis, CARGO_MANIFEST_DIR/pyscf/gto/basis"
-            .into(),
-    })
+                .into(),
+        })
 }
 
 #[cfg(test)]

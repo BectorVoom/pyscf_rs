@@ -10,22 +10,22 @@
 #![forbid(unsafe_code)]
 #![warn(clippy::unwrap_used)]
 
-pub mod hooks;
-pub mod kernel;
-pub mod kernel_impl;
-pub mod init_guess;
-pub mod fock;
-pub mod eig;
-pub mod occ;
-pub mod rdm;
-pub mod energy;
 pub mod analyze;
 pub mod convert;
-pub mod scanner;
-pub mod rhf;
-pub mod uhf;
-pub mod ghf;
+pub mod eig;
+pub mod energy;
 pub mod error;
+pub mod fock;
+pub mod ghf;
+pub mod hooks;
+pub mod init_guess;
+pub mod kernel;
+pub mod kernel_impl;
+pub mod occ;
+pub mod rdm;
+pub mod rhf;
+pub mod scanner;
+pub mod uhf;
 // Plan 03-06 — SCF chkfile schema (impl Checkpointable for ScfResult +
 // dump_scf_to_file/load_scf_from_file helpers).
 pub mod chkfile;
@@ -38,19 +38,19 @@ pub use error::ScfError;
 pub use ghf::GHF;
 pub use hooks::{NoOverrides, OverrideHooks};
 pub use init_guess::parse_init_guess_mode;
-pub use kernel::{kernel, InitGuessMode, KernelConfig, ScfResult};
+pub use kernel::{InitGuessMode, KernelConfig, ScfResult, kernel};
 pub use rhf::RHF;
 pub use uhf::UHF;
 
 // Plan 03-11 re-exports — the `default_*` free fns + convert/analyze/
 // scanner surface 03-03 deliberately omitted (bodies didn't exist yet).
-pub use analyze::{analyze, dip_moment, mulliken_meta, mulliken_pop, MullikenResult};
-pub use convert::{
-    to_ghf, to_rhf, to_rks, to_rks_stub, to_uhf, to_uks, to_uks_stub, KsConversion,
-};
+pub use analyze::{MullikenResult, analyze, dip_moment, mulliken_meta, mulliken_pop};
+pub use convert::{KsConversion, to_ghf, to_rhf, to_rks, to_rks_stub, to_uhf, to_uks, to_uks_stub};
 pub use eig::default_eig;
 pub use energy::{default_energy_elec, default_energy_tot};
-pub use fock::{default_get_fock, default_get_hcore, default_get_jk, default_get_ovlp, default_get_veff};
+pub use fock::{
+    default_get_fock, default_get_hcore, default_get_jk, default_get_ovlp, default_get_veff,
+};
 pub use init_guess::default_get_init_guess;
 pub use occ::default_get_occ;
 pub use rdm::default_make_rdm1;
@@ -61,7 +61,7 @@ pub use scanner::as_scanner;
 pub use chkfile::{dump_scf_to_file, load_scf_from_file};
 
 // Plan 03-04 re-exports — DIIS adapter surface (FockSubspace + diis_step).
-pub use diis_adapter::{diis_step, FockSubspace};
+pub use diis_adapter::{FockSubspace, diis_step};
 // Plan 03-05 re-exports — DF-HF entry (DfHooks). RHF::density_fit lives on the
 // RHF impl block in df_scf.rs.
 pub use df_scf::DfHooks;

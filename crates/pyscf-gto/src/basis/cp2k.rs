@@ -12,11 +12,7 @@ use pyscf_core::{BasisLoadError, ParsedBasis};
 /// Stub: returns a structured "not yet implemented" error. The dispatch
 /// surface remains so future GTH-format basis files can be wired without
 /// touching call sites.
-pub fn parse_cp2k(
-    _text: &str,
-    _symbol: &str,
-    source: &str,
-) -> Result<ParsedBasis, BasisLoadError> {
+pub fn parse_cp2k(_text: &str, _symbol: &str, source: &str) -> Result<ParsedBasis, BasisLoadError> {
     Err(BasisLoadError::Parse {
         file: source.into(),
         line: 0,

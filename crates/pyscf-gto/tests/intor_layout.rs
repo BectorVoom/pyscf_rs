@@ -20,7 +20,7 @@
 mod common;
 
 use pyscf_core::Unit;
-use pyscf_gto::{intor, layout_table::IntorLayout, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor, layout_table::IntorLayout};
 
 fn h2_mol() -> pyscf_core::Mole {
     M(MoleBuildArgs {
@@ -28,11 +28,7 @@ fn h2_mol() -> pyscf_core::Mole {
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     })
     .expect("H2/STO-3G build")

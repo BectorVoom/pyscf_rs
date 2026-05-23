@@ -51,7 +51,10 @@ fn make_rdm1_diagonal_mos() {
     // D[0,0] = Σ_i occ[i] * C[0,i] * C[0,i] = 2 * 1 * 1 + 0 = 2.
     // D[0,1] = 2 * 1 * 0 + 0 = 0.
     // D[1,1] = 2 * 0 * 0 + 0 * 1 * 1 = 0.
-    assert!((dm.data[0] - 2.0).abs() < 1e-12, "D[0,0] = 2 (one doubly-occupied MO at AO 0)");
+    assert!(
+        (dm.data[0] - 2.0).abs() < 1e-12,
+        "D[0,0] = 2 (one doubly-occupied MO at AO 0)"
+    );
     assert!((dm.data[1]).abs() < 1e-12, "D[0,1] = 0");
     assert!((dm.data[2]).abs() < 1e-12, "D[1,0] = 0");
     assert!((dm.data[3]).abs() < 1e-12, "D[1,1] = 0 (second MO empty)");
@@ -63,23 +66,53 @@ fn energy_elec_simple() {
     // E_1e = sum D*h1e = -1 - 1 = -2
     // E_coul = 0.5 * sum D*vhf = 0.5 * (0.5 + 0.5) = 0.5
     // E_elec = E_1e + E_coul = -1.5
-    let dm = Density { nao: 2, data: vec![1.0, 0.0, 0.0, 1.0] };
-    let h1e = Density { nao: 2, data: vec![-1.0, 0.0, 0.0, -1.0] };
-    let vhf = Density { nao: 2, data: vec![0.5, 0.0, 0.0, 0.5] };
+    let dm = Density {
+        nao: 2,
+        data: vec![1.0, 0.0, 0.0, 1.0],
+    };
+    let h1e = Density {
+        nao: 2,
+        data: vec![-1.0, 0.0, 0.0, -1.0],
+    };
+    let vhf = Density {
+        nao: 2,
+        data: vec![0.5, 0.0, 0.0, 0.5],
+    };
     let (e_elec, e_coul) = default_energy_elec(&dm, &h1e, &vhf).expect("e_elec");
-    assert!((e_elec.0 - (-1.5)).abs() < 1e-12, "e_elec = -1.5, got {}", e_elec.0);
-    assert!((e_coul.0 - 0.5).abs() < 1e-12, "e_coul = 0.5, got {}", e_coul.0);
+    assert!(
+        (e_elec.0 - (-1.5)).abs() < 1e-12,
+        "e_elec = -1.5, got {}",
+        e_elec.0
+    );
+    assert!(
+        (e_coul.0 - 0.5).abs() < 1e-12,
+        "e_coul = 0.5, got {}",
+        e_coul.0
+    );
 }
 
 #[test]
 fn energy_tot_equals_elec_plus_nuc_caller_adds() {
     // The hook returns e_elec (caller adds nuc-repulsion in the kernel loop).
-    let dm = Density { nao: 1, data: vec![1.0] };
-    let h1e = Density { nao: 1, data: vec![-2.0] };
-    let vhf = Density { nao: 1, data: vec![1.0] };
+    let dm = Density {
+        nao: 1,
+        data: vec![1.0],
+    };
+    let h1e = Density {
+        nao: 1,
+        data: vec![-2.0],
+    };
+    let vhf = Density {
+        nao: 1,
+        data: vec![1.0],
+    };
     let e_tot: Energy = default_energy_tot(&dm, &h1e, &vhf).expect("e_tot");
     // e_1e = -2, e_coul = 0.5 * 1 = 0.5, sum = -1.5
-    assert!((e_tot.0 - (-1.5)).abs() < 1e-12, "energy_tot returns e_elec, got {}", e_tot.0);
+    assert!(
+        (e_tot.0 - (-1.5)).abs() < 1e-12,
+        "energy_tot returns e_elec, got {}",
+        e_tot.0
+    );
 }
 
 #[test]
@@ -90,17 +123,22 @@ fn make_rdm1_uses_oracle_sum_path() {
         nmo: 3,
         data: vec![
             // F-order: col 0, col 1, col 2
-            0.6, 0.8, 0.0,
-            -0.8, 0.6, 0.0,
-            0.0, 0.0, 1.0,
+            0.6, 0.8, 0.0, -0.8, 0.6, 0.0, 0.0, 0.0, 1.0,
         ],
         energies: vec![-1.0, 0.5, 0.8],
         occupations: vec![2.0, 0.0, 0.0],
     };
     let dm_a = default_make_rdm1(&mo).expect("rdm 1");
     let dm_b = default_make_rdm1(&mo).expect("rdm 2");
-    assert_eq!(dm_a.data, dm_b.data, "deterministic re-run (oracle_sum invariance)");
+    assert_eq!(
+        dm_a.data, dm_b.data,
+        "deterministic re-run (oracle_sum invariance)"
+    );
     // sum of diagonal == trace = sum of occupations = 2.0 (closed shell, 2 electrons)
     let trace = dm_a.data[0] + dm_a.data[4] + dm_a.data[8];
-    assert!((trace - 2.0).abs() < 1e-12, "trace(D) = nelec = 2, got {}", trace);
+    assert!(
+        (trace - 2.0).abs() < 1e-12,
+        "trace(D) = nelec = 2, got {}",
+        trace
+    );
 }

@@ -40,7 +40,7 @@ use std::str::FromStr;
 
 use pyscf_chkfile::hdf5;
 use pyscf_chkfile::hdf5::types::VarLenUnicode;
-use pyscf_chkfile::{primitives, Checkpointable, ChkfileError};
+use pyscf_chkfile::{Checkpointable, ChkfileError, primitives};
 use pyscf_core::{Energy, MOCoefficients};
 use pyscf_scf::ScfResult;
 
@@ -138,12 +138,13 @@ impl Checkpointable for KsResult {
             });
         }
         let view: ArrayView2<f64> =
-            ArrayView2::from_shape((nao, nmo).strides((1, nao)), &self.scf.mo_coeff.data)
-                .map_err(|_| ChkfileError::ShapeMismatch {
+            ArrayView2::from_shape((nao, nmo).strides((1, nao)), &self.scf.mo_coeff.data).map_err(
+                |_| ChkfileError::ShapeMismatch {
                     key: "mo_coeff".into(),
                     expected: vec![nao, nmo],
                     actual: vec![self.scf.mo_coeff.data.len()],
-                })?;
+                },
+            )?;
         primitives::write_dataset_f_order(scf_group, "mo_coeff", view)?;
 
         // ── The DFT metadata (xc + grids — DFT-07 chkfile) ─────────────────
@@ -275,8 +276,7 @@ mod tests {
         let original = sample_ks_result();
         let tmp = tempfile::NamedTempFile::new().expect("tmp");
         let path = tmp.path();
-        dump_ks_to_file(path, r#"{"atom":"O 0 0 0","basis":"cc-pvdz"}"#, &original)
-            .expect("dump");
+        dump_ks_to_file(path, r#"{"atom":"O 0 0 0","basis":"cc-pvdz"}"#, &original).expect("dump");
         let loaded = load_ks_from_file(path).expect("load");
 
         assert!((loaded.scf.e_tot.0 - original.scf.e_tot.0).abs() < 1e-12);

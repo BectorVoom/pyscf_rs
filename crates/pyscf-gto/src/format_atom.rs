@@ -75,7 +75,7 @@ fn parse_atom_string(
     origin: [f64; 3],
     axes: [[f64; 3]; 3],
 ) -> Result<Vec<ParsedAtom>, PyscfRsError> {
-    let normalized = s.replace(';', "\n").replace(',', " ").replace('\t', " ");
+    let normalized = s.replace(';', "\n").replace([',', '\t'], " ");
     let mut atoms = Vec::new();
     for raw_line in normalized.lines() {
         // Strip "# comment" suffix.
@@ -161,11 +161,7 @@ fn apply_unit_origin_axes(
     atoms
         .into_iter()
         .map(|(symb, xyz)| {
-            let s = [
-                xyz[0] - origin[0],
-                xyz[1] - origin[1],
-                xyz[2] - origin[2],
-            ];
+            let s = [xyz[0] - origin[0], xyz[1] - origin[1], xyz[2] - origin[2]];
             // r[k] = sum_j s[j] * axes[j][k]
             let r = [
                 f * (s[0] * axes[0][0] + s[1] * axes[1][0] + s[2] * axes[2][0]),

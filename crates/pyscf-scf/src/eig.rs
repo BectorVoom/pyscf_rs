@@ -10,7 +10,7 @@
 //! calls `pyscf_core::canonicalize_signs` on the F-order MO coefficient
 //! buffer to make eigenvector signs vendor-stable.
 
-use pyscf_core::{canonicalize_signs, Density, MOCoefficients, PyscfRsError};
+use pyscf_core::{Density, MOCoefficients, PyscfRsError, canonicalize_signs};
 
 use crate::error::ScfError;
 
@@ -27,8 +27,8 @@ pub fn default_eig(fock: &Density, s1e: &Density) -> Result<MOCoefficients, Pysc
         })
         .into());
     }
-    let (eigvals, mut eigvecs) = pyscf_algebra::eigh_gen(&fock.data, &s1e.data, nao)
-        .map_err(ScfError::Algebra)?;
+    let (eigvals, mut eigvecs) =
+        pyscf_algebra::eigh_gen(&fock.data, &s1e.data, nao).map_err(ScfError::Algebra)?;
 
     // SCF-13 anchor (Pitfall 4 + Pitfall 12) — vendor-stable eigenvector
     // signs. Idempotent; the canonicalize_post_eigh.rs integration test

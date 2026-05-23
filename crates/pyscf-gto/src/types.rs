@@ -57,19 +57,14 @@ impl Default for BasisInput {
 }
 
 /// ECP-input form. Plan 02-07 fills the body.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum EcpInput {
+    #[default]
     None,
     Name(String),
     PerElement(HashMap<String, EcpInput>),
     NwchemEcpText(String),
     Parsed(ParsedEcp),
-}
-
-impl Default for EcpInput {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Typed-kwargs analog of upstream `Mole.build(**kwargs)`.

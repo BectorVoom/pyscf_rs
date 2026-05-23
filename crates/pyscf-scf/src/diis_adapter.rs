@@ -9,7 +9,7 @@
 //! `pyscf_algebra::oracle_dot` so the B-matrix inner products are
 //! bit-identical across thread counts.
 
-use pyscf_diis::{err_vec_scf, Diis, DiisError, DiisStorable};
+use pyscf_diis::{Diis, DiisError, DiisStorable, err_vec_scf};
 
 /// Fock-matrix subspace stored in the DIIS ring buffer.
 ///

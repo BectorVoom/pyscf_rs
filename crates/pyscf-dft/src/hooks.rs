@@ -22,8 +22,8 @@ use pyscf_grids::Grids;
 use pyscf_scf::{InitGuessMode, OverrideHooks};
 
 use crate::numint::NumInt;
-use crate::parser::{xcfun, XcSpec};
-use crate::veff::{default_get_veff, KsVeff};
+use crate::parser::{XcSpec, xcfun};
+use crate::veff::{KsVeff, default_get_veff};
 
 /// The KS override surface — extends `pyscf_scf::OverrideHooks` (a supertrait
 /// bound) with the two KS-specific seams (DFT-08).
@@ -79,11 +79,7 @@ impl OverrideHooks for NoKsOverrides {
     fn get_ovlp(&self, mol: &Mole) -> Result<Density, PyscfRsError> {
         pyscf_scf::default_get_ovlp(mol)
     }
-    fn get_init_guess(
-        &self,
-        mol: &Mole,
-        mode: &InitGuessMode,
-    ) -> Result<Density, PyscfRsError> {
+    fn get_init_guess(&self, mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
         pyscf_scf::default_get_init_guess(mol, mode)
     }
     fn get_jk(&self, mol: &Mole, dm: &Density) -> Result<(Density, Density), PyscfRsError> {
@@ -247,11 +243,7 @@ impl OverrideHooks for KsHooks<'_> {
     fn get_ovlp(&self, mol: &Mole) -> Result<Density, PyscfRsError> {
         pyscf_scf::default_get_ovlp(mol)
     }
-    fn get_init_guess(
-        &self,
-        mol: &Mole,
-        mode: &InitGuessMode,
-    ) -> Result<Density, PyscfRsError> {
+    fn get_init_guess(&self, mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
         pyscf_scf::default_get_init_guess(mol, mode)
     }
     fn get_jk(&self, mol: &Mole, dm: &Density) -> Result<(Density, Density), PyscfRsError> {
@@ -316,8 +308,10 @@ impl OverrideHooks for KsHooks<'_> {
                     drop(cache);
                     let bundle = self.ks_veff(self.mol, dm)?;
                     let c = self.cache.borrow();
-                    let cc = c.as_ref().map(|c| (c.exc, c.half_tr_d_vxc)).unwrap_or((bundle.exc, 0.0));
-                    cc
+
+                    c.as_ref()
+                        .map(|c| (c.exc, c.half_tr_d_vxc))
+                        .unwrap_or((bundle.exc, 0.0))
                 }
             }
         };
@@ -373,7 +367,9 @@ mod tests {
         let err = hooks.define_xc_callable().unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("deferred") || msg.contains("not yet implemented") || msg.contains("NotYetImplemented"),
+            msg.contains("deferred")
+                || msg.contains("not yet implemented")
+                || msg.contains("NotYetImplemented"),
             "callable define_xc_ must be deferred (D-02), got: {msg}"
         );
     }

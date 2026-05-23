@@ -50,7 +50,10 @@ pub struct NlcCoeffs {
 
 impl NlcCoeffs {
     /// The bare `'VV10'` default `(Bvv = 5.9, Cvv = 0.0093)` (A1).
-    pub const VV10_DEFAULT: NlcCoeffs = NlcCoeffs { bvv: 5.9, cvv: 0.0093 };
+    pub const VV10_DEFAULT: NlcCoeffs = NlcCoeffs {
+        bvv: 5.9,
+        cvv: 0.0093,
+    };
 
     /// Resolve the NLC coefficients for an `nlc` code. For the bare `'VV10'`
     /// (case-insensitive) returns the A1 default. Per-functional resolution
@@ -64,11 +67,10 @@ impl NlcCoeffs {
             // Without the libxc backend we only know the bare default — surface
             // a clear error rather than silently substituting the default.
             other => Err(DftError::UnknownFunctional {
-                xc: format!(
-                    "per-functional VV10 coefficients require the libxc backend \
+                xc: "per-functional VV10 coefficients require the libxc backend \
                      (libxc_rs::NlcCoefficients::nlc_coeff); only the bare 'VV10' default \
                      (Bvv=5.9, Cvv=0.0093) is available on the xcfun-default build (A1)"
-                ),
+                    .to_string(),
                 token: other.to_string(),
             }),
         }
@@ -275,9 +277,8 @@ pub fn nr_nlc_vxc(
 
     // GGA Vxc back-contraction (numint.py:1407-1415). The AO buffer is
     // F-order [4, ngrids, nao]: ao[comp*ngrids*nao + (g + mu*ngrids)].
-    let ao_at = |comp: usize, g: usize, mu: usize| -> f64 {
-        ao[comp * ngrids * nao + (g + mu * ngrids)]
-    };
+    let ao_at =
+        |comp: usize, g: usize, mu: usize| -> f64 { ao[comp * ngrids * nao + (g + mu * ngrids)] };
     let mut vmat = vec![0.0_f64; nao * nao];
     let mut row_terms = vec![0.0_f64; ngrids];
     for mu in 0..nao {
@@ -291,9 +292,8 @@ pub fn nr_nlc_vxc(
                 // GGA gradient term: 2·w·vsigma·(∇ρ·∇φ_μ)·φ_ν, symmetrized
                 // (the same back-contraction shape as the main numint grid
                 // loop; the 0.5 folds with the vmat += V + Vᵀ symmetrization).
-                let gphi_mu = dx[g] * ao_at(1, g, mu)
-                    + dy[g] * ao_at(2, g, mu)
-                    + dz[g] * ao_at(3, g, mu);
+                let gphi_mu =
+                    dx[g] * ao_at(1, g, mu) + dy[g] * ao_at(2, g, mu) + dz[g] * ao_at(3, g, mu);
                 t += 0.5 * 2.0 * w * vv.vsigma[g] * gphi_mu * phi_nu;
                 row_terms[g] = t;
             }
@@ -346,7 +346,10 @@ mod tests {
     #[test]
     fn per_functional_nlc_requires_libxc() {
         let res = NlcCoeffs::for_nlc_code("WB97X_V");
-        assert!(res.is_err(), "per-functional nlc needs libxc nlc_coeff (A1)");
+        assert!(
+            res.is_err(),
+            "per-functional nlc needs libxc nlc_coeff (A1)"
+        );
     }
 
     /// Independent longhand verification of the VV10 inner double-loop on a

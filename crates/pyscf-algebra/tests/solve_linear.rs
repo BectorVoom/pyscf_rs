@@ -5,7 +5,7 @@
 //! 0.24 `FullPivLu` handles it correctly (singular-detection via the
 //! post-solve `is_finite` check — see `solve_linear.rs` for rationale).
 
-use pyscf_algebra::{solve_linear, AlgebraError};
+use pyscf_algebra::{AlgebraError, solve_linear};
 
 #[test]
 fn identity_returns_rhs() {
@@ -21,11 +21,7 @@ fn diis_b_matrix_shape_with_lagrange_row() {
     // 3×3 DIIS B-matrix with Lagrange-row pattern (zero on bottom-right
     // diagonal element). Construct: B[i,j] = (i+1)*(j+1) for i,j<2, -1 on
     // last row/col, 0 in corner. RHS = [0,0,-1].
-    let a = [
-        1.0,  2.0, -1.0,
-        2.0,  4.5, -1.0,
-       -1.0, -1.0,  0.0,
-    ];
+    let a = [1.0, 2.0, -1.0, 2.0, 4.5, -1.0, -1.0, -1.0, 0.0];
     let b = [0.0, 0.0, -1.0];
     // Manual solve: this system has a unique solution per Pulay's method.
     // We only assert the solve succeeds and the residual is small.
@@ -43,8 +39,8 @@ fn singular_matrix_returns_err() {
     let a = [1.0, 2.0, 2.0, 4.0]; // det=0
     let b = [1.0, 2.0];
     match solve_linear(&a, &b, 2) {
-        Err(AlgebraError::Singular)         => (),
-        Err(AlgebraError::ShapeMismatch{..}) => panic!("expected Singular, got ShapeMismatch"),
+        Err(AlgebraError::Singular) => (),
+        Err(AlgebraError::ShapeMismatch { .. }) => panic!("expected Singular, got ShapeMismatch"),
         Err(e) => panic!("unexpected error variant: {:?}", e),
         Ok(_) => panic!("expected singular error, got Ok"),
     }
@@ -54,5 +50,8 @@ fn singular_matrix_returns_err() {
 fn shape_mismatch_returns_err() {
     let a = [1.0, 0.0, 0.0]; // 3 elements but n=2 → mismatch
     let b = [1.0, 2.0];
-    assert!(matches!(solve_linear(&a, &b, 2), Err(AlgebraError::ShapeMismatch{..})));
+    assert!(matches!(
+        solve_linear(&a, &b, 2),
+        Err(AlgebraError::ShapeMismatch { .. })
+    ));
 }

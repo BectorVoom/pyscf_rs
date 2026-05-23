@@ -64,11 +64,7 @@ pub trait IntegralEngine {
     /// Compute the named integral (e.g., `"int1e_ovlp_sph"`,
     /// `"int2e"`). Returns the array layout upstream PySCF returns
     /// (F-order where applicable — Pitfall 8).
-    fn intor(
-        &self,
-        mol: &Mole,
-        name: &str,
-    ) -> Result<Density, PyscfRsError>;
+    fn intor(&self, mol: &Mole, name: &str) -> Result<Density, PyscfRsError>;
 }
 
 /// ECP engine — the cintx-side ECP integration seam.
@@ -93,11 +89,7 @@ pub trait EcpEngine: Send + Sync {
     /// ECP gradients). Phase 2 default returns
     /// `NotYetImplemented{phase:7}`; the cintx-backed impl (when 02-10
     /// wires it) ships this for grad.
-    fn ecp_int1e_ipnuc(
-        &self,
-        mol: &Mole,
-        name: &str,
-    ) -> Result<Density, PyscfRsError> {
+    fn ecp_int1e_ipnuc(&self, mol: &Mole, name: &str) -> Result<Density, PyscfRsError> {
         let _ = (mol, name);
         Err(PyscfRsError::NotYetImplemented {
             phase: 7,

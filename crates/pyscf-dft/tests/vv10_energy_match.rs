@@ -19,15 +19,13 @@
 //! `nr_nlc_vxc` (1347-1416).
 
 use pyscf_core::Unit;
-use pyscf_dft::{nr_nlc_vxc, NlcCoeffs, NumInt};
+use pyscf_dft::{NlcCoeffs, NumInt, nr_nlc_vxc};
 use pyscf_grids::Grids;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 fn h2o_mol() -> pyscf_core::Mole {
     M(MoleBuildArgs {
-        atom: AtomInput::String(
-            "O 0.0 0.0 0.0; H 0.0 -0.757 0.587; H 0.0 0.757 0.587".into(),
-        ),
+        atom: AtomInput::String("O 0.0 0.0 0.0; H 0.0 -0.757 0.587; H 0.0 0.757 0.587".into()),
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Ang,
         max_memory: 4000.0,
@@ -67,10 +65,20 @@ fn vv10_nlc_runs_end_to_end_over_coarser_nlcgrids() {
     let res = nr_nlc_vxc(&ni, &mol, &nlcgrids, "VV10", &dm).expect("nr_nlc_vxc VV10");
 
     // Finite NLC energy + potential (the double-loop produced real numbers).
-    assert!(res.excsum.is_finite(), "NLC excsum must be finite, got {}", res.excsum);
-    assert!(res.nelec.is_finite() && res.nelec > 0.0, "NLC nelec finite + positive");
+    assert!(
+        res.excsum.is_finite(),
+        "NLC excsum must be finite, got {}",
+        res.excsum
+    );
+    assert!(
+        res.nelec.is_finite() && res.nelec > 0.0,
+        "NLC nelec finite + positive"
+    );
     assert_eq!(res.vmat.nao, nao, "NLC Vxc is nao × nao");
-    assert!(res.vmat.data.iter().all(|v| v.is_finite()), "NLC Vxc finite");
+    assert!(
+        res.vmat.data.iter().all(|v| v.is_finite()),
+        "NLC Vxc finite"
+    );
 
     // The NLC potential matrix is symmetric (vmat += V + Vᵀ, numint.py:1415).
     for mu in 0..nao {

@@ -21,15 +21,13 @@
 //! `mol.with_range_coulomb(omega)`.
 
 use pyscf_core::Unit;
-use pyscf_dft::{default_get_veff, NumInt};
+use pyscf_dft::{NumInt, default_get_veff};
 use pyscf_grids::Grids;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 fn h2o_mol() -> pyscf_core::Mole {
     M(MoleBuildArgs {
-        atom: AtomInput::String(
-            "O 0.0 0.0 0.0; H 0.0 -0.757 0.587; H 0.0 0.757 0.587".into(),
-        ),
+        atom: AtomInput::String("O 0.0 0.0 0.0; H 0.0 -0.757 0.587; H 0.0 0.757 0.587".into()),
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Ang,
         max_memory: 4000.0,
@@ -60,7 +58,10 @@ fn rsh_coeff_distinguishes_rsh_from_standard_hybrid() {
 
     // RSH functional: omega != 0, and alpha (LR HF mixing) != hyb (SR/std).
     let (omega, alpha, hyb) = ni.rsh_coeff(RSH_XC, 0).expect("RSH rsh_coeff");
-    assert!(omega.abs() > 1e-9, "RSH functional must have omega != 0, got {omega}");
+    assert!(
+        omega.abs() > 1e-9,
+        "RSH functional must have omega != 0, got {omega}"
+    );
     assert!(
         (alpha - hyb).abs() > 1e-9,
         "RSH must have alpha != hyb so (alpha − hyb)·K_lr is non-trivial (alpha={alpha}, hyb={hyb})"
@@ -78,7 +79,7 @@ fn rsh_coeff_distinguishes_rsh_from_standard_hybrid() {
 #[test]
 fn rsh_get_veff_dispatches_into_range_coulomb_branch() {
     let ni = NumInt::new();
-    let mut mol = h2o_mol();
+    let mol = h2o_mol();
     let mut grids = Grids::new();
     grids.level = 0; // coarse grid — we only need the branch dispatch, not energy.
     let (coords, weights) = grids.build(&mol);
@@ -88,9 +89,18 @@ fn rsh_get_veff_dispatches_into_range_coulomb_branch() {
     let nao = mol.nao_nr;
     // A trivial (1e-shaped) density and zero J/K so the veff math is defined;
     // the RSH branch then calls get_k_with_omega, which hits the ERI gap.
-    let dm = pyscf_core::Density { nao, data: vec![0.1_f64; nao * nao] };
-    let j = pyscf_core::Density { nao, data: vec![0.0_f64; nao * nao] };
-    let k = pyscf_core::Density { nao, data: vec![0.0_f64; nao * nao] };
+    let dm = pyscf_core::Density {
+        nao,
+        data: vec![0.1_f64; nao * nao],
+    };
+    let j = pyscf_core::Density {
+        nao,
+        data: vec![0.0_f64; nao * nao],
+    };
+    let k = pyscf_core::Density {
+        nao,
+        data: vec![0.0_f64; nao * nao],
+    };
 
     let res = default_get_veff(&ni, &mol, &grids, RSH_XC, &dm, &j, &k);
 
@@ -106,9 +116,7 @@ fn rsh_get_veff_dispatches_into_range_coulomb_branch() {
             // the RSH K builder — acceptable only if it is also the ERI gap
             // surfaced from the grid loop's J/K. Fail loudly otherwise so a
             // regression in the RSH wiring is caught.
-            panic!(
-                "RSH get_veff did not reach the arity-4 int2e gap as expected; got {other:?}"
-            );
+            panic!("RSH get_veff did not reach the arity-4 int2e gap as expected; got {other:?}");
         }
         Ok(_) => panic!(
             "RSH get_veff returned Ok unexpectedly — the omega-screened K build \

@@ -108,7 +108,8 @@ fn xc_eval_bitexact_xcfun_and_libxc_agree_on_lda_exchange() {
 
     for ip in 0..RHO_BLOCK.len() {
         assert!(
-            (libxc_out.exc[ip] - xcfun_out.exc[ip]).abs() <= 1e-10 * libxc_out.exc[ip].abs().max(1.0),
+            (libxc_out.exc[ip] - xcfun_out.exc[ip]).abs()
+                <= 1e-10 * libxc_out.exc[ip].abs().max(1.0),
             "LDA exchange disagreement at ip={ip}: libxc {} vs xcfun {}",
             libxc_out.exc[ip],
             xcfun_out.exc[ip]

@@ -50,7 +50,9 @@ pub enum DftError {
     /// The bounded-depth guard on compound-functional expansion
     /// (`0.5*b3lyp`-style unit scaling) tripped — protects against adversarial
     /// or cyclic alias chains (threat T-04-05b, DoS via unbounded recursion).
-    #[error("XC compound-expansion depth limit ({limit}) exceeded for '{xc}' — possible cyclic alias")]
+    #[error(
+        "XC compound-expansion depth limit ({limit}) exceeded for '{xc}' — possible cyclic alias"
+    )]
     ExpansionDepthExceeded { xc: String, limit: usize },
 
     /// The `libxc` backend was requested but the crate was not compiled with

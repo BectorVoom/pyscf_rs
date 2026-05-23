@@ -84,9 +84,7 @@ fn is_f_contiguous(arr: &PyReadonlyArray2<'_, f64>) -> bool {
     let strides = arr.strides();
     let shape = arr.shape();
     let f64_size = std::mem::size_of::<f64>() as isize;
-    strides.len() == 2
-        && strides[0] == f64_size
-        && strides[1] == (shape[0] as isize) * f64_size
+    strides.len() == 2 && strides[0] == f64_size && strides[1] == (shape[0] as isize) * f64_size
 }
 
 /// Convert a `Density` into a C-contiguous NumPy 2D array.

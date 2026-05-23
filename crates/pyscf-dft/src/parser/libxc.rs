@@ -23,7 +23,7 @@
 //! compound-expansion recursion is depth-bounded.
 
 use crate::error::DftError;
-use crate::parser::{remove_dup, Component, XcSpec, MAX_EXPANSION_DEPTH};
+use crate::parser::{Component, MAX_EXPANSION_DEPTH, XcSpec, remove_dup};
 
 /// An `XC_CODES` / `XC_ALIAS` entry either resolves directly to a libxc
 /// integer ID, or expands to another XC string (compound, recursively parsed).
@@ -81,8 +81,14 @@ const XC_CODES: &[(&str, Resolved)] = &[
     ("MGGA_X_SCAN", Resolved::Id(263)),
     ("MGGA_C_SCAN", Resolved::Id(267)),
     // Compound expansions (libxc.py:173,195,198 ...).
-    ("B3LYP5", Resolved::Expand(".2*HF + .08*SLATER + .72*B88, .81*LYP + .19*VWN")),
-    ("B5050LYP", Resolved::Expand(".5*HF + .08*SLATER + .42*B88, .81*LYP + .19*VWN")),
+    (
+        "B3LYP5",
+        Resolved::Expand(".2*HF + .08*SLATER + .72*B88, .81*LYP + .19*VWN"),
+    ),
+    (
+        "B5050LYP",
+        Resolved::Expand(".5*HF + .08*SLATER + .42*B88, .81*LYP + .19*VWN"),
+    ),
     ("PBE50", Resolved::Expand(".5*HF + .5*PBE, PBE")),
 ];
 
@@ -137,13 +143,24 @@ impl Ftype {
         match self {
             // possible_x_for ∪ possible_k_for
             Ftype::XorK => &[
-                "LDA_X_", "GGA_X_", "MGGA_X_", "HYB_GGA_X_", "HYB_MGGA_X_", "LDA_K_", "GGA_K_",
+                "LDA_X_",
+                "GGA_X_",
+                "MGGA_X_",
+                "HYB_GGA_X_",
+                "HYB_MGGA_X_",
+                "LDA_K_",
+                "GGA_K_",
             ],
             // possible_c_for
             Ftype::C => &["LDA_C_", "GGA_C_", "MGGA_C_"],
             // possible_xc_for
             Ftype::CompoundXc => &[
-                "LDA_XC_", "GGA_XC_", "MGGA_XC_", "HYB_LDA_XC_", "HYB_GGA_XC_", "HYB_MGGA_XC_",
+                "LDA_XC_",
+                "GGA_XC_",
+                "MGGA_XC_",
+                "HYB_LDA_XC_",
+                "HYB_GGA_XC_",
+                "HYB_MGGA_XC_",
             ],
         }
     }
@@ -520,7 +537,14 @@ fn parse_xc_inner(description: &str, depth: usize) -> Result<XcSpec, DftError> {
         }
     } else {
         for token in split_tokens(&description) {
-            parse_token(&mut state, &description, &token, Ftype::CompoundXc, true, depth)?;
+            parse_token(
+                &mut state,
+                &description,
+                &token,
+                Ftype::CompoundXc,
+                true,
+                depth,
+            )?;
         }
     }
 

@@ -34,7 +34,7 @@
 mod common;
 
 use pyscf_core::Unit;
-use pyscf_gto::{intor, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor};
 
 fn h2_args() -> MoleBuildArgs {
     MoleBuildArgs {
@@ -42,11 +42,7 @@ fn h2_args() -> MoleBuildArgs {
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     }
 }
@@ -57,11 +53,7 @@ fn h_args() -> MoleBuildArgs {
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     }
 }
@@ -143,7 +135,10 @@ fn unknown_intor_returns_invalid_molecule_error() {
     let r = intor(&mol, "int1e_totally_fake");
     match r {
         Err(pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(msg))) => {
-            assert!(msg.contains("unknown intor"), "msg should mention 'unknown intor': {msg}");
+            assert!(
+                msg.contains("unknown intor"),
+                "msg should mention 'unknown intor': {msg}"
+            );
             // Post-suffix name in error message — gives the user the
             // actual lookup key the layout_table didn't contain.
             assert!(
@@ -182,8 +177,7 @@ fn unbuilt_mol_errors() {
     match r {
         Err(pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(msg))) => {
             assert!(
-                msg.to_lowercase().contains("not built")
-                    || msg.contains("build()"),
+                msg.to_lowercase().contains("not built") || msg.contains("build()"),
                 "msg should explain unbuilt: {msg}",
             );
         }

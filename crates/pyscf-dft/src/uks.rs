@@ -136,12 +136,7 @@ impl UKS {
         let _ = self.grids.build(&self.mol);
         let cfg = self.to_kernel_config();
         let result = {
-            let hooks = crate::hooks::KsHooks::new(
-                &self._numint,
-                &self.mol,
-                &self.grids,
-                &self.xc,
-            );
+            let hooks = crate::hooks::KsHooks::new(&self._numint, &self.mol, &self.grids, &self.xc);
             pyscf_scf::kernel(&self.mol, &hooks, cfg)?
         };
         self.mo_coeff = Some(result.mo_coeff.clone());
@@ -182,7 +177,7 @@ impl UKS {
 mod tests {
     use super::*;
     use pyscf_core::Unit;
-    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
     /// An open-shell fixture (doublet — one unpaired electron).
     fn open_shell() -> Mole {

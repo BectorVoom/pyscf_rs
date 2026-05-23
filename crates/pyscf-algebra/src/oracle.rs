@@ -43,16 +43,22 @@ pub fn oracle_dot(a: &[f64], b: &[f64]) -> f64 {
 /// Phase 4"). Other patterns return None.
 pub fn oracle_einsum(
     pattern: &str,
-    a: &[f64], a_shape: (usize, usize),
-    b: &[f64], b_shape: (usize, usize),
+    a: &[f64],
+    a_shape: (usize, usize),
+    b: &[f64],
+    b_shape: (usize, usize),
 ) -> Option<Vec<f64>> {
     if pattern != "ij,jk->ik" {
         return None;
     }
     let (m, k1) = a_shape;
     let (k2, n) = b_shape;
-    if k1 != k2 { return None; }
-    if a.len() != m * k1 || b.len() != k2 * n { return None; }
+    if k1 != k2 {
+        return None;
+    }
+    if a.len() != m * k1 || b.len() != k2 * n {
+        return None;
+    }
 
     let mut out = vec![0.0_f64; m * n];
     // Contract j: out[i,k] = oracle_sum(a[i, :] * b[:, k]) for each (i,k).
@@ -74,7 +80,9 @@ fn pairwise(xs: &[f64], chunk: usize) -> f64 {
     if xs.len() <= chunk {
         // Base case: strict sequential sum.
         let mut s = 0.0_f64;
-        for &x in xs { s += x; }
+        for &x in xs {
+            s += x;
+        }
         s
     } else {
         let mid = xs.len() / 2;

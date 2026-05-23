@@ -29,7 +29,7 @@ pub mod fixtures;
 pub mod runner;
 
 pub use fixtures::{BENZENE_6_31GS, H2O_CC_PVDZ, H2O_TRIPLET_CCPVDZ, WATER_TRIMER_CC_PVDZ};
-pub use runner::{run_oracle_check, OracleError};
+pub use runner::{OracleError, run_oracle_check};
 
 /// THE macro. Used in tests across pyscf-scf / pyscf-df / pyscf-chkfile /
 /// pyscf-py and (in plan 03-10) inside Python pytest harness fixtures.

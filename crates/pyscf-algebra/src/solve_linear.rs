@@ -16,7 +16,7 @@
 //! lint `clippy::unwrap_used` warned at lib.rs).
 
 use crate::error::AlgebraError;
-use faer::{Mat, prelude::Solve, linalg::solvers::FullPivLu};
+use faer::{Mat, linalg::solvers::FullPivLu, prelude::Solve};
 
 /// Solve `A·x = b` for `x`, where `A` is an `n×n` row-major flat slice and
 /// `b` is an `n`-element rhs. Returns the solution as a `Vec<f64>` of length
@@ -30,13 +30,13 @@ pub fn solve_linear(a: &[f64], b: &[f64], n: usize) -> Result<Vec<f64>, AlgebraE
     if a.len() != n * n {
         return Err(AlgebraError::ShapeMismatch {
             expected: format!("{}x{}", n, n),
-            actual:   format!("len={}", a.len()),
+            actual: format!("len={}", a.len()),
         });
     }
     if b.len() != n {
         return Err(AlgebraError::ShapeMismatch {
             expected: format!("rhs len={}", n),
-            actual:   format!("len={}", b.len()),
+            actual: format!("len={}", b.len()),
         });
     }
     // Build faer `Mat` in row-major from the flat slice. `Mat::from_fn`

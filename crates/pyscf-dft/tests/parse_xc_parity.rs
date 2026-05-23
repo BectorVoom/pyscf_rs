@@ -25,7 +25,7 @@
 //!   `cargo test -p pyscf-dft parse_xc_parity`   (or `--test parse_xc_parity`)
 
 use pyscf_dft::error::DftError;
-use pyscf_dft::parser::{libxc, xcfun, XcSpec};
+use pyscf_dft::parser::{XcSpec, libxc, xcfun};
 
 /// Compare a parsed spec against the expected `(hyb, components)`, with an
 /// exact float match on every factor (the parser does only exact arithmetic —
@@ -164,7 +164,9 @@ fn parse_xc_parity_libxc_malformed_bad_rsh() {
 fn parse_xc_parity_libxc_malformed_does_not_panic_on_adversarial() {
     // A pile of operators / empty tokens / stray punctuation must return a
     // clean result or Err — never panic, never hang.
-    for s in ["+++", "*", "0.5*", ",", "---,---", "()", "RSH()", "1e999*HF"] {
+    for s in [
+        "+++", "*", "0.5*", ",", "---,---", "()", "RSH()", "1e999*HF",
+    ] {
         let _ = libxc::parse_xc(s); // must simply not panic
     }
 }

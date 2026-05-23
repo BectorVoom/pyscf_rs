@@ -29,11 +29,11 @@ use std::sync::{Arc, Mutex};
 use pyscf_core::{Mole, Unit};
 use pyscf_dft::NumInt;
 use pyscf_grids::Grids;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 use pyscf_runtime::DType;
 use tracing::subscriber::with_default;
-use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
 
 /// A minimal in-process tracing layer that records whether ANY `WARN`-level
 /// event was emitted (self-contained — no `tracing-test` dep).
@@ -48,10 +48,10 @@ impl<S: tracing::Subscriber> Layer<S> for WarnCatcher {
         event: &tracing::Event<'_>,
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
-        if *event.metadata().level() == tracing::Level::WARN {
-            if let Ok(mut g) = self.saw_warn.lock() {
-                *g = true;
-            }
+        if *event.metadata().level() == tracing::Level::WARN
+            && let Ok(mut g) = self.saw_warn.lock()
+        {
+            *g = true;
         }
     }
 }
@@ -99,7 +99,11 @@ fn dtype_f32_smoke() {
 
             // NumInt reads PYSCF_DTYPE=f32 at construction (D-08).
             let ni = NumInt::new();
-            assert_eq!(ni.dtype(), DType::F32, "PYSCF_DTYPE=f32 → NumInt::dtype()==F32");
+            assert_eq!(
+                ni.dtype(),
+                DType::F32,
+                "PYSCF_DTYPE=f32 → NumInt::dtype()==F32"
+            );
 
             // The D-08 f32 dispatch path, end-to-end (SVWN = LDA).
             ni.nr_rks(&mol, &grids, "svwn", &dm, 0, 1, mol.max_memory, None)

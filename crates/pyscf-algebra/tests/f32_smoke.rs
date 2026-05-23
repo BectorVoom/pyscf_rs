@@ -54,5 +54,8 @@ fn f32_scalar_kind_maps_to_f32_dtype() {
     // same path Tensor uses (Tensor::<f32> derives its dtype from the kind).
     let t = Tensor::<f32>::placeholder(vec![1]);
     assert_eq!(t.dtype, DType::F32);
-    assert_eq!(<f32 as pyscf_core::Scalar>::KIND, pyscf_core::ScalarKind::F32);
+    assert_eq!(
+        <f32 as pyscf_core::Scalar>::KIND,
+        pyscf_core::ScalarKind::F32
+    );
 }

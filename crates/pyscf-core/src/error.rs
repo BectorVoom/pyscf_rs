@@ -20,10 +20,7 @@ pub enum PyscfRsError {
     NotYetImplemented { phase: u8, what: &'static str },
 
     #[error("convergence failure after {iterations} iterations: {reason}")]
-    ConvergenceFailure {
-        iterations: u32,
-        reason: String,
-    },
+    ConvergenceFailure { iterations: u32, reason: String },
 
     /// Phase 2 GTO-02/GTO-03 — failure to resolve / parse a basis-set
     /// definition (file not found, ALIAS unknown, parse error, IO error).
@@ -38,7 +35,9 @@ pub enum PyscfRsError {
     /// Phase 2 D-06 — `EcpEngine` trait shipped, but the cintx ECP
     /// workstream hasn't landed `cint1e_ecp` yet. Returned by the stub
     /// `EcpEngine` impl until the gap-closure plan wires the real engine.
-    #[error("ECP engine not available — pending cintx ECP merge (Phase 2 D-06 gap-closure plan 02-10)")]
+    #[error(
+        "ECP engine not available — pending cintx ECP merge (Phase 2 D-06 gap-closure plan 02-10)"
+    )]
     EcpEngineNotAvailable,
 }
 

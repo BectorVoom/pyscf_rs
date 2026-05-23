@@ -9,26 +9,26 @@
 //! crates consume Tensor only and never name a cubecl::* type
 //! (D-04, D-05).
 #![deny(unsafe_op_in_unsafe_fn)]
-#![warn(clippy::unwrap_used)]    // FOUND-07
+#![warn(clippy::unwrap_used)] // FOUND-07
 
 pub mod client;
-pub mod tensor;
 pub mod error;
 pub mod select;
+pub mod tensor;
 // quick-260522-b06: device-side precision bridge. The cubecl::Float bound
 // (DeviceScalar) and the ScalarKind -> DType reconciliation (dtype_of) live
 // here — inside the wall — never in pyscf-core or a method crate.
 pub mod scalar;
 
+pub mod axpy;
+pub mod dot;
 pub mod gemm;
 pub mod gemv;
-pub mod axpy;
+pub mod host_fallback;
+pub mod oracle;
+pub mod reduce;
 pub mod scal;
 pub mod transpose;
-pub mod dot;
-pub mod reduce;
-pub mod oracle;
-pub mod host_fallback;
 // Phase 3 plan 03-01 — Pulay DIIS B-matrix LU solve (RESEARCH Open Question 1).
 pub mod solve_linear;
 // Phase 3 plan 03-11 — slice-based generalized self-adjoint eigh for SCF.
@@ -41,7 +41,7 @@ pub use client::AlgebraClient;
 pub use error::AlgebraError;
 pub use pyscf_runtime::DType;
 pub use scalar::DeviceScalar;
-pub use select::{select_backend, BackendSelection};
+pub use select::{BackendSelection, select_backend};
 pub use tensor::{BufferId, Tensor};
 
 pub use axpy::axpy;

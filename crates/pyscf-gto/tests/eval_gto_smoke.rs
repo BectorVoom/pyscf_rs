@@ -22,7 +22,7 @@
 //! `pyscf.dft.numint.eval_ao(mol, [[0,0,0]])`.
 
 use pyscf_core::Unit;
-use pyscf_gto::{eval_gto, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, eval_gto};
 
 fn h_at_origin_sto3g() -> pyscf_core::Mole {
     M(MoleBuildArgs {
@@ -65,11 +65,7 @@ fn h_1s_at_far_distance_decays() {
     // Ratio psi(5)/psi(0) is on the order of exp(-α_min * 25). For
     // STO-3G α_min ≈ 0.16886, so psi(5)/psi(0) ≈ exp(-4.22) ≈ 0.0146.
     // Assert the absolute value is well below 0.1 (a generous envelope).
-    assert!(
-        psi_5.abs() < 0.1,
-        "psi(5 Bohr) = {} (expected ≪ 1)",
-        psi_5
-    );
+    assert!(psi_5.abs() < 0.1, "psi(5 Bohr) = {} (expected ≪ 1)", psi_5);
 }
 
 #[test]

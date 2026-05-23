@@ -42,14 +42,14 @@
 use std::any::Any;
 
 use pyscf_core::{Density, Energy, MOCoefficients, Mole, PyscfRsError};
-use pyscf_df::{cholesky_eri, default_jkfit, DfIntegrals};
+use pyscf_df::{DfIntegrals, cholesky_eri, default_jkfit};
 use pyscf_grids::Grids;
 use pyscf_scf::{InitGuessMode, OverrideHooks};
 
 use crate::hooks::KsOverrideHooks;
 use crate::numint::NumInt;
 use crate::rks::RKS;
-use crate::veff::{default_get_veff, KsVeff};
+use crate::veff::{KsVeff, default_get_veff};
 
 impl RKS {
     /// Configure this RKS instance to use density-fitting for the Coulomb-J
@@ -90,10 +90,10 @@ impl RKS {
 /// variants pass through verbatim → DEFAULT_AUXBASIS lookup misses → `weigend`
 /// universal fallback (the documented behaviour).
 fn extract_basis_name(basis_field: &str) -> String {
-    if let Some(rest) = basis_field.strip_prefix("Name(\"") {
-        if let Some(name) = rest.strip_suffix("\")") {
-            return name.to_string();
-        }
+    if let Some(rest) = basis_field.strip_prefix("Name(\"")
+        && let Some(name) = rest.strip_suffix("\")")
+    {
+        return name.to_string();
     }
     basis_field.to_string()
 }
@@ -193,11 +193,7 @@ impl OverrideHooks for DfKsHooks<'_> {
     fn get_ovlp(&self, mol: &Mole) -> Result<Density, PyscfRsError> {
         pyscf_scf::default_get_ovlp(mol)
     }
-    fn get_init_guess(
-        &self,
-        mol: &Mole,
-        mode: &InitGuessMode,
-    ) -> Result<Density, PyscfRsError> {
+    fn get_init_guess(&self, mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
         pyscf_scf::default_get_init_guess(mol, mode)
     }
     /// DF-DFT J/K split (DFT-07, the df_scf.rs:96-98 J-build seam):

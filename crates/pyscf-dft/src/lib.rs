@@ -34,9 +34,9 @@ pub mod xc_backend;
 
 // ── Plan 04-06 Task 1 (DFT-08/DFT-10 + D-08) ───────────────────────────────
 // The core Kohn-Sham machinery: NumInt grid loop, KS get_veff, KsOverrideHooks.
+pub mod hooks;
 pub mod numint;
 pub mod veff;
-pub mod hooks;
 // ── Plan 04-06 Task 2 (DFT-01) ─────────────────────────────────────────────
 // The RKS/UKS structs reusing the Phase 3 generic kernel<H>.
 pub mod rks;
@@ -69,13 +69,13 @@ pub use hooks::{KsOverrideHooks, NoKsOverrides};
 pub use numint::{NrResult, NrUksResult, NumInt, XcType};
 pub use rks::RKS;
 pub use uks::UKS;
-pub use veff::{default_get_veff, KsVeff};
+pub use veff::{KsVeff, default_get_veff};
 // VV10 NLC surface (04-07).
-pub use vv10::{nr_nlc_vxc, vv10nlc, NlcCoeffs, NlcResult, Vv10Output};
+pub use vv10::{NlcCoeffs, NlcResult, Vv10Output, nr_nlc_vxc, vv10nlc};
 // DF-DFT surface (04-08 Task 1, DFT-07).
 pub use df_dft::DfKsHooks;
 // KS chkfile surface (04-08 Task 2, DFT-07 chkfile / D-06).
-pub use chkfile::{dump_ks_to_file, load_ks_from_file, GridsMeta, KsResult};
+pub use chkfile::{GridsMeta, KsResult, dump_ks_to_file, load_ks_from_file};
 // NOTE: `pub mod rks; pub mod uks;` are declared above (Task 1) so the crate
 // compiles atomically; their FULL bodies (RKS/UKS reusing kernel<H>) land in
 // Task 2. Task 1 ships minimal struct skeletons sufficient for the
