@@ -14,7 +14,7 @@ fn rmp2_module_surface_exists() {
     assert_error_type(None);
 
     // The MP2-08 helper re-exports are reachable from the crate root.
-    let _: fn(&[f64], usize) -> _ = pyscf_mp2::get_nocc;
+    let _: fn(&[f64], &pyscf_mp2::Frozen) -> _ = pyscf_mp2::get_nocc;
 }
 
 /// RMP2 kernel SHAPE + error-propagation. Wired in plan 05-03 (needs the

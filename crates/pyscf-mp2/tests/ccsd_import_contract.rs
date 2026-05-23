@@ -5,50 +5,57 @@
 //! from pyscf.mp.mp2 import get_nocc, get_nmo, get_frozen_mask, get_e_hf, _mo_without_core
 //! ```
 //! This test asserts the EXACT same symbol set is exported from `pyscf-mp2`
-//! (the Python `_mo_without_core` maps to the Rust `mo_without_core`). The
-//! always-on arm proves the symbols are importable AND callable; the numeric
-//! arm (asserting the RESULTS) is `#[ignore]`d until the helper bodies land in
-//! plan 05-03.
+//! (the Python `_mo_without_core` maps to the Rust `mo_without_core`). Both
+//! arms are ALWAYS-ON (no cintx, no integrals): the contract proves the symbols
+//! are importable AND that they compute the upstream-matching helper results.
 
 // The exact CCSD import symbol set (cc/ccsd.py:35), proving they are exported.
-use pyscf_mp2::{get_e_hf, get_frozen_mask, get_nmo, get_nocc, mo_without_core};
+use pyscf_mp2::{Frozen, get_e_hf, get_frozen_mask, get_nmo, get_nocc, mo_without_core};
 
-/// Always-on: the five symbols exist, are importable, and are callable. We
-/// take their function pointers (proving the signatures resolve) and invoke
-/// each once on a toy closed-shell input. The bodies currently return
-/// `Err(NotYetImplemented)`, which is fine — this arm asserts the CONTRACT
-/// (symbol existence + callability), not the numeric result.
+/// Always-on: the five symbols exist, are importable, and resolve to the
+/// expected signatures. Binding each as a function pointer is the contract
+/// guard — a missing/renamed symbol or a signature drift fails to compile.
 #[test]
 fn ccsd_import_symbols_exist_and_are_callable() {
     let mo_occ = [2.0_f64, 2.0, 0.0, 0.0];
-    let mo_energy = [-0.5_f64, -0.4, 0.2, 0.3];
-    let mo_coeff = [1.0_f64, 0.0, 0.0, 1.0];
-    let mask = [true, true, false, false];
 
-    // Bind each as a function pointer so a missing/renamed symbol fails to
-    // compile — this is the contract guard.
-    let _f_nocc: fn(&[f64], usize) -> _ = get_nocc;
-    let _f_nmo: fn(&[f64], usize) -> _ = get_nmo;
-    let _f_frozen_mask: fn(&[f64], usize) -> _ = get_frozen_mask;
-    let _f_e_hf: fn(&[f64], &[f64]) -> _ = get_e_hf;
-    let _f_mo_wo_core: fn(&[f64], &[bool]) -> _ = mo_without_core;
+    // Bind each as a function pointer so a missing/renamed symbol — or a
+    // signature change away from the (mo_occ, &Frozen) contract — fails to
+    // compile. This is the hard CCSD interface guard.
+    let _f_nocc: fn(&[f64], &Frozen) -> _ = get_nocc;
+    let _f_nmo: fn(&[f64], &Frozen) -> _ = get_nmo;
+    let _f_frozen_mask: fn(&[f64], &Frozen) -> _ = get_frozen_mask;
+    let _f_e_hf: fn(f64) -> _ = get_e_hf;
+    let _f_mo_wo_core: fn(&pyscf_core::MOCoefficients, &Frozen) -> _ = mo_without_core;
 
-    // Callable smoke — invoke each once. Results are not asserted here.
-    let _ = get_nocc(&mo_occ, 0);
-    let _ = get_nmo(&mo_occ, 0);
-    let _ = get_frozen_mask(&mo_occ, 0);
-    let _ = get_e_hf(&mo_energy, &mo_occ);
-    let _ = mo_without_core(&mo_coeff, &mask);
+    // Callable smoke.
+    let _ = get_nocc(&mo_occ, &Frozen::None);
+    let _ = get_e_hf(-76.0);
 }
 
-/// Numeric arm — asserts the helper RESULTS match upstream semantics. Ignored
-/// until the bodies land in plan 05-03.
+/// Always-on numeric contract — the helper RESULTS match upstream semantics.
+/// Toy closed-shell reference `mo_occ = [2, 2, 0, 0]`.
 #[test]
-#[ignore = "numeric body lands in plan 05-03"]
 fn ccsd_import_symbols_return_upstream_values() {
     let mo_occ = [2.0_f64, 2.0, 0.0, 0.0];
-    // 2 doubly-occupied orbitals, no frozen core → nocc == 2.
-    assert_eq!(get_nocc(&mo_occ, 0).expect("nocc"), 2);
-    // 4 MOs, no frozen → nmo == 4.
-    assert_eq!(get_nmo(&mo_occ, 0).expect("nmo"), 4);
+
+    // Frozen::None → 2 occupied, 4 total, all active.
+    assert_eq!(get_nocc(&mo_occ, &Frozen::None).expect("nocc"), 2);
+    assert_eq!(get_nmo(&mo_occ, &Frozen::None).expect("nmo"), 4);
+    assert_eq!(
+        get_frozen_mask(&mo_occ, &Frozen::None).expect("mask"),
+        vec![true, true, true, true]
+    );
+
+    // Frozen::Count(1) → freeze the inner-most orbital: nocc 1, nmo 3,
+    // mask [false, true, true, true].
+    assert_eq!(get_nocc(&mo_occ, &Frozen::Count(1)).expect("nocc"), 1);
+    assert_eq!(get_nmo(&mo_occ, &Frozen::Count(1)).expect("nmo"), 3);
+    assert_eq!(
+        get_frozen_mask(&mo_occ, &Frozen::Count(1)).expect("mask"),
+        vec![false, true, true, true]
+    );
+
+    // get_e_hf is the reference SCF e_tot passthrough.
+    assert_eq!(get_e_hf(-76.026_760_737), -76.026_760_737);
 }

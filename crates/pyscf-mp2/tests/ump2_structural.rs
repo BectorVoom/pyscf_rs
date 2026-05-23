@@ -13,7 +13,7 @@ fn ump2_module_surface_exists() {
     assert_error_type(None);
 
     // get_frozen_mask is exercised by both restricted and unrestricted paths.
-    let _: fn(&[f64], usize) -> _ = pyscf_mp2::get_frozen_mask;
+    let _: fn(&[f64], &pyscf_mp2::Frozen) -> _ = pyscf_mp2::get_frozen_mask;
 }
 
 /// UMP2 spin-block kernel SHAPE + error-propagation. Wired in plan 05-04

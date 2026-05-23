@@ -26,4 +26,5 @@ pub mod rdm;
 pub mod ump2;
 
 pub use error::Mp2Error;
+pub use frozen::Frozen;
 pub use helpers::{get_e_hf, get_frozen_mask, get_nmo, get_nocc, mo_without_core};
