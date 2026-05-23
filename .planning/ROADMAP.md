@@ -8,7 +8,7 @@
 
 ## Overview
 
-pyscf_rs is a pure-Rust rewrite of PySCF that ships as a `pip install`-able wheel preserving the `from pyscf import gto, scf, dft, mp, cc, grad, geomopt` import surface. The architecture is locked: a 19-crate horizontal-layered façade workspace mirroring `cintx`/`xcfun_rs` (Phase 1 shipped 15 with `pyscf-algebra` owning all linear algebra; Phase 3 grew the workspace to 18 by adding `pyscf-chkfile`, `pyscf-diis`, `pyscf-df`; Phase 4 added `pyscf-grids` → 19), cubecl 0.10.0 as the sole compute primitive (CPU SIMD/CUDA/WGPU/ROCm), faer 0.24 used only for host eigh/Cholesky/QR/SVD behind the algebra crate's surface, PyO3 0.28 for the Python boundary, and PySCF-as-live-oracle in CI. Backend selection is runtime-driven via `PYSCF_BACKEND`; the workspace `gpu` umbrella feature is OFF by default so the standard build is CPU-only. See `docs/manual/Cubecl/` for the cubecl runtime/ComputeClient/tensor-handle pattern that `pyscf-algebra` is built on.
+pyscf_rs is a pure-Rust rewrite of PySCF that ships as a `pip install`-able wheel preserving the `from pyscf import gto, scf, dft, mp, cc, grad, geomopt` import surface. The architecture is locked: a 20-crate horizontal-layered façade workspace mirroring `cintx`/`xcfun_rs` (Phase 1 shipped 15 with `pyscf-algebra` owning all linear algebra; Phase 3 grew the workspace to 18 by adding `pyscf-chkfile`, `pyscf-diis`, `pyscf-df`; Phase 4 added `pyscf-grids` → 19; Phase 5 added `pyscf-ao2mo` → 20, D-01), cubecl 0.10.0 as the sole compute primitive (CPU SIMD/CUDA/WGPU/ROCm), faer 0.24 used only for host eigh/Cholesky/QR/SVD behind the algebra crate's surface, PyO3 0.28 for the Python boundary, and PySCF-as-live-oracle in CI. Backend selection is runtime-driven via `PYSCF_BACKEND`; the workspace `gpu` umbrella feature is OFF by default so the standard build is CPU-only. See `docs/manual/Cubecl/` for the cubecl runtime/ComputeClient/tensor-handle pattern that `pyscf-algebra` is built on.
 
 The dependency DAG dictates phase ordering almost entirely: `core/runtime → kernels → gto → scf → {dft, mp2} → ccsd → grad → geomopt → wheel`. Phases 1–7 walk this critical path with the PyO3 contract folded into Phase 3 (SCF) so subclass-override / NumPy-boundary / GIL-release conventions lock on a small surface (RHF) before DFT's overrideable explosion. Phase 8 is the closing "ship readiness" phase combining GPU backend enable, oracle hardening, and wheel distribution because all three gate on the same artifact (a working CPU baseline across every method) and feed the same goal (validating the 2–5× speedup claim on a real benchmark suite, in a real wheel, on a real CI machine).
 
@@ -185,7 +185,17 @@ Plans:
   4. `mp2.as_scanner()` returns a callable that takes a Mole and returns the energy — exercised by a geomopt smoke test in Phase 7 (MP2-07).
   5. MP2 helpers (`get_nocc`, `get_nmo`, `get_frozen_mask`, `get_e_hf`, `_mo_without_core`) are exported with upstream-matching semantics and contract-tested via a unit test that mimics CCSD's exact import call site (MP2-08).
 
-**Plans**: TBD
+**Plans**: 7 plans across 7 waves (1 scaffold + 1 AO→MO transform + 5 method/bridge plans)
+
+Plans:
+
+- [ ] 05-01-PLAN.md — Scaffold: create `pyscf-ao2mo` (20th `pyscf-*` member, D-01) + register in workspace, wire `pyscf-mp2` deps (pyo3-free), Wave-0 test scaffolds + MP2 oracle arms + CI structural/cintx-gated jobs (MP2-01,02,04,05,08)
+- [ ] 05-02-PLAN.md — AO→MO 4-index transform: `general`/`full` quarter-transform host-loop body through `oracle_sum` (D-02/D-03), F-order layout, always-on synthetic-ERI roundtrip (the one un-gated numeric assertion) (MP2-01,02,04)
+- [ ] 05-03-PLAN.md — In-core RMP2 headline: closed-form `rmp2_kernel` + SCS factors (MP2-06) + the five MP2-08 helpers (CCSD import contract) + frozen-core int/list/'auto'/window (MP2-03) + `Mp2OverrideHooks` trait (D-08) (MP2-01,03,06,08)
+- [ ] 05-04-PLAN.md — Open-shell UMP2 spin-block kernel + `UmpAmplitudes (t2aa/t2ab/t2bb)` container + `make_rdm1`/`make_rdm2` via `_gamma1_intermediates` (MP2-02,05)
+- [ ] 05-05-PLAN.md — Conventional DF-MP2 (D-06 primary): `DFRMP2`/`DFUMP2` swap ERI source to the `pyscf-df` B-tensor, `*-ri` mp2fit aux (`default_ri`), `(ia|jb)=Σ_Q B^Q·B^Q`; structural/synthetic always-on, numeric cintx#11-gated (MP2-04)
+- [ ] 05-06-PLAN.md — Native RI-MP2 fast path (D-06 additional): `emp2_rhf`/`emp2_uhf` on its own `dfmp2_native` module path, reuses the shipped 3c Cholesky; native↔conventional synthetic cross-check (MP2-04)
+- [ ] 05-07-PLAN.md — PyO3 bridge: `PyRMP2`/`PyUMP2`/`PyDFMP2` eager-snapshot (D-07) + `Mp2OverrideHooks` `call_method1` dispatch (D-08/Pitfall 7) + `mf.MP2()` factory + `as_scanner` (MP2-07) + `python/pyscf/mp` overlay (MP2-01,02,04,05,06,07)
 
 ### Phase 6: CCSD
 
@@ -242,7 +252,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
-| 5. MP2 | 0/TBD | Not started | - |
+| 5. MP2 | 0/7 | Planned | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
