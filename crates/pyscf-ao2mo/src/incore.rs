@@ -11,11 +11,7 @@ use crate::error::Ao2moError;
 /// `eri_ao` into the MO basis using up to four distinct MO coefficient
 /// blocks `mo_coeffs`. Returns the transformed integrals as a flat
 /// (F-order) buffer. Body lands in plan 05-02.
-pub fn general(
-    eri_ao: &[f64],
-    mo_coeffs: &[&[f64]],
-    nao: usize,
-) -> Result<Vec<f64>, Ao2moError> {
+pub fn general(eri_ao: &[f64], mo_coeffs: &[&[f64]], nao: usize) -> Result<Vec<f64>, Ao2moError> {
     let _ = (eri_ao, mo_coeffs, nao);
     Err(Ao2moError::NotYetImplemented)
 }

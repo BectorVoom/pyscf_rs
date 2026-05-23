@@ -10,3 +10,16 @@ description = "Møller–Plesset 2nd-order (RMP2/UMP2/DF-MP2). Implemented in Ph
 path = "src/lib.rs"
 
 [dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+pyscf-ao2mo   = { path = "../pyscf-ao2mo" }
+pyscf-scf     = { path = "../pyscf-scf" }
+pyscf-df      = { path = "../pyscf-df" }
+pyscf-gto     = { path = "../pyscf-gto" }
+pyscf-runtime = { path = "../pyscf-runtime" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+# pyo3 is FORBIDDEN here (D-07/D-08 algebra+pyo3 wall) — bridge lives in pyscf-py.
+
+[dev-dependencies]
+approx = "0.5"

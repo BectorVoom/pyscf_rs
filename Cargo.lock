@@ -6102,6 +6102,18 @@ dependencies = [
 [[package]]
 name = "pyscf-mp2"
 version = "0.1.0"
+dependencies = [
+ "approx",
+ "pyscf-algebra",
+ "pyscf-ao2mo",
+ "pyscf-core",
+ "pyscf-df",
+ "pyscf-gto",
+ "pyscf-runtime",
+ "pyscf-scf",
+ "thiserror 2.0.18",
+ "tracing",
+]
 
 [[package]]
 name = "pyscf-oracle"
