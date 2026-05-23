@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
+status: executing
 stopped_at: Completed 02-10-PLAN.md (GTO-05 eval half)
-last_updated: "2026-05-23T11:47:51.522Z"
+last_updated: "2026-05-23T23:07:17.028Z"
 last_activity: 2026-05-23
 progress:
   total_phases: 8
   completed_phases: 5
-  total_plans: 51
-  completed_plans: 51
+  total_plans: 56
+  completed_plans: 56
   percent: 63
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 05 — mp2
+**Current focus:** Phase 02 — gto
 
 ## Current Position
 
-Phase: 03
-Plan: Not started
-Status: Phase complete — GTO-05 fully shipped (loading + eval)
-Last activity: 2026-05-23
+Phase: 02 (gto) — COMPLETE (11/11 plans)
+Plan: 11 of 11
+Status: Phase 02 complete — 02-11 closed the general-contraction gap + minao heavy-atom caveat
+Last activity: 2026-05-24 -- 02-11 general-contraction parser fix executed
 
-Progress: [██████████] 95% (42/44 plans done across all phases; Phase 04 gap closure: 4/4 gap plans done)
+Progress: [██████████] 100% (56/56 plans done across all phases; Phase 02 gap closure 02-11 done)
 
 ## Performance Metrics
 
@@ -74,6 +74,7 @@ Progress: [██████████] 95% (42/44 plans done across all phas
 | Phase 05 P05 | 5min | 2 tasks | 3 files |
 | Phase 05 P06 | 18min | 2 tasks | 3 files |
 | Phase 05 P07 | 8min | 2 tasks | 6 files |
+| Phase 02 P02-11 | 35min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -113,6 +114,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-09 DF-metric robustness gap-closure — closed the LAST DF-MP2 (MP2-04) numeric blocker surfaced by 05-08: the DF 2-center metric `(P|Q)` is frequently ill-conditioned/rank-deficient for real aux bases (cc-pvdz-jkfit AND weigend), and `cholesky_eri`'s plain Cholesky-Banachiewicz (`s<=0` pivot) rejected it. NEW `pyscf_algebra::df_metric_fit(j2c,n,lindep) -> (W column-major n×rank, rank)` (df_metric.rs): faer `SelfAdjointEigen` rank-revealing inverse-sqrt fit — drops eigenvalues ≤ `DF_METRIC_LINEAR_DEP=1e-9` (upstream PySCF `LINEAR_DEP_THRESHOLD` route), `W·Wᵀ = (P|Q)⁻¹` on the kept subspace. `cholesky_eri` keeps the Cholesky+forward-sub PD fast path BIT-FOR-BIT and, on `SingularAux`, falls back to `df_metric_fit` building `b_uvq[μν,k]=Σ_P (μν|P)·W[P,k]` via oracle_dot (no bare +=); `DfIntegrals.naux` becomes the EFFECTIVE rank ≤ auxmol.nao_nr. Mirrors upstream PySCF's try-Cholesky-then-eigh exactly (maximizes eventual byte-identity). RESULTS: cc-pvdz-jkfit + weigend `(P|Q)` now build real finite B-tensors (un-ignored `df_integrals_shape::h2o_cc_pvdz_df_integrals_shape` → always-on); DF-MP2 e_corr **-0.04424** (eff. naux=21) ≈ in-core RMP2 **-0.04428** to ~4e-5 (the DF fitting error); the gold-standard `df_b_tensor_reconstructs_exact_eri` check shows `Σ_Q B B` reconstructs the real `intor(int2e)` (μν|λσ) to **1.7e-3** (validates int3c2e+int2c2e+metric fit independent of any kernel). df_metric unit tests: PD inverse / rank-deficient pseudo-inverse / tiny-negative dropped (no NaN) / Singular / shape. No new crate dep (faer already in pyscf-algebra); 0 libxc; clippy -D warnings + fmt + check-no-fma + check-dependency-wall PASS. DF-HF (Phase 3) shares `cholesky_eri` so its metric is now robust too (its own SCF closure remains). MP2-04 numeric fully lit up in-tree.
 - [Phase 05]: 05-08 cintx#11 numeric gap-closure — cintx now ships arity-4 `int2e_{sph,cart}` (api_manifest.rs:166/183, SHELL_TUPLE_CAPACITY=4) + arity-3 `int3c2e_sph` (api_manifest.rs:404), libcint-byte-identical at the cintx source (`safe_api_arity4_parity`/`center_3c2e_parity`; cintx-rs now asserts against all-zero output, api.rs:750). Wired the missing pyscf-gto dispatch layer: `intor.rs` `evaluate_arity4` (shell-quad loop → SessionRequest → F-order `[nao;4]` stitch, the `eri_ao` convention pyscf_ao2mo::transform documents) replaces the `3|4 => NotYetImplemented{phase:2}` branch (component-leading arity-4 = int2e_ip gradients → `NotYetImplemented{phase:7}`; plain arity-3 → clear error, int3c2e uses intor_with_auxmol). `evaluate_int3c2e_with_auxmol` replaces the all-zeros stub with real evaluation over a COMBINED orbital+aux BasisSet (`projection::build_int3c2e_combined_basis`, PySCF fakemol/conc_mol — aux shells re-based onto appended aux atoms; i,j∈orbital, k∈aux; aux AO offset = shell_offset(k)−nao). Shape surprises ?-propagate (no panic/no zero-substitute, T-05-08-FFI). The MP2 kernels are UNCHANGED (D-05): in-core RMP2 numeric now runs end-to-end (mp2_numeric_smoke.rs: H2/STO-3G `e_corr=-0.04428`, finite ≤0, thread-invariant); flipped `default_ao2mo_propagates_int2e_not_yet_implemented` → `..._succeeds_after_cintx11_closure`. Always-on in-tree gates: int2e_arity4.rs (finite/non-zero/8-fold) + int3c2e_auxmol.rs (finite/non-zero/bra-symmetric). CI: `mp2-oracle-cintx-gated` (if: false) → `mp2-oracle-upstream-manual` (workflow_dispatch + pyscf install) — upstream byte-identity is the human-verify arm (sandbox lacks numpy/PySCF, 02-10 precedent). FINDING (NOT chased, T-05-08-SCOPE): unignoring the H2O/cc-pVDZ DF shape test surfaced a SEPARATE Phase-3 issue — the cc-pvdz-jkfit AND weigend `(P|Q)` DF metrics are ill-conditioned and the plain Cholesky-Banachiewicz (`s<=0` pivot) rejects them; int3c2e itself ships (int3c2e_auxmol.rs proves it). So DF-MP2 numeric (MP2-04) is unblocked at the integral layer but gated on a Phase-3 rank-revealing DF-metric Cholesky in pyscf-algebra. No new crate dep; Cargo.lock UNCHANGED; libxc NEVER compiled. clippy -D warnings + fmt + check-no-fma + check-dependency-wall PASS. Also unblocks Phase-3 DF-HF + Phase-4 bit-exact RKS/UKS (int2e/int3c2e now real) — their own oracle closures.
 - [Phase 02]: 02-10 GTO-05 eval-half gap-closure — the cintx Phase-19/20 workstream SHIPPED `int1e_ecp_{cart,sph}` (Type-1 local + Type-2 projector) byte-identical to vendored PySCF nr_ecp (cintx `safe_api_ecp_parity.rs` pins atol=1e-12). cintx is a PATH dep already pointing at the merged tree (Cargo.lock UNCHANGED — no git-rev pin bump needed; the plan's git-rev sketch was superseded by the Phase-1 D-15 path-dep topology). New `ecp_engine_cintx::CintxEcpEngine` replaces `EcpEngineNotAvailable` as the default `pyscf_gto::ecp_engine()`; the stub stays in-tree (documentation + testable error path, exercised DIRECTLY in updated `ecp_engine_stub.rs` tests rather than via `ecp_engine()`). KEY DEVIATION from the plan's speculative sketch: the cintx safe-API ECP preflight (`SessionRequest::query_workspace`) returns `FacadeError::MissingEcpBasis` unless `basis.ecp_shells()` is non-empty, but `mol.basis_set` is built ECP-free (`build_cintx_basis_set` → `BasisSet::try_new`). So the engine builds an ECP-augmented `BasisSet` on demand via a NEW `projection::build_cintx_basis_set_with_ecp` (projects per-element `mol._ecp` ParsedEcp → cintx `EcpChannel::Local`/`Projected(l)` + `EcpShell`, one shell per (atom,channel,distinct n_power) — mirrors make_ecp_env's `_ecpbas` row grouping), then iterates AO shell pairs through `SessionRequest` exactly like the non-ECP `intor::evaluate_arity2` and stitches an F-order nao×nao matrix into `Density::from_flat` (new pyscf-core helper). int1e_ecp on an ECP-LESS mol returns the canonical `EcpEngineNotAvailable` via a `mol._ecp.is_empty()` guard (preserves the 02-07 user-facing error contract). Always-on in-tree gate `crates/pyscf-gto/tests/ecp_int1e_oracle.rs` (Cu/LANL2DZ → finite, non-zero, symmetric matrix) PASSES under `cargo test -p pyscf-gto --test ecp_int1e_oracle`. The upstream byte-identity pytest `tests/oracle/test_ecp_int1e.py` is shipped + the `dump_intor_for_oracle` harness extended with `PYSCF_RS_ORACLE_ECP`, but it CANNOT run in this sandbox (no numpy/upstream-pyscf; the entire oracle suite is gated on `tests/oracle/requirements.txt`) — downgraded to a human-verify item (cintx already pins 1e-12 byte-identity to nr_ecp at the source). xtask check-dependency-wall + check-cubecl-pin PASS. No `#[ignore = "Pending cintx ECP"]` annotations existed to remove. Phase 7 GRAD-07 (ECP gradients via `int1e_ecp_ipnuc_*`, manifest ids 28/29) now unblocked. GTO-05 fully closed: loading ✅ + eval ✅.
+- [Phase 02]: 02-11 general-contraction parser fix: nwchem.rs emits N contractions per N coeff columns (was truncating to col 1); projection.rs feeds cintx ROW-MAJOR coeffs [prim*nctr+ctr]. Closes 03-13 minao heavy-atom caveat (H2O Tr(dm.S) 7.9->9.86; minao unnormalized so <nelec, H2 dm traces 1.976/2.0). cintx l>=3 nctr>1 asymmetry surfaced as DI-02-11-CINTX-NCTR-HIGHL. Consumed cintx 6b14d48 via path-dep. GTO-02/03 done.
 
 ### Pending Todos
 
@@ -156,6 +158,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-23T08:54:09.285Z
+Last session: 2026-05-23T23:06:59.782Z
 Stopped at: Completed 02-10-PLAN.md (GTO-05 eval half)
 Resume file: None
