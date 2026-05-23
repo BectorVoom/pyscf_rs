@@ -134,7 +134,7 @@ Plans:
   5. **WGPU f64 honesty**: the `wgpu` feature is gated on the `shader-f64` Vulkan extension being present at runtime; when the extension is missing, the runtime falls back to CPU with a clear warning rather than silently degrading to f32 — proven by a CI job on a `shader-f64`-less device that runs `dft.RKS(mol).run()` and prints the fallback warning while still producing CPU-correct numbers (DFT-11, Pitfall 3 mitigation).
 
 *Planning note (2026-05-22): success criterion 3's "cintx `int2e_lr_*`/`int2e_sr_*`" framing is conceptual shorthand. RESEARCH corrected this: RSH (DFT-05) sets `PTR_RANGE_OMEGA = env[8]` (via a `with_range_coulomb`-equivalent on the pyscf-gto intor path) and calls the standard `int2e` — there are no distinct lr/sr intor symbols in cintx. The plans implement the env[8] mechanism.*
-**Plans**: 10 plans across 5 waves (1 scaffold + 1 sibling-crate coordination + 8 implementation)
+**Plans**: 14 plans across 7 waves (1 scaffold + 1 sibling-crate coordination + 8 implementation + 4 gap-closure)
 
 Plans:
 **Wave 1**
@@ -161,6 +161,16 @@ Plans:
 - [x] 04-08-PLAN.md — DF-DFT (reuse pyscf-df, D-10) + KsResult chkfile (Phase 3 D-06) (DFT-07)
 - [x] 04-09-PLAN.md — PyO3 bridge: PyRKS/PyUKS + dft submodule + KsOverrideHooks bridge + overlay; subclass-override re-validation (DFT-08)
 - [x] 04-10-PLAN.md — WGPU f64 honesty (delegate to xcfun_rs + Phase 1 resolver) + dedicated cached `--features libxc` bit-exact CI job + wgpu-no-f64 CI job + nightly cross-crate re-enable (DFT-03, DFT-11)
+
+**Wave 6 — GAP CLOSURE** *(parallel: independent blockers from 04-VERIFICATION.md)*
+
+- [ ] 04-11-PLAN.md — GAP CLOSURE CR-03: c2s_coeff l>4 panic → Result; eval_gto_sph/deriv1 return Result<_, PyscfRsError> (DFT-01)
+- [ ] 04-12-PLAN.md — GAP CLOSURE CR-04: replace non-injective Σ|D| cache fingerprint with u64 content hash in hooks.rs + df_dft.rs (DFT-01)
+- [ ] 04-13-PLAN.md — GAP CLOSURE CR-02: f32 numeric chain NumericOverflow error variant + ok_or propagation replacing unwrap_or(0.0) in numint.rs (DFT-11)
+
+**Wave 7 — GAP CLOSURE** *(blocked on Wave 6: 04-13 touches numint.rs; 04-14 also touches numint.rs)*
+
+- [ ] 04-14-PLAN.md — GAP CLOSURE CR-01: UksXcOutput spin-polarized eval_uks + genuine open-shell nr_uks grid loop + UksKsHooks + UKS::kernel wiring + PyUKS::get_veff (DFT-01, DFT-10)
 
 ### Phase 5: MP2
 
@@ -231,7 +241,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 10/10 | Complete   | 2026-05-22 |
+| 4. DFT | 10/14 | Gap closure in progress (4 plans pending: 04-11..04-14) | 2026-05-22 (initial); gap closure 2026-05-23 |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
