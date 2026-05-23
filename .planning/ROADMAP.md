@@ -24,7 +24,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 - [ ] **Phase 1: Foundation** — Workspace (15 crates including `pyscf-algebra`), core types, runtime + env-driven backend selection (`PYSCF_BACKEND`), workspace `gpu` feature (OFF by default → CPU is the default backend), single-owner cubecl algebra crate (GEMM/reduce/AXPY/dot via `cubecl-matmul`/`cubecl-reduce`/`#[cube]`), FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep + dependency-wall lints, nightly cross-crate matrix CI
 - [ ] **Phase 2: GTO** — Mole, basis-set loading (5 atom-input × 11 basis-input forms), ECP, intor wrappers via cintx, eval_gto for grids
 - [ ] **Phase 3: SCF + PyO3 bindings** — RHF/UHF/GHF + DIIS + chkfile + sign canonicalization + first end-to-end energy AND lock the entire PyO3 contract (subclass-override dispatch, NumPy contiguity, GIL release seam, abi3-py310 wheel skeleton, oracle harness bootstrap)
-- [ ] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT (all 10 plans executed 2026-05-22; verification = gaps_found 3/5 — 4 BLOCKERs in 04-VERIFICATION.md: UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key → gap closure required before complete)
+- [x] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT (all 10 plans executed 2026-05-22; verification = gaps_found 3/5 — 4 BLOCKERs in 04-VERIFICATION.md: UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key → gap closure required before complete) (completed 2026-05-23)
 - [ ] **Phase 5: MP2** — RMP2/UMP2/DF-MP2 + frozen-core + AO→MO transformation kernel + helpers CCSD imports
 - [ ] **Phase 6: CCSD** — RCCSD/UCCSD + amplitude DIIS + Lambda + RDMs + AO-direct + DF-CCSD with HDF5 spill + tensor-arena from day one + T1/D1/D2 diagnostics
 - [ ] **Phase 7: Gradients + Geomopt** — Analytical gradients for HF/DFT/MP2/CCSD + ECP + CPHF/CPKS + native Rust BFGS+RFO in redundant internals + geomeTRIC/berny drop-in shims
@@ -170,7 +170,7 @@ Plans:
 
 **Wave 7 — GAP CLOSURE** *(blocked on Wave 6: 04-13 touches numint.rs; 04-14 also touches numint.rs)*
 
-- [ ] 04-14-PLAN.md — GAP CLOSURE CR-01: UksXcOutput spin-polarized eval_uks + genuine open-shell nr_uks grid loop + UksKsHooks + UKS::kernel wiring + PyUKS::get_veff (DFT-01, DFT-10)
+- [x] 04-14-PLAN.md — GAP CLOSURE CR-01: UksXcOutput spin-polarized eval_uks + genuine open-shell nr_uks grid loop + UksKsHooks + UKS::kernel wiring + PyUKS::get_veff (DFT-01, DFT-10)
 
 ### Phase 5: MP2
 
@@ -241,7 +241,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 13/14 | Gap closure in progress (1 plan pending: 04-14 CR-01; 04-11 CR-03, 04-12 CR-04, 04-13 CR-02 done) | 2026-05-22 (initial); gap closure 2026-05-23 |
+| 4. DFT | 14/14 | Complete   | 2026-05-23 |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
