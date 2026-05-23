@@ -64,8 +64,8 @@ pub use error::DftError;
 pub use parser::{Component, HybCoeffs, XcSpec};
 pub use xc_backend::{DerivOrder, Family, RhoBlock, UksXcOutput, XcBackend, XcOutput};
 
-// KS SCF surface (04-06).
-pub use hooks::{KsOverrideHooks, NoKsOverrides};
+// KS SCF surface (04-06; UksKsHooks 04-14 CR-01).
+pub use hooks::{KsHooks, KsOverrideHooks, NoKsOverrides, UksKsHooks};
 pub use numint::{NrResult, NrUksResult, NumInt, XcType};
 pub use rks::RKS;
 pub use uks::UKS;

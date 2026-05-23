@@ -321,9 +321,7 @@ impl OverrideHooks for KsHooks<'_> {
                 // CR-04: exact `u64` equality on the injective content hash —
                 // NOT a float approximation. Any change to the density (even
                 // below µHartree) misses the cache and recomputes the grid loop.
-                Some(c) if c.dm_fingerprint == dm_fingerprint(dm) => {
-                    (c.exc, c.half_tr_d_vxc)
-                }
+                Some(c) if c.dm_fingerprint == dm_fingerprint(dm) => (c.exc, c.half_tr_d_vxc),
                 // Cache miss (cold call / dm changed): recompute the grid loop.
                 // (mol is borrowed on KsHooks for exactly this fallback.)
                 _ => {
@@ -366,6 +364,274 @@ impl KsOverrideHooks for KsHooks<'_> {
         k: &Density,
     ) -> Result<KsVeff, PyscfRsError> {
         default_get_veff(ni, mol, grids, xc_code, dm, j, k)
+    }
+}
+
+/// Open-shell KS hooks — the UKS analog of [`KsHooks`] (CR-01).
+///
+/// The `UKS::kernel` driver passes this to the Phase 3 generic `kernel<H>`,
+/// which maintains a SINGLE total density matrix `dm` and calls
+/// `get_veff(mol, dm)` once per SCF cycle (kernel_impl.rs:59,127). For the v1
+/// gap closure the total `dm` is split SYMMETRICALLY into `dm_a = dm_b = dm/2`
+/// (the structural-wiring contract from the plan's must_haves: the generic
+/// `kernel<H>` carries one `Density`, so genuine asymmetric alpha/beta SCF
+/// state is out of scope until `pyscf_scf::kernel<H>` is generalized). The
+/// KEY difference from `KsHooks` is the routing: `get_veff` calls
+/// [`NumInt::nr_uks`] (the genuine spin-polarized grid loop), NOT `nr_rks`.
+/// The combined effective potential `Vxc = Vxc_alpha + Vxc_beta` enters the
+/// Fock build (matching upstream `uks.py:get_veff`).
+pub struct UksKsHooks<'a> {
+    /// The numerical-integration driver (grid loop + active D-08 precision).
+    pub ni: &'a NumInt,
+    /// The molecule (the SCF `energy_elec` signature does not pass it).
+    pub mol: &'a Mole,
+    /// The (already-built) Becke integration grid (coords + weights).
+    pub grids: &'a Grids,
+    /// The XC functional string.
+    pub xc_code: &'a str,
+    /// Per-cycle XC-energy cache, keyed on the injective content fingerprints
+    /// of BOTH spin channels (CR-04 scheme, one `u64` per channel). `RefCell`
+    /// because the SCF hooks take `&self`.
+    cache: std::cell::RefCell<Option<UksEnergyCache>>,
+}
+
+/// Cached per-cycle open-shell KS energy decomposition (see
+/// [`UksKsHooks::cache`]). Mirrors [`KsEnergyCache`] with TWO spin-channel
+/// fingerprints — a cache hit requires BOTH `dm_a` and `dm_b` to be byte-
+/// identical to the densities the cache was scored against.
+#[derive(Debug, Clone)]
+struct UksEnergyCache {
+    /// `Exc = ∫ ε_xc(ρ_a, ρ_b)`.
+    exc: f64,
+    /// `0.5·Tr(D·Vxc)` for the TOTAL density (`D = D_a + D_b`,
+    /// `Vxc = Vxc_a + Vxc_b`) — the term `energy_elec` subtracts from
+    /// `0.5·Tr(D·vhf)` to replace it with `Exc`.
+    half_tr_d_vxc: f64,
+    /// Injective fingerprint of the alpha-spin density (CR-04).
+    dm_a_fingerprint: u64,
+    /// Injective fingerprint of the beta-spin density (CR-04).
+    dm_b_fingerprint: u64,
+}
+
+impl<'a> UksKsHooks<'a> {
+    /// Construct the open-shell KS hooks bundle. The grid must already be built.
+    pub fn new(ni: &'a NumInt, mol: &'a Mole, grids: &'a Grids, xc_code: &'a str) -> Self {
+        Self {
+            ni,
+            mol,
+            grids,
+            xc_code,
+            cache: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// Compute the open-shell KS `get_veff` bundle for the TOTAL density `dm`.
+    ///
+    /// Splits `dm` symmetrically into `dm_a = dm_b = dm/2`, routes through
+    /// [`NumInt::nr_uks`] for the genuine spin-polarized `(Vxc_a, Vxc_b)`, and
+    /// assembles `veff = J + (Vxc_a + Vxc_b) − hyb·K`. Caches `(Exc,
+    /// 0.5·Tr(D·Vxc))` keyed on both spin-channel fingerprints for the matching
+    /// `energy_elec` call.
+    fn uks_veff(&self, mol: &Mole, dm: &Density) -> Result<KsVeff, PyscfRsError> {
+        let nao = dm.nao;
+        // Symmetric split: dm_a = dm_b = dm/2 (structural-wiring contract).
+        let half: Vec<f64> = dm.data.iter().map(|v| 0.5 * v).collect();
+        let dm_a = Density {
+            nao,
+            data: half.clone(),
+        };
+        let dm_b = Density { nao, data: half };
+
+        // (omega, alpha, hyb): the range-separation triple (rsh_coeff).
+        let (omega, alpha, hyb) = self
+            .ni
+            .rsh_coeff(self.xc_code, mol.spin)
+            .map_err(PyscfRsError::from)?;
+
+        // Genuine open-shell Vxc/Exc via the spin-polarized grid loop (CR-01).
+        let nr = self.ni.nr_uks(
+            mol,
+            self.grids,
+            self.xc_code,
+            (&dm_a, &dm_b),
+            0,
+            1,
+            mol.max_memory,
+            None,
+        )?;
+        // Combined XC potential Vxc = Vxc_alpha + Vxc_beta (uks.py:get_veff).
+        let vxc_total: Vec<f64> = nr
+            .vmat
+            .0
+            .data
+            .iter()
+            .zip(&nr.vmat.1.data)
+            .map(|(a, b)| a + b)
+            .collect();
+
+        // Exact-exchange potential vk = hyb·K (+ RSH long-range term).
+        let (j, k) = self.get_jk(mol, dm)?;
+        if j.nao != nao || k.nao != nao {
+            return Err(PyscfRsError::Core(
+                pyscf_core::CoreError::DimensionMismatch {
+                    expected: nao,
+                    actual: j.nao,
+                },
+            ));
+        }
+        let mut vk: Vec<f64> = k.data.iter().map(|x| hyb * x).collect();
+        if omega != 0.0 {
+            let mut mol_lr = mol.clone();
+            let k_lr = pyscf_gto::get_k_with_omega(&mut mol_lr, dm, omega)?;
+            if k_lr.nao != nao {
+                return Err(PyscfRsError::Core(
+                    pyscf_core::CoreError::DimensionMismatch {
+                        expected: nao,
+                        actual: k_lr.nao,
+                    },
+                ));
+            }
+            let lr_coeff = alpha - hyb;
+            vk.iter_mut()
+                .zip(&k_lr.data)
+                .for_each(|(v, x)| *v += lr_coeff * x);
+        }
+
+        // veff = J + Vxc_total − vk (inline loop — fock.rs template).
+        let mut veff = vec![0.0_f64; nao * nao];
+        let mut jk = vec![0.0_f64; nao * nao];
+        for i in 0..(nao * nao) {
+            veff[i] = j.data[i] + vxc_total[i] - vk[i];
+            jk[i] = j.data[i] - vk[i];
+        }
+        let e_coul = 0.5 * pyscf_algebra::oracle_dot(&dm.data, &jk);
+        // 0.5·Tr(D·Vxc) over the TOTAL density and combined Vxc.
+        let half_tr_d_vxc = 0.5 * pyscf_algebra::oracle_dot(&dm.data, &vxc_total);
+
+        *self.cache.borrow_mut() = Some(UksEnergyCache {
+            exc: nr.excsum,
+            half_tr_d_vxc,
+            dm_a_fingerprint: dm_fingerprint(&dm_a),
+            dm_b_fingerprint: dm_fingerprint(&dm_b),
+        });
+
+        Ok(KsVeff {
+            veff: Density { nao, data: veff },
+            exc: nr.excsum,
+            ecoul: e_coul,
+            nelec: nr.nelec.0 + nr.nelec.1,
+            half_tr_d_vxc,
+        })
+    }
+}
+
+impl OverrideHooks for UksKsHooks<'_> {
+    fn get_hcore(&self, mol: &Mole) -> Result<Density, PyscfRsError> {
+        pyscf_scf::default_get_hcore(mol)
+    }
+    fn get_ovlp(&self, mol: &Mole) -> Result<Density, PyscfRsError> {
+        pyscf_scf::default_get_ovlp(mol)
+    }
+    fn get_init_guess(&self, mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
+        pyscf_scf::default_get_init_guess(mol, mode)
+    }
+    fn get_jk(&self, mol: &Mole, dm: &Density) -> Result<(Density, Density), PyscfRsError> {
+        pyscf_scf::default_get_jk(mol, dm)
+    }
+    /// Open-shell KS effective potential: `J + (Vxc_a + Vxc_b) − hyb·K`.
+    fn get_veff(&self, mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError> {
+        Ok(self.uks_veff(mol, dm)?.veff)
+    }
+    fn get_fock(
+        &self,
+        h1e: &Density,
+        s1e: &Density,
+        vhf: &Density,
+        dm: &Density,
+        cycle: i32,
+        diis_state: Option<&Density>,
+    ) -> Result<Density, PyscfRsError> {
+        pyscf_scf::default_get_fock(h1e, s1e, vhf, dm, cycle, diis_state)
+    }
+    fn eig(&self, fock: &Density, s1e: &Density) -> Result<MOCoefficients, PyscfRsError> {
+        pyscf_scf::default_eig(fock, s1e)
+    }
+    fn get_occ(&self, mo_energy: &[f64], nelec: usize) -> Result<Vec<f64>, PyscfRsError> {
+        pyscf_scf::default_get_occ(mo_energy, nelec)
+    }
+    fn make_rdm1(&self, mo: &MOCoefficients) -> Result<Density, PyscfRsError> {
+        pyscf_scf::default_make_rdm1(mo)
+    }
+    /// Open-shell KS electronic energy: `E_elec = Tr(D·h1e) + Ecoul + Exc`.
+    /// Same decomposition as [`KsHooks::energy_elec`], keyed on the open-shell
+    /// (dm_a, dm_b) fingerprints. A cache miss recomputes via `uks_veff`.
+    fn energy_elec(
+        &self,
+        dm: &Density,
+        h1e: &Density,
+        vhf: &Density,
+    ) -> Result<(Energy, Energy), PyscfRsError> {
+        let e_1e = pyscf_algebra::oracle_dot(&dm.data, &h1e.data);
+
+        // The symmetric split this hook uses for `dm`.
+        let nao = dm.nao;
+        let half: Vec<f64> = dm.data.iter().map(|v| 0.5 * v).collect();
+        let dm_a = Density {
+            nao,
+            data: half.clone(),
+        };
+        let dm_b = Density { nao, data: half };
+        let fp_a = dm_fingerprint(&dm_a);
+        let fp_b = dm_fingerprint(&dm_b);
+
+        let (exc, half_tr_d_vxc) = {
+            let cache = self.cache.borrow();
+            match cache.as_ref() {
+                Some(c) if c.dm_a_fingerprint == fp_a && c.dm_b_fingerprint == fp_b => {
+                    (c.exc, c.half_tr_d_vxc)
+                }
+                _ => {
+                    drop(cache);
+                    let bundle = self.uks_veff(self.mol, dm)?;
+                    let c = self.cache.borrow();
+                    c.as_ref()
+                        .map(|c| (c.exc, c.half_tr_d_vxc))
+                        .unwrap_or((bundle.exc, 0.0))
+                }
+            }
+        };
+
+        let half_tr_d_vhf = 0.5 * pyscf_algebra::oracle_dot(&dm.data, &vhf.data);
+        let e_2e = half_tr_d_vhf - half_tr_d_vxc + exc;
+        let e_elec = e_1e + e_2e;
+        Ok((Energy(e_elec), Energy(e_2e)))
+    }
+    fn energy_tot(
+        &self,
+        dm: &Density,
+        h1e: &Density,
+        vhf: &Density,
+    ) -> Result<Energy, PyscfRsError> {
+        let (e_elec, _) = self.energy_elec(dm, h1e, vhf)?;
+        Ok(e_elec)
+    }
+}
+
+impl KsOverrideHooks for UksKsHooks<'_> {
+    fn get_veff_ks(
+        &self,
+        _ni: &NumInt,
+        mol: &Mole,
+        _grids: &Grids,
+        _xc_code: &str,
+        dm: &Density,
+        _j: &Density,
+        _k: &Density,
+    ) -> Result<KsVeff, PyscfRsError> {
+        // Open-shell: route the full bundle through the spin-polarized path.
+        // (The borrowed `ni`/`grids`/`xc_code` here are the same the hooks own,
+        // so we use `self.*` to keep the symmetric (dm_a, dm_b) split + cache.)
+        self.uks_veff(mol, dm)
     }
 }
 

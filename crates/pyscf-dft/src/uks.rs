@@ -136,7 +136,10 @@ impl UKS {
         let _ = self.grids.build(&self.mol);
         let cfg = self.to_kernel_config();
         let result = {
-            let hooks = crate::hooks::KsHooks::new(&self._numint, &self.mol, &self.grids, &self.xc);
+            // CR-01: open-shell hooks route get_veff through nr_uks (the
+            // genuine spin-polarized grid loop), NOT the closed-shell KsHooks.
+            let hooks =
+                crate::hooks::UksKsHooks::new(&self._numint, &self.mol, &self.grids, &self.xc);
             pyscf_scf::kernel(&self.mol, &hooks, cfg)?
         };
         self.mo_coeff = Some(result.mo_coeff.clone());
@@ -206,5 +209,30 @@ mod tests {
         if std::env::var("PYSCF_DTYPE").is_err() {
             assert_eq!(ks.dtype(), DType::F64);
         }
+    }
+
+    /// CR-01 structural assertion: `UKS::kernel` wires the OPEN-SHELL
+    /// [`crate::hooks::UksKsHooks`] (which routes `get_veff` through
+    /// `NumInt::nr_uks`), NOT the closed-shell `KsHooks` (which routes through
+    /// `nr_rks` on the total density). This test confirms `UksKsHooks::new`
+    /// constructs and satisfies BOTH the SCF `OverrideHooks` bound AND the KS
+    /// `KsOverrideHooks` extension — exactly what the generic `kernel<H>`
+    /// requires at the `UKS::kernel` call site.
+    #[test]
+    fn uks_kernel_uses_nr_uks_not_rks_path() {
+        use pyscf_grids::Grids;
+        use pyscf_scf::OverrideHooks;
+
+        fn assert_scf<H: OverrideHooks>(_h: &H) {}
+        fn assert_ks<H: crate::hooks::KsOverrideHooks>(_h: &H) {}
+
+        let mol = open_shell();
+        let ni = NumInt::new();
+        let grids = Grids::new();
+        // The exact type the UKS::kernel driver instantiates.
+        let hooks = crate::hooks::UksKsHooks::new(&ni, &mol, &grids, "svwn");
+        // Trait bounds the generic kernel<H> requires at the call site.
+        assert_scf(&hooks);
+        assert_ks(&hooks);
     }
 }

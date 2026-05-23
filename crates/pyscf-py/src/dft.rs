@@ -29,7 +29,7 @@ use pyo3::prelude::*;
 
 use pyscf_core::{Density, Mole};
 use pyscf_dft::{
-    KsOverrideHooks, NoKsOverrides, NumInt, RKS as RksRust, UKS as UksRust,
+    KsOverrideHooks, NoKsOverrides, NumInt, RKS as RksRust, UKS as UksRust, UksKsHooks,
     default_get_veff as ks_default_get_veff,
 };
 use pyscf_scf::InitGuessMode;
@@ -677,7 +677,15 @@ impl PyUKS {
         Ok(slf)
     }
 
-    /// KS effective potential `J + Vxc − hyb·K` (open-shell Vxc via nr_uks).
+    /// Open-shell KS effective potential `J + (Vxc_a + Vxc_b) − hyb·K`.
+    ///
+    /// CR-01: routes through [`UksKsHooks`] (which calls `NumInt::nr_uks`, the
+    /// genuine spin-polarized grid loop), NOT the closed-shell
+    /// `ks_default_get_veff`/`nr_rks` path. The PyO3 surface receives a single
+    /// total density matrix `dm` from Python; `UksKsHooks` splits it
+    /// symmetrically into `(dm_a, dm_b) = (dm/2, dm/2)` (the structural-wiring
+    /// contract — genuine asymmetric alpha/beta SCF state requires generalizing
+    /// `pyscf_scf::kernel<H>`, out of scope for this gap closure).
     fn get_veff<'py>(
         &mut self,
         py: Python<'py>,
@@ -690,8 +698,12 @@ impl PyUKS {
         let _ = self.inner.grids.build(&mol_ref);
         let bundle = py
             .detach(|| {
+                let hooks = UksKsHooks::new(&self.inner._numint, &mol_ref, &self.inner.grids, &xc);
+                // get_veff_ks routes through nr_uks (open-shell). The `ni`/
+                // `grids`/`xc`/`j`/`k` args are placeholders — UksKsHooks uses
+                // its own borrowed fields + the symmetric (dm_a, dm_b) split.
                 let (j, k) = pyscf_scf::default_get_jk(&mol_ref, &dm_ref)?;
-                ks_default_get_veff(
+                hooks.get_veff_ks(
                     &self.inner._numint,
                     &mol_ref,
                     &self.inner.grids,
