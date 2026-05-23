@@ -873,3 +873,47 @@ fn eval_gto_sph_deriv1_cpu(
         shape: vec![4, ngrids, nao],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyscf_core::PyscfRsError;
+
+    /// BLOCKER CR-03 (FOUND-07 never-panic): `c2s_coeff` must return
+    /// `Err(NotYetImplemented{phase:4,..})` for l>4 (h-shells and above)
+    /// instead of `panic!`-ing. A user supplying cc-pV5Z / ANO through the
+    /// PyO3 boundary would otherwise abort the Python process.
+    #[test]
+    fn c2s_coeff_l5_returns_err_not_panic() {
+        // l = 5 (h-shell) is not in the v1 c2s table → Err, no panic.
+        let r = c2s_coeff(5, 0, 0);
+        assert!(
+            matches!(
+                r,
+                Err(PyscfRsError::NotYetImplemented { phase: 4, .. })
+            ),
+            "c2s_coeff(5,..) must return Err(NotYetImplemented{{phase:4}}), got {r:?}"
+        );
+
+        // l = 6 too — the wildcard arm covers every l>4.
+        assert!(matches!(
+            c2s_coeff(6, 0, 0),
+            Err(PyscfRsError::NotYetImplemented { phase: 4, .. })
+        ));
+    }
+
+    /// No behavioral regression: l<=4 still returns the FROZEN libcint
+    /// coefficients (byte-exact). Spot-check the g-shell (l=4) value the
+    /// plan calls out plus the d-shell (l=2) m=-2 xy entry.
+    #[test]
+    fn c2s_coeff_l_le_4_unchanged() {
+        // l=4 row 0, col 1 = 2.503342941796704_6 (xxxy → m=-4).
+        assert_eq!(c2s_coeff(4, 0, 1).unwrap(), 2.503_342_941_796_704_6);
+        // l=2 row 0, col 1 = 1.092548430592079_2 (xy → m=-2).
+        assert_eq!(c2s_coeff(2, 0, 1).unwrap(), 1.092_548_430_592_079_2);
+        // l=0 identity.
+        assert_eq!(c2s_coeff(0, 0, 0).unwrap(), 1.0);
+        // l=1 identity diagonal.
+        assert_eq!(c2s_coeff(1, 1, 1).unwrap(), 1.0);
+    }
+}
