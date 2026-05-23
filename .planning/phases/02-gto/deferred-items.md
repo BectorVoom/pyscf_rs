@@ -44,34 +44,79 @@ non-zero entry was unnormalized — producing non-symmetric, non-PSD overlaps.
 
 ---
 
-## DI-02-11-CINTX-NCTR-HIGHL — cintx l≥3 cart→sph asymmetry for nctr>1 cross-blocks
+## DI-02-11-CINTX-NCTR-HIGHL — cross-l 1e overlap/kinetic/nuclear asymmetry — RESOLVED
 
 **Surfaced by:** plan 02-11, 2026-05-24.
-**Disposition:** cross-repo gap (cintx), low priority — NOT a v1 blocker.
+**Resolved by:** cintx branch `fix/general-contraction-nctr-1e` (commit `9af2164`,
+`fix(1e,ecp): general contraction for ECP + cross-l overlap layout`), 2026-05-24.
+**Disposition:** RESOLVED.
+
+### Root cause (corrected from the original framing)
+
+Originally suspected as an l≥3-and-nctr>1 cart→sph scatter bug. The true root cause
+is broader and independent of nctr: `contract_overlap/kinetic/nuclear` emitted
+ROW-major `out[bra*ncj + ket]`, but `cart_to_sph_1e` (and the pyscf-rs block stitch)
+read COLUMN-major bra-fastest `out[ket*nci + bra]`. The two coincide only when a
+shell is l=0 (a vector) or li==lj with a symmetric block, so EVERY cross-l block
+with both li,lj>0 (p-d, p-f, d-g) was silently transposed/scrambled — at any nctr.
+It was invisible because the cintx byte-identity oracle is feature-gated (does not
+run in the sandbox) and the in-tree analytic tests are s-s only.
+
+### How it was resolved
+
+`9af2164` changed the three contraction functions to emit column-major
+`out[ket*nci+bra]` (matching `cart_to_sph_1e`'s documented input and the pyscf-rs
+stitch). Single-contraction s-s/s-p/s-d/p-s are byte-unchanged (vectors/symmetric).
+The `one_electron.rs` Cart launch branch reads/writes column-major to match.
+
+### Verification (always-on, cintx in-tree)
+
+- `test_cross_l_overlap_is_symmetric`: ovlp + kin (+ nuc for p-d) cross-l transpose
+  symmetry for p-d, p-f, d-g, single contraction.
+- `test_general_contraction_high_l_cross_block_is_symmetric`: the executor's exact
+  case — generally-contracted d(nctr=2) × f(nctr=2) full-block transpose symmetry.
+- pyscf-rs downstream (gto+scf+df+mp2): 280 tests pass, no regression.
+
+---
+
+## DI-02-11-ECP-NCTR — cintx int1e_ecp mis-evaluated general-contraction shells — RESOLVED
+
+**Surfaced by:** plan 02-11 regression sweep (Cu/LANL2DZ S-block is nctr=2), 2026-05-24.
+**Resolved by:** cintx `9af2164`. **Disposition:** RESOLVED.
+
+The nwchem parser fix made LANL2DZ load its real contractions (nctr>1), exposing two
+bugs in `ecp.rs`: (1) `launch_ecp` sized `gctr`/`needed` as ncart*ncart (no nctr) →
+index-out-of-bounds panic, since `ecp_type1/2_cart` write the full nctr block; fixed
+with nctr-aware sizing + per-contraction cart→sph scatter. (2) The kernel read
+`Shell.coefficients` column-major while the canonical layout (all other kernels) is
+row-major; fixed with a `coeffs_col_major()` transpose-once helper (identity at nctr=1).
+The 02-10 `ecp_int1e_oracle` had been passing against a TRUNCATED (wrong) LANL2DZ; it now
+passes (symmetric + finite) against the correct nctr=2 basis.
+
+---
+
+## DI-02-11-CINTX-NUC-HIGHL — cintx nuclear attraction limited to li+lj ≤ 3 (≤2 Rys roots)
+
+**Surfaced by:** plan 02-11 cross-l test development, 2026-05-24.
+**Disposition:** cross-repo gap (cintx), pre-existing — NOT a v1 02 blocker; tracked.
 
 ### What was found
 
-After the 02-11 coefficient-layout fix, the cintx 1e kernel
-(`one_electron.rs`@`6b14d48`) evaluates general-contraction (nctr>1) overlaps
-correctly for **l ≤ 2** (proven exact by cc-pVDZ and the ANO s/p/d sub-block:
-symmetric, unit diagonal). For nctr>1 it introduces a SYMMETRY violation in the
-**(p,f) and (d,g) cross-blocks** (|Δ| up to ~6 on the ANO O overlap at l≥3),
-i.e. the per-contraction-pair cart→sph scatter is incorrect when one shell has
-l ≥ 3 AND nctr > 1. The diagonal stays correct (each AO still normalises to 1);
-only the high-l cross-block off-diagonal is asymmetric.
+`contract_nuclear` (`one_electron.rs`) computes `nrys_roots = (li+lj)/2 + 1` but only
+implements 1 or 2 Rys roots (`rys_root1_host` / `rys_root2_host`). For li+lj > 3
+(nrys_roots ≥ 3 — e.g. d-d, p-f, d-g) the per-root loop indexes the 2-element root
+array out of bounds and panics. Overlap and kinetic use the analytic g-tensor and are
+unaffected at any l; this is specific to nuclear attraction (`int1e_nuc`).
 
-### Impact on pyscf-rs — NONE for current deliverables
+### Impact on pyscf-rs
 
-- `init_guess_by_minao` is UNAFFECTED: the occupation walk assigns occ=0 to every
-  l≥3 (f,g) ANO contraction, so those columns are filtered out of the density. The
-  H2O minao trace (9.86) and the H2 byte-match exercise only l≤1 occupied ANO
-  orbitals. The l≤2 sub-block is symmetric, so the occupied projection is correct.
-- No current pyscf-rs numeric path consumes a generally-contracted l≥3 overlap.
+- minao / ANO overlap path: UNAFFECTED (overlap only).
+- Becomes relevant when a non-DF SCF builds the nuclear-attraction `hcore` over an
+  orbital basis with high angular momentum (any d-d block already has li+lj=4). The
+  default SCF path in-tree uses DF or low-l bases; full non-DF SCF on d/f bases needs
+  `rys_root3`/`rys_root4`+ in cintx. Tracked here.
 
-### Required cintx work (when an l≥3 nctr>1 numeric path lands)
+### Required cintx work
 
-Audit the cart→sph staging scatter in `one_electron.rs` for l≥3 with nctr>1 (the
-`Representation::Spheric` branch's `staging[ii + jj*di_sph]` index vs the
-`cart_to_sph_1e` output ordering); extend the cintx safe-API arity-2 parity oracle
-to an ANO-style basis with f/g general contractions. Tracked here until a pyscf-rs
-phase (e.g. correlation on ANO-RCC) needs it.
+Implement higher-order Rys roots (3+) in `math/rys.rs` and generalize the
+`if nrys_roots == 1 {..} else {rys_root2}` dispatch in `contract_nuclear`.

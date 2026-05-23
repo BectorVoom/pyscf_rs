@@ -122,8 +122,35 @@ None - no external service configuration required.
 
 ## Next Phase Readiness
 
-- GTO general-contraction loading + evaluation correct for l≤2 (the v1 corpus: cc-pVDZ, def2, Pople, ANO valence). Heavy-atom minao closed.
-- ANO-RCC / correlation-on-ANO at l≥3 (f/g general contractions) will need the cintx high-l cart→sph fix (DI-02-11-CINTX-NCTR-HIGHL) — a future cintx#11-style cross-repo task; not a v1 blocker.
+- GTO general-contraction loading + evaluation correct for ALL l (l≤2 AND l≥3). Heavy-atom minao closed.
+- ANO-RCC / correlation-on-ANO at l≥3 (f/g general contractions): the cintx high-l cart→sph asymmetry (DI-02-11-CINTX-NCTR-HIGHL) is now RESOLVED — see addendum.
+
+## Addendum (2026-05-24) — full cintx general-contraction closure (commit 9af2164)
+
+A user-approved deeper cintx pass (branch `fix/general-contraction-nctr-1e`, commit
+`9af2164`) closed three further cintx-side issues, all exposed once bases load their
+real contraction counts:
+
+1. **DI-02-11-ECP-NCTR (RESOLVED)** — `ecp.rs` `int1e_ecp` panicked (index-OOB) and read
+   coefficients column-major for nctr>1. Fixed `launch_ecp` gctr/needed sizing +
+   per-contraction cart→sph scatter; added `coeffs_col_major()` (row-major→internal
+   column-major, identity at nctr=1). `ecp_int1e_oracle` (Cu/LANL2DZ S-block nctr=2)
+   now passes against the CORRECT basis (it had been green against a truncated one).
+2. **DI-02-11-CINTX-NCTR-HIGHL (RESOLVED)** — root cause was broader than l≥3: the 1e
+   `contract_overlap/kinetic/nuclear` emitted row-major while `cart_to_sph_1e` and the
+   pyscf-rs stitch read column-major bra-fastest, transposing EVERY cross-l block
+   (li≠lj, both>0) at any nctr. Fixed to column-major; single-contraction
+   s-s/s-p/s-d/p-s byte-unchanged. New cintx tests: cross-l transpose symmetry
+   (ovlp/kin/nuc, p-d/p-f/d-g) + generally-contracted d(nctr2)×f(nctr2) symmetry.
+3. **DI-02-11-CINTX-NUC-HIGHL (TRACKED, pre-existing)** — `contract_nuclear` implements
+   only ≤2 Rys roots (li+lj≤3); high-l nuclear attraction needs `rys_root3+`. Does not
+   affect minao/overlap; deferred.
+
+Validation: cintx 173 lib tests; pyscf-rs gto+scf+df+mp2 = 280 tests (0 failures);
+pyscf-dft 47 lib tests. clippy -D warnings + fmt + check-no-fma + check-dependency-wall
+PASS; 0 libxc. (One pre-existing UNRELATED failure: pyscf-dft
+`cam_b3lyp_h2o_rsh::rsh_get_veff_dispatches_into_range_coulomb_branch` — a 2e int2e
+test stale since 05-08 closed that gap; orthogonal to this 1e/ECP work.)
 
 ## Self-Check: PASSED
 
