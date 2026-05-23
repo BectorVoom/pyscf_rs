@@ -17,11 +17,11 @@
 //! onto atoms. This is the same algorithm upstream uses at
 //! `pyscf/gto/mole.py:aoslice_by_atom`.
 
-use pyscf_core::raw_layout::{ATOM_OF, BAS_SLOTS};
 use pyscf_core::PyscfRsError;
+use pyscf_core::raw_layout::{ATOM_OF, BAS_SLOTS};
 
-use crate::error::ScfError;
 use crate::RHF;
+use crate::error::ScfError;
 
 /// Mulliken population-analysis result. Consumed by oracle Arms 7 + 8
 /// (plan 03-08).
@@ -75,6 +75,8 @@ pub fn mulliken_pop(rhf: &RHF) -> Result<MullikenResult, PyscfRsError> {
     // Both D and S are row-major nao×nao.
     let mut ao_pop = vec![0.0_f64; nao];
     let mut terms = vec![0.0_f64; nao];
+    // Flat-array reduction: mu/nu drive row-major D/S offsets + buffers.
+    #[allow(clippy::needless_range_loop)]
     for mu in 0..nao {
         for nu in 0..nao {
             terms[nu] = dm.data[mu * nao + nu] * s.data[nu * nao + mu];
@@ -87,15 +89,17 @@ pub fn mulliken_pop(rhf: &RHF) -> Result<MullikenResult, PyscfRsError> {
     let natm = rhf.mol.natm;
     let mut atom_pop = vec![0.0_f64; natm];
     let nbas = rhf.mol.nbas;
-    if !rhf.mol._bas.is_empty() && rhf.mol.ao_loc_nr.len() >= nbas + 1 {
+    if !rhf.mol._bas.is_empty() && rhf.mol.ao_loc_nr.len() > nbas {
         // Standard path (post mol.build()): ao_loc_nr is `nbas+1` long.
         for shell in 0..nbas {
             let atom = rhf.mol._bas[shell * BAS_SLOTS + ATOM_OF] as usize;
             if atom >= natm {
-                return Err(ScfError::Core(pyscf_core::CoreError::InvalidMolecule(
-                    format!("mulliken_pop: _bas[{shell}, ATOM_OF] = {atom} but natm = {natm}"),
-                ))
-                .into());
+                return Err(
+                    ScfError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
+                        "mulliken_pop: _bas[{shell}, ATOM_OF] = {atom} but natm = {natm}"
+                    )))
+                    .into(),
+                );
             }
             let lo = rhf.mol.ao_loc_nr[shell] as usize;
             let hi = rhf.mol.ao_loc_nr[shell + 1] as usize;
@@ -108,7 +112,11 @@ pub fn mulliken_pop(rhf: &RHF) -> Result<MullikenResult, PyscfRsError> {
     let charges = rhf.mol.atom_charges();
     let mut atom_charges = vec![0.0_f64; natm];
     for a in 0..natm {
-        let z = if a < charges.len() { charges[a] as f64 } else { 0.0 };
+        let z = if a < charges.len() {
+            charges[a] as f64
+        } else {
+            0.0
+        };
         atom_charges[a] = z - atom_pop[a];
     }
 
@@ -157,6 +165,8 @@ pub fn dip_moment(rhf: &RHF) -> Result<[f64; 3], PyscfRsError> {
     //  components + (oj+jj) * components * nao`.)
     let mut dip = [0.0_f64; 3];
     let mut terms = vec![0.0_f64; nao * nao];
+    // Flat-array reduction: k/mu/nu drive the component-leading r offsets.
+    #[allow(clippy::needless_range_loop)]
     for k in 0..3 {
         for mu in 0..nao {
             for nu in 0..nao {
@@ -171,7 +181,11 @@ pub fn dip_moment(rhf: &RHF) -> Result<[f64; 3], PyscfRsError> {
     // Nuclear contribution: Σ_A Z_A · r_A.
     let charges = rhf.mol.atom_charges();
     for a in 0..rhf.mol.natm {
-        let z = if a < charges.len() { charges[a] as f64 } else { 0.0 };
+        let z = if a < charges.len() {
+            charges[a] as f64
+        } else {
+            0.0
+        };
         let coords = if a < rhf.mol._atom.len() {
             rhf.mol._atom[a].1
         } else {

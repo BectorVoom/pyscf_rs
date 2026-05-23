@@ -8,8 +8,8 @@
 //! Algorithm:
 //!   1. Push (current iterate, error vector) into the ring buffer.
 //!   2. Build Pulay's Lagrange-multiplier system:
-//!        B has shape (n+1, n+1); B[i,j] = <err_i, err_j> for i,j<n,
-//!        B[i,n] = B[n,i] = -1, B[n,n] = 0.
+//!      B has shape (n+1, n+1); B[i,j] = <err_i, err_j> for i,j<n,
+//!      B[i,n] = B[n,i] = -1, B[n,n] = 0.
 //!      RHS b has shape (n+1); b[i] = 0 for i<n, b[n] = -1.
 //!   3. Solve B·c = b via `pyscf_algebra::solve_linear` (host-faer LU).
 //!   4. Extrapolated iterate = Σ_{i<n} c[i] · bookkeep[i].
@@ -80,11 +80,7 @@ impl<S: DiisStorable + Clone> Diis<S> {
     /// solve, return `Σ_i c[i] · bookkeep[i]` as the extrapolated iterate.
     ///
     /// Source: `pyscf/scf/diis.py:48-58` (`update` method).
-    pub fn extrapolate(
-        &mut self,
-        current: S,
-        error: Vec<f64>,
-    ) -> Result<S, DiisError> {
+    pub fn extrapolate(&mut self, current: S, error: Vec<f64>) -> Result<S, DiisError> {
         self.push(current, error);
         let n = self.bookkeep.len();
         let dim = n + 1;
@@ -123,11 +119,11 @@ impl<S: DiisStorable + Clone> Diis<S> {
         // oracle_sum takes &[f64], so we materialise the per-iterate
         // contributions for each `k`.
         let mut terms = vec![0.0_f64; n];
-        for k in 0..flat_len {
+        for (k, extrap) in extrap_flat.iter_mut().enumerate() {
             for i in 0..n {
                 terms[i] = c[i] * self.bookkeep[i].as_flat()[k];
             }
-            extrap_flat[k] = pyscf_algebra::oracle_sum(&terms);
+            *extrap = pyscf_algebra::oracle_sum(&terms);
         }
         let mut extrap = self.bookkeep[0].clone();
         extrap.from_flat(&extrap_flat);

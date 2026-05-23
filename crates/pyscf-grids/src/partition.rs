@@ -173,8 +173,8 @@ mod tests {
                 assert_eq!(d[i * n + j], d[j * n + i]);
             }
         }
-        assert!((d[0 * n + 1] - 1.5).abs() < 1e-15);
-        assert!((d[0 * n + 2] - 1.0).abs() < 1e-15);
+        assert!((d[1] - 1.5).abs() < 1e-15); // d[0][1]
+        assert!((d[2] - 1.0).abs() < 1e-15); // d[0][2]
     }
 
     #[test]
@@ -183,9 +183,16 @@ mod tests {
         let atm_coords = vec![[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]];
         let atm_dist = inter_distance(&atm_coords);
         // A few test grid points around the two atoms.
-        let coords = vec![[0.0, 0.0, 0.5], [0.0, 0.0, 1.0], [0.0, 0.0, 1.5], [1.0, 1.0, 1.0]];
+        let coords = vec![
+            [0.0, 0.0, 0.5],
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.5],
+            [1.0, 1.0, 1.0],
+        ];
         let pbecke = gen_grid_partition(&coords, &atm_coords, &atm_dist, None, original_becke);
         let natm = 2;
+        // `g` indexes the grid-point (2nd) dimension of each pbecke[a].
+        #[allow(clippy::needless_range_loop)]
         for g in 0..coords.len() {
             let mut col = vec![0.0; natm];
             for a in 0..natm {
@@ -193,10 +200,13 @@ mod tests {
             }
             let denom = pyscf_algebra::oracle_sum(&col);
             let mut frac_sum = 0.0;
-            for a in 0..natm {
-                frac_sum += pbecke[a][g] / denom;
+            for pb in &pbecke {
+                frac_sum += pb[g] / denom;
             }
-            assert!((frac_sum - 1.0).abs() < 1e-12, "partition fractions sum != 1 at g={g}");
+            assert!(
+                (frac_sum - 1.0).abs() < 1e-12,
+                "partition fractions sum != 1 at g={g}"
+            );
         }
     }
 

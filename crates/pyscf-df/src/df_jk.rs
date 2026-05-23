@@ -62,6 +62,8 @@ pub fn get_jk_df(dm: &Density, df: &DfIntegrals) -> Result<(Density, Density), P
     //   D[lambda,sigma]    = dm.data[lambda*nao + sigma]
     let mut rho_q = vec![0.0_f64; naux];
     let mut prod_buf = vec![0.0_f64; nao * nao];
+    // `q` drives multi-dim flat-array offsets (b_uvq row-major [nao,nao,naux]).
+    #[allow(clippy::needless_range_loop)]
     for q in 0..naux {
         for lambda in 0..nao {
             for sigma in 0..nao {
@@ -92,6 +94,8 @@ pub fn get_jk_df(dm: &Density, df: &DfIntegrals) -> Result<(Density, Density), P
     for q in 0..naux {
         for mu in 0..nao {
             for lambda in 0..nao {
+                // `sigma` drives multi-dim flat-array offsets across b_uvq/dm.
+                #[allow(clippy::needless_range_loop)]
                 for sigma in 0..nao {
                     let b = df.b_uvq[mu * nao * naux + sigma * naux + q];
                     let d = dm.data[sigma * nao + lambda];
@@ -118,10 +122,7 @@ pub fn get_jk_df(dm: &Density, df: &DfIntegrals) -> Result<(Density, Density), P
         }
     }
 
-    Ok((
-        Density { nao, data: j },
-        Density { nao, data: k },
-    ))
+    Ok((Density { nao, data: j }, Density { nao, data: k }))
 }
 
 #[cfg(test)]

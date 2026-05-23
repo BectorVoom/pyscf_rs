@@ -18,17 +18,23 @@
 //!
 //! `pyscf-dft` stays **pyo3-free** — only this crate (pyscf-py) names pyo3
 //! (the PyO3 wall).
+
+// PyO3 boundary: hook methods return multi-array tuples (e.g. the (J, K)
+// pair as `(Bound<PyArray2>, Bound<PyArray2>)`). These FFI return shapes are
+// inherent to the Python surface, so `type_complexity` is allowed module-wide.
+#![allow(clippy::type_complexity)]
+
 use numpy::{PyArray1, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 use pyscf_core::{Density, Mole};
 use pyscf_dft::{
-    default_get_veff as ks_default_get_veff, KsOverrideHooks, NoKsOverrides, NumInt, RKS as RksRust,
-    UKS as UksRust,
+    KsOverrideHooks, NoKsOverrides, NumInt, RKS as RksRust, UKS as UksRust,
+    default_get_veff as ks_default_get_veff,
 };
 use pyscf_scf::InitGuessMode;
 
-use crate::bridge::{extract_mole_from_pyany, PyOverrideBridge};
+use crate::bridge::{PyOverrideBridge, extract_mole_from_pyany};
 use crate::errors::pyscf_to_py;
 use crate::numpy_io::{density_to_pyarray, slice_to_pyarray1, to_density};
 
@@ -99,16 +105,34 @@ impl PyRKS {
     }
 
     // DFT-specific attributes (rks.py).
-    #[getter] fn xc(&self) -> String { self.inner.xc.clone() }
-    #[setter] fn set_xc(&mut self, v: String) { self.inner.xc = v; }
+    #[getter]
+    fn xc(&self) -> String {
+        self.inner.xc.clone()
+    }
+    #[setter]
+    fn set_xc(&mut self, v: String) {
+        self.inner.xc = v;
+    }
 
-    #[getter] fn nlc(&self) -> String { self.inner.nlc.clone() }
-    #[setter] fn set_nlc(&mut self, v: String) { self.inner.nlc = v; }
+    #[getter]
+    fn nlc(&self) -> String {
+        self.inner.nlc.clone()
+    }
+    #[setter]
+    fn set_nlc(&mut self, v: String) {
+        self.inner.nlc = v;
+    }
 
     // grids / nlcgrids — exposed as bool presence flags (the Grids struct is
     // opaque to Python today; the build happens inside kernel()).
-    #[getter] fn grids(&self) -> bool { true }
-    #[getter] fn nlcgrids(&self) -> bool { true }
+    #[getter]
+    fn grids(&self) -> bool {
+        true
+    }
+    #[getter]
+    fn nlcgrids(&self) -> bool {
+        true
+    }
 
     /// `mf._numint` — the read-only numerical-integration view (D-08).
     /// Surfaces ONLY the active precision; no mutable surface.
@@ -134,10 +158,22 @@ impl PyRKS {
     }
 
     // Scalar SCF state (set by kernel()).
-    #[getter] fn e_tot(&self)     -> f64  { self.inner.e_tot }
-    #[getter] fn e_elec(&self)    -> f64  { self.inner.e_elec }
-    #[getter] fn converged(&self) -> bool { self.inner.converged }
-    #[getter] fn cycles(&self)    -> u32  { self.inner.cycles }
+    #[getter]
+    fn e_tot(&self) -> f64 {
+        self.inner.e_tot
+    }
+    #[getter]
+    fn e_elec(&self) -> f64 {
+        self.inner.e_elec
+    }
+    #[getter]
+    fn converged(&self) -> bool {
+        self.inner.converged
+    }
+    #[getter]
+    fn cycles(&self) -> u32 {
+        self.inner.cycles
+    }
 
     #[getter]
     fn mo_coeff<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyArray2<f64>>>> {
@@ -148,7 +184,10 @@ impl PyRKS {
     }
     #[getter]
     fn mo_energy<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
-        self.inner.mo_energy.as_ref().map(|v| slice_to_pyarray1(py, v))
+        self.inner
+            .mo_energy
+            .as_ref()
+            .map(|v| slice_to_pyarray1(py, v))
     }
     #[getter]
     fn mo_occ<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
@@ -156,26 +195,68 @@ impl PyRKS {
     }
 
     // Inherited SCF tunables (the floor subset rks.py reuses).
-    #[getter] fn verbose(&self) -> u8 { self.inner.verbose }
-    #[setter] fn set_verbose(&mut self, v: u8) { self.inner.verbose = v; }
+    #[getter]
+    fn verbose(&self) -> u8 {
+        self.inner.verbose
+    }
+    #[setter]
+    fn set_verbose(&mut self, v: u8) {
+        self.inner.verbose = v;
+    }
 
-    #[getter] fn max_cycle(&self) -> u32 { self.inner.max_cycle }
-    #[setter] fn set_max_cycle(&mut self, v: u32) { self.inner.max_cycle = v; }
+    #[getter]
+    fn max_cycle(&self) -> u32 {
+        self.inner.max_cycle
+    }
+    #[setter]
+    fn set_max_cycle(&mut self, v: u32) {
+        self.inner.max_cycle = v;
+    }
 
-    #[getter] fn conv_tol(&self) -> f64 { self.inner.conv_tol }
-    #[setter] fn set_conv_tol(&mut self, v: f64) { self.inner.conv_tol = v; }
+    #[getter]
+    fn conv_tol(&self) -> f64 {
+        self.inner.conv_tol
+    }
+    #[setter]
+    fn set_conv_tol(&mut self, v: f64) {
+        self.inner.conv_tol = v;
+    }
 
-    #[getter] fn init_guess(&self) -> String { self.inner.init_guess.clone() }
-    #[setter] fn set_init_guess(&mut self, v: String) { self.inner.init_guess = v; }
+    #[getter]
+    fn init_guess(&self) -> String {
+        self.inner.init_guess.clone()
+    }
+    #[setter]
+    fn set_init_guess(&mut self, v: String) {
+        self.inner.init_guess = v;
+    }
 
-    #[getter] fn diis(&self) -> bool { self.inner.diis }
-    #[setter] fn set_diis(&mut self, v: bool) { self.inner.diis = v; }
+    #[getter]
+    fn diis(&self) -> bool {
+        self.inner.diis
+    }
+    #[setter]
+    fn set_diis(&mut self, v: bool) {
+        self.inner.diis = v;
+    }
 
-    #[getter] fn level_shift(&self) -> f64 { self.inner.level_shift }
-    #[setter] fn set_level_shift(&mut self, v: f64) { self.inner.level_shift = v; }
+    #[getter]
+    fn level_shift(&self) -> f64 {
+        self.inner.level_shift
+    }
+    #[setter]
+    fn set_level_shift(&mut self, v: f64) {
+        self.inner.level_shift = v;
+    }
 
-    #[getter] fn damp(&self) -> f64 { self.inner.damp }
-    #[setter] fn set_damp(&mut self, v: f64) { self.inner.damp = v; }
+    #[getter]
+    fn damp(&self) -> f64 {
+        self.inner.damp
+    }
+    #[setter]
+    fn set_damp(&mut self, v: f64) {
+        self.inner.damp = v;
+    }
 
     // ───────────────────────────────────────────────────────────────────
     // kernel + run — the KS SCF driver. Subclass-override dispatch happens
@@ -287,9 +368,7 @@ impl PyRKS {
     fn define_xc_(&mut self, py: Python<'_>, description: &str) -> PyResult<f64> {
         let hooks = NoKsOverrides;
         let desc = description.to_string();
-        let spec = py
-            .detach(|| hooks.define_xc_(&desc))
-            .map_err(pyscf_to_py)?;
+        let spec = py.detach(|| hooks.define_xc_(&desc)).map_err(pyscf_to_py)?;
         // Adopt the recombined functional string as the active xc.
         self.inner.xc = desc;
         Ok(spec.hyb().0)
@@ -382,7 +461,7 @@ impl PyRKS {
         mo_energy: numpy::PyReadonlyArray1<'py, f64>,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let energies: Vec<f64> = mo_energy.as_slice()?.to_vec();
-        let nelec = self.inner.mol.nelectron as usize;
+        let nelec = self.inner.mol.nelectron;
         let occ = py
             .detach(|| pyscf_scf::default_get_occ(&energies, nelec))
             .map_err(pyscf_to_py)?;
@@ -476,11 +555,23 @@ impl PyUKS {
         self.py_mol.bind(py).clone()
     }
 
-    #[getter] fn xc(&self) -> String { self.inner.xc.clone() }
-    #[setter] fn set_xc(&mut self, v: String) { self.inner.xc = v; }
+    #[getter]
+    fn xc(&self) -> String {
+        self.inner.xc.clone()
+    }
+    #[setter]
+    fn set_xc(&mut self, v: String) {
+        self.inner.xc = v;
+    }
 
-    #[getter] fn nlc(&self) -> String { self.inner.nlc.clone() }
-    #[setter] fn set_nlc(&mut self, v: String) { self.inner.nlc = v; }
+    #[getter]
+    fn nlc(&self) -> String {
+        self.inner.nlc.clone()
+    }
+    #[setter]
+    fn set_nlc(&mut self, v: String) {
+        self.inner.nlc = v;
+    }
 
     /// `mf._numint` — read-only precision view (D-08).
     #[getter]
@@ -499,18 +590,51 @@ impl PyUKS {
         self.inner.dtype().name()
     }
 
-    #[getter] fn e_tot(&self)     -> f64  { self.inner.e_tot }
-    #[getter] fn e_elec(&self)    -> f64  { self.inner.e_elec }
-    #[getter] fn converged(&self) -> bool { self.inner.converged }
-    #[getter] fn cycles(&self)    -> u32  { self.inner.cycles }
+    #[getter]
+    fn e_tot(&self) -> f64 {
+        self.inner.e_tot
+    }
+    #[getter]
+    fn e_elec(&self) -> f64 {
+        self.inner.e_elec
+    }
+    #[getter]
+    fn converged(&self) -> bool {
+        self.inner.converged
+    }
+    #[getter]
+    fn cycles(&self) -> u32 {
+        self.inner.cycles
+    }
 
-    #[getter] fn max_cycle(&self) -> u32 { self.inner.max_cycle }
-    #[setter] fn set_max_cycle(&mut self, v: u32) { self.inner.max_cycle = v; }
-    #[getter] fn conv_tol(&self) -> f64 { self.inner.conv_tol }
-    #[setter] fn set_conv_tol(&mut self, v: f64) { self.inner.conv_tol = v; }
-    #[getter] fn verbose(&self) -> u8 { self.inner.verbose }
-    #[setter] fn set_verbose(&mut self, v: u8) { self.inner.verbose = v; }
-    #[getter] fn init_guess(&self) -> String { self.inner.init_guess.clone() }
+    #[getter]
+    fn max_cycle(&self) -> u32 {
+        self.inner.max_cycle
+    }
+    #[setter]
+    fn set_max_cycle(&mut self, v: u32) {
+        self.inner.max_cycle = v;
+    }
+    #[getter]
+    fn conv_tol(&self) -> f64 {
+        self.inner.conv_tol
+    }
+    #[setter]
+    fn set_conv_tol(&mut self, v: f64) {
+        self.inner.conv_tol = v;
+    }
+    #[getter]
+    fn verbose(&self) -> u8 {
+        self.inner.verbose
+    }
+    #[setter]
+    fn set_verbose(&mut self, v: u8) {
+        self.inner.verbose = v;
+    }
+    #[getter]
+    fn init_guess(&self) -> String {
+        self.inner.init_guess.clone()
+    }
 
     #[pyo3(signature = (dm0=None))]
     fn kernel<'py>(
@@ -585,9 +709,7 @@ impl PyUKS {
     fn define_xc_(&mut self, py: Python<'_>, description: &str) -> PyResult<f64> {
         let hooks = NoKsOverrides;
         let desc = description.to_string();
-        let spec = py
-            .detach(|| hooks.define_xc_(&desc))
-            .map_err(pyscf_to_py)?;
+        let spec = py.detach(|| hooks.define_xc_(&desc)).map_err(pyscf_to_py)?;
         self.inner.xc = desc;
         Ok(spec.hyb().0)
     }
@@ -707,9 +829,18 @@ pub(crate) fn uks_from_conversion(conv: pyscf_scf::KsConversion, xc: &str) -> Uk
 fn _markers(r: &PyRKS, u: &PyUKS) -> usize {
     let _ = &r.py_mol;
     let _ = &u.py_mol;
-    let _ = Density { nao: 0, data: vec![] };
+    let _ = Density {
+        nao: 0,
+        data: vec![],
+    };
     let _: fn() -> NumInt = NumInt::new;
-    let _ = |h: &NoKsOverrides, ni: &NumInt, mol: &Mole, g: &pyscf_grids::Grids, dm: &Density, j: &Density, k: &Density| {
+    let _ = |h: &NoKsOverrides,
+             ni: &NumInt,
+             mol: &Mole,
+             g: &pyscf_grids::Grids,
+             dm: &Density,
+             j: &Density,
+             k: &Density| {
         let _ = h.get_veff_ks(ni, mol, g, "lda", dm, j, k);
     };
     0

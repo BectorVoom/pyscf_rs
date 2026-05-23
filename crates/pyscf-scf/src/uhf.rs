@@ -7,7 +7,7 @@
 //! `Debug` is implemented manually (see rhf.rs explanation) because of
 //! the `Box<dyn Any>` / `Box<dyn Fn>` opaque slots.
 
-use crate::{kernel, InitGuessMode, KernelConfig, NoOverrides, ScfResult};
+use crate::{InitGuessMode, KernelConfig, NoOverrides, ScfResult, kernel};
 use pyscf_core::{MOCoefficients, Mole, PyscfRsError};
 
 pub struct UHF {
@@ -44,6 +44,7 @@ pub struct UHF {
     pub irrep_nelec: std::collections::HashMap<String, u32>,
     /// UHF carries the explicit (n_alpha, n_beta) split.
     pub nelec: Option<(u32, u32)>,
+    #[allow(clippy::type_complexity)]
     pub callback: Option<Box<dyn Fn(&ScfResult) + Send + Sync>>,
     pub scf_summary: std::collections::HashMap<String, f64>,
     pub opt: Option<Box<dyn std::any::Any + Send + Sync>>,
@@ -136,9 +137,9 @@ impl UHF {
                 "atom" => InitGuessMode::Atom,
                 "1e" => InitGuessMode::OneElectron,
                 "huckel" => InitGuessMode::Huckel,
-                "chkfile" => InitGuessMode::Chkfile(
-                    self.chkfile.clone().unwrap_or_else(|| "scf.chk".into()),
-                ),
+                "chkfile" => {
+                    InitGuessMode::Chkfile(self.chkfile.clone().unwrap_or_else(|| "scf.chk".into()))
+                }
                 _ => InitGuessMode::Minao,
             },
         }

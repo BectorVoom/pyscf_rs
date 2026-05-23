@@ -21,6 +21,11 @@
 //!   code 4: (a,b,0) etc, b=sqrt(1-a^2), a input    → 24 points
 //!   code 5: (a,b,c) etc, c=sqrt(1-a^2-b^2), a/b in → 48 points
 
+/// One Lebedev seed tuple `(code, a, b, weight)`.
+type LebedevSeed = (u8, f64, f64, f64);
+/// One Lebedev order entry: `(order N, seed slice)`.
+type LebedevOrder = (u32, &'static [LebedevSeed]);
+
 /// Per-order Lebedev seed tuples `(code, a, b, v)` ported verbatim from
 /// `pyscf/dft/LebedevGrid.py` `MakeAngularGrid_<N>()`. Each seed is expanded by
 /// [`sph_gen_oh`] into the Oh-symmetric point set. The total expanded point count
@@ -29,7 +34,7 @@
 /// `a`/`b` are literal table constants (codes 0/1/2 derive `a` internally; codes
 /// 3/4/5 derive `b`/`c` internally), so no `sqrt` is needed at table-definition time.
 #[rustfmt::skip]
-pub(crate) const LEBEDEV_SEEDS: &[(u32, &[(u8, f64, f64, f64)])] = &[
+pub(crate) const LEBEDEV_SEEDS: &[LebedevOrder] = &[
     (6, &[(0, 0.0_f64, 0.0_f64, 0.1666666666666667_f64)]),
     (14, &[(0, 0.0_f64, 0.0_f64, 0.06666666666666667_f64), (2, 0.0_f64, 0.0_f64, 0.075_f64)]),
     (26, &[(0, 0.0_f64, 0.0_f64, 0.04761904761904762_f64), (1, 0.0_f64, 0.0_f64, 0.0380952380952381_f64), (2, 0.0_f64, 0.0_f64, 0.03214285714285714_f64)]),

@@ -13,7 +13,9 @@ pub struct WorkspacePool {
     /// PYSCF_MAX_MEMORY ceiling in bytes. Default 4 GB.
     pub budget_bytes: usize,
     /// Free-list of buffer allocations. Phase 6 fills the inner
-    /// PooledAllocation type.
+    /// PooledAllocation type. Written by `new()` today; Phase 6 (CCSD-11)
+    /// adds the read path (reserve/release), so the field is dead until then.
+    #[allow(dead_code)]
     pub(crate) pool: std::sync::Mutex<Vec<PooledAllocation>>,
 }
 

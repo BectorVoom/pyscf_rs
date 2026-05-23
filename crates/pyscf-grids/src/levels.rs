@@ -124,8 +124,8 @@ mod tests {
         // H angular orders per level 0..9 → point counts.
         // orders: 11,17,23,29,35,41,47,53,59,65
         let h_order_pts = [50u32, 110, 194, 302, 434, 590, 770, 974, 1202, 1454];
-        for level in 0..=9 {
-            assert_eq!(default_ang(1, level), h_order_pts[level]);
+        for (level, &pts) in h_order_pts.iter().enumerate() {
+            assert_eq!(default_ang(1, level), pts);
         }
     }
 }

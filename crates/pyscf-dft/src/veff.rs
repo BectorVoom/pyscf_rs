@@ -61,16 +61,20 @@ pub fn default_get_veff(
 ) -> Result<KsVeff, PyscfRsError> {
     let nao = j.nao;
     if dm.nao != nao || k.nao != nao {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-            expected: nao,
-            actual: dm.nao,
-        }));
+        return Err(PyscfRsError::Core(
+            pyscf_core::CoreError::DimensionMismatch {
+                expected: nao,
+                actual: dm.nao,
+            },
+        ));
     }
 
     // (omega, alpha, hyb): the range-separation triple (rsh_coeff).
     //   omega == 0  → standard hybrid: vk = hyb·K.
     //   omega != 0  → RSH: vk = hyb·K + (alpha − hyb)·K_lr  (rks.py:108-129).
-    let (omega, alpha, hyb) = ni.rsh_coeff(xc_code, mol.spin).map_err(PyscfRsError::from)?;
+    let (omega, alpha, hyb) = ni
+        .rsh_coeff(xc_code, mol.spin)
+        .map_err(PyscfRsError::from)?;
 
     // Vxc + Exc from the numerical-integration grid loop.
     let nr = ni.nr_rks(mol, grids, xc_code, dm, 0, 1, mol.max_memory, None)?;
@@ -82,23 +86,22 @@ pub fn default_get_veff(
     //     Pitfall 1: get_k_with_omega uses the standard int2e + env[8], NOT a
     //     phantom int2e_lr_/int2e_sr_ symbol. The screened K is built on a
     //     clone so the omega mutation is local + RAII-restored (no leak).
-    let mut vk = vec![0.0_f64; nao * nao];
-    for i in 0..(nao * nao) {
-        vk[i] = hyb * k.data[i];
-    }
+    let mut vk: Vec<f64> = k.data.iter().map(|x| hyb * x).collect();
     if omega != 0.0 {
         let mut mol_lr = mol.clone();
         let k_lr = pyscf_gto::get_k_with_omega(&mut mol_lr, dm, omega)?;
         if k_lr.nao != nao {
-            return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-                expected: nao,
-                actual: k_lr.nao,
-            }));
+            return Err(PyscfRsError::Core(
+                pyscf_core::CoreError::DimensionMismatch {
+                    expected: nao,
+                    actual: k_lr.nao,
+                },
+            ));
         }
         let lr_coeff = alpha - hyb;
-        for i in 0..(nao * nao) {
-            vk[i] += lr_coeff * k_lr.data[i];
-        }
+        vk.iter_mut()
+            .zip(&k_lr.data)
+            .for_each(|(v, x)| *v += lr_coeff * x);
     }
 
     // veff = J + Vxc − vk (inline loop — matches fock.rs:144-146 template).
@@ -160,14 +163,24 @@ mod tests {
     fn veff_is_linear_combination() {
         // Synthetic 1x1 J/K/Vxc — verify the −hyb·K mixing only (no grid).
         let nao = 1;
-        let j = Density { nao, data: vec![2.0] };
-        let k = Density { nao, data: vec![1.0] };
-        let vxc = vec![0.5_f64];
+        let j = Density {
+            nao,
+            data: vec![2.0],
+        };
+        let k = Density {
+            nao,
+            data: vec![1.0],
+        };
+        let vxc = [0.5_f64];
         let hyb = 0.2;
         // veff = J + Vxc − hyb·K = 2.0 + 0.5 − 0.2·1.0 = 2.3
         let veff: Vec<f64> = (0..nao * nao)
             .map(|i| j.data[i] + vxc[i] - hyb * k.data[i])
             .collect();
-        assert!((veff[0] - 2.3).abs() < 1e-13, "veff = J + Vxc − hyb·K, got {}", veff[0]);
+        assert!(
+            (veff[0] - 2.3).abs() < 1e-13,
+            "veff = J + Vxc − hyb·K, got {}",
+            veff[0]
+        );
     }
 }

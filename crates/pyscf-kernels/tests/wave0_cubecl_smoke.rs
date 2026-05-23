@@ -31,7 +31,7 @@ fn vector_add(lhs: &Array<f32>, rhs: &Array<f32>, out: &mut Array<f32>) {
 
 #[test]
 fn cubecl_cpu_vector_add_round_trip() {
-    let device = CpuDevice::default();
+    let device = CpuDevice;
     let client = CpuRuntime::client(&device);
 
     const N: usize = 256;
@@ -74,8 +74,8 @@ fn cubecl_cpu_vector_add_round_trip() {
         "result length must equal N (got {})",
         result.len()
     );
-    for i in 0..N {
+    for (i, &got) in result.iter().enumerate() {
         let expected = (3 * i) as f32; // lhs[i] + rhs[i] = i + 2i = 3i
-        approx::assert_abs_diff_eq!(result[i], expected, epsilon = 1e-6);
+        approx::assert_abs_diff_eq!(got, expected, epsilon = 1e-6);
     }
 }

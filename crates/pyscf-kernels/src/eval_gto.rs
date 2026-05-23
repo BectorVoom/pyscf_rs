@@ -76,7 +76,7 @@
 //! The host CPU path stays as a fallback for the algebra-wall and as
 //! the FMA-free oracle target (FOUND-05).
 
-use pyscf_algebra::{oracle_sum, AlgebraClient};
+use pyscf_algebra::{AlgebraClient, oracle_sum};
 use pyscf_runtime::BackendKind;
 
 // `cubecl` is reachable from this crate per the ALG-06 carve-out
@@ -106,8 +106,8 @@ use pyscf_core::raw_layout::{
 #[inline]
 fn common_fac_sp(l: u32) -> f64 {
     match l {
-        0 => 0.282094791773878143,
-        1 => 0.488602511902919921,
+        0 => 0.282_094_791_773_878_14,
+        1 => 0.488_602_511_902_919_9,
         _ => 1.0,
     }
 }
@@ -154,34 +154,269 @@ fn c2s_coeff(l: u32, m_row: usize, cart_col: usize) -> f64 {
     const L1: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     // d (l=2): 5×6. cols: xx,xy,xz,yy,yz,zz. rows: m=-2..+2.
     const L2: [[f64; 6]; 5] = [
-        [0.0, 1.092548430592079070, 0.0, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0, 1.092548430592079070, 0.0],
-        [-0.315391565252520002, 0.0, 0.0, -0.315391565252520002, 0.0, 0.630783130505040012],
-        [0.0, 0.0, 1.092548430592079070, 0.0, 0.0, 0.0],
-        [0.546274215296039535, 0.0, 0.0, -0.546274215296039535, 0.0, 0.0],
+        [0.0, 1.092_548_430_592_079_2, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 1.092_548_430_592_079_2, 0.0],
+        [
+            -0.315_391_565_252_52,
+            0.0,
+            0.0,
+            -0.315_391_565_252_52,
+            0.0,
+            0.630_783_130_505_04,
+        ],
+        [0.0, 0.0, 1.092_548_430_592_079_2, 0.0, 0.0, 0.0],
+        [
+            0.546_274_215_296_039_6,
+            0.0,
+            0.0,
+            -0.546_274_215_296_039_6,
+            0.0,
+            0.0,
+        ],
     ];
     // f (l=3): 7×10. cols: xxx,xxy,xxz,xyy,xyz,xzz,yyy,yyz,yzz,zzz.
     const L3: [[f64; 10]; 7] = [
-        [0.0, 1.770130769779930531, 0.0, 0.0, 0.0, 0.0, -0.590043589926643510, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0, 2.890611442640554055, 0.0, 0.0, 0.0, 0.0, 0.0],
-        [0.0, -0.457045799464465739, 0.0, 0.0, 0.0, 0.0, -0.457045799464465739, 0.0, 1.828183197857862944, 0.0],
-        [0.0, 0.0, -1.119528997770346170, 0.0, 0.0, 0.0, 0.0, -1.119528997770346170, 0.0, 0.746352665180230782],
-        [-0.457045799464465739, 0.0, 0.0, -0.457045799464465739, 0.0, 1.828183197857862944, 0.0, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 1.445305721320277020, 0.0, 0.0, 0.0, 0.0, -1.445305721320277020, 0.0, 0.0],
-        [0.590043589926643510, 0.0, 0.0, -1.770130769779930530, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [
+            0.0,
+            1.770_130_769_779_930_4,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.590_043_589_926_643_5,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.890_611_442_640_554_3,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            -0.457_045_799_464_465_7,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.457_045_799_464_465_7,
+            0.0,
+            1.828_183_197_857_862_9,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            -1.119_528_997_770_346_2,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -1.119_528_997_770_346_2,
+            0.0,
+            0.746_352_665_180_230_8,
+        ],
+        [
+            -0.457_045_799_464_465_7,
+            0.0,
+            0.0,
+            -0.457_045_799_464_465_7,
+            0.0,
+            1.828_183_197_857_862_9,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            1.445_305_721_320_277_1,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -1.445_305_721_320_277_1,
+            0.0,
+            0.0,
+        ],
+        [
+            0.590_043_589_926_643_5,
+            0.0,
+            0.0,
+            -1.770_130_769_779_930_4,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
     ];
     // g (l=4): 9×15. cols: xxxx,xxxy,xxxz,xxyy,xxyz,xxzz,xyyy,xyyz,xyzz,
     // xzzz,yyyy,yyyz,yyzz,yzzz,zzzz.
     const L4: [[f64; 15]; 9] = [
-        [0.0, 2.503342941796704538, 0.0, 0.0, 0.0, 0.0, -2.503342941796704530, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0, 5.310392309339791593, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.770130769779930530, 0.0, 0.0, 0.0],
-        [0.0, -0.946174695757560014, 0.0, 0.0, 0.0, 0.0, -0.946174695757560014, 0.0, 5.677048174545360108, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0, 0.0, -2.007139630671867500, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.007139630671867500, 0.0, 2.676186174229156671, 0.0],
-        [0.317356640745612911, 0.0, 0.0, 0.634713281491225822, 0.0, -2.538853125964903290, 0.0, 0.0, 0.0, 0.0, 0.317356640745612911, 0.0, -2.538853125964903290, 0.0, 0.846284375321634430],
-        [0.0, 0.0, -2.007139630671867500, 0.0, 0.0, 0.0, 0.0, -2.007139630671867500, 0.0, 2.676186174229156671, 0.0, 0.0, 0.0, 0.0, 0.0],
-        [-0.473087347878780002, 0.0, 0.0, 0.0, 0.0, 2.838524087272680054, 0.0, 0.0, 0.0, 0.0, 0.473087347878780009, 0.0, -2.838524087272680050, 0.0, 0.0],
-        [0.0, 0.0, 1.770130769779930531, 0.0, 0.0, 0.0, 0.0, -5.310392309339791590, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        [0.625835735449176134, 0.0, 0.0, -3.755014412695056800, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.625835735449176134, 0.0, 0.0, 0.0, 0.0],
+        [
+            0.0,
+            2.503_342_941_796_704_6,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -2.503_342_941_796_704_6,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            5.310_392_309_339_791,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -1.770_130_769_779_930_4,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            -0.946_174_695_757_56,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.946_174_695_757_56,
+            0.0,
+            5.677_048_174_545_360_5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -2.007_139_630_671_867_6,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -2.007_139_630_671_867_6,
+            0.0,
+            2.676_186_174_229_157,
+            0.0,
+        ],
+        [
+            0.317_356_640_745_612_93,
+            0.0,
+            0.0,
+            0.634_713_281_491_225_9,
+            0.0,
+            -2.538_853_125_964_903_4,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.317_356_640_745_612_93,
+            0.0,
+            -2.538_853_125_964_903_4,
+            0.0,
+            0.846_284_375_321_634_5,
+        ],
+        [
+            0.0,
+            0.0,
+            -2.007_139_630_671_867_6,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -2.007_139_630_671_867_6,
+            0.0,
+            2.676_186_174_229_157,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            -0.473_087_347_878_78,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.838_524_087_272_680_2,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.473_087_347_878_78,
+            0.0,
+            -2.838_524_087_272_680_2,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            1.770_130_769_779_930_4,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -5.310_392_309_339_791,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.625_835_735_449_176_1,
+            0.0,
+            0.0,
+            -3.755_014_412_695_057,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.625_835_735_449_176_1,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
     ];
     match l {
         0 => L0[m_row][cart_col],
@@ -227,6 +462,9 @@ pub struct EvalGtoBuffers {
 /// - `spherical`: `true` → apply `cart2sph` (Phase 4 DFT extension; for
 ///   l = 0 a no-op so the s-shell smoke test passes either way);
 ///   `false` → return raw cartesian.
+// Arg list mirrors the libcint `GTOval_sph` flat-array API (atm/bas/env/
+// ao_loc); grouping into a struct would obscure that correspondence.
+#[allow(clippy::too_many_arguments)]
 pub fn eval_gto_sph(
     client: &AlgebraClient,
     coords: &[f64],
@@ -272,6 +510,8 @@ pub fn eval_gto_sph(
 /// which the caller does not pass here; it stays deferred and the
 /// `pyscf-gto::eval_gto` wrapper only routes `spherical=true` into the
 /// l >= 1 path for the corpus bases (sp shells excepted — none in v1).
+// Mirrors the libcint flat-array API (see `eval_gto_sph`).
+#[allow(clippy::too_many_arguments)]
 fn eval_gto_sph_cpu(
     coords_host: &[f64],
     ngrids: usize,
@@ -290,7 +530,7 @@ fn eval_gto_sph_cpu(
         ngrids
     );
     debug_assert!(
-        bas_host.len() % BAS_SLOTS == 0,
+        bas_host.len().is_multiple_of(BAS_SLOTS),
         "bas length {} not a multiple of BAS_SLOTS={}",
         bas_host.len(),
         BAS_SLOTS
@@ -301,7 +541,10 @@ fn eval_gto_sph_cpu(
 
     // Empty grid → empty output, skip the loop entirely.
     if out_len == 0 {
-        return EvalGtoBuffers { values: Vec::new(), shape: vec![ngrids, nao] };
+        return EvalGtoBuffers {
+            values: Vec::new(),
+            shape: vec![ngrids, nao],
+        };
     }
 
     let mut out = vec![0.0_f64; out_len];
@@ -313,6 +556,9 @@ fn eval_gto_sph_cpu(
         let gy = coords_host[g + ngrids];
         let gz = coords_host[g + 2 * ngrids];
 
+        // `shell_idx` drives parallel flat-array offsets (bas_host via
+        // BAS_SLOTS, ao_loc_host) — a range loop is clearer than enumerate.
+        #[allow(clippy::needless_range_loop)]
         for shell_idx in 0..nbas {
             let bas_row = shell_idx * BAS_SLOTS;
             let atom_id = bas_host[bas_row + ATOM_OF] as usize;
@@ -412,6 +658,8 @@ fn eval_gto_sph_cpu(
                     // cart → sph: row m = Σ_c T[l][m][c] * cart_vals[c].
                     for m_idx in 0..nsph_l {
                         let mut v = 0.0_f64;
+                        // `ci` indexes cart_vals AND feeds c2s_coeff(l, m, ci).
+                        #[allow(clippy::needless_range_loop)]
                         for ci in 0..ncart_l {
                             v += c2s_coeff(l, m_idx, ci) * cart_vals[ci];
                         }
@@ -423,7 +671,10 @@ fn eval_gto_sph_cpu(
         }
     }
 
-    EvalGtoBuffers { values: out, shape: vec![ngrids, nao] }
+    EvalGtoBuffers {
+        values: out,
+        shape: vec![ngrids, nao],
+    }
 }
 
 /// Evaluate `GTOval_sph_deriv1` on the grid: the AO value plus the three
@@ -483,7 +734,7 @@ fn eval_gto_sph_deriv1_cpu(
         ngrids
     );
     debug_assert!(
-        bas_host.len() % BAS_SLOTS == 0,
+        bas_host.len().is_multiple_of(BAS_SLOTS),
         "bas length {} not a multiple of BAS_SLOTS={}",
         bas_host.len(),
         BAS_SLOTS
@@ -493,7 +744,10 @@ fn eval_gto_sph_deriv1_cpu(
     let comp_stride = ngrids * nao;
     let out_len = 4 * comp_stride;
     if comp_stride == 0 {
-        return EvalGtoBuffers { values: Vec::new(), shape: vec![4, ngrids, nao] };
+        return EvalGtoBuffers {
+            values: Vec::new(),
+            shape: vec![4, ngrids, nao],
+        };
     }
     let mut out = vec![0.0_f64; out_len];
 
@@ -512,6 +766,9 @@ fn eval_gto_sph_deriv1_cpu(
         let gy = coords_host[g + ngrids];
         let gz = coords_host[g + 2 * ngrids];
 
+        // `shell_idx` drives parallel flat-array offsets (bas_host via
+        // BAS_SLOTS, ao_loc_host) — a range loop is clearer than enumerate.
+        #[allow(clippy::needless_range_loop)]
         for shell_idx in 0..nbas {
             let bas_row = shell_idx * BAS_SLOTS;
             let atom_id = bas_host[bas_row + ATOM_OF] as usize;
@@ -611,5 +868,8 @@ fn eval_gto_sph_deriv1_cpu(
         }
     }
 
-    EvalGtoBuffers { values: out, shape: vec![4, ngrids, nao] }
+    EvalGtoBuffers {
+        values: out,
+        shape: vec![4, ngrids, nao],
+    }
 }

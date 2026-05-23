@@ -8,9 +8,9 @@
 //!   - Atom-count and per-position symbol mismatches are rejected.
 //!   - `mol.unit` is honoured for the input string conversion.
 
-use pyscf_core::raw_layout::{ATM_SLOTS, PTR_COORD};
 use pyscf_core::Unit;
-use pyscf_gto::{set_geom_, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_core::raw_layout::{ATM_SLOTS, PTR_COORD};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, set_geom_};
 use std::sync::Arc;
 
 fn h2_at_1_4() -> pyscf_core::Mole {
@@ -36,8 +36,8 @@ fn set_geom_updates_env_coords_only() {
 
     // Capture per-atom coord pointers BEFORE the mutation so the test reads
     // exactly the slots set_geom_ touched (avoids hard-coding _env layout).
-    let ptr_a0 = mol._atm[0 * ATM_SLOTS + PTR_COORD] as usize;
-    let ptr_a1 = mol._atm[1 * ATM_SLOTS + PTR_COORD] as usize;
+    let ptr_a0 = mol._atm[PTR_COORD] as usize; // atom 0 row starts at offset 0
+    let ptr_a1 = mol._atm[ATM_SLOTS + PTR_COORD] as usize;
 
     set_geom_(&mut mol, "H 0 0 0; H 0 0 2.0").unwrap();
 
@@ -92,11 +92,7 @@ fn set_geom_honours_unit_kwarg() {
     // mol.unit still Ang; set_geom_ honours it.
     set_geom_(&mut mol, "H 0 0 0; H 0 0 1.0").unwrap();
     // Second H should be at z = 1.0 * 1.8897261339213 Bohr.
-    approx::assert_abs_diff_eq!(
-        mol.atom_coords()[1][2],
-        1.8897261339213,
-        epsilon = 1e-9
-    );
+    approx::assert_abs_diff_eq!(mol.atom_coords()[1][2], 1.8897261339213, epsilon = 1e-9);
 }
 
 #[test]

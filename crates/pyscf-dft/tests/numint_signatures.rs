@@ -86,6 +86,7 @@ fn numint_signatures() {
     // exact signatures (numint.py:1074 / numint.py:1192).
     // nr_rks(ni, mol, grids, xc_code, dms, relativity, hermi, max_memory,
     //        verbose) -> (nelec, excsum, vmat)
+    #[allow(clippy::type_complexity)]
     let _nr_rks: fn(
         &NumInt,
         &pyscf_core::Mole,
@@ -98,6 +99,7 @@ fn numint_signatures() {
         Option<i32>,
     ) -> Result<pyscf_dft::NrResult, pyscf_core::PyscfRsError> = NumInt::nr_rks;
     // nr_uks(ni, mol, grids, xc_code, (dm_a, dm_b), ...) -> NrUksResult
+    #[allow(clippy::type_complexity)]
     let _nr_uks: fn(
         &NumInt,
         &pyscf_core::Mole,
@@ -111,8 +113,16 @@ fn numint_signatures() {
     ) -> Result<pyscf_dft::NrUksResult, pyscf_core::PyscfRsError> = NumInt::nr_uks;
 
     // ── D-08: dtype() reads from the env resolver; default (unset) is F64 ───
-    assert_eq!(ni.dtype(), DType::from_env(), "dtype() reflects DType::from_env()");
+    assert_eq!(
+        ni.dtype(),
+        DType::from_env(),
+        "dtype() reflects DType::from_env()"
+    );
     if std::env::var("PYSCF_DTYPE").is_err() {
-        assert_eq!(ni.dtype(), DType::F64, "PYSCF_DTYPE unset → F64 (D-08 default)");
+        assert_eq!(
+            ni.dtype(),
+            DType::F64,
+            "PYSCF_DTYPE unset → F64 (D-08 default)"
+        );
     }
 }

@@ -23,11 +23,14 @@
 //!   - even once arity-4 lands, the safe-API plan does not yet *read*
 //!     `_env[8]` (cintx exposes `f12_zeta`=env[9] but no `range_omega`=env[8]
 //!     setter — Open Question A5 RESOLVED: cintx gap-closure required).
+//!
 //! The env-slot set/restore contract THIS file owns is verified independently
 //! of that gap, exactly the 04-06 DFT-01 CI-only-oracle convention.
 
 use pyscf_core::Unit;
-use pyscf_gto::{intor, intor_with_omega, AtomInput, BasisInput, MoleBuildArgs, M, PTR_RANGE_OMEGA};
+use pyscf_gto::{
+    AtomInput, BasisInput, M, MoleBuildArgs, PTR_RANGE_OMEGA, intor, intor_with_omega,
+};
 
 fn h2_mol() -> pyscf_core::Mole {
     M(MoleBuildArgs {
@@ -100,7 +103,10 @@ fn no_cross_call_contamination_lr_and_sr_signs() {
     // residual omega from the ranged calls (int1e_ovlp does not read env[8],
     // so this also confirms restore did not corrupt the slot).
     let after = intor(&mol, "int1e_ovlp").expect("post-ranged ovlp").values;
-    assert_eq!(after, baseline, "standard intor unchanged by prior ranged calls");
+    assert_eq!(
+        after, baseline,
+        "standard intor unchanged by prior ranged calls"
+    );
 }
 
 /// Pitfall 1 source assertion: the range-coulomb module does NOT introduce

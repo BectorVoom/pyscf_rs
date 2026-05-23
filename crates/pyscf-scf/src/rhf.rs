@@ -17,7 +17,7 @@
 //! `Box<dyn Any>` and `Box<dyn Fn>` don't implement `Debug`. The manual
 //! impl prints scalar fields verbatim and elides the opaque slots.
 
-use crate::{kernel, InitGuessMode, KernelConfig, NoOverrides, ScfResult};
+use crate::{InitGuessMode, KernelConfig, NoOverrides, ScfResult, kernel};
 use pyscf_core::{MOCoefficients, Mole, PyscfRsError};
 
 pub struct RHF {
@@ -50,6 +50,7 @@ pub struct RHF {
     pub do_disp: bool,
     pub irrep_nelec: std::collections::HashMap<String, u32>,
     pub nelec: Option<(u32, u32)>,
+    #[allow(clippy::type_complexity)]
     pub callback: Option<Box<dyn Fn(&ScfResult) + Send + Sync>>,
     pub scf_summary: std::collections::HashMap<String, f64>,
     pub opt: Option<Box<dyn std::any::Any + Send + Sync>>,
@@ -59,7 +60,10 @@ impl std::fmt::Debug for RHF {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RHF")
             .field("mol", &self.mol)
-            .field("mo_coeff", &self.mo_coeff.as_ref().map(|_| "<MOCoefficients>"))
+            .field(
+                "mo_coeff",
+                &self.mo_coeff.as_ref().map(|_| "<MOCoefficients>"),
+            )
             .field("mo_energy", &self.mo_energy)
             .field("mo_occ", &self.mo_occ)
             .field("e_tot", &self.e_tot)
@@ -168,9 +172,9 @@ impl RHF {
                 "atom" => InitGuessMode::Atom,
                 "1e" => InitGuessMode::OneElectron,
                 "huckel" => InitGuessMode::Huckel,
-                "chkfile" => InitGuessMode::Chkfile(
-                    self.chkfile.clone().unwrap_or_else(|| "scf.chk".into()),
-                ),
+                "chkfile" => {
+                    InitGuessMode::Chkfile(self.chkfile.clone().unwrap_or_else(|| "scf.chk".into()))
+                }
                 _ => InitGuessMode::Minao,
             },
         }

@@ -17,7 +17,7 @@ use crate::error::ScfError;
 /// 2.0, the rest with 0.0. Returns an `Err` if `nelec` is odd (RHF
 /// requires an even electron count — UHF / ROHF handle the odd case).
 pub fn default_get_occ(mo_energy: &[f64], nelec: usize) -> Result<Vec<f64>, PyscfRsError> {
-    if nelec % 2 != 0 {
+    if !nelec.is_multiple_of(2) {
         return Err(ScfError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
             "RHF Aufbau requires even nelec; got {nelec} (use UHF / ROHF for odd-electron systems)"
         )))
@@ -25,8 +25,8 @@ pub fn default_get_occ(mo_energy: &[f64], nelec: usize) -> Result<Vec<f64>, Pysc
     }
     let n_occ = nelec / 2;
     let mut occ = vec![0.0_f64; mo_energy.len()];
-    for i in 0..n_occ.min(mo_energy.len()) {
-        occ[i] = 2.0;
+    for o in occ.iter_mut().take(n_occ) {
+        *o = 2.0;
     }
     Ok(occ)
 }

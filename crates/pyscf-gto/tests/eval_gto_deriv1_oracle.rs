@@ -15,6 +15,7 @@
 //!   - value  = x^lx y^ly z^lz · R         (GTOshell_eval_grid_cart)
 //!   - ∂/∂q   = e2a·q·(x^lx y^ly z^lz) + e·lq·(…q^(lq-1)…)
 //!     (GTOshell_eval_grid_ip_cart, general-l `default` branch)
+//!
 //! where R = Σ_p c·exp(−α r²)·CINTcommon_fac_sp(l) and
 //! e2a = Σ_p (−2α)·c·exp(−α r²)·CINTcommon_fac_sp(l). Both sides then
 //! apply the libcint g_trans_cart2sph transform per component.
@@ -30,19 +31,19 @@
 //! gradient against (value(x+h)−value(x−h))/2h — a check that does NOT
 //! share the analytic-derivative algebra at all.
 
+use pyscf_core::Unit;
 use pyscf_core::raw_layout::{
     ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, NCTR_OF, NPRIM_OF, PTR_COEFF, PTR_COORD, PTR_EXP,
 };
-use pyscf_core::Unit;
-use pyscf_gto::{eval_gto, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, eval_gto};
 
 // ── independent reference (longhand, different code path) ───────────────
 
 mod reference {
     pub fn common_fac_sp(l: u32) -> f64 {
         match l {
-            0 => 0.282094791773878143,
-            1 => 0.488602511902919921,
+            0 => 0.282_094_791_773_878_14,
+            1 => 0.488_602_511_902_919_9,
             _ => 1.0,
         }
     }
@@ -70,11 +71,25 @@ mod reference {
         const L0: [[f64; 1]; 1] = [[1.0]];
         const L1: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         const L2: [[f64; 6]; 5] = [
-            [0.0, 1.092548430592079070, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 1.092548430592079070, 0.0],
-            [-0.315391565252520002, 0.0, 0.0, -0.315391565252520002, 0.0, 0.630783130505040012],
-            [0.0, 0.0, 1.092548430592079070, 0.0, 0.0, 0.0],
-            [0.546274215296039535, 0.0, 0.0, -0.546274215296039535, 0.0, 0.0],
+            [0.0, 1.092_548_430_592_079_2, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 1.092_548_430_592_079_2, 0.0],
+            [
+                -0.315_391_565_252_52,
+                0.0,
+                0.0,
+                -0.315_391_565_252_52,
+                0.0,
+                0.630_783_130_505_04,
+            ],
+            [0.0, 0.0, 1.092_548_430_592_079_2, 0.0, 0.0, 0.0],
+            [
+                0.546_274_215_296_039_6,
+                0.0,
+                0.0,
+                -0.546_274_215_296_039_6,
+                0.0,
+                0.0,
+            ],
         ];
         match l {
             0 => L0[m][c],
@@ -117,6 +132,8 @@ mod reference {
             let gx = coords_flat[g];
             let gy = coords_flat[g + ngrids];
             let gz = coords_flat[g + 2 * ngrids];
+            // Reference kernel: `s` drives parallel flat-array offsets.
+            #[allow(clippy::needless_range_loop)]
             for s in 0..nbas {
                 let row = s * BAS_SLOTS;
                 let atom_id = bas[row + ATOM_OF] as usize;
@@ -154,8 +171,7 @@ mod reference {
                     let mut cdy = vec![0.0_f64; ncart];
                     let mut cdz = vec![0.0_f64; ncart];
                     for (ci, &(lx, ly, lz)) in powers.iter().enumerate() {
-                        let mono =
-                            dx.powi(lx as i32) * dy.powi(ly as i32) * dz.powi(lz as i32);
+                        let mono = dx.powi(lx as i32) * dy.powi(ly as i32) * dz.powi(lz as i32);
                         cval[ci] = mono * radial;
                         cdx[ci] = radial_2a * dx * mono
                             + radial * dpow(dx, lx) * dy.powi(ly as i32) * dz.powi(lz as i32);
@@ -254,7 +270,13 @@ fn eval_gto_deriv1_oracle_matches_reference_on_1000_point_grid() {
 
     let flat = pack(&coords);
     let expect = reference::deriv1(
-        &flat, ngrids, &mol._atm, &mol._bas, &mol._env, &mol.ao_loc_nr, nao,
+        &flat,
+        ngrids,
+        &mol._atm,
+        &mol._bas,
+        &mol._env,
+        &mol.ao_loc_nr,
+        nao,
     );
 
     let comp_names = ["value", "d/dx", "d/dy", "d/dz"];
@@ -262,6 +284,8 @@ fn eval_gto_deriv1_oracle_matches_reference_on_1000_point_grid() {
     let mut nonzero_grad = 0usize;
     for comp in 0..4 {
         let base = comp * ngrids * nao;
+        // `idx` indexes both the flat `out.values` (via `base`) and `expect`.
+        #[allow(clippy::needless_range_loop)]
         for idx in 0..(ngrids * nao) {
             let a = out.values[base + idx];
             let b = expect[comp][idx];

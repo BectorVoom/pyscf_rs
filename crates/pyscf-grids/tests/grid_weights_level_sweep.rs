@@ -23,7 +23,7 @@
 //! Run the byte-exact oracle (CI, libpython + upstream pyscf):
 //!   `cargo test --features python -p pyscf-grids -- --include-ignored`
 
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 /// Build a corpus Mole from a geometry string + basis name. Grids only read
 /// `atom_charges()` + `atom_coords()`, but a real basis is loaded so the Mole
@@ -55,12 +55,15 @@ const WATER_TRIMER: &str = concat!(
 // Expected total grid-point counts per level 0..9 — computed from the upstream
 // gen_atomic_grids + nwchem_prune algorithm (independent Python replica), NOT
 // from pyscf-grids. These ARE the DFT-09 oracle for the count sweep.
-const H2O_SIZES: [usize; 10] =
-    [2326, 10124, 21952, 33698, 59676, 90058, 132380, 187062, 233536, 489828];
-const BENZENE_SIZES: [usize; 10] =
-    [10236, 45912, 99480, 143556, 265896, 399108, 586320, 819972, 993000, 1940880];
-const TRIMER_SIZES: [usize; 10] =
-    [6978, 30372, 65856, 101094, 179028, 270174, 397140, 561186, 700608, 1469484];
+const H2O_SIZES: [usize; 10] = [
+    2326, 10124, 21952, 33698, 59676, 90058, 132380, 187062, 233536, 489828,
+];
+const BENZENE_SIZES: [usize; 10] = [
+    10236, 45912, 99480, 143556, 265896, 399108, 586320, 819972, 993000, 1940880,
+];
+const TRIMER_SIZES: [usize; 10] = [
+    6978, 30372, 65856, 101094, 179028, 270174, 397140, 561186, 700608, 1469484,
+];
 
 /// DFT-09: `Grids::size` matches the upstream grid-point count for every
 /// level 0..9 on the corpus.
@@ -73,6 +76,9 @@ fn grid_point_counts_match_upstream_level_sweep() {
     ];
     for (atom, basis, expected) in cases {
         let mol = build_mol(atom, basis);
+        // `level` is a semantic grid level (assigned to `g.level`), not just
+        // an index into `expected`.
+        #[allow(clippy::needless_range_loop)]
         for level in 0..=9usize {
             let mut g = pyscf_grids::Grids::new();
             g.level = level;

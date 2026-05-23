@@ -63,7 +63,7 @@ pub struct DfIntegrals {
 ///   `DfError::SingularAux` → `From<DfError>`) on rank-deficient (P|Q).
 pub fn cholesky_eri(mol: &Mole, auxbasis: &str) -> Result<DfIntegrals, PyscfRsError> {
     use pyscf_core::{CoreError, Unit};
-    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
     if !mol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
@@ -141,6 +141,8 @@ pub fn cholesky_eri(mol: &Mole, auxbasis: &str) -> Result<DfIntegrals, PyscfRsEr
     let mut rhs = vec![0.0_f64; naux];
     for mu in 0..nao {
         for nu in 0..nao {
+            // `q` drives multi-dim flat-array offsets (int3c F-order).
+            #[allow(clippy::needless_range_loop)]
             for q in 0..naux {
                 rhs[q] = int3c.values[mu + nu * nao + q * nao * nao];
             }

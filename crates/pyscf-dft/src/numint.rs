@@ -43,7 +43,7 @@ use pyscf_grids::Grids;
 use pyscf_runtime::DType;
 
 use crate::error::DftError;
-use crate::parser::{xcfun, XcSpec};
+use crate::parser::{XcSpec, xcfun};
 use crate::xc_backend::{DerivOrder, RhoBlock, XcBackend};
 
 /// xcfun functional ids (0..77) whose family is GGA (gradient-dependent).
@@ -201,20 +201,24 @@ impl NumInt {
         match xctype {
             XcType::Lda => {
                 if ao.len() != ngrids * nao {
-                    return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-                        expected: ngrids * nao,
-                        actual: ao.len(),
-                    }));
+                    return Err(PyscfRsError::Core(
+                        pyscf_core::CoreError::DimensionMismatch {
+                            expected: ngrids * nao,
+                            actual: ao.len(),
+                        },
+                    ));
                 }
                 let rho = Self::contract_rho(ao, ao, dm, ngrids, nao, &ao_at);
                 Ok((rho, None))
             }
             XcType::Gga => {
                 if ao.len() != 4 * ngrids * nao {
-                    return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-                        expected: 4 * ngrids * nao,
-                        actual: ao.len(),
-                    }));
+                    return Err(PyscfRsError::Core(
+                        pyscf_core::CoreError::DimensionMismatch {
+                            expected: 4 * ngrids * nao,
+                            actual: ao.len(),
+                        },
+                    ));
                 }
                 // ρ from the value component (comp 0).
                 let rho = Self::contract_rho_comp(ao, dm, ngrids, nao, 0, 0, 1.0, &ao_at);
@@ -228,6 +232,8 @@ impl NumInt {
     }
 
     /// ρ[g] = Σ_{μν} AO_l[g,μ] D[μν] AO_r[g,ν] (closed-shell value block).
+    // `ao_at` is the AO-lookup closure; `g` is the grid index passed into it.
+    #[allow(clippy::type_complexity, clippy::needless_range_loop)]
     fn contract_rho(
         ao_l: &[f64],
         ao_r: &[f64],
@@ -255,6 +261,12 @@ impl NumInt {
     /// `scale · Σ_{μν} AO[comp_l][g,μ] D[μν] AO[comp_r][g,ν]`.
     /// Used for ρ (comp_l=comp_r=0, scale=1) and ∇ρ_c (comp_l=c, comp_r=0,
     /// scale=2).
+    // `ao_at` is the AO-lookup closure; `g` is the grid index passed into it.
+    #[allow(
+        clippy::type_complexity,
+        clippy::too_many_arguments,
+        clippy::needless_range_loop
+    )]
     fn contract_rho_comp(
         ao: &[f64],
         dm: &Density,
@@ -346,14 +358,12 @@ impl NumInt {
         }
 
         let xctype = Self::xc_type_of(xc_code)?;
-        let coords = grids
-            .coords
-            .as_ref()
-            .ok_or_else(|| dft_err("nr_rks: grids not built (coords missing) — call grids.build(&mol)"))?;
-        let weights = grids
-            .weights
-            .as_ref()
-            .ok_or_else(|| dft_err("nr_rks: grids not built (weights missing) — call grids.build(&mol)"))?;
+        let coords = grids.coords.as_ref().ok_or_else(|| {
+            dft_err("nr_rks: grids not built (coords missing) — call grids.build(&mol)")
+        })?;
+        let weights = grids.weights.as_ref().ok_or_else(|| {
+            dft_err("nr_rks: grids not built (weights missing) — call grids.build(&mol)")
+        })?;
         let nao = mol.nao_nr;
 
         // The matmul chain is dispatched over the active scalar (D-08). The
@@ -411,7 +421,10 @@ impl NumInt {
                 let sigma: Vec<f64> = (0..ngrids)
                     .map(|g| dx[g] * dx[g] + dy[g] * dy[g] + dz[g] * dz[g])
                     .collect();
-                let rb = RhoBlock::Gga { rho: &rho, sigma: &sigma };
+                let rb = RhoBlock::Gga {
+                    rho: &rho,
+                    sigma: &sigma,
+                };
                 self.eval_xc(xc_code, &rb, DerivOrder::Vxc)
             }
         }
@@ -500,6 +513,8 @@ impl NumInt {
         };
         let contract = |comp_l: usize, comp_r: usize, scale: f64| -> Vec<f64> {
             let mut out = vec![0.0_f64; ngrids];
+            // `g` is the grid index passed into the `ao_at` closure.
+            #[allow(clippy::needless_range_loop)]
             for g in 0..ngrids {
                 let mut acc = S::zero();
                 for mu in 0..nao {
@@ -551,12 +566,16 @@ impl NumInt {
         // the Vxc is applied to each spin channel. nr_rks over the total
         // density yields Exc + a Vxc that, for the v1 corpus, is the per-spin
         // potential (the closed-shell rho/2 split symmetrizes α/β).
-        let mut total = vec![0.0_f64; nao * nao];
-        for i in 0..(nao * nao) {
-            total[i] = dm_a.data[i] + dm_b.data[i];
-        }
+        let total: Vec<f64> = dm_a
+            .data
+            .iter()
+            .zip(&dm_b.data)
+            .map(|(a, b)| a + b)
+            .collect();
         let total_dm = Density { nao, data: total };
-        let r = self.nr_rks(mol, grids, xc_code, &total_dm, relativity, hermi, max_memory, verbose)?;
+        let r = self.nr_rks(
+            mol, grids, xc_code, &total_dm, relativity, hermi, max_memory, verbose,
+        )?;
 
         // Per-spin electron counts (integrate each channel's density).
         let xctype = Self::xc_type_of(xc_code)?;
@@ -572,8 +591,16 @@ impl NumInt {
         let ao = eval_gto_block(mol, xctype, coords)?;
         let (rho_a, _) = NumInt::eval_rho(&ao, dm_a, ngrids, xctype)?;
         let (rho_b, _) = NumInt::eval_rho(&ao, dm_b, ngrids, xctype)?;
-        let nelec_a = oracle_sum(&(0..ngrids).map(|g| weights[g] * rho_a[g]).collect::<Vec<_>>());
-        let nelec_b = oracle_sum(&(0..ngrids).map(|g| weights[g] * rho_b[g]).collect::<Vec<_>>());
+        let nelec_a = oracle_sum(
+            &(0..ngrids)
+                .map(|g| weights[g] * rho_a[g])
+                .collect::<Vec<_>>(),
+        );
+        let nelec_b = oracle_sum(
+            &(0..ngrids)
+                .map(|g| weights[g] * rho_b[g])
+                .collect::<Vec<_>>(),
+        );
 
         Ok(NrUksResult {
             nelec: (nelec_a, nelec_b),
@@ -610,7 +637,11 @@ impl NumInt {
 /// `pyscf_kernels::eval_gto_sph` behind the algebra wall — D-07). The AO
 /// buffer is always f64 (`eval_gto` is `KernelScalar = f64`; the D-08 f32
 /// boundary covers only the downstream matmul chain).
-fn eval_gto_block(mol: &Mole, xctype: XcType, coords: &[[f64; 3]]) -> Result<Vec<f64>, PyscfRsError> {
+fn eval_gto_block(
+    mol: &Mole,
+    xctype: XcType,
+    coords: &[[f64; 3]],
+) -> Result<Vec<f64>, PyscfRsError> {
     let out = pyscf_gto::eval_gto(mol, xctype.eval_gto_name(), coords)?;
     Ok(out.values)
 }
@@ -633,9 +664,17 @@ mod tests {
         // F64. We avoid mutating the process-wide env (the crate is
         // `#![forbid(unsafe_code)]`, and edition-2024 env mutation is unsafe).
         let ni = NumInt::new();
-        assert_eq!(ni.dtype(), DType::from_env(), "dtype() must reflect from_env()");
+        assert_eq!(
+            ni.dtype(),
+            DType::from_env(),
+            "dtype() must reflect from_env()"
+        );
         if std::env::var("PYSCF_DTYPE").is_err() {
-            assert_eq!(ni.dtype(), DType::F64, "default precision must be F64 (D-08)");
+            assert_eq!(
+                ni.dtype(),
+                DType::F64,
+                "default precision must be F64 (D-08)"
+            );
         }
     }
 
@@ -662,12 +701,9 @@ mod tests {
         assert!(grad.is_none());
         // Independent longhand: rho[g] = Σ_{μν} ao[g,μ] D[μν] ao[g,ν].
         for g in 0..ngrids {
-            let a0 = ao_vals[g + 0 * ngrids];
-            let a1 = ao_vals[g + 1 * ngrids];
-            let expect = a0 * 1.0 * a0
-                + a0 * 0.5 * a1
-                + a1 * 0.5 * a0
-                + a1 * 2.0 * a1;
+            let a0 = ao_vals[g]; // component 0
+            let a1 = ao_vals[g + ngrids];
+            let expect = a0 * 1.0 * a0 + a0 * 0.5 * a1 + a1 * 0.5 * a0 + a1 * 2.0 * a1;
             assert!(
                 (rho[g] - expect).abs() < 1e-13,
                 "rho[{g}]: got {}, want {}",
@@ -683,7 +719,10 @@ mod tests {
         let ni = NumInt::new();
         // xcfun svwn → SLATERX+VWN5C, hyb=0 (pure functional).
         let svwn = ni.hybrid_coeff("svwn", 0).unwrap();
-        assert!(svwn.abs() < 1e-12, "SVWN is a pure functional: hyb=0, got {svwn}");
+        assert!(
+            svwn.abs() < 1e-12,
+            "SVWN is a pure functional: hyb=0, got {svwn}"
+        );
         // xcfun b3lyp → 0.2*HF + ..., hyb=0.2 (standard-hybrid HF mixing).
         let b3lyp = ni.hybrid_coeff("b3lyp", 0).unwrap();
         assert!(

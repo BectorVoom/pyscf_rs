@@ -25,8 +25,8 @@
 //! Pitfall 2: `_atm.len() % ATM_SLOTS == 0` and `_bas.len() % BAS_SLOTS == 0`.
 
 use pyscf_core::raw_layout::{
-    ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, CHARGE_OF, KAPPA_OF, NCTR_OF, NPRIM_OF,
-    NUC_MOD_OF, POINT_NUC, PTR_COEFF, PTR_COORD, PTR_ENV_START, PTR_EXP, PTR_ZETA,
+    ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, CHARGE_OF, KAPPA_OF, NCTR_OF, NPRIM_OF, NUC_MOD_OF,
+    POINT_NUC, PTR_COEFF, PTR_COORD, PTR_ENV_START, PTR_EXP, PTR_ZETA,
 };
 use pyscf_core::{ParsedAtom, ParsedBasis};
 use std::collections::HashMap;
@@ -59,10 +59,11 @@ pub fn make_env(
     basis: &HashMap<String, ParsedBasis>,
     cart: bool,
 ) -> MakeEnvOutput {
-    let mut out = MakeEnvOutput::default();
-
     // Reserve the libcint global-param slots (PTR_ENV_START = 20 zeros).
-    out._env = vec![0.0_f64; PTR_ENV_START];
+    let mut out = MakeEnvOutput {
+        _env: vec![0.0_f64; PTR_ENV_START],
+        ..Default::default()
+    };
 
     // ===== Pass 1: per-atom _atm rows + xyz to _env =====
     for (sym_with_suffix, xyz) in atoms {
@@ -135,8 +136,8 @@ pub fn make_env(
     let mut acc: i32 = 0;
     ao_loc.push(0);
     for i in 0..nbas {
-        let l = out._bas[i * BAS_SLOTS + ANG_OF] as i32;
-        let nctr = out._bas[i * BAS_SLOTS + NCTR_OF] as i32;
+        let l = out._bas[i * BAS_SLOTS + ANG_OF];
+        let nctr = out._bas[i * BAS_SLOTS + NCTR_OF];
         let dim_per_ctr = if cart {
             ((l + 1) * (l + 2)) / 2
         } else {
@@ -154,10 +155,7 @@ pub fn make_env(
 /// Per-symbol: build bas templates + append normalised exponents/coeffs to `_env`.
 /// Returns `Vec<bas_row_template>` with `PTR_EXP` / `PTR_COEFF` pointing into `_env`;
 /// `ATOM_OF` stays 0 (caller patches per atom).
-fn make_bas_env_for_symbol(
-    parsed: &ParsedBasis,
-    _env: &mut Vec<f64>,
-) -> Vec<[i32; BAS_SLOTS]> {
+fn make_bas_env_for_symbol(parsed: &ParsedBasis, _env: &mut Vec<f64>) -> Vec<[i32; BAS_SLOTS]> {
     let mut templates = Vec::with_capacity(parsed.shells.len());
     for shell in &parsed.shells {
         let l = shell.l;
@@ -173,8 +171,8 @@ fn make_bas_env_for_symbol(
         _env.extend_from_slice(&shell.exponents);
         let ptr_coeff = _env.len();
         // Append in F-order: for each contraction column c, append nprim primitives.
-        for c_idx in 0..nctr {
-            _env.extend_from_slice(&final_coeffs[c_idx]);
+        for col in &final_coeffs {
+            _env.extend_from_slice(col);
         }
 
         let mut row = [0_i32; BAS_SLOTS];
@@ -212,25 +210,27 @@ pub(crate) fn normalise_contractions(
 
     // Apply per-primitive norm: c'_{c,p} = c_{c,p} * prim_norm[p].
     let mut scaled: Vec<Vec<f64>> = (0..nctr)
-        .map(|c| (0..nprim).map(|p| raw_coeffs[c][p] * prim_norm[p]).collect())
+        .map(|c| {
+            (0..nprim)
+                .map(|p| raw_coeffs[c][p] * prim_norm[p])
+                .collect()
+        })
         .collect();
 
     // _nomalize_contracted_ao: post-multiply each contraction column c by
     // 1/sqrt(c.T @ S @ c) where S[i,j] = gaussian_int(2l+2, e_i + e_j).
-    for c in 0..nctr {
-        let col = &scaled[c];
+    for col in scaled.iter_mut() {
         let mut norm_sq = 0.0_f64;
         for i in 0..nprim {
             for j in 0..nprim {
-                norm_sq += col[i]
-                    * col[j]
-                    * gaussian_int(2 * l as i32 + 2, exponents[i] + exponents[j]);
+                norm_sq +=
+                    col[i] * col[j] * gaussian_int(2 * l as i32 + 2, exponents[i] + exponents[j]);
             }
         }
         if norm_sq > 0.0 {
             let inv = 1.0 / norm_sq.sqrt();
-            for p in 0..nprim {
-                scaled[c][p] *= inv;
+            for v in col.iter_mut() {
+                *v *= inv;
             }
         }
     }
@@ -276,7 +276,8 @@ mod tests {
         //                    = 1 / sqrt(0.5 * (sqrt(π)/2) / 2.8284) = 1 / sqrt(0.0782) ≈ 3.5779
         let n = gto_norm(0, 1.0);
         // From scipy: 1 / sqrt(0.5 * sqrt(pi) * 0.5 / 2^(3/2)) = 2 * (2/π)^(1/4) * sqrt(2)
-        let expected = 2.0 * (2.0 / std::f64::consts::PI).powf(0.25) * 1.0_f64.sqrt() * 2.0_f64.powf(0.75);
+        let expected =
+            2.0 * (2.0 / std::f64::consts::PI).powf(0.25) * 1.0_f64.sqrt() * 2.0_f64.powf(0.75);
         // The exact closed form: gto_norm(0,α)= (2α/π)^(3/4) * 2^(0+0) ; for α=1 → (2/π)^(3/4)
         // Actually upstream: gto_norm(0,α) = (2α/π)^(3/4) * 2^l * sqrt((2l+1)!! / (4π))^-1 — simplified.
         // Easier: our implementation uses the closed form via gaussian_int. Verify by

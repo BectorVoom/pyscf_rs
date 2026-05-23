@@ -43,9 +43,13 @@ pub fn build_cintx_basis_set(
         // basis functions but have no nuclear charge; map them to atomic_number=1
         // for the cintx-core typed view (the libcint flat-array side already
         // carries CHARGE_OF=0 via _atm). Phase 2 test corpus has no ghost atoms.
-        let atomic_number: u16 = if raw_charge <= 0 { 1 } else { raw_charge as u16 };
-        let atom = CintxAtom::try_new(atomic_number, *xyz, CintxNuc::Point, None, None)
-            .map_err(|e| {
+        let atomic_number: u16 = if raw_charge <= 0 {
+            1
+        } else {
+            raw_charge as u16
+        };
+        let atom =
+            CintxAtom::try_new(atomic_number, *xyz, CintxNuc::Point, None, None).map_err(|e| {
                 PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                     "cintx Atom::try_new failed for symbol '{sym}' (Z={atomic_number}): {e}"
                 )))
@@ -82,8 +86,8 @@ pub fn build_cintx_basis_set(
 
             // Flatten coeffs in F-order: outer = contraction column, inner = primitive.
             let mut coeffs_flat: Vec<f64> = Vec::with_capacity(nprim * nctr);
-            for c_idx in 0..nctr {
-                coeffs_flat.extend_from_slice(&final_coeffs[c_idx]);
+            for col in &final_coeffs {
+                coeffs_flat.extend_from_slice(col);
             }
 
             let exps_arc: Arc<[f64]> = Arc::from(spec.exponents.clone().into_boxed_slice());

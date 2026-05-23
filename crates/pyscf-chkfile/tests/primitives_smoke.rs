@@ -65,11 +65,9 @@ fn mo_coeff_f_order_round_trip() {
     let path = tmp.path();
     // Build a 3x3 matrix where C-order and F-order differ visibly.
     // c_order[(i, j)] = original 1..9 row-major.
-    let c_order: Array2<f64> = Array2::from_shape_vec(
-        (3, 3),
-        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
-    )
-    .expect("c");
+    let c_order: Array2<f64> =
+        Array2::from_shape_vec((3, 3), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+            .expect("c");
     {
         let f = open_for_write(path).expect("create");
         let scf = f.create_group("scf").expect("scf group");
@@ -115,7 +113,7 @@ fn append_mode_preserves_existing_data() {
         assert!(s.contains("H 0 0 0"));
         // Add /extra/foo dataset
         let extra = f.create_group("extra").expect("extra group");
-        write_scalar_f64(&extra, "foo", 3.14_f64).expect("foo");
+        write_scalar_f64(&extra, "foo", 2.5_f64).expect("foo");
         f.flush().expect("flush");
     }
     // Final read: both /scf/e_tot AND /extra/foo present
@@ -124,6 +122,6 @@ fn append_mode_preserves_existing_data() {
         let scf = f.group("scf").expect("scf group");
         assert!((read_scalar_f64(&scf, "e_tot").expect("e_tot") - (-1.117)).abs() < 1e-12);
         let extra = f.group("extra").expect("extra group");
-        assert!((read_scalar_f64(&extra, "foo").expect("foo") - 3.14).abs() < 1e-12);
+        assert!((read_scalar_f64(&extra, "foo").expect("foo") - 2.5).abs() < 1e-12);
     }
 }

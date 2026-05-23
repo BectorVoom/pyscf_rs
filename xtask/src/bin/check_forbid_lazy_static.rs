@@ -50,12 +50,11 @@ fn workspace_root() -> PathBuf {
     let mut cur: &Path = &cwd;
     loop {
         let candidate = cur.join("Cargo.toml");
-        if candidate.exists() {
-            if let Ok(s) = fs::read_to_string(&candidate) {
-                if s.contains("[workspace]") {
-                    return cur.to_path_buf();
-                }
-            }
+        if candidate.exists()
+            && let Ok(s) = fs::read_to_string(&candidate)
+            && s.contains("[workspace]")
+        {
+            return cur.to_path_buf();
         }
         match cur.parent() {
             Some(p) => cur = p,
@@ -75,8 +74,8 @@ fn scan(dir: &Path) -> Result<Vec<String>> {
             }
             hits.extend(scan(&path)?);
         } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
-            let content = fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))?;
+            let content =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
             for (i, line) in content.lines().enumerate() {
                 let trimmed = line.trim_start();
                 if trimmed.starts_with("//") {

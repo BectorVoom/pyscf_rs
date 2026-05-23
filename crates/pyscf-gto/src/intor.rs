@@ -30,11 +30,11 @@ use std::sync::Arc;
 
 use cintx_core::{BasisSet as CintxBasisSet, OperatorId, Representation};
 use cintx_ops::resolver::{OperatorDescriptor, Resolver};
-use cintx_runtime::ExecutionOptions;
 use cintx_rs::SessionRequest;
+use cintx_runtime::ExecutionOptions;
 use pyscf_core::{CoreError, EcpEngine, Mole, PyscfRsError};
 
-use crate::layout_table::{self, IntorLayout, INTOR_LAYOUTS};
+use crate::layout_table::{self, INTOR_LAYOUTS, IntorLayout};
 
 /// Output of a successful `intor(...)` call.
 ///
@@ -225,18 +225,16 @@ fn evaluate_arity2(
     let shell_offsets: Vec<usize> = (0..nbas)
         .map(|s| meta.shell_offset(s).unwrap_or(0))
         .collect();
-    let shell_counts: Vec<usize> = (0..nbas)
-        .map(|s| meta.ao_count(s).unwrap_or(0))
-        .collect();
+    let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
 
     // Iterate (i, j) shell pairs.
     for i in 0..nbas {
         for j in 0..nbas {
-            let shells = basis
-                .shell_tuple_for_indices([i, j])
-                .map_err(|e| PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            let shells = basis.shell_tuple_for_indices([i, j]).map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                     "shell_tuple_for_indices(i={i}, j={j}) failed for '{intor_name}': {e}",
-                ))))?;
+                )))
+            })?;
 
             let request = SessionRequest::new(
                 operator,
@@ -247,13 +245,17 @@ fn evaluate_arity2(
             );
             let outcome = request
                 .query_workspace()
-                .map_err(|e| PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "cintx workspace query failed for '{intor_name}' shell pair ({i},{j}): {e}",
-                ))))?
+                .map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx workspace query failed for '{intor_name}' shell pair ({i},{j}): {e}",
+                    )))
+                })?
                 .evaluate()
-                .map_err(|e| PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "cintx evaluate failed for '{intor_name}' shell pair ({i},{j}): {e}",
-                ))))?;
+                .map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx evaluate failed for '{intor_name}' shell pair ({i},{j}): {e}",
+                    )))
+                })?;
 
             // For arity-2 the per-pair block is `[ni, nj]` (or `[c, ni, nj]`
             // if component-leading). cintx writes the block in F-order with
@@ -384,7 +386,12 @@ fn stitch_arity2_block(
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
             "cintx returned block of {} elements for shell pair ({i_shell},{j_shell}) of '{intor_name}', \
              expected {} (components={}, ni={}, nj={}, extents={:?})",
-            block.len(), expected_total, components, ni, nj, block_extents,
+            block.len(),
+            expected_total,
+            components,
+            ni,
+            nj,
+            block_extents,
         ))));
     }
     Ok(())
@@ -401,7 +408,7 @@ fn stitch_arity2_block(
 /// Supported names (Phase 3 plan 03-05 scope):
 ///   - `int3c2e_sph` : 3-center (μ ν | P) — shape `[nao, nao, naux]`, F-order
 ///   - `int2c2e_sph` : 2-center (P | Q)   — shape `[naux, naux]`,       F-order
-///                     (mol is unused; operates on auxmol alone)
+///     (mol is unused; operates on auxmol alone)
 ///
 /// For any other name, returns `Err(NotYetImplemented{ phase: 3 })`.
 ///
@@ -428,12 +435,14 @@ pub fn intor_with_auxmol(
 ) -> Result<IntorOutput, PyscfRsError> {
     if !mol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
-            "intor_with_auxmol: mol not built — call pyscf_gto::M(args) or mol.build() first".into(),
+            "intor_with_auxmol: mol not built — call pyscf_gto::M(args) or mol.build() first"
+                .into(),
         )));
     }
     if !auxmol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
-            "intor_with_auxmol: auxmol not built — call pyscf_gto::M(args) or mol.build() first".into(),
+            "intor_with_auxmol: auxmol not built — call pyscf_gto::M(args) or mol.build() first"
+                .into(),
         )));
     }
     match name {

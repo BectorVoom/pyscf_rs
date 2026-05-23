@@ -21,8 +21,12 @@ use crate::scalar::dtype_of;
 pub struct BufferId(pub(crate) u64);
 
 impl BufferId {
+    // Used by the real device allocator (later phase); inert until then.
     #[doc(hidden)]
-    pub(crate) fn from_raw(id: u64) -> Self { Self(id) }
+    #[allow(dead_code)]
+    pub(crate) fn from_raw(id: u64) -> Self {
+        Self(id)
+    }
 }
 
 /// Opaque device buffer handle, generic over its host element type.
@@ -41,8 +45,12 @@ pub struct Tensor<T: Scalar = f64> {
 }
 
 impl<T: Scalar> Tensor<T> {
-    pub fn rank(&self) -> usize { self.shape.len() }
-    pub fn numel(&self) -> usize { self.shape.iter().product() }
+    pub fn rank(&self) -> usize {
+        self.shape.len()
+    }
+    pub fn numel(&self) -> usize {
+        self.shape.iter().product()
+    }
     pub fn elem_size(&self) -> usize {
         match self.dtype {
             DType::F32 => 4,

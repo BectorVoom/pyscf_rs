@@ -111,7 +111,9 @@ pub fn gauss_chebyshev(n: usize) -> (Vec<f64>, Vec<f64>) {
         })
         .collect();
     // xi = (xi_raw - xi_raw[::-1]) / 2
-    let xi: Vec<f64> = (0..n).map(|i| (xi_raw[i] - xi_raw[n - 1 - i]) / 2.0).collect();
+    let xi: Vec<f64> = (0..n)
+        .map(|i| (xi_raw[i] - xi_raw[n - 1 - i]) / 2.0)
+        .collect();
     let mut r = vec![0.0_f64; n];
     let mut dr = vec![0.0_f64; n];
     for i in 0..n {
@@ -203,13 +205,7 @@ fn build_a_matrix(rad: &[f64]) -> Vec<f64> {
         for j in 0..natm {
             let rr_ij = rad[i] * (1.0 / rad[j]);
             let rr_ji = rad[j] * (1.0 / rad[i]);
-            let mut v = 0.25 * (rr_ji - rr_ij);
-            if v < -0.5 {
-                v = -0.5;
-            }
-            if v > 0.5 {
-                v = 0.5;
-            }
+            let v = (0.25 * (rr_ji - rr_ij)).clamp(-0.5, 0.5);
             a[i * natm + j] = v;
         }
     }
@@ -222,7 +218,10 @@ fn build_a_matrix(rad: &[f64]) -> Vec<f64> {
 /// `charges` is the per-atom nuclear charge list; `atomic_radii` is the
 /// radius lookup (Bohr) — typically [`bragg_radii`].
 #[must_use]
-pub fn treutler_atomic_radii_adjust(charges: &[usize], atomic_radii: &dyn Fn(usize) -> f64) -> RadiiAdjust {
+pub fn treutler_atomic_radii_adjust(
+    charges: &[usize],
+    atomic_radii: &dyn Fn(usize) -> f64,
+) -> RadiiAdjust {
     let rad: Vec<f64> = charges
         .iter()
         .map(|&z| atomic_radii(z).sqrt() + 1e-200)
@@ -242,7 +241,10 @@ pub fn treutler_atomic_radii_adjust(charges: &[usize], atomic_radii: &dyn Fn(usi
 /// Becke atomic-radii-adjust factory — `radi.becke_atomic_radii_adjust`.
 /// Uses `atomic_radii[Z]` directly (no sqrt). JCP 88, 2547 (1988).
 #[must_use]
-pub fn becke_atomic_radii_adjust(charges: &[usize], atomic_radii: &dyn Fn(usize) -> f64) -> RadiiAdjust {
+pub fn becke_atomic_radii_adjust(
+    charges: &[usize],
+    atomic_radii: &dyn Fn(usize) -> f64,
+) -> RadiiAdjust {
     let rad: Vec<f64> = charges.iter().map(|&z| atomic_radii(z) + 1e-200).collect();
     let natm = rad.len();
     let a = build_a_matrix(&rad);

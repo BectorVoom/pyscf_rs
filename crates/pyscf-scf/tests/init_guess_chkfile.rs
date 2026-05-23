@@ -6,9 +6,7 @@
 //! (not a NotYetImplemented error). The full SCF restart path is plan
 //! 03-08's ORACLE-08 territory.
 use pyscf_core::{Energy, MOCoefficients, Mole};
-use pyscf_scf::{
-    chkfile::dump_scf_to_file, default_get_init_guess, InitGuessMode, ScfResult,
-};
+use pyscf_scf::{InitGuessMode, ScfResult, chkfile::dump_scf_to_file, default_get_init_guess};
 
 fn sample_result(nao: usize) -> ScfResult {
     let mut data = vec![0.0_f64; nao * nao];
@@ -19,8 +17,8 @@ fn sample_result(nao: usize) -> ScfResult {
     let energies = vec![-1.0_f64; nao];
     let mut occs = vec![0.0_f64; nao];
     // Closed shell: fill first nao/2 orbitals with 2.
-    for i in 0..(nao / 2) {
-        occs[i] = 2.0;
+    for o in occs.iter_mut().take(nao / 2) {
+        *o = 2.0;
     }
     ScfResult {
         e_tot: Energy(-1.0),
@@ -41,13 +39,15 @@ fn sample_result(nao: usize) -> ScfResult {
 #[test]
 fn init_guess_by_chkfile_reads_prior_density() {
     // Use H2/sto-3g (nao=2, nelec=2).
-    let mut mol = Mole::default();
-    mol.atom = "H 0 0 0; H 0 0 0.74".into();
-    mol.basis = "sto-3g".into();
-    mol.nelectron = 2;
-    mol.nao_nr = 2;
-    mol.natm = 2;
-    mol._built = true; // bypass build() for the Phase-3 simple-case wire
+    let mol = Mole {
+        atom: "H 0 0 0; H 0 0 0.74".into(),
+        basis: "sto-3g".into(),
+        nelectron: 2,
+        nao_nr: 2,
+        natm: 2,
+        _built: true, // bypass build() for the Phase-3 simple-case wire
+        ..Default::default()
+    };
 
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
     let path = tmp.path().to_path_buf();
@@ -68,12 +68,14 @@ fn init_guess_by_chkfile_reads_prior_density() {
 
 #[test]
 fn init_guess_by_chkfile_rejects_nao_mismatch() {
-    let mut mol = Mole::default();
-    mol.atom = "H 0 0 0".into();
-    mol.basis = "cc-pvdz".into();
-    mol.nelectron = 1;
-    mol.nao_nr = 5; // current basis is bigger than prior chkfile
-    mol._built = true;
+    let mol = Mole {
+        atom: "H 0 0 0".into(),
+        basis: "cc-pvdz".into(),
+        nelectron: 1,
+        nao_nr: 5, // current basis is bigger than prior chkfile
+        _built: true,
+        ..Default::default()
+    };
 
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
     let path = tmp.path().to_path_buf();

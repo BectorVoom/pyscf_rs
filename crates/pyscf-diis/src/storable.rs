@@ -14,6 +14,9 @@ pub trait DiisStorable {
     fn as_flat(&self) -> &[f64];
     /// In-place replacement of the iterate's storage from a flat slice.
     /// Caller guarantees `slice.len() == self.len()`.
+    // Intentionally `&mut self` (in-place loader reusing the iterate's
+    // allocation), so the `from_*`-takes-no-self convention does not apply.
+    #[allow(clippy::wrong_self_convention)]
     fn from_flat(&mut self, slice: &[f64]);
     /// Inner product with another iterate. MUST be implemented via
     /// `pyscf_algebra::oracle_dot` for Pitfall 9 mitigation.

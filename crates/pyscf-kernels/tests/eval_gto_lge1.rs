@@ -61,14 +61,14 @@ fn gamma(x: f64) -> f64 {
     // Lanczos approximation, g=7, n=9.
     const G: f64 = 7.0;
     const C: [f64; 9] = [
-        0.99999999999980993,
+        0.999_999_999_999_809_9,
         676.5203681218851,
         -1259.1392167224028,
-        771.32342877765313,
-        -176.61502916214059,
+        771.323_428_777_653_1,
+        -176.615_029_162_140_6,
         12.507343278686905,
         -0.13857109526572012,
-        9.9843695780195716e-6,
+        9.984_369_578_019_572e-6,
         1.5056327351493116e-7,
     ];
     if x < 0.5 {
@@ -104,13 +104,13 @@ struct Fixture {
 }
 
 fn build_fixture(centre: [f64; 3], shells: &[ShellSpec]) -> Fixture {
-    let mut env: Vec<f64> = vec![0.0; PTR_ENV_START as usize];
+    let mut env: Vec<f64> = vec![0.0; PTR_ENV_START];
     // atom coordinate block
     let ptr_coord = env.len();
     env.extend_from_slice(&centre);
 
     let mut atm = vec![0i32; ATM_SLOTS];
-    atm[ATOM_OF.min(ATM_SLOTS - 1)] = 0; // unused for eval
+    atm[ATOM_OF] = 0; // unused for eval
     atm[PTR_COORD] = ptr_coord as i32;
     // charge slot etc. irrelevant for eval_gto.
 
@@ -145,7 +145,13 @@ fn build_fixture(centre: [f64; 3], shells: &[ShellSpec]) -> Fixture {
     }
     ao_loc.push(ao_cursor); // ao_loc has nbas+1 entries
 
-    Fixture { atm, bas, env, ao_loc, nao: ao_cursor as usize }
+    Fixture {
+        atm,
+        bas,
+        env,
+        ao_loc,
+        nao: ao_cursor as usize,
+    }
 }
 
 /// s+p+d fixture on a single centre (mimics an O-like [1s1p1d] block).
@@ -153,9 +159,18 @@ fn spd_fixture() -> Fixture {
     build_fixture(
         [0.1, -0.2, 0.3],
         &[
-            ShellSpec { l: 0, prims: vec![(5.0, 0.5), (1.2, 0.6)] },
-            ShellSpec { l: 1, prims: vec![(3.1, 0.4), (0.9, 0.7)] },
-            ShellSpec { l: 2, prims: vec![(2.3, 1.0)] },
+            ShellSpec {
+                l: 0,
+                prims: vec![(5.0, 0.5), (1.2, 0.6)],
+            },
+            ShellSpec {
+                l: 1,
+                prims: vec![(3.1, 0.4), (0.9, 0.7)],
+            },
+            ShellSpec {
+                l: 2,
+                prims: vec![(2.3, 1.0)],
+            },
         ],
     )
 }
@@ -165,8 +180,8 @@ fn spd_fixture() -> Fixture {
 mod reference {
     pub fn common_fac_sp(l: u32) -> f64 {
         match l {
-            0 => 0.282094791773878143,
-            1 => 0.488602511902919921,
+            0 => 0.282_094_791_773_878_14,
+            1 => 0.488_602_511_902_919_9,
             _ => 1.0,
         }
     }
@@ -196,11 +211,25 @@ mod reference {
         const L0: [[f64; 1]; 1] = [[1.0]];
         const L1: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
         const L2: [[f64; 6]; 5] = [
-            [0.0, 1.092548430592079070, 0.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 1.092548430592079070, 0.0],
-            [-0.315391565252520002, 0.0, 0.0, -0.315391565252520002, 0.0, 0.630783130505040012],
-            [0.0, 0.0, 1.092548430592079070, 0.0, 0.0, 0.0],
-            [0.546274215296039535, 0.0, 0.0, -0.546274215296039535, 0.0, 0.0],
+            [0.0, 1.092_548_430_592_079_2, 0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0, 1.092_548_430_592_079_2, 0.0],
+            [
+                -0.315_391_565_252_52,
+                0.0,
+                0.0,
+                -0.315_391_565_252_52,
+                0.0,
+                0.630_783_130_505_04,
+            ],
+            [0.0, 0.0, 1.092_548_430_592_079_2, 0.0, 0.0, 0.0],
+            [
+                0.546_274_215_296_039_6,
+                0.0,
+                0.0,
+                -0.546_274_215_296_039_6,
+                0.0,
+                0.0,
+            ],
         ];
         match l {
             0 => L0[m][c],
@@ -226,6 +255,9 @@ fn reference_gtoval_sph(
         let gx = coords_flat[g];
         let gy = coords_flat[g + ngrids];
         let gz = coords_flat[g + 2 * ngrids];
+        // Reference kernel: `s` drives parallel flat-array offsets (mirrors
+        // the production loop in `eval_gto.rs`).
+        #[allow(clippy::needless_range_loop)]
         for s in 0..nbas {
             let row = s * BAS_SLOTS;
             let atom_id = bas[row + ATOM_OF] as usize;
@@ -259,6 +291,7 @@ fn reference_gtoval_sph(
                 }
                 for m in 0..nsph {
                     let mut v = 0.0_f64;
+                    #[allow(clippy::needless_range_loop)]
                     for ci in 0..ncart {
                         v += reference::c2s_coeff(l, m, ci) * cart[ci];
                     }
@@ -314,7 +347,10 @@ fn eval_gto_lge1_fixture_exercises_p_and_d_shells() {
         has_p |= l == 1;
         has_d |= l == 2;
     }
-    assert!(has_p && has_d, "fixture must contain p (l=1) and d (l=2) shells");
+    assert!(
+        has_p && has_d,
+        "fixture must contain p (l=1) and d (l=2) shells"
+    );
     // s(1) + p(3) + d(5) = 9 AOs
     assert_eq!(fx.nao, 9);
 }
@@ -329,8 +365,7 @@ fn eval_gto_lge1_gtoval_sph_matches_reference_on_1000_point_grid() {
     let got = eval_gto_sph(
         &client, &flat, ngrids, &fx.atm, &fx.bas, &fx.env, &fx.ao_loc, fx.nao, true,
     );
-    let expect =
-        reference_gtoval_sph(&flat, ngrids, &fx.atm, &fx.bas, &fx.env, &fx.ao_loc, fx.nao);
+    let expect = reference_gtoval_sph(&flat, ngrids, &fx.atm, &fx.bas, &fx.env, &fx.ao_loc, fx.nao);
 
     assert_eq!(got.shape, vec![ngrids, fx.nao]);
     assert_eq!(got.values.len(), expect.len());
@@ -382,7 +417,15 @@ fn eval_gto_lge1_p_shell_sph_components_proportional_to_xyz() {
     let coords = vec![[centre[0] + dx, centre[1] + dy, centre[2] + dz]];
     let (flat, ngrids) = pack_coords(&coords);
     let out = eval_gto_sph(
-        &cpu_client(), &flat, ngrids, &fx.atm, &fx.bas, &fx.env, &fx.ao_loc, fx.nao, true,
+        &cpu_client(),
+        &flat,
+        ngrids,
+        &fx.atm,
+        &fx.bas,
+        &fx.env,
+        &fx.ao_loc,
+        fx.nao,
+        true,
     );
 
     let px = out.values[(ao_off) * ngrids];
@@ -418,13 +461,21 @@ fn eval_gto_lge1_d_shell_sph_ratio_matches_real_solid_harmonics() {
     let coords = vec![[centre[0] + x, centre[1] + y, centre[2] + z]];
     let (flat, ngrids) = pack_coords(&coords);
     let out = eval_gto_sph(
-        &cpu_client(), &flat, ngrids, &fx.atm, &fx.bas, &fx.env, &fx.ao_loc, fx.nao, true,
+        &cpu_client(),
+        &flat,
+        ngrids,
+        &fx.atm,
+        &fx.bas,
+        &fx.env,
+        &fx.ao_loc,
+        fx.nao,
+        true,
     );
 
     // m order -2,-1,0,+1,+2: m=0 at +2, m=+2 at +4.
     let dz2 = out.values[(ao_off + 2) * ngrids];
     let dx2y2 = out.values[(ao_off + 4) * ngrids];
-    let num = -0.315391565252520002 * (x * x + y * y) + 0.630783130505040012 * z * z;
-    let den = 0.546274215296039535 * (x * x - y * y);
+    let num = -0.315_391_565_252_52 * (x * x + y * y) + 0.630_783_130_505_04 * z * z;
+    let den = 0.546_274_215_296_039_6 * (x * x - y * y);
     approx::assert_abs_diff_eq!(dz2 / dx2y2, num / den, epsilon = 1e-9);
 }
