@@ -496,7 +496,7 @@ impl NumInt {
     /// (+∇ρ) cast back to f64 for the XC boundary. For `S=f64` the casts are
     /// identity and the result is bit-identical to [`NumInt::eval_rho`].
     #[allow(clippy::type_complexity)]
-    fn eval_rho_scalar<S: pyscf_core::Scalar>(
+    pub(crate) fn eval_rho_scalar<S: pyscf_core::Scalar>(
         ao: &[f64],
         dm: &Density,
         ngrids: usize,
@@ -728,6 +728,57 @@ mod tests {
         assert!(
             (b3lyp - 0.2).abs() < 1e-9,
             "B3LYP standard-hybrid HF mixing is 0.2, got {b3lyp}"
+        );
+    }
+
+    /// CR-02 gap-closure: the f32 precision path must propagate an Err on
+    /// f64→f32 overflow, NOT silently substitute 0.0. A value exceeding
+    /// f32::MAX (~3.4e38) flowing through `eval_rho_scalar::<f32>` returns
+    /// `Err(PyscfRsError::NumericOverflow { .. })`, never `Ok((vec![0.0], _))`.
+    #[test]
+    fn f32_overflow_returns_err_not_zero() {
+        // nao=1, 1 grid point. AO buffer (F-order [ngrids, nao]) holds a value
+        // far beyond f32::MAX so the f64→f32 cast returns None.
+        let ngrids = 1;
+        let nao = 1;
+        let ao = vec![1e40_f64]; // > f32::MAX (~3.4e38)
+        let dm = Density {
+            nao,
+            data: vec![1e40_f64], // also out of f32 range
+        };
+        let res = NumInt::eval_rho_scalar::<f32>(&ao, &dm, ngrids, XcType::Lda);
+        // Must be an Err, specifically NumericOverflow.
+        assert!(
+            matches!(res, Err(PyscfRsError::NumericOverflow { .. })),
+            "f32 overflow must return Err(NumericOverflow), got {res:?}"
+        );
+        // And must NOT be the old silent 0.0 substitution.
+        assert!(
+            !matches!(res, Ok((ref v, None)) if v == &vec![0.0_f64]),
+            "f32 overflow must NOT silently produce Ok((vec![0.0], None))"
+        );
+    }
+
+    /// The f64 default path is unchanged: `eval_rho_scalar::<f64>` short-circuits
+    /// to the bit-exact `eval_rho` and returns Ok with no overflow even for the
+    /// same large values that trip the f32 path (f64 holds 1e40 fine).
+    #[test]
+    fn f64_path_unchanged_no_overflow_on_large_values() {
+        let ngrids = 1;
+        let nao = 1;
+        let ao = vec![1e40_f64];
+        let dm = Density {
+            nao,
+            data: vec![1.0_f64],
+        };
+        let res = NumInt::eval_rho_scalar::<f64>(&ao, &dm, ngrids, XcType::Lda);
+        let (rho, grad) = res.expect("f64 path must succeed for in-f64-range values");
+        assert!(grad.is_none());
+        // rho = ao * D * ao = 1e40 * 1 * 1e40 = 1e80 (well within f64).
+        assert!(
+            (rho[0] - 1e80).abs() / 1e80 < 1e-12,
+            "f64 path must compute rho=1e80, got {}",
+            rho[0]
         );
     }
 
