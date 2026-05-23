@@ -195,7 +195,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 05-02-PLAN.md — AO→MO 4-index transform: `general`/`full` quarter-transform host-loop body through `oracle_sum` (D-02/D-03), F-order layout, always-on synthetic-ERI roundtrip (the one un-gated numeric assertion) (MP2-01,02,04)
+- [x] 05-02-PLAN.md — AO→MO 4-index transform: `general`/`full` quarter-transform host-loop body through `oracle_sum` (D-02/D-03), F-order layout, always-on synthetic-ERI roundtrip (the one un-gated numeric assertion) (MP2-01,02,04)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -272,7 +272,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
-| 5. MP2 | 1/7 | In Progress|  |
+| 5. MP2 | 2/7 | In Progress|  |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
