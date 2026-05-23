@@ -17,8 +17,19 @@
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
+// 05-08 update (cintx#11): the original ignore reason ("int3c2e_sph base
+// symbol missing") is RESOLVED — cintx now ships int3c2e_sph and
+// `intor_with_auxmol` evaluates it for real (verified by
+// pyscf-gto/tests/int3c2e_auxmol.rs). This test still fails for a SEPARATE,
+// pre-existing Phase-3 reason: the `cc-pvdz-jkfit` (P|Q) metric is ill-
+// conditioned and the plain Cholesky-Banachiewicz in `cholesky_eri`
+// (`s <= 0.0` pivot guard) rejects it as rank-deficient. Upstream PySCF
+// tolerates this via a pivoted/eigen-threshold decomposition; pyscf-rs needs
+// the same robustness in `pyscf_algebra::cholesky` (Phase-3/DF follow-up, NOT
+// the MP2 cintx#11 closure). The small-basis int3c2e + DF-MP2 numeric path is
+// covered always-on by int3c2e_auxmol.rs + pyscf-mp2/tests/mp2_numeric_smoke.rs.
 #[test]
-#[ignore = "cintx-ops int3c2e_sph base symbol missing; plan 03-10 unignores"]
+#[ignore = "Phase-3 DF: cc-pvdz-jkfit (P|Q) metric needs a rank-revealing Cholesky in pyscf-algebra; int3c2e_sph itself now ships (05-08)"]
 fn h2o_cc_pvdz_df_integrals_shape() {
     let mol = M(MoleBuildArgs {
         atom: AtomInput::String("O 0 0 0; H 0 1 0; H 1 0 0".into()),

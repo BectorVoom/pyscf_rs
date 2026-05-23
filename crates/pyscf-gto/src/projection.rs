@@ -167,6 +167,61 @@ fn build_atoms_and_shells(
     basis: &HashMap<String, ParsedBasis>,
     cart: bool,
 ) -> Result<(Vec<CintxAtom>, Vec<Arc<CintxShell>>), PyscfRsError> {
+    build_atoms_and_shells_with_base(atoms, basis, cart, 0)
+}
+
+/// Combined orbital + auxiliary `BasisSet` for the 3-center 2-electron
+/// integral `(μν|P)` (DF / RI-MP2). Mirrors upstream's `conc_mol`/fakemol
+/// pattern (`pyscf/df/incore.py`): the orbital shells (`mol`) occupy the
+/// leading shell range and the auxiliary shells (`auxmol`) follow, with aux
+/// shells re-based onto the appended aux atoms so the combined `BasisSet`
+/// owns one contiguous atom + shell table.
+///
+/// Returns `(basis, n_orb_shells, n_aux_shells)`. The caller iterates
+/// `i,j ∈ 0..n_orb_shells` (orbital μ,ν) and `k ∈ n_orb_shells..` (aux P);
+/// orbital AOs occupy combined AO range `[0, nao)` and aux AOs `[nao, nao+naux)`,
+/// so an aux shell's AO offset within the aux block is `shell_offset(k) - nao`.
+pub(crate) fn build_int3c2e_combined_basis(
+    orb_atoms: &[ParsedAtom],
+    orb_basis: &HashMap<String, ParsedBasis>,
+    orb_cart: bool,
+    aux_atoms: &[ParsedAtom],
+    aux_basis: &HashMap<String, ParsedBasis>,
+    aux_cart: bool,
+) -> Result<(Arc<BasisSet>, usize, usize), PyscfRsError> {
+    let (mut atoms, orb_shells) =
+        build_atoms_and_shells_with_base(orb_atoms, orb_basis, orb_cart, 0)?;
+    let n_orb_atoms = atoms.len() as u32;
+    let (aux_atoms_cintx, aux_shells) =
+        build_atoms_and_shells_with_base(aux_atoms, aux_basis, aux_cart, n_orb_atoms)?;
+
+    atoms.extend(aux_atoms_cintx);
+    let n_orb_shells = orb_shells.len();
+    let n_aux_shells = aux_shells.len();
+    let mut shells = orb_shells;
+    shells.extend(aux_shells);
+
+    let atoms_arc: Arc<[CintxAtom]> = Arc::from(atoms.into_boxed_slice());
+    let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(shells.into_boxed_slice());
+    let basis_set = BasisSet::try_new(atoms_arc, shells_arc).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx combined orbital+aux BasisSet::try_new failed: {e}"
+        )))
+    })?;
+
+    Ok((Arc::new(basis_set), n_orb_shells, n_aux_shells))
+}
+
+/// Build typed cintx atoms + shells, with each shell's `atom_index` offset by
+/// `atom_id_base`. `atom_id_base == 0` reproduces the standalone-Mole layout;
+/// a non-zero base lets the auxiliary shells reference atoms appended after
+/// the orbital atoms in a combined `BasisSet` (see [`build_int3c2e_combined_basis`]).
+fn build_atoms_and_shells_with_base(
+    atoms: &[ParsedAtom],
+    basis: &HashMap<String, ParsedBasis>,
+    cart: bool,
+    atom_id_base: u32,
+) -> Result<(Vec<CintxAtom>, Vec<Arc<CintxShell>>), PyscfRsError> {
     let representation = if cart {
         Representation::Cart
     } else {
@@ -233,7 +288,7 @@ fn build_atoms_and_shells(
             let coeffs_arc: Arc<[f64]> = Arc::from(coeffs_flat.into_boxed_slice());
 
             let shell = CintxShell::try_new(
-                atom_id as u32,
+                atom_id_base + atom_id as u32,
                 l,
                 nprim as u16,
                 nctr as u16,

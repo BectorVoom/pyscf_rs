@@ -617,13 +617,14 @@ pub fn intor_with_auxmol(
 /// 3-center 2-electron integrals `(μν|P)` over `mol` (orbital) × `auxmol`
 /// (auxiliary). Returns shape `[nao, nao, naux]` in F-order.
 ///
-/// CINTX-OPS GAP: `int3c2e_sph` is not yet a base symbol in cintx-ops
-/// `api_manifest.rs` (only the derivative `int3c2e_ip1_sph` and the unstable
-/// `int3c2e_sph_ssc` ship). Until cintx-ops adds the base operator id,
-/// this function returns an all-zero buffer of the correct shape so
-/// downstream callers (`pyscf_df::cholesky_eri`, `df_integrals_shape`
-/// smoke test) compile and validate layout. The numerical bit-exact
-/// assertion is gated by plan 03-10 (oracle harness wave 2).
+/// cintx ships `int3c2e_sph` as a base arity-3 operator (api_manifest.rs:404),
+/// libcint-byte-identical via cintx's `center_3c2e_parity`/`safe_api_arity3_parity`
+/// suites. Wired in 05-08 (cintx#11 DF half): a combined orbital+aux `BasisSet`
+/// is built (PySCF fakemol/`conc_mol` pattern — `build_int3c2e_combined_basis`),
+/// then `(μ ν | P)` is evaluated over shell triples with μ,ν drawn from the
+/// orbital shell range and P from the auxiliary shell range. The per-triple
+/// F-order block `[ni,nj,nk]` is stitched into the global F-order `[nao,nao,naux]`
+/// buffer. Upstream-PySCF byte-identity stays the CI-gated/human-verify arm.
 fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput, PyscfRsError> {
     let nao = mol.nao_nr;
     let naux = auxmol.nao_nr;
@@ -636,8 +637,115 @@ fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput
                 nao, naux
             )))
         })?;
+
+    // Combined orbital+aux basis (orbital shells lead, aux shells follow).
+    let (combined, n_orb_shells, n_aux_shells) = crate::projection::build_int3c2e_combined_basis(
+        &mol._atom,
+        &mol._basis,
+        mol.cart,
+        &auxmol._atom,
+        &auxmol._basis,
+        auxmol.cart,
+    )?;
+
+    // Resolve the int3c2e_sph operator id through the same cintx resolver the
+    // main dispatcher uses (keeps the symbol→OperatorId mapping single-source).
+    let descriptor = Resolver::descriptor_by_symbol("int3c2e_sph").map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx-ops resolver does not know 'int3c2e_sph': {e}"
+        )))
+    })?;
+    let operator = descriptor.id;
+    let representation = Representation::Spheric;
+
+    let meta = combined.meta();
+    let total_shells = n_orb_shells + n_aux_shells;
+    let shell_offsets: Vec<usize> = (0..total_shells)
+        .map(|s| meta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let shell_counts: Vec<usize> = (0..total_shells)
+        .map(|s| meta.ao_count(s).unwrap_or(0))
+        .collect();
+
+    let mut out = vec![0.0f64; total];
+    let nao2 = nao * nao;
+
+    // (μ ν | P): μ,ν over orbital shells [0, n_orb_shells); P over aux shells.
+    for i in 0..n_orb_shells {
+        for j in 0..n_orb_shells {
+            for k in n_orb_shells..total_shells {
+                let shells = combined.shell_tuple_for_indices([i, j, k]).map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "shell_tuple_for_indices(i={i}, j={j}, k={k}) failed for \
+                         'int3c2e_sph': {e}",
+                    )))
+                })?;
+                let request = SessionRequest::new(
+                    operator,
+                    representation,
+                    &combined,
+                    shells,
+                    ExecutionOptions::default(),
+                );
+                let outcome = request
+                    .query_workspace()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx workspace query failed for 'int3c2e_sph' triple ({i},{j},{k}): {e}",
+                        )))
+                    })?
+                    .evaluate()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx evaluate failed for 'int3c2e_sph' triple ({i},{j},{k}): {e}",
+                        )))
+                    })?;
+
+                let ni = shell_counts[i];
+                let nj = shell_counts[j];
+                let nk = shell_counts[k];
+                let oi = shell_offsets[i];
+                let oj = shell_offsets[j];
+                // Aux AO offset within the [0, naux) aux block: the combined AO
+                // offset of aux shell k minus the leading orbital block (nao).
+                let oa = shell_offsets[k].checked_sub(nao).ok_or_else(|| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "int3c2e_sph: aux shell {k} AO offset {} < nao {nao} (combined basis layout invariant violated)",
+                        shell_offsets[k]
+                    )))
+                })?;
+
+                let block = &outcome.tensor.owned_values;
+                let expected = ni * nj * nk;
+                // Never panic / never zero-substitute on a shape surprise
+                // (T-05-08-FFI; the Phase-4 CR-02 lesson).
+                if block.len() != expected {
+                    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx returned {} elements for int3c2e_sph triple ({i},{j},{k}), \
+                         expected {} (ni={ni}, nj={nj}, nk={nk}, extents={:?})",
+                        block.len(),
+                        expected,
+                        outcome.tensor.extents,
+                    ))));
+                }
+
+                // Per-triple block F-order [ni,nj,nk] (i fastest) → global
+                // F-order [nao,nao,naux]: out[(oi+ii)+(oj+jj)*nao+(oa+kk)*nao^2].
+                for kk in 0..nk {
+                    for jj in 0..nj {
+                        for ii in 0..ni {
+                            let b = ii + jj * ni + kk * ni * nj;
+                            let o = (oi + ii) + (oj + jj) * nao + (oa + kk) * nao2;
+                            out[o] = block[b];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(IntorOutput {
-        values: vec![0.0_f64; total],
+        values: out,
         shape: vec![nao, nao, naux],
         layout: IntorLayout::ScalarFOrder,
     })
