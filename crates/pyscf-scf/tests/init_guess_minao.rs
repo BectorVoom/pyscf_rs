@@ -78,3 +78,36 @@ fn minao_dm_symmetric_and_traces_to_nelec() {
         mol.nelectron
     );
 }
+
+/// minao for a multi-atom, heavier-element molecule (H2O — O needs a 2nd s
+/// contraction). The vendored `ano.dat` under-resolves O's s-shell, so the
+/// minao dm under-normalizes (`Tr(dm·S) ≈ 7.9` vs nelec 10) — the documented
+/// heavy-atom data caveat. BUT minao is only a STARTING guess: RHF still
+/// converges to the correct H2O/STO-3G energy (≈ -74.96 Hartree). This locks in
+/// that the out-of-the-box default path works beyond H/He, even where the ANO
+/// data is imperfect.
+#[test]
+fn minao_default_converges_for_h2o_despite_data_caveat() {
+    use pyscf_scf::{KernelConfig, NoOverrides, kernel};
+
+    let mol = M(MoleBuildArgs {
+        atom: AtomInput::String("O 0 0 0; H 0 0 0.96; H 0 0.93 -0.26".into()),
+        basis: BasisInput::Name("sto-3g".into()),
+        unit: Unit::Ang,
+        ..Default::default()
+    })
+    .expect("H2O/STO-3G");
+
+    // minao produces a finite, symmetric dm (under-normalized for O — caveat).
+    let dm = default_get_init_guess(&mol, &InitGuessMode::Minao).expect("H2O minao");
+    assert!(dm.data.iter().all(|v| v.is_finite()), "minao dm finite");
+
+    // Default-config (minao) RHF converges to the correct H2O/STO-3G energy.
+    let r = kernel(&mol, &NoOverrides, KernelConfig::default()).expect("H2O RHF(minao)");
+    assert!(r.converged, "H2O RHF with the minao guess must converge");
+    assert!(
+        (r.e_tot.0 - (-74.963)).abs() < 1e-2,
+        "H2O/STO-3G RHF ≈ -74.963 Hartree, got {}",
+        r.e_tot.0
+    );
+}
