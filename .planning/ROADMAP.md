@@ -21,7 +21,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED) — none yet
 
-- [ ] **Phase 1: Foundation** — Workspace (15 crates including `pyscf-algebra`), core types, runtime + env-driven backend selection (`PYSCF_BACKEND`), workspace `gpu` feature (OFF by default → CPU is the default backend), single-owner cubecl algebra crate (GEMM/reduce/AXPY/dot via `cubecl-matmul`/`cubecl-reduce`/`#[cube]`), FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep + dependency-wall lints, nightly cross-crate matrix CI
+- [x] **Phase 1: Foundation** — Workspace (15 crates including `pyscf-algebra`), core types, runtime + env-driven backend selection (`PYSCF_BACKEND`), workspace `gpu` feature (OFF by default → CPU is the default backend), single-owner cubecl algebra crate (GEMM/reduce/AXPY/dot via `cubecl-matmul`/`cubecl-reduce`/`#[cube]`), FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep + dependency-wall lints, nightly cross-crate matrix CI (completed 2026-05-23)
 - [ ] **Phase 2: GTO** — Mole, basis-set loading (5 atom-input × 11 basis-input forms), ECP, intor wrappers via cintx, eval_gto for grids
 - [ ] **Phase 3: SCF + PyO3 bindings** — RHF/UHF/GHF + DIIS + chkfile + sign canonicalization + first end-to-end energy AND lock the entire PyO3 contract (subclass-override dispatch, NumPy contiguity, GIL release seam, abi3-py310 wheel skeleton, oracle harness bootstrap)
 - [x] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT (all 10 plans executed 2026-05-22; verification = gaps_found 3/5 — 4 BLOCKERs in 04-VERIFICATION.md: UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key → gap closure required before complete) (completed 2026-05-23)
@@ -57,8 +57,8 @@ Plans:
 - [x] 01-05-PLAN.md — xtask 5 CI lint binaries (FOUND-05, FOUND-07, FOUND-08, ALG-06)
 - [x] 01-06-PLAN.md — GitHub Actions ci.yml + nightly-cross-crate.yml (FOUND-05, FOUND-08, FOUND-10, ALG-06, ORACLE-05, ORACLE-09)
 - [x] 01-07-PLAN.md — CONTRIBUTING.md + docs/upgrade-cubecl.md + README.md additions (FOUND-04, FOUND-09)
-- [ ] 01-08-PLAN.md — GAP CLOSURE: cintx clean-SHA repin + Cargo.lock commit (closes BLOCKER 1 + 3; FOUND-01, FOUND-04, FOUND-10)
-- [ ] 01-09-PLAN.md — GAP CLOSURE: check-cubecl-pin transitive version-skew reconciliation (closes BLOCKER 2; FOUND-04)
+- [x] 01-08-PLAN.md — GAP CLOSURE: cintx clean-SHA repin + Cargo.lock commit (closes BLOCKER 1 + 3; FOUND-01, FOUND-04, FOUND-10)
+- [x] 01-09-PLAN.md — GAP CLOSURE: check-cubecl-pin transitive version-skew reconciliation (closes BLOCKER 2; FOUND-04)
 
 ### Phase 2: GTO
 
@@ -268,7 +268,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
+| 1. Foundation | 9/9 | Complete    | 2026-05-23 |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |

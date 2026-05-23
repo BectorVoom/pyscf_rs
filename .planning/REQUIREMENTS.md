@@ -11,16 +11,16 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 
 ### Foundation (FOUND)
 
-- [ ] **FOUND-01**: Workspace builds clean as a 14-crate horizontal-layered façade — `pyscf-{core,runtime,kernels,gto,scf,dft,mp2,ccsd,grad,geomopt,py,oracle,bench}` plus top-level façade — mirroring the cintx/xcfun_rs pattern
-- [ ] **FOUND-02**: `pyscf-core` exposes the universal types (Mole, BasisSet, Density, MOCoefficients, Amplitudes, Energy newtype) and traits (Method, Scf, KohnSham, PostScf, Gradient, IntegralEngine) with no compute dependencies
-- [ ] **FOUND-03**: `pyscf-runtime` provides `BackendKind::{Cpu,Cuda,Wgpu,Rocm,Metal}` enum, `auto_backend()` priority chain (`PYSCF_BACKEND` env override → CUDA → ROCm → Metal → WGPU → CPU), and a `WorkspacePool`
-- [ ] **FOUND-04**: cubecl 0.10.0 is exact-pinned across the workspace and lockstep with cintx/libxc_rs/xcfun_rs (`[patch.crates-io]` enforced; documented upgrade ritual in CONTRIBUTING.md)
-- [ ] **FOUND-05**: A `[profile.release-oracle]` build profile with `RUSTFLAGS="-C target-feature=-fma"` produces FMA-free machine code; CI greps for `llvm.fmuladd` and fails on hits
-- [ ] **FOUND-06**: `oracle_sum`, `oracle_dot`, `oracle_einsum` deterministic-ordered-reduction primitives are implemented and used in every numerical kernel that the oracle harness checks
-- [ ] **FOUND-07**: Panic policy is enforced — every `extern "C"` callback uses `catch_unwind`; clippy lint blocks `unwrap()` in numerical modules; release builds use `panic = "abort"`
-- [ ] **FOUND-08**: A `forbidden-paths` lint refuses imports from out-of-scope upstream modules (pbc, x2c, mcscf, tdscf, adc, gw, eom, NAC, EPH) at every PR
-- [ ] **FOUND-09**: Tracing-based logging (`tracing 0.1`) replicates PySCF's `pyscf.lib.logger` verbosity contract (verbosity 0–9, `mol.verbose` configurable)
-- [ ] **FOUND-10**: MSRV 1.92, edition 2024, Apache-2.0 license file at workspace root, and `cargo deny` clean
+- [x] **FOUND-01**: Workspace builds clean as a 14-crate horizontal-layered façade — `pyscf-{core,runtime,kernels,gto,scf,dft,mp2,ccsd,grad,geomopt,py,oracle,bench}` plus top-level façade — mirroring the cintx/xcfun_rs pattern
+- [x] **FOUND-02**: `pyscf-core` exposes the universal types (Mole, BasisSet, Density, MOCoefficients, Amplitudes, Energy newtype) and traits (Method, Scf, KohnSham, PostScf, Gradient, IntegralEngine) with no compute dependencies
+- [x] **FOUND-03**: `pyscf-runtime` provides `BackendKind::{Cpu,Cuda,Wgpu,Rocm,Metal}` enum, `auto_backend()` priority chain (`PYSCF_BACKEND` env override → CUDA → ROCm → Metal → WGPU → CPU), and a `WorkspacePool`
+- [x] **FOUND-04**: cubecl 0.10.0 is exact-pinned across the workspace and lockstep with cintx/libxc_rs/xcfun_rs (`[patch.crates-io]` enforced; documented upgrade ritual in CONTRIBUTING.md)
+- [x] **FOUND-05**: A `[profile.release-oracle]` build profile with `RUSTFLAGS="-C target-feature=-fma"` produces FMA-free machine code; CI greps for `llvm.fmuladd` and fails on hits
+- [x] **FOUND-06**: `oracle_sum`, `oracle_dot`, `oracle_einsum` deterministic-ordered-reduction primitives are implemented and used in every numerical kernel that the oracle harness checks
+- [x] **FOUND-07**: Panic policy is enforced — every `extern "C"` callback uses `catch_unwind`; clippy lint blocks `unwrap()` in numerical modules; release builds use `panic = "abort"`
+- [x] **FOUND-08**: A `forbidden-paths` lint refuses imports from out-of-scope upstream modules (pbc, x2c, mcscf, tdscf, adc, gw, eom, NAC, EPH) at every PR
+- [x] **FOUND-09**: Tracing-based logging (`tracing 0.1`) replicates PySCF's `pyscf.lib.logger` verbosity contract (verbosity 0–9, `mol.verbose` configurable)
+- [x] **FOUND-10**: MSRV 1.92, edition 2024, Apache-2.0 license file at workspace root, and `cargo deny` clean
 
 ### Molecular structure & integrals (GTO)
 
@@ -149,15 +149,15 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 
 ### Oracle, testing & CI (ORACLE)
 
-- [ ] **ORACLE-01**: `pyscf-oracle` crate uses `pyo3::Python::with_gil` to drive upstream PySCF in-process; listed only in `dev-dependencies` so release wheels never link Python
+- [x] **ORACLE-01**: `pyscf-oracle` crate uses `pyo3::Python::with_gil` to drive upstream PySCF in-process; listed only in `dev-dependencies` so release wheels never link Python
 - [ ] **ORACLE-02**: `oracle_check!(method, tolerance, fixture)` macro compares pyscf-rs and upstream PySCF outputs at every test fixture
 - [ ] **ORACLE-03**: Test isolation uses subprocess-per-fixture for tests that mutate global state (SCF density caches, threading config); persistent worker for stateless tests
 - [ ] **ORACLE-04**: Pre-merge CI runs the full test corpus on Linux x86_64 with CPU backend; ≥80% of curated upstream PySCF unit tests for in-scope modules pass when run against pyscf-rs as the import target
-- [ ] **ORACLE-05**: Nightly cross-crate matrix CI rebuilds and tests cintx + libxc_rs + xcfun_rs + pyscf_rs together against the cubecl pin
+- [x] **ORACLE-05**: Nightly cross-crate matrix CI rebuilds and tests cintx + libxc_rs + xcfun_rs + pyscf_rs together against the cubecl pin
 - [ ] **ORACLE-06**: Nightly per-basis bit-exact test sweeps every basis-set name PySCF knows
 - [ ] **ORACLE-07**: GPU backends (CUDA/WGPU/ROCm) are tested at chemical accuracy, not bit-exact; tolerance documented per backend
 - [ ] **ORACLE-08**: chkfile round-trip oracle: PySCF writes → pyscf-rs reads, asserts identical; pyscf-rs writes → PySCF reads, runs downstream calc, asserts agreement
-- [ ] **ORACLE-09**: Floating-point determinism: oracle CI pins `RAYON_NUM_THREADS=1`, `mol.lib.num_threads(1)`, and uses the `release-oracle` profile
+- [x] **ORACLE-09**: Floating-point determinism: oracle CI pins `RAYON_NUM_THREADS=1`, `mol.lib.num_threads(1)`, and uses the `release-oracle` profile
 
 ### Performance (PERF)
 
@@ -249,16 +249,16 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FOUND-01 | Phase 1 | Pending |
-| FOUND-02 | Phase 1 | Pending |
-| FOUND-03 | Phase 1 | Pending |
-| FOUND-04 | Phase 1 | Pending |
-| FOUND-05 | Phase 1 | Pending |
-| FOUND-06 | Phase 1 | Pending |
-| FOUND-07 | Phase 1 | Pending |
-| FOUND-08 | Phase 1 | Pending |
-| FOUND-09 | Phase 1 | Pending |
-| FOUND-10 | Phase 1 | Pending |
+| FOUND-01 | Phase 1 | Complete |
+| FOUND-02 | Phase 1 | Complete |
+| FOUND-03 | Phase 1 | Complete |
+| FOUND-04 | Phase 1 | Complete |
+| FOUND-05 | Phase 1 | Complete |
+| FOUND-06 | Phase 1 | Complete |
+| FOUND-07 | Phase 1 | Complete |
+| FOUND-08 | Phase 1 | Complete |
+| FOUND-09 | Phase 1 | Complete |
+| FOUND-10 | Phase 1 | Complete |
 | GTO-01 | Phase 2 | Complete |
 | GTO-02 | Phase 2 | Pending |
 | GTO-03 | Phase 2 | Pending |
@@ -340,15 +340,15 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | BIND-07 | Phase 3 | Pending |
 | BIND-08 | Phase 8 | Pending |
 | BIND-09 | Phase 3 | Pending |
-| ORACLE-01 | Phase 1 | Pending |
+| ORACLE-01 | Phase 1 | Complete |
 | ORACLE-02 | Phase 3 | Pending |
 | ORACLE-03 | Phase 8 | Pending |
 | ORACLE-04 | Phase 8 | Pending |
-| ORACLE-05 | Phase 1 | Pending |
+| ORACLE-05 | Phase 1 | Complete |
 | ORACLE-06 | Phase 8 | Pending |
 | ORACLE-07 | Phase 8 | Pending |
 | ORACLE-08 | Phase 3 | Pending |
-| ORACLE-09 | Phase 1 | Pending |
+| ORACLE-09 | Phase 1 | Complete |
 | PERF-01 | Phase 8 | Pending |
 | PERF-02 | Phase 8 | Pending |
 | PERF-03 | Phase 8 | Pending |
