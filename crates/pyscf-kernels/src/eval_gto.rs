@@ -87,6 +87,7 @@ use pyscf_runtime::BackendKind;
 #[allow(unused_imports)]
 use cubecl::prelude::*;
 
+use pyscf_core::PyscfRsError;
 use pyscf_core::raw_layout::{
     ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, NCTR_OF, NPRIM_OF, PTR_COEFF, PTR_COORD, PTR_EXP,
 };
@@ -145,9 +146,13 @@ fn cart_powers(l: u32) -> Vec<(u32, u32, u32)> {
 
 /// libcint `g_trans_cart2sph` coefficient `T[l][m_row][cart_col]`.
 /// Returns the FROZEN Condon-Shortley value. `l ≤ 4` supported (g-shells);
-/// higher `l` is not in the v1 corpus (max cc-pVTZ f = l 3) and panics so
-/// a future basis with l>4 fails loudly rather than silently writing 0.
-fn c2s_coeff(l: u32, m_row: usize, cart_col: usize) -> f64 {
+/// higher `l` is not in the v1 corpus (max cc-pVTZ f = l 3). For `l > 4`
+/// (h-shells and above — cc-pV5Z, ANO) this returns
+/// `Err(PyscfRsError::NotYetImplemented{phase:4,..})` rather than panicking,
+/// so a user-supplied basis fails loudly through the PyO3 boundary with a
+/// Python exception instead of aborting the process (BLOCKER CR-03 /
+/// FOUND-07 never-panic policy).
+fn c2s_coeff(l: u32, m_row: usize, cart_col: usize) -> Result<f64, PyscfRsError> {
     // s (l=0): 1×1 identity.
     const L0: [[f64; 1]; 1] = [[1.0]];
     // p (l=1): identity (px,py,pz); the 0.4886 prefactor is in fac1.
@@ -419,15 +424,16 @@ fn c2s_coeff(l: u32, m_row: usize, cart_col: usize) -> f64 {
         ],
     ];
     match l {
-        0 => L0[m_row][cart_col],
-        1 => L1[m_row][cart_col],
-        2 => L2[m_row][cart_col],
-        3 => L3[m_row][cart_col],
-        4 => L4[m_row][cart_col],
-        _ => panic!(
-            "eval_gto: cart→sph transform only supports l<=4 (g shells); got l={l}. \
-             v1 corpus tops out at f (l=3). Add the g_trans_cart2sph row for l>4 if needed."
-        ),
+        0 => Ok(L0[m_row][cart_col]),
+        1 => Ok(L1[m_row][cart_col]),
+        2 => Ok(L2[m_row][cart_col]),
+        3 => Ok(L3[m_row][cart_col]),
+        4 => Ok(L4[m_row][cart_col]),
+        _ => Err(PyscfRsError::NotYetImplemented {
+            phase: 4,
+            what: "cart→sph transform for l>4 (h-shells and above) not yet implemented — \
+                   add c2s_coeff table for the required l",
+        }),
     }
 }
 
@@ -475,7 +481,7 @@ pub fn eval_gto_sph(
     ao_loc: &[i32],
     nao: usize,
     spherical: bool,
-) -> EvalGtoBuffers {
+) -> Result<EvalGtoBuffers, PyscfRsError> {
     // The per-backend match still lives at the public surface so future
     // GPU arms (Phase 8) drop in cleanly. With only the `cpu` feature
     // enabled, `BackendKind` only has the `Cpu` variant constructible
@@ -521,7 +527,7 @@ fn eval_gto_sph_cpu(
     ao_loc_host: &[i32],
     nao: usize,
     _spherical: bool,
-) -> EvalGtoBuffers {
+) -> Result<EvalGtoBuffers, PyscfRsError> {
     debug_assert_eq!(
         coords_host.len(),
         ngrids * 3,
@@ -541,10 +547,10 @@ fn eval_gto_sph_cpu(
 
     // Empty grid → empty output, skip the loop entirely.
     if out_len == 0 {
-        return EvalGtoBuffers {
+        return Ok(EvalGtoBuffers {
             values: Vec::new(),
             shape: vec![ngrids, nao],
-        };
+        });
     }
 
     let mut out = vec![0.0_f64; out_len];
@@ -661,7 +667,7 @@ fn eval_gto_sph_cpu(
                         // `ci` indexes cart_vals AND feeds c2s_coeff(l, m, ci).
                         #[allow(clippy::needless_range_loop)]
                         for ci in 0..ncart_l {
-                            v += c2s_coeff(l, m_idx, ci) * cart_vals[ci];
+                            v += c2s_coeff(l, m_idx, ci)? * cart_vals[ci];
                         }
                         let ao_idx = ao_off + c_idx * nsph_l + m_idx;
                         out[g + ao_idx * ngrids] = v;
@@ -671,10 +677,10 @@ fn eval_gto_sph_cpu(
         }
     }
 
-    EvalGtoBuffers {
+    Ok(EvalGtoBuffers {
         values: out,
         shape: vec![ngrids, nao],
-    }
+    })
 }
 
 /// Evaluate `GTOval_sph_deriv1` on the grid: the AO value plus the three
@@ -697,7 +703,7 @@ pub fn eval_gto_sph_deriv1(
     env: &[f64],
     ao_loc: &[i32],
     nao: usize,
-) -> EvalGtoBuffers {
+) -> Result<EvalGtoBuffers, PyscfRsError> {
     let kind = client.kind();
     if kind != BackendKind::Cpu {
         tracing::warn!(
@@ -725,7 +731,7 @@ fn eval_gto_sph_deriv1_cpu(
     env_host: &[f64],
     ao_loc_host: &[i32],
     nao: usize,
-) -> EvalGtoBuffers {
+) -> Result<EvalGtoBuffers, PyscfRsError> {
     debug_assert_eq!(
         coords_host.len(),
         ngrids * 3,
@@ -744,10 +750,10 @@ fn eval_gto_sph_deriv1_cpu(
     let comp_stride = ngrids * nao;
     let out_len = 4 * comp_stride;
     if comp_stride == 0 {
-        return EvalGtoBuffers {
+        return Ok(EvalGtoBuffers {
             values: Vec::new(),
             shape: vec![4, ngrids, nao],
-        };
+        });
     }
     let mut out = vec![0.0_f64; out_len];
 
@@ -853,7 +859,7 @@ fn eval_gto_sph_deriv1_cpu(
                     let mut vy = 0.0_f64;
                     let mut vz = 0.0_f64;
                     for ci in 0..ncart_l {
-                        let t = c2s_coeff(l, m_idx, ci);
+                        let t = c2s_coeff(l, m_idx, ci)?;
                         v += t * cval[ci];
                         vx += t * cdx[ci];
                         vy += t * cdy[ci];
@@ -868,10 +874,10 @@ fn eval_gto_sph_deriv1_cpu(
         }
     }
 
-    EvalGtoBuffers {
+    Ok(EvalGtoBuffers {
         values: out,
         shape: vec![4, ngrids, nao],
-    }
+    })
 }
 
 #[cfg(test)]
