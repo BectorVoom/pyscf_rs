@@ -163,12 +163,15 @@ fn scs_energy_factors() {
     assert!((scs - scs_ref).abs() < 1e-15, "scs = {scs}");
 }
 
-/// ALWAYS-ON structural: `default_ao2mo` (exercised through `NoMp2Overrides`)
-/// propagates the `int2e` `NotYetImplemented` error against a REAL Mole — it
-/// must return `Err`, never panic, never substitute a zero buffer. The numeric
-/// energy is cintx#11-gated; the error-propagation SHAPE is always-on.
+/// ALWAYS-ON: `default_ao2mo` (exercised through `NoMp2Overrides`) now SUCCEEDS
+/// against a REAL Mole — cintx#11 is closed (05-08), so `intor("int2e")` returns
+/// a real arity-4 tensor instead of `NotYetImplemented{phase:2}`. The transform
+/// runs end-to-end and yields a well-formed `ChemistsEris` of the expected
+/// `(o,v,o,v)` shape. With the zero `mo_coeff` of this toy reference the block is
+/// numerically zero, but the path no longer errors — the finite-energy numeric
+/// proof lives in `mp2_numeric_smoke.rs`.
 #[test]
-fn default_ao2mo_propagates_int2e_not_yet_implemented() {
+fn default_ao2mo_succeeds_after_cintx11_closure() {
     // A built H2/STO-3G Mole so intor() passes its built-check and reaches the
     // arity-4 int2e NotYetImplemented branch.
     let mol = pyscf_gto::M(MoleBuildArgs {
@@ -213,9 +216,18 @@ fn default_ao2mo_propagates_int2e_not_yet_implemented() {
     };
 
     let hooks = NoMp2Overrides;
-    let r = hooks.ao2mo(&refr, &Frozen::None);
-    assert!(
-        matches!(r, Err(PyscfRsError::NotYetImplemented { .. })),
-        "expected NotYetImplemented from int2e, got {r:?}"
+    let eris = hooks
+        .ao2mo(&refr, &Frozen::None)
+        .expect("default_ao2mo must succeed now that arity-4 int2e lands (cintx#11 closed)");
+    // nocc=1 (one doubly-occupied), nvir = nmo-1; ovov is the (o,v,o,v) block.
+    assert_eq!(eris.nocc, 1, "H2/STO-3G closed-shell has 1 occupied MO");
+    assert_eq!(eris.nvir, refr.mo_coeff.nmo - 1);
+    assert_eq!(
+        eris.ovov.len(),
+        eris.nocc * eris.nvir * eris.nocc * eris.nvir,
+        "ovov block has (o,v,o,v) shape"
     );
+    for v in &eris.ovov {
+        assert!(v.is_finite(), "ovov entries must be finite");
+    }
 }
