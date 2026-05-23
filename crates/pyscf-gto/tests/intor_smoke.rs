@@ -4,8 +4,14 @@
 //!   1. Drives `cintx_rs::SessionRequest` over a real Mole → produces
 //!      a finite, F-order, `nao × nao` output for `int1e_ovlp_sph`.
 //!   2. Honours upstream `_add_suffix` (`pyscf/gto/mole.py:945+`).
-//!   3. Routes ECP names (`int1e_ecp*`, `ECPscalar*`) to
-//!      `PyscfRsError::EcpEngineNotAvailable` (02-07 wires the real engine).
+//!   3. Routes ECP names (`int1e_ecp*`, `ECPscalar*`) through the
+//!      `EcpEngine`. For an ECP-LESS molecule (these smoke tests use
+//!      H/STO-3G) the cintx-backed engine (02-10) returns
+//!      `PyscfRsError::EcpEngineNotAvailable` via its `mol._ecp.is_empty()`
+//!      guard — so the user-facing "ECP on a molecule without one" error
+//!      contract is unchanged from the 02-07 stub. Real ECP evaluation on a
+//!      molecule WITH an ECP (Cu/LANL2DZ) is covered by
+//!      `tests/ecp_int1e_oracle.rs`.
 //!   4. Returns a clear error for unknown names AND for unbuilt Mole.
 //!
 //! NOTE on the H2/STO-3G analytical assertion:
@@ -151,22 +157,24 @@ fn unknown_intor_returns_invalid_molecule_error() {
 }
 
 #[test]
-fn ecp_int1e_route_returns_engine_not_available() {
+fn ecp_int1e_route_on_ecpless_mol_returns_engine_not_available() {
+    // H/STO-3G has no ECP; the cintx-backed engine (02-10) guards on
+    // mol._ecp.is_empty() and returns the canonical EcpEngineNotAvailable.
     let mol = M(h_args()).expect("build");
     let r = intor(&mol, "int1e_ecp");
     assert!(
         matches!(r, Err(pyscf_core::PyscfRsError::EcpEngineNotAvailable)),
-        "int1e_ecp must route to EcpEngineNotAvailable; got {r:?}",
+        "int1e_ecp on ECP-less mol must route to EcpEngineNotAvailable; got {r:?}",
     );
 }
 
 #[test]
-fn ecp_ecpscalar_route_returns_engine_not_available() {
+fn ecp_ecpscalar_route_on_ecpless_mol_returns_engine_not_available() {
     let mol = M(h_args()).expect("build");
     let r = intor(&mol, "ECPscalar");
     assert!(
         matches!(r, Err(pyscf_core::PyscfRsError::EcpEngineNotAvailable)),
-        "ECPscalar* names must route to EcpEngineNotAvailable; got {r:?}",
+        "ECPscalar* on ECP-less mol must route to EcpEngineNotAvailable; got {r:?}",
     );
 }
 
