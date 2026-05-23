@@ -8,8 +8,10 @@
 //!
 //! Design — what this module does:
 //!   1. `add_suffix(name, mol.cart)` — verbatim port of upstream `_add_suffix`.
-//!   2. ECP route — `int1e_ecp*` and `ECPscalar*` short-circuit to
-//!      `PyscfRsError::EcpEngineNotAvailable` (02-07 wires the real engine).
+//!   2. ECP route — `int1e_ecp*` / `ECPscalar*` names dispatch through the
+//!      `EcpEngine` trait (02-10 wires the cintx-backed `CintxEcpEngine`;
+//!      ECP-less mols → `EcpEngineNotAvailable`, derivative names → Phase-7
+//!      `NotYetImplemented`).
 //!   3. `layout_table::lookup(name)` — feature gate. Unknown names produce a
 //!      structured error pointing at the layout table.
 //!   4. cintx Resolver — maps the post-suffix symbol → `OperatorId` + arity.
@@ -19,12 +21,12 @@
 //!      F-order `nao×nao(×nao×nao)` output buffer.
 //!   6. Return `IntorOutput { values, shape, layout }`.
 //!
-//! Caveat (cintx-state, 02-05 ship date): `cintx_rs::SessionRequest`'s safe-API
-//! executor populates output via `fill_staging_values` (synthetic pattern).
-//! Real integral evaluation is in cintx-compat::raw + linked vendor libcint
-//! (cintx-oracle test suite). The 02-05 dispatcher's job is the LAYOUT +
-//! NAMING + ECP-ROUTING contract; numerical byte-identity vs upstream pyscf
-//! is gated by 02-09 verification rollup once cintx flips to real eval.
+//! cintx-state (updated 02-10): `cintx_rs::SessionRequest::evaluate` now runs
+//! REAL integral evaluation via `CubeClExecutor` over the linked kernels (the
+//! old synthetic `fill_staging_values` staging placeholder no longer exists in
+//! the cintx workspace). This dispatcher owns the LAYOUT + NAMING +
+//! ECP-ROUTING contract; numerical byte-identity vs upstream pyscf is gated by
+//! the 02-09 verification rollup and the venv-gated oracle harness.
 
 use std::sync::Arc;
 
@@ -85,10 +87,11 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
     // to this dispatcher.
     if full_name.starts_with("int1e_ecp") || full_name.starts_with("ECPscalar") {
         let engine = crate::ecp_engine();
-        // The Phase 2 stub never returns Ok, so the conversion below is
-        // exercise-only until 02-10. When the cintx-backed impl lands, the
-        // returned `Density` carries an F-order `nao × nao` buffer and we
-        // re-pack it into the `IntorOutput` shape used elsewhere.
+        // Since 02-10 `ecp_engine()` returns the cintx-backed `CintxEcpEngine`:
+        // for an ECP-bearing molecule + scalar name it returns Ok with an
+        // F-order `nao × nao` buffer, which we re-pack into `IntorOutput`.
+        // ECP-less molecules still get `EcpEngineNotAvailable`; derivative
+        // names (ipnuc/iprinv) get `NotYetImplemented{phase:7}` (WR-01).
         let density = EcpEngine::ecp_int1e(&engine, mol, &full_name)?;
         // Defensive shape: even when 02-10 wires the real engine, this
         // dispatcher promises the same `(nao, nao)` F-order layout
