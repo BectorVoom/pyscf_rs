@@ -11,6 +11,8 @@
 #![warn(clippy::unwrap_used)]
 
 pub mod analyze;
+// Plan 03-13 — per-element electron configuration + frac_occ for the minao guess.
+mod atom_config;
 pub mod convert;
 pub mod eig;
 pub mod energy;
