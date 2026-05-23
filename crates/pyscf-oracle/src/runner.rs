@@ -73,6 +73,22 @@ const KNOWN_METHODS: &[&str] = &[
     // /scf schema + the xc/grids metadata, round-tripping both directions (the
     // ORACLE-08 harness extended to the KS result type, D-06).
     "ks_chkfile_roundtrip",
+    // ── Phase 5 MP2 numeric oracle arms (plan 05-01) ───────────────────────
+    // MP2-01/02/04/05: RMP2 / UMP2 / DF-MP2 (conventional + native) correlation
+    // energies + MP2 RDM, each compared ≤ 1 µHartree vs upstream
+    // `mp.RMP2(mf).kernel()` / `mp.UMP2(uhf_mf).kernel()` /
+    // `mp.DFMP2(mf).kernel()` (and the native RI-MP2 path). The fixture name
+    // encodes the system as `<base>` (e.g. "h2o_ccpvdz"), exactly the
+    // rks_energy precedent. ALL five MP2 numeric arms are CI-gated behind
+    // cintx#11 (the numeric oracle needs both arity-4 `int2e` for the in-core
+    // RMP2/UMP2 path AND arity-3 `int3c2e_sph` for the DF-MP2 path); the
+    // `mp2-oracle-cintx-gated` CI job stays `if: false` until cintx#11 ships
+    // these — mirroring the DF-HF / DFT-01 (rks_energy/uks_energy) gating.
+    "mp2_rmp2_energy",
+    "mp2_ump2_energy",
+    "dfmp2_energy",
+    "dfmp2_native_energy",
+    "mp2_rdm",
 ];
 
 /// Top-level dispatcher. Resolves the method name to either a known
@@ -965,8 +981,10 @@ mod tests {
     #[test]
     fn known_methods_list_has_all_arms() {
         // 8 SCF/DF arms (Phase 3) + grid_weights (04-04) + rks_energy +
-        // uks_energy (04-06) + df_dft_energy + ks_chkfile_roundtrip (04-08) = 13.
-        assert_eq!(KNOWN_METHODS.len(), 13);
+        // uks_energy (04-06) + df_dft_energy + ks_chkfile_roundtrip (04-08) = 13,
+        // + 5 Phase-5 MP2 arms (05-01: mp2_rmp2_energy, mp2_ump2_energy,
+        // dfmp2_energy, dfmp2_native_energy, mp2_rdm) = 18.
+        assert_eq!(KNOWN_METHODS.len(), 18);
         assert!(KNOWN_METHODS.contains(&"scf_rhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_uhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_diis_iter_count"));
@@ -980,5 +998,11 @@ mod tests {
         assert!(KNOWN_METHODS.contains(&"uks_energy"));
         assert!(KNOWN_METHODS.contains(&"df_dft_energy"));
         assert!(KNOWN_METHODS.contains(&"ks_chkfile_roundtrip"));
+        // Phase 5 MP2 arms (05-01).
+        assert!(KNOWN_METHODS.contains(&"mp2_rmp2_energy"));
+        assert!(KNOWN_METHODS.contains(&"mp2_ump2_energy"));
+        assert!(KNOWN_METHODS.contains(&"dfmp2_energy"));
+        assert!(KNOWN_METHODS.contains(&"dfmp2_native_energy"));
+        assert!(KNOWN_METHODS.contains(&"mp2_rdm"));
     }
 }
