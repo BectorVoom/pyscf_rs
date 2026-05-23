@@ -53,6 +53,7 @@ fn error_kind(err: &PyscfRsError) -> &'static str {
         PyscfRsError::BasisLoad(_) => "BasisLoad",
         PyscfRsError::EcpLoad(_) => "EcpLoad",
         PyscfRsError::EcpEngineNotAvailable => "EcpEngineNotAvailable",
+        PyscfRsError::NumericOverflow { .. } => "NumericOverflow",
     }
 }
 
