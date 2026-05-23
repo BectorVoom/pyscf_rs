@@ -117,6 +117,12 @@ pub fn parse_nwchem(text: &str, symbol: &str, source: &str) -> Result<ParsedBasi
                 current = CurrentShell::Single {
                     l,
                     exps: Vec::new(),
+                    // GENERAL CONTRACTION: one inner Vec per coefficient column.
+                    // For a SEGMENTED block this stays length-1 (a single
+                    // contraction); for a GENERALLY-CONTRACTED block (ANO,
+                    // ANO-RCC, cc-pVDZ O S) it grows to N parallel columns. The
+                    // number of columns is fixed by the FIRST primitive row and
+                    // every subsequent row must match it (ragged → Parse error).
                     coeffs: Vec::new(),
                 };
             } else {
@@ -167,8 +173,36 @@ pub fn parse_nwchem(text: &str, symbol: &str, source: &str) -> Result<ParsedBasi
                             ),
                         });
                     }
+                    // GENERAL CONTRACTION: `cols = [exp, c1, c2, ..., cN]`. The
+                    // number of contraction columns is `cols.len() - 1`. The
+                    // FIRST primitive row of a block establishes that count; all
+                    // subsequent rows MUST carry the same number of columns —
+                    // a ragged block is silently-wrong basis data, so reject it
+                    // with a descriptive Parse error (threat T-02-11-RAGGED)
+                    // rather than padding or truncating.
+                    let n_ctr = cols.len() - 1;
+                    if coeffs.is_empty() {
+                        // First primitive row: allocate one column vector per
+                        // contraction. `coeffs[ctr_idx][prim_idx]` is the
+                        // column-major layout `ShellSpec.coeffs` expects.
+                        coeffs.resize(n_ctr, Vec::new());
+                    } else if coeffs.len() != n_ctr {
+                        return Err(BasisLoadError::Parse {
+                            file: source.into(),
+                            line: i + 1,
+                            reason: format!(
+                                "ragged general-contraction block: previous rows had {} \
+                                 coefficient column(s) but this row has {}: {}",
+                                coeffs.len(),
+                                n_ctr,
+                                line
+                            ),
+                        });
+                    }
                     exps.push(cols[0]);
-                    coeffs.push(cols[1]);
+                    for (ctr_idx, col) in coeffs.iter_mut().enumerate() {
+                        col.push(cols[ctr_idx + 1]);
+                    }
                 }
                 CurrentShell::SharedSP {
                     exps,
@@ -208,10 +242,14 @@ fn flush_current(current: &mut CurrentShell, shells: &mut Vec<ShellSpec>) {
         CurrentShell::None => {}
         CurrentShell::Single { l, exps, coeffs } => {
             if !exps.is_empty() {
+                // `coeffs` is already `Vec<Vec<f64>>` (one inner Vec per
+                // contraction column), exactly the column-major layout
+                // `ShellSpec.coeffs` consumes. For a segmented block this is a
+                // single column; for a general contraction it is the N columns.
                 shells.push(ShellSpec {
                     l,
                     exponents: exps,
-                    coeffs: vec![coeffs],
+                    coeffs,
                 });
             }
         }
@@ -244,7 +282,9 @@ enum CurrentShell {
     Single {
         l: u8,
         exps: Vec<f64>,
-        coeffs: Vec<f64>,
+        /// Contraction-coefficient columns: `coeffs[ctr_idx][prim_idx]`.
+        /// Length 1 for a segmented block, N for a general contraction.
+        coeffs: Vec<Vec<f64>>,
     },
     SharedSP {
         exps: Vec<f64>,

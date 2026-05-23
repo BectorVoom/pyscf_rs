@@ -273,14 +273,25 @@ fn build_atoms_and_shells_with_base(
 
             // Apply the same gto_norm + _nomalize_contracted_ao normalisation
             // that make_env applies; cintx and the libcint flat-array view stay
-            // in lockstep.
+            // in lockstep. `final_coeffs[ctr][prim]` is contraction-major.
             let final_coeffs =
                 crate::make_env::normalise_contractions(l, &spec.exponents, &spec.coeffs);
 
-            // Flatten coeffs in F-order: outer = contraction column, inner = primitive.
-            let mut coeffs_flat: Vec<f64> = Vec::with_capacity(nprim * nctr);
-            for col in &final_coeffs {
-                coeffs_flat.extend_from_slice(col);
+            // Flatten coeffs into the layout the cintx 1e/2e kernel CONSUMES:
+            // `coefficients[prim * nctr + ctr]` (primitive-major / contraction-
+            // minor, i.e. ROW-MAJOR `[nprim][nctr]`). This is the cintx safe-API
+            // Shell convention — see cintx `kernels/one_electron.rs`
+            // (`shell.coefficients[pi * n_ctr + ci]`). For the SEGMENTED case
+            // (nctr == 1) this interleave is byte-identical to a plain column
+            // copy, which is why the truncating-parser era never exposed it; for
+            // a GENERAL CONTRACTION (nctr > 1, e.g. ANO/cc-pVDZ O) a column-major
+            // flatten silently SCRAMBLES the coefficients and yields a wrong,
+            // un-normalised, asymmetric overlap (threat T-02-11-CINTX-NCTR).
+            let mut coeffs_flat: Vec<f64> = vec![0.0; nprim * nctr];
+            for (ctr, col) in final_coeffs.iter().enumerate() {
+                for (prim, &c) in col.iter().enumerate() {
+                    coeffs_flat[prim * nctr + ctr] = c;
+                }
             }
 
             let exps_arc: Arc<[f64]> = Arc::from(spec.exponents.clone().into_boxed_slice());
