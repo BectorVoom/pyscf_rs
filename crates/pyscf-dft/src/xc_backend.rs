@@ -635,15 +635,12 @@ fn xcfun_eval_uks(
 
     // For GGA the caller must supply all three sigma channels.
     let (saa, sab, sbb) = if detected == Family::Gga {
-        let saa = sigma_aa.ok_or_else(|| {
-            DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_aa".into())
-        })?;
-        let sab = sigma_ab.ok_or_else(|| {
-            DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_ab".into())
-        })?;
-        let sbb = sigma_bb.ok_or_else(|| {
-            DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_bb".into())
-        })?;
+        let saa = sigma_aa
+            .ok_or_else(|| DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_aa".into()))?;
+        let sab = sigma_ab
+            .ok_or_else(|| DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_ab".into()))?;
+        let sbb = sigma_bb
+            .ok_or_else(|| DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_bb".into()))?;
         if saa.len() != np || sab.len() != np || sbb.len() != np {
             return Err(DftError::BackendEval(
                 "xcfun_eval_uks: sigma_* length must equal rho length".into(),
@@ -661,10 +658,12 @@ fn xcfun_eval_uks(
         let base = ip * inlen;
         density[base] = rho_a[ip]; // a
         density[base + 1] = rho_b[ip]; // b
-        if detected == Family::Gga {
-            density[base + 2] = saa.unwrap()[ip]; // gaa
-            density[base + 3] = sab.unwrap()[ip]; // gab
-            density[base + 4] = sbb.unwrap()[ip]; // gbb
+        // For GGA, `saa`/`sab`/`sbb` are all `Some` (validated above); use
+        // `if let` so we never `unwrap()` (the crate forbids it).
+        if let (Some(saa), Some(sab), Some(sbb)) = (saa, sab, sbb) {
+            density[base + 2] = saa[ip]; // gaa
+            density[base + 3] = sab[ip]; // gab
+            density[base + 4] = sbb[ip]; // gbb
         }
     }
     let mut out_buf = vec![0.0_f64; np * outlen];

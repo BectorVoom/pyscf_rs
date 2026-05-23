@@ -635,10 +635,25 @@ impl NumInt {
     /// `nr_uks` — open-shell UKS Vxc/Exc grid loop (numint.py:1192).
     ///
     /// Signature mirrors `nr_uks(ni, mol, grids, xc_code, dms, ...)` returning
-    /// `(nelec[2], excsum, vmat[2])`. v1 builds the spin-resolved Vxc by
-    /// running the closed-shell-shaped contraction over the total density for
-    /// the XC eval (the `XcBackend` closed-shell rho/2 split, 04-05) and
-    /// returning a Vxc per spin channel. `dm` is `(dm_alpha, dm_beta)`.
+    /// `(nelec[2], excsum, vmat[2])`. `dm` is `(dm_alpha, dm_beta)`.
+    ///
+    /// CR-01 — this is the GENUINE open-shell loop (it replaces the prior
+    /// dead-code body that ran `nr_rks` on the total density and returned the
+    /// same Vxc cloned into both spin channels):
+    ///   1. Evaluate the AO block once (shared coords for both spins).
+    ///   2. Contract `rho_a` from `(ao, dm_a)` and `rho_b` from `(ao, dm_b)`
+    ///      INDEPENDENTLY (plus `∇rho_a`/`∇rho_b` for GGA).
+    ///   3. For GGA build `sigma_aa = |∇rho_a|²`, `sigma_bb = |∇rho_b|²`,
+    ///      `sigma_ab = ∇rho_a·∇rho_b`.
+    ///   4. Call [`XcBackend::eval_uks`] with the spin-resolved input → a
+    ///      [`UksXcOutput`] carrying `vrho_a != vrho_b`.
+    ///   5. Back-contract `vmat_alpha` from `vrho_a` (+ GGA gradient terms with
+    ///      the `vsigma_ab` cross-term) and `vmat_beta` from `vrho_b` — two
+    ///      DISTINCT matrices for an asymmetric density.
+    ///
+    /// The XC eval is f64-only (xcfun host), so this body runs in f64 (the
+    /// D-08 f32 matmul chain is the closed-shell `nr_rks` concern; the
+    /// open-shell back-contraction is the gap-closure scope).
     #[allow(clippy::too_many_arguments)]
     pub fn nr_uks(
         &self,
@@ -646,29 +661,23 @@ impl NumInt {
         grids: &Grids,
         xc_code: &str,
         dm: (&Density, &Density),
-        relativity: i32,
-        hermi: i32,
+        _relativity: i32,
+        _hermi: i32,
         max_memory: f64,
-        verbose: Option<i32>,
+        _verbose: Option<i32>,
     ) -> Result<NrUksResult, PyscfRsError> {
+        let raw_env = std::env::var("PYSCF_DTYPE").ok();
+        tracing::info!(
+            target: "pyscf_dft::numint",
+            backend = self.backend_name(),
+            dtype = self.dtype.name(),
+            env = raw_env.as_deref().unwrap_or("unset"),
+            max_memory = max_memory,
+            "nr_uks grid-loop entry"
+        );
+
         let (dm_a, dm_b) = dm;
         let nao = mol.nao_nr;
-        // Total density D = Dα + Dβ drives the (closed-shell-split) XC eval;
-        // the Vxc is applied to each spin channel. nr_rks over the total
-        // density yields Exc + a Vxc that, for the v1 corpus, is the per-spin
-        // potential (the closed-shell rho/2 split symmetrizes α/β).
-        let total: Vec<f64> = dm_a
-            .data
-            .iter()
-            .zip(&dm_b.data)
-            .map(|(a, b)| a + b)
-            .collect();
-        let total_dm = Density { nao, data: total };
-        let r = self.nr_rks(
-            mol, grids, xc_code, &total_dm, relativity, hermi, max_memory, verbose,
-        )?;
-
-        // Per-spin electron counts (integrate each channel's density).
         let xctype = Self::xc_type_of(xc_code)?;
         let coords = grids
             .coords
@@ -679,25 +688,161 @@ impl NumInt {
             .as_ref()
             .ok_or_else(|| dft_err("nr_uks: grids not built (weights missing)"))?;
         let ngrids = coords.len();
+
+        // (1) AO block once — shared by both spins (same grid coords).
         let ao = eval_gto_block(mol, xctype, coords)?;
-        let (rho_a, _) = NumInt::eval_rho(&ao, dm_a, ngrids, xctype)?;
-        let (rho_b, _) = NumInt::eval_rho(&ao, dm_b, ngrids, xctype)?;
-        let nelec_a = oracle_sum(
-            &(0..ngrids)
-                .map(|g| weights[g] * rho_a[g])
-                .collect::<Vec<_>>(),
+
+        // (2) rho_a / rho_b (+ ∇rho_a / ∇rho_b for GGA), evaluated INDEPENDENTLY.
+        let (rho_a, grad_a) = NumInt::eval_rho(&ao, dm_a, ngrids, xctype)?;
+        let (rho_b, grad_b) = NumInt::eval_rho(&ao, dm_b, ngrids, xctype)?;
+
+        // (3) Spin-resolved XC eval. For GGA assemble the three sigma channels.
+        let spec = xcfun::parse_xc(xc_code).map_err(PyscfRsError::from)?;
+        let xc_out = match xctype {
+            XcType::Lda => {
+                self.backend
+                    .eval_uks(&spec, &rho_a, &rho_b, None, None, None, DerivOrder::Vxc)
+            }
+            XcType::Gga => {
+                let (dax, day, daz) = grad_a
+                    .as_ref()
+                    .ok_or_else(|| dft_err("nr_uks: GGA functional but ∇rho_a missing"))?;
+                let (dbx, dby, dbz) = grad_b
+                    .as_ref()
+                    .ok_or_else(|| dft_err("nr_uks: GGA functional but ∇rho_b missing"))?;
+                let sigma_aa: Vec<f64> = (0..ngrids)
+                    .map(|g| dax[g] * dax[g] + day[g] * day[g] + daz[g] * daz[g])
+                    .collect();
+                let sigma_bb: Vec<f64> = (0..ngrids)
+                    .map(|g| dbx[g] * dbx[g] + dby[g] * dby[g] + dbz[g] * dbz[g])
+                    .collect();
+                let sigma_ab: Vec<f64> = (0..ngrids)
+                    .map(|g| dax[g] * dbx[g] + day[g] * dby[g] + daz[g] * dbz[g])
+                    .collect();
+                self.backend.eval_uks(
+                    &spec,
+                    &rho_a,
+                    &rho_b,
+                    Some(&sigma_aa),
+                    Some(&sigma_ab),
+                    Some(&sigma_bb),
+                    DerivOrder::Vxc,
+                )
+            }
+        }
+        .map_err(PyscfRsError::from)?;
+
+        // (4) Exc + per-spin electron counts (oracle_sum reductions).
+        let mut exc_terms = vec![0.0_f64; ngrids];
+        let mut den_a = vec![0.0_f64; ngrids];
+        let mut den_b = vec![0.0_f64; ngrids];
+        for g in 0..ngrids {
+            let w = weights[g];
+            exc_terms[g] = w * xc_out.exc[g];
+            den_a[g] = w * rho_a[g];
+            den_b[g] = w * rho_b[g];
+        }
+        let excsum = oracle_sum(&exc_terms);
+        let nelec_a = oracle_sum(&den_a);
+        let nelec_b = oracle_sum(&den_b);
+
+        // (5) Back-contract two DISTINCT Vxc matrices (alpha from vrho_a,
+        //     vsigma_aa, vsigma_ab; beta from vrho_b, vsigma_bb, vsigma_ab).
+        let vmat_a = self.uks_vmat(
+            &ao,
+            weights,
+            ngrids,
+            nao,
+            xctype,
+            &xc_out.vrho_a,
+            &xc_out.vsigma_aa,
+            &xc_out.vsigma_ab,
+            grad_a.as_ref(),
+            grad_b.as_ref(),
         );
-        let nelec_b = oracle_sum(
-            &(0..ngrids)
-                .map(|g| weights[g] * rho_b[g])
-                .collect::<Vec<_>>(),
+        let vmat_b = self.uks_vmat(
+            &ao,
+            weights,
+            ngrids,
+            nao,
+            xctype,
+            &xc_out.vrho_b,
+            &xc_out.vsigma_bb,
+            &xc_out.vsigma_ab,
+            grad_b.as_ref(),
+            grad_a.as_ref(),
         );
 
         Ok(NrUksResult {
             nelec: (nelec_a, nelec_b),
-            excsum: r.excsum,
-            vmat: (r.vmat.clone(), r.vmat),
+            excsum,
+            vmat: (Density { nao, data: vmat_a }, Density { nao, data: vmat_b }),
         })
+    }
+
+    /// Back-contract one spin channel's Vxc matrix (CR-01 helper).
+    ///
+    /// For the channel "this" (alpha or beta) the LDA term is
+    /// `0.5·w·vrho · φ_μ φ_ν` (the 0.5 folds with the `V + Vᵀ` symmetrization
+    /// below). For GGA, add the gradient back-contraction with BOTH the
+    /// same-spin `vsigma_same` (e.g. `vsigma_aa` for alpha) and the cross-spin
+    /// `vsigma_ab` term (per upstream `numint.py:nr_uks` GGA section):
+    ///   `2·w·vsigma_same·(∇rho_this·∇φ_μ)·φ_ν + w·vsigma_ab·(∇rho_other·∇φ_μ)·φ_ν`.
+    /// `grad_this`/`grad_other` are the (∇x,∇y,∇z) blocks for this/other spin.
+    #[allow(clippy::too_many_arguments)]
+    fn uks_vmat(
+        &self,
+        ao: &[f64],
+        weights: &[f64],
+        ngrids: usize,
+        nao: usize,
+        xctype: XcType,
+        vrho: &[f64],
+        vsigma_same: &[f64],
+        vsigma_ab: &[f64],
+        grad_this: Option<&(Vec<f64>, Vec<f64>, Vec<f64>)>,
+        grad_other: Option<&(Vec<f64>, Vec<f64>, Vec<f64>)>,
+    ) -> Vec<f64> {
+        let ao_at = |buf: &[f64], comp: usize, g: usize, mu: usize| -> f64 {
+            buf[comp * ngrids * nao + (g + mu * ngrids)]
+        };
+        let mut vmat = vec![0.0_f64; nao * nao];
+        let mut vrow_terms = vec![0.0_f64; ngrids];
+        for mu in 0..nao {
+            for nu in 0..nao {
+                #[allow(clippy::needless_range_loop)]
+                for g in 0..ngrids {
+                    let w = weights[g];
+                    let phi_mu = ao_at(ao, 0, g, mu);
+                    let phi_nu = ao_at(ao, 0, g, nu);
+                    // LDA term: 0.5·w·vrho · φ_μ φ_ν (0.5 folds with V + Vᵀ).
+                    let mut t = w * 0.5 * vrho[g] * phi_mu * phi_nu;
+                    if let (XcType::Gga, Some((tx, ty, tz)), Some((ox, oy, oz))) =
+                        (xctype, grad_this, grad_other)
+                    {
+                        // ∇rho_this · ∇φ_μ  and  ∇rho_other · ∇φ_μ.
+                        let gphi_this = tx[g] * ao_at(ao, 1, g, mu)
+                            + ty[g] * ao_at(ao, 2, g, mu)
+                            + tz[g] * ao_at(ao, 3, g, mu);
+                        let gphi_other = ox[g] * ao_at(ao, 1, g, mu)
+                            + oy[g] * ao_at(ao, 2, g, mu)
+                            + oz[g] * ao_at(ao, 3, g, mu);
+                        // same-spin: 2·w·vsigma_same·(∇rho_this·∇φ_μ)·φ_ν
+                        // cross-spin: w·vsigma_ab·(∇rho_other·∇φ_μ)·φ_ν
+                        // 0.5 prefactor folds with the symmetrization (V + Vᵀ).
+                        let grad_term = 2.0 * w * vsigma_same[g] * gphi_this * phi_nu
+                            + w * vsigma_ab[g] * gphi_other * phi_nu;
+                        t += 0.5 * grad_term;
+                    }
+                    vrow_terms[g] = t;
+                }
+                let contrib = oracle_sum(&vrow_terms);
+                // Symmetrize: vmat += V + Vᵀ (upstream numint.py).
+                vmat[mu * nao + nu] += contrib;
+                vmat[nu * nao + mu] += contrib;
+            }
+        }
+        vmat
     }
 
     /// Stable backend name for the ALG-08 log line.
