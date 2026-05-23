@@ -1,35 +1,20 @@
-//! Shape-only smoke test for `cholesky_eri` (plan 03-05 Task 1 RED).
+//! Shape smoke test for `cholesky_eri`.
 //!
-//! Bit-exact DF-HF energy assertion vs upstream is in plan 03-10. This test
-//! only asserts:
-//!   1. `DfIntegrals { b_uvq, naux, nao }` is constructable.
-//!   2. `nao` matches `mol.nao_nr`.
-//!   3. `b_uvq.len() == nao * nao * naux`.
+//! Asserts `DfIntegrals { b_uvq, naux, nao }` is constructable, `nao` matches
+//! `mol.nao_nr`, and `b_uvq.len() == nao*nao*naux`. Bit-exact DF energy vs
+//! upstream PySCF is the CI-gated/human-verify arm.
 //!
-//! The test is `#[ignore]`d because cintx-ops does NOT yet ship the
-//! `int3c2e_sph` base operator id (only the derivative + an unstable
-//! source variant); plan 03-05 Task 0's `intor_with_auxmol` for that name
-//! returns a zero-filled buffer. The (P|Q) Cholesky of cintx's current
-//! synthetic-staging `int2c2e_sph` output is likely rank-deficient
-//! (singular). Plan 03-10 unignores this test once cintx upstream lands
-//! the base operator id AND flips from synthetic to real evaluation.
+//! History: this was `#[ignore]`d for "int3c2e_sph base symbol missing"
+//! (resolved by 05-08 — cintx ships int3c2e_sph, see int3c2e_auxmol.rs), then
+//! still failed on the ill-conditioned `cc-pvdz-jkfit` `(P|Q)` metric. 05-09
+//! added the rank-revealing eigh fallback (`pyscf_algebra::df_metric_fit`) to
+//! `cholesky_eri`, so the metric is now handled and this test is ALWAYS-ON.
+//! `naux` may be the effective rank after linear-dependence removal.
 
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
-// 05-08 update (cintx#11): the original ignore reason ("int3c2e_sph base
-// symbol missing") is RESOLVED — cintx now ships int3c2e_sph and
-// `intor_with_auxmol` evaluates it for real (verified by
-// pyscf-gto/tests/int3c2e_auxmol.rs). This test still fails for a SEPARATE,
-// pre-existing Phase-3 reason: the `cc-pvdz-jkfit` (P|Q) metric is ill-
-// conditioned and the plain Cholesky-Banachiewicz in `cholesky_eri`
-// (`s <= 0.0` pivot guard) rejects it as rank-deficient. Upstream PySCF
-// tolerates this via a pivoted/eigen-threshold decomposition; pyscf-rs needs
-// the same robustness in `pyscf_algebra::cholesky` (Phase-3/DF follow-up, NOT
-// the MP2 cintx#11 closure). The small-basis int3c2e + DF-MP2 numeric path is
-// covered always-on by int3c2e_auxmol.rs + pyscf-mp2/tests/mp2_numeric_smoke.rs.
 #[test]
-#[ignore = "Phase-3 DF: cc-pvdz-jkfit (P|Q) metric needs a rank-revealing Cholesky in pyscf-algebra; int3c2e_sph itself now ships (05-08)"]
 fn h2o_cc_pvdz_df_integrals_shape() {
     let mol = M(MoleBuildArgs {
         atom: AtomInput::String("O 0 0 0; H 0 1 0; H 1 0 0".into()),
@@ -40,8 +25,39 @@ fn h2o_cc_pvdz_df_integrals_shape() {
     .expect("H2O/cc-pVDZ");
     let df = pyscf_df::cholesky_eri(&mol, "cc-pvdz-jkfit").expect("cholesky_eri");
     assert_eq!(df.nao, mol.nao_nr);
-    assert!(df.naux > 0);
+    assert!(df.naux > 0, "effective auxiliary rank must be positive");
     assert_eq!(df.b_uvq.len(), df.nao * df.nao * df.naux);
+    assert!(
+        df.b_uvq.iter().all(|v| v.is_finite()),
+        "DF B-tensor must be finite"
+    );
+    assert!(
+        df.b_uvq.iter().any(|&v| v.abs() > 1e-12),
+        "DF B-tensor must be non-zero"
+    );
+}
+
+/// The previously-failing real auxiliary metrics (cc-pvdz-jkfit AND the weigend
+/// universal aux) now build a real, finite DF B-tensor via the 05-09
+/// rank-revealing eigh fallback — no more rank-deficient `SingularAux` error.
+#[test]
+fn ill_conditioned_metrics_build_via_rank_revealing_fallback() {
+    let mol = M(MoleBuildArgs {
+        atom: AtomInput::String("O 0 0 0; H 0 1 0; H 1 0 0".into()),
+        basis: BasisInput::Name("cc-pvdz".into()),
+        unit: Unit::Bohr,
+        ..Default::default()
+    })
+    .expect("H2O/cc-pVDZ");
+    for aux in ["cc-pvdz-jkfit", "weigend"] {
+        let df = pyscf_df::cholesky_eri(&mol, aux)
+            .unwrap_or_else(|e| panic!("cholesky_eri({aux}) must now succeed: {e}"));
+        assert_eq!(df.nao, mol.nao_nr, "{aux}: nao");
+        assert!(df.naux > 0, "{aux}: effective rank > 0");
+        assert_eq!(df.b_uvq.len(), df.nao * df.nao * df.naux, "{aux}: shape");
+        assert!(df.b_uvq.iter().all(|v| v.is_finite()), "{aux}: finite");
+        assert!(df.b_uvq.iter().any(|&v| v.abs() > 1e-12), "{aux}: non-zero");
+    }
 }
 
 /// Negative-path: cholesky_eri's body is reachable even when the inner
