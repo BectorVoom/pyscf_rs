@@ -241,7 +241,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 14/14 | Complete   | 2026-05-23 |
+| 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: "Completed 04-14-PLAN.md (CR-01: nr_uks was dead code returning (r.vmat.clone(), r.vmat) via nr_rks on the total density; added XcBackend::eval_uks + UksXcOutput (genuine rho_a/rho_b), rewrote nr_uks open-shell loop with uks_vmat back-contracting two DISTINCT vmat_a/vmat_b, added UksKsHooks; UKS::kernel + PyUKS::get_veff now route through nr_uks; vmat_alpha != vmat_beta proven). Phase 04 gap closure COMPLETE — all 4 BLOCKERs (CR-01..04) closed; 14/14 plans done."
-last_updated: "2026-05-23T05:19:30.031Z"
-last_activity: "2026-05-23 -- 04-14 executed: genuine open-shell UKS. XcBackend::eval_uks builds the per-point xcfun input from GENUINE rho_a/rho_b (NO rho/2 split) so vrho_a != vrho_b; NumInt::nr_uks now contracts rho_a/rho_b independently, calls eval_uks, and back-contracts two DISTINCT Vxc via uks_vmat (LDA + GGA same-spin vsigma_aa + cross-spin vsigma_ab gradient terms, V+Vᵀ symmetrized). UksKsHooks (two-channel injective fingerprint cache reusing CR-04) routes get_veff through nr_uks; UKS::kernel uses UksKsHooks::new not KsHooks::new; PyUKS::get_veff uses get_veff_ks->nr_uks not ks_default_get_veff/nr_rks. nr_uks is f64-only (xcfun is f64-host). Symmetric dm split (dm/2) is the structural-wiring contract since pyscf_scf::kernel<H> carries a single Density. 47 dft lib + py tests green; clippy -D warnings + fmt clean; libxc NEVER compiled; no new crate dep"
+status: completed
+stopped_at: "Completed 04-13-PLAN.md (CR-02: f32 numint matmul chain silently substituted inf/0.0 on f64→f32 overflow; added PyscfRsError::NumericOverflow + cast_finite/back_to_f64 helpers so eval_rho_scalar<f32>/nr_rks_inner<f32> propagate Err; f64 path bit-identical; f32_overflow_returns_err_not_zero green). Wave 7 remaining: 04-14 CR-01"
+last_updated: "2026-05-23T05:36:32.844Z"
+last_activity: 2026-05-23
 progress:
   total_phases: 8
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 44
   completed_plans: 42
-  percent: 95
+  percent: 25
 ---
 
 # Project State
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 
 ## Current Position
 
-Phase: 04 (dft) — gap closure COMPLETE (ready for phase verification/transition)
-Plan: 04-11 (CR-03), 04-12 (CR-04), 04-13 (CR-02), 04-14 (CR-01) ALL DONE. All 4 BLOCKERs closed; 14/14 Phase 04 plans done.
+Phase: 5
+Plan: Not started
 Status: Phase 04 gap-closure complete — 4 of 4 gap plans complete (04-11, 04-12, 04-13, 04-14)
-Last activity: 2026-05-23 -- 04-14 executed: genuine open-shell UKS — XcBackend::eval_uks (GENUINE rho_a/rho_b, no rho/2 split) + rewritten nr_uks (uks_vmat back-contracts two DISTINCT Vxc, GGA same-spin vsigma_aa + cross-spin vsigma_ab) + UksKsHooks; UKS::kernel + PyUKS::get_veff route through nr_uks (not nr_rks). vmat_alpha != vmat_beta proven. f64-only; symmetric dm/2 split (single-Density kernel<H> contract). 47 dft lib + py tests green; clippy -D warnings + fmt clean; no new crate dep; libxc NEVER compiled
+Last activity: 2026-05-23
 
 Progress: [██████████] 95% (42/44 plans done across all phases; Phase 04 gap closure: 4/4 gap plans done)
 
@@ -36,7 +36,7 @@ Progress: [██████████] 95% (42/44 plans done across all phas
 
 **Velocity:**
 
-- Total plans completed: 20
+- Total plans completed: 34
 - Average duration: — (no plans run yet)
 - Total execution time: 0 hours
 
@@ -46,6 +46,7 @@ Progress: [██████████] 95% (42/44 plans done across all phas
 |-------|-------|-------|----------|
 | 02 | 9 | - | - |
 | 03 | 11 | - | - |
+| 04 | 14 | - | - |
 
 **Recent Trend:**
 
