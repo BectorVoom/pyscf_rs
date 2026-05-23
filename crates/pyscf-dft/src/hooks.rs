@@ -384,4 +384,45 @@ mod tests {
         assert_scf(&h);
         assert_ks(&h);
     }
+
+    /// CR-04: the KS energy-cache fingerprint MUST be injective. The old
+    /// `Σ|D|` (L1-norm) fingerprint is NOT — two density matrices with the
+    /// same L1 norm but different entries collide, so at µHartree convergence
+    /// `energy_elec` could return a stale `Exc` from the prior SCF cycle.
+    ///
+    /// `a` and `b` below both have `Σ|D| = 4` but differ entry-by-entry, so a
+    /// correct (injective) fingerprint MUST distinguish them.
+    #[test]
+    fn dm_fingerprint_is_injective() {
+        let a = Density {
+            nao: 2,
+            data: vec![1.0, -1.0, 1.0, -1.0],
+        };
+        let b = Density {
+            nao: 2,
+            data: vec![2.0, -2.0, 0.0, 0.0],
+        };
+
+        // Sanity: the OLD non-injective L1-norm key would treat these as equal.
+        let l1_a: f64 = a.data.iter().map(|v| v.abs()).sum();
+        let l1_b: f64 = b.data.iter().map(|v| v.abs()).sum();
+        assert!(
+            (l1_a - l1_b).abs() < 1e-12,
+            "fixture must share an L1 norm (Σ|D|) so the test exercises the collision"
+        );
+
+        // Injective fingerprint: distinct data ⇒ distinct fingerprint.
+        assert_ne!(
+            dm_fingerprint(&a),
+            dm_fingerprint(&b),
+            "two dm with the same Σ|D| but different data must NOT collide"
+        );
+
+        // Deterministic: same data ⇒ same fingerprint (cache-hit correctness).
+        assert_eq!(
+            dm_fingerprint(&a),
+            dm_fingerprint(&a),
+            "fingerprint must be deterministic for an identical dm"
+        );
+    }
 }
