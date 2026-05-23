@@ -25,7 +25,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 - [ ] **Phase 2: GTO** — Mole, basis-set loading (5 atom-input × 11 basis-input forms), ECP, intor wrappers via cintx, eval_gto for grids
 - [ ] **Phase 3: SCF + PyO3 bindings** — RHF/UHF/GHF + DIIS + chkfile + sign canonicalization + first end-to-end energy AND lock the entire PyO3 contract (subclass-override dispatch, NumPy contiguity, GIL release seam, abi3-py310 wheel skeleton, oracle harness bootstrap)
 - [x] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT (all 10 plans executed 2026-05-22; verification = gaps_found 3/5 — 4 BLOCKERs in 04-VERIFICATION.md: UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key → gap closure required before complete) (completed 2026-05-23)
-- [ ] **Phase 5: MP2** — RMP2/UMP2/DF-MP2 + frozen-core + AO→MO transformation kernel + helpers CCSD imports
+- [x] **Phase 5: MP2** — RMP2/UMP2/DF-MP2 + frozen-core + AO→MO transformation kernel + helpers CCSD imports (completed 2026-05-23)
 - [ ] **Phase 6: CCSD** — RCCSD/UCCSD + amplitude DIIS + Lambda + RDMs + AO-direct + DF-CCSD with HDF5 spill + tensor-arena from day one + T1/D1/D2 diagnostics
 - [ ] **Phase 7: Gradients + Geomopt** — Analytical gradients for HF/DFT/MP2/CCSD + ECP + CPHF/CPKS + native Rust BFGS+RFO in redundant internals + geomeTRIC/berny drop-in shims
 - [ ] **Phase 8: GPU enable + Oracle hardening + Distribution** — Per-backend regression suite (CPU/CUDA/WGPU/ROCm), 2–5× benchmark proof, abi3-py310 wheel for Linux/macOS/Windows × x86_64+aarch64, per-backend extras, drop-in audit (≥80% upstream tests pass against pyscf-rs as import target), full top-20-idiom shakedown
@@ -215,7 +215,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 05-07-PLAN.md — PyO3 bridge: `PyRMP2`/`PyUMP2`/`PyDFMP2` eager-snapshot (D-07) + `Mp2OverrideHooks` `call_method1` dispatch (D-08/Pitfall 7) + `mf.MP2()` factory + `as_scanner` (MP2-07) + `python/pyscf/mp` overlay (MP2-01,02,04,05,06,07)
+- [x] 05-07-PLAN.md — PyO3 bridge: `PyRMP2`/`PyUMP2`/`PyDFMP2` eager-snapshot (D-07) + `Mp2OverrideHooks` `call_method1` dispatch (D-08/Pitfall 7) + `mf.MP2()` factory + `as_scanner` (MP2-07) + `python/pyscf/mp` overlay (MP2-01,02,04,05,06,07)
 
 ### Phase 6: CCSD
 
@@ -272,7 +272,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
-| 5. MP2 | 6/7 | In Progress|  |
+| 5. MP2 | 7/7 | Complete   | 2026-05-23 |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |

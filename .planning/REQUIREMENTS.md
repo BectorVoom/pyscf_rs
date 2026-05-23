@@ -75,7 +75,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **MP2-04**: `mp.DFMP2(mf).kernel()` (density-fitted MP2) reproduces upstream
 - [x] **MP2-05**: `mp2.make_rdm1()` and `mp2.make_rdm2()` match upstream
 - [x] **MP2-06**: SCS-MP2 (`mp.MP2(mf).set(emp2_ss_factor=..., emp2_os_factor=...)`) works
-- [ ] **MP2-07**: `mp2.as_scanner()` works (used by gradients and geomopt)
+- [x] **MP2-07**: `mp2.as_scanner()` works (used by gradients and geomopt)
 - [x] **MP2-08**: MP2 helpers (`get_nocc`, `get_nmo`, `get_frozen_mask`, `get_e_hf`, `_mo_without_core`) are exported because CCSD imports them
 
 ### Coupled cluster (CCSD)
@@ -301,7 +301,7 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | MP2-04 | Phase 5 | Complete |
 | MP2-05 | Phase 5 | Complete |
 | MP2-06 | Phase 5 | Complete |
-| MP2-07 | Phase 5 | Pending |
+| MP2-07 | Phase 5 | Complete |
 | MP2-08 | Phase 5 | Complete |
 | CCSD-01 | Phase 6 | Pending |
 | CCSD-02 | Phase 6 | Pending |
