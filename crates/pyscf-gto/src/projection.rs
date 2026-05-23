@@ -12,7 +12,7 @@
 //! so all downstream consumers (libcint via cintx-compat AND the typed cintx
 //! BasisSet) see the same coefficient values.
 
-use cintx_core::ecp::{EcpChannel, EcpShell as CintxEcpShell, ECP_LMAX};
+use cintx_core::ecp::{ECP_LMAX, EcpChannel, EcpShell as CintxEcpShell};
 use cintx_core::{
     Atom as CintxAtom, BasisSet, NuclearModel as CintxNuc, Representation, Shell as CintxShell,
 };
