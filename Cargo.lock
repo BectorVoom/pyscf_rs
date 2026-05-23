@@ -5951,6 +5951,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyscf-ao2mo"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-gto",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "pyscf-bench"
 version = "0.1.0"
 

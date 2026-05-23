@@ -1,0 +1,17 @@
+[package]
+name = "pyscf-ao2mo"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "AO→MO integral transformation (general/full). CCSD-reusable (D-01). Phase 5."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+pyscf-gto     = { path = "../pyscf-gto" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }

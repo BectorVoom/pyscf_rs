@@ -8,6 +8,8 @@ members = [
     "crates/pyscf-gto",
     "crates/pyscf-scf",
     "crates/pyscf-dft",
+    # Phase 5 addition (D-01): AO→MO transformation crate (CCSD-reusable). Workspace grows 19 → 20.
+    "crates/pyscf-ao2mo",
     "crates/pyscf-mp2",
     "crates/pyscf-ccsd",
     "crates/pyscf-grad",
