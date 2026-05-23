@@ -166,7 +166,7 @@ Plans:
 
 - [x] 04-11-PLAN.md — GAP CLOSURE CR-03: c2s_coeff l>4 panic → Result; eval_gto_sph/deriv1 return Result<_, PyscfRsError> (DFT-01)
 - [x] 04-12-PLAN.md — GAP CLOSURE CR-04: replaced non-injective Σ|D| cache fingerprint with u64 content hash (DefaultHasher over f64 bits) in hooks.rs + df_dft.rs; cache hit now exact `u64 ==` (DFT-01)
-- [ ] 04-13-PLAN.md — GAP CLOSURE CR-02: f32 numeric chain NumericOverflow error variant + ok_or propagation replacing unwrap_or(0.0) in numint.rs (DFT-11)
+- [x] 04-13-PLAN.md — GAP CLOSURE CR-02: f32 numeric chain NumericOverflow error variant + ok_or propagation replacing unwrap_or(0.0) in numint.rs (DFT-11)
 
 **Wave 7 — GAP CLOSURE** *(blocked on Wave 6: 04-13 touches numint.rs; 04-14 also touches numint.rs)*
 
@@ -241,7 +241,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 1. Foundation | 7/9 | Gap closure pending (2 plans) | - |
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
-| 4. DFT | 12/14 | Gap closure in progress (2 plans pending: 04-13..04-14; 04-11 CR-03, 04-12 CR-04 done) | 2026-05-22 (initial); gap closure 2026-05-23 |
+| 4. DFT | 13/14 | Gap closure in progress (1 plan pending: 04-14 CR-01; 04-11 CR-03, 04-12 CR-04, 04-13 CR-02 done) | 2026-05-22 (initial); gap closure 2026-05-23 |
 | 5. MP2 | 0/TBD | Not started | - |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
