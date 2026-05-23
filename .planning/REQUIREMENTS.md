@@ -28,7 +28,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [ ] **GTO-02**: `mol.basis = ...` accepts all 11 input forms (string name, dict, list, ECP-bcc, F12, dyall, ANO, def2, parsed Gaussian-94, NWChem, and auto-segmented)
 - [ ] **GTO-03**: All 207 built-in basis-set files in `pyscf/gto/basis/` resolve correctly; `gto.parse(...)` handles user-supplied Gaussian-94/NWChem text
 - [ ] **GTO-04**: `mol.build()` produces identical internal arrays (`_atm`, `_bas`, `_env`, `ao_loc_nr`, `nao_nr`) to upstream PySCF for the test corpus
-- [ ] **GTO-05**: ECP loading and `int1e_ecp` evaluation match upstream PySCF bit-exact under the `release-oracle` profile
+- [x] **GTO-05**: ECP loading and `int1e_ecp` evaluation match upstream PySCF bit-exact under the `release-oracle` profile — loading shipped 02-07; evaluation closed 02-10 (cintx-backed `CintxEcpEngine`; in-tree Cu/LANL2DZ finite/non-zero/symmetric gate green; cintx pins atol=1e-12 vs nr_ecp at source; upstream byte-identity pytest `tests/oracle/test_ecp_int1e.py` shipped, gated on the oracle venv)
 - [ ] **GTO-06**: `mol.intor(name, ...)` is a thin wrapper over `cintx` covering all integral families upstream PySCF supports for the in-scope methods
 - [ ] **GTO-07**: `eval_gto(mol, eval_name, coords, ...)` for grid evaluation supports `GTOval`, `GTOval_sph`, `GTOval_deriv1`, `GTOval_deriv2`, `GTOval_ip` (gradient), and `GTOval_ig` (magnetic)
 - [x] **GTO-08**: `Mole` exposes the ≥30 attribute floor (`atom`, `basis`, `charge`, `spin`, `nelectron`, `natm`, `nbas`, `nao_nr`, `nao_2c`, `ao_loc_nr`, `ao_labels`, `cart`, `verbose`, `max_memory`, `unit`, `output`, `_atm`, `_bas`, `_env`, …) with semantics matching upstream
@@ -263,7 +263,7 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | GTO-02 | Phase 2 | Pending |
 | GTO-03 | Phase 2 | Pending |
 | GTO-04 | Phase 2 | Pending |
-| GTO-05 | Phase 2 | Pending |
+| GTO-05 | Phase 2 | Complete (02-07 loading + 02-10 eval) |
 | GTO-06 | Phase 2 | Pending |
 | GTO-07 | Phase 2 | Pending |
 | GTO-08 | Phase 2 | Complete |
