@@ -376,27 +376,31 @@ if eri_ao.size == nao**4:   # full int2e tensor — exactly what mol.intor("int2
 | A4 | No new external crate is needed; the contraction + RDMs are expressible through existing `pyscf-algebra` host-loop + `oracle_sum` surface | Standard Stack | LOW — DFT already proved this for dense contractions; native-DF CPHF may need `eigh`/`solve_linear` (both wired). |
 | A5 | The `check-dependency-wall` lint needs **no change** for `pyscf-ao2mo`/`pyscf-mp2` (it's a cubecl denylist; these crates simply must not name cubecl) — contradicting CONTEXT's "extend the allowlist" wording | Anti-Patterns / Pitfall 6 | LOW — verified the lint is a denylist with a 3-crate carve-out; the new crates pass automatically as long as they avoid cubecl. The CONTEXT "extend allowlist" instruction is imprecise but harmless. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **In-core RMP2 numeric gating (HIGH priority — corrects CONTEXT).**
    - What we know: `pyscf-gto::intor` returns `NotYetImplemented{phase:2}` for arity-4 `int2e` (`intor.rs:181-185`); Phase-2 02-09 xfail-tracks `int2e_sph` behind cintx safe-API arity>2 (`cintx#11`). SCF gets J/K via `pyscf-df`, not `int2e`.
    - What's unclear: CONTEXT D-05 frames in-core RMP2 as the "un-gated headline." That framing is wrong against the current code.
    - Recommendation: Plan in-core RMP2/UMP2 numeric oracle **CI-gated behind `cintx#11`** (same as DF-MP2, DF-HF, DFT-01). Ship the full algorithm + always-on structural tests now. Both `int2e` and `int3c2e_sph` are the same gap. Surface this to discuss-phase so the "un-gated headline" decision is re-confirmed.
+   - **RESOLVED:** All 7 plans CI-gate numeric oracle assertions behind `cintx#11`. The synthetic-ERI `ao2mo` roundtrip in 05-02 is the only always-on numeric assertion (no `intor`). Plans 05-01 T3 gate `pyscf-oracle` arms; 05-03/04/05/06 all carry `#[cfg]`-gated / feature-gated numeric oracle arms. CONTEXT "un-gated" framing corrected.
 
 2. **Frozen-core `'auto'` core table source (MP2-03).**
    - What we know: `mp2.set_frozen` delegates to `pyscf.cc.ccsd.set_frozen(method='auto', window=...)` (`mp2.py:575-579`).
    - What's unclear: Whether the chemcore element→core-count table is in `cc/ccsd.py` or a shared `pyscf/data` module, and whether pyscf-rs already has it.
    - Recommendation: Locate `set_frozen`/`chemcore` upstream during planning; port the table verbatim. Default factors must reproduce upstream on the corpus.
+   - **RESOLVED:** 05-03 T1 explicitly ports the chemcore element→core-count table from `cc/ccsd.py set_frozen` into a `static CHEMCORE: OnceLock<HashMap<u32, usize>>` (modeled on `auxbasis.rs::OnceLock` shape). Planner noted `cc/ccsd.py` as the source and the action reads it in `read_first`.
 
 3. **`_iterative_kernel` necessity (Claude's discretion).**
    - What we know: Upstream uses closed-form for `self._scf.converged`; iterative (DIIS amplitude) path only for non-canonical refs (`mp2.py:80-115, 634-637`).
    - What's unclear: Whether any v1 corpus fixture uses a non-canonical reference.
    - Recommendation: Ship closed-form only; add `_iterative_kernel` as a deferred follow-on unless a fixture forces it. Document the `NotYetImplemented` stub for the non-canonical branch.
+   - **RESOLVED:** No plan implements `_iterative_kernel`. 05-03 T2 ships closed-form canonical MP2 only. Confirmed no corpus fixture requires a non-canonical reference at v1 scope.
 
 4. **`with_t2` default + amplitude storage shape.**
    - What we know: Upstream `WITH_T2=True` by default (`mp2.py:30`); `Amplitudes` in `pyscf-core` stores `t2` as a flat `Vec<f64>` `[nocc,nocc,nvir,nvir]`.
    - What's unclear: Whether RDMs (MP2-05) and the Phase-7 gradient need `t2` retained by default for the corpus sizes.
    - Recommendation: Default `with_t2=true` (upstream); RDMs consume stored `t2`. UMP2 needs the `(t2aa, t2ab, t2bb)` triple — the `Amplitudes` struct may need a spin-resolved variant or a separate UMP2 amplitude container.
+   - **RESOLVED:** 05-03 T2 implements `with_t2=true` default; `Mp2Result.t2: Option<Amplitudes>`. 05-04 T1 uses a `UmpAmplitudes { t2aa, t2ab, t2bb }` struct for the UMP2 spin-resolved triple. RDMs (05-04 T2) consume `&UmpAmplitudes`/`&Amplitudes` respectively.
 
 ## Environment Availability
 
