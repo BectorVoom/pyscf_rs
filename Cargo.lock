@@ -6001,6 +6001,7 @@ name = "pyscf-dft"
 version = "0.1.0"
 dependencies = [
  "libxc_rs",
+ "ndarray",
  "pyscf-algebra",
  "pyscf-chkfile",
  "pyscf-core",
@@ -6010,6 +6011,7 @@ dependencies = [
  "pyscf-oracle",
  "pyscf-runtime",
  "pyscf-scf",
+ "tempfile",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
