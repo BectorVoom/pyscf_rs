@@ -437,20 +437,23 @@ def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=1,
 | A4 | xcfun_rs `Vars`/`Mode` enum variant names (e.g. `AB_GGA`, `Polarized`) | Pattern 3 | MEDIUM — `eval_setup(Vars, Mode, order)` signature confirmed; exact variant spelling from `xcfun-core/src/enums.rs` to be confirmed at plan time. |
 | A5 | cintx exposes a safe-API range-coulomb/env[8] setter | DFT-05 / Pattern 4 | MEDIUM-HIGH — cintx *reads* env[8] (verified), and `pyscf-gto::make_env` builds `_env`, but a clean safe-API omega setter was NOT found in cintx-rs/cintx-ops src (only low-level compat/raw references env[8]). DFT-05 may need a small env-slot mutation on the pyscf-gto intor path, or a cintx safe-API gap-closure. **Planner must scope this explicitly.** |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does cintx need a safe-API range-coulomb gap-closure for DFT-05?**
    - What we know: cintx reads `PTR_RANGE_OMEGA = env[8]` and computes `erf(ωr)/r`; pyscf-gto builds `_env`.
    - What's unclear: whether the safe `mol.intor` path in pyscf-gto can set/restore env[8] today, or whether a cintx-side `with_range_coulomb`-equivalent is needed.
    - Recommendation: Plan a small env-slot setter in `pyscf-gto::intor` (set env[8]=±omega around the int2e call). If cintx's safe API blocks env mutation, file a cintx gap-closure (cintx#11-style) and sequence DFT-05 behind it. Low effort either way — the omega slot is a single f64 in `_env`.
+   - RESOLVED: Plan 04-07 implemented `OmegaGuard` RAII in `pyscf-gto/src/range_coulomb.rs` — a safe API that sets/restores env[8] around intor calls. Tests `omega_guard_sets_and_restores` and `omega_restored_on_error_path` pass. DFT-05 is structurally complete; bit-exact RSH energy is CI-only pending cintx#11 (deferred per REQUIREMENTS.md).
 
 2. **Which corpus functionals seed the D-04 `libxc` feature subset?**
    - What we know: CONTEXT names SVWN (`lda_x`,`lda_c_vwn`), PBE (`gga_x_pbe`,`gga_c_pbe`), B3LYP (`gga_x_b88`,`gga_c_lyp`,`hyb_gga_xc_b3lyp`), CAM-B3LYP (`hyb_gga_xc_cam_b3lyp`), a meta-GGA (TPSS/SCAN), VV10 deps.
    - What's unclear: the exact compound-functional kernel dependency closure (e.g. b3lyp internally mixes LDA/B88/LYP/VWN — all must be in the feature set).
    - Recommendation: Planner finalizes from the test corpus; each compound's component IDs must be enumerated by reading `libxc_rs` `generated_hybrid.rs`/`HybridTerm` metadata for the transitive closure.
+   - RESOLVED: Per PENDING_LIBXC_RS_FEATURE_GATE decision (04-02 SUMMARY), the per-functional libxc feature gate is a user-decision item, not a v1 gate. The libxc CI job ships disabled (`if: false`). The xcfun default path is verified. D-04 coordination deferred to post-milestone.
 
 3. **Does VV10 ship in the core RKS plan or a follow-on?** (Claude's discretion, D-07/CONTEXT)
    - Recommendation: follow-on plan after core RKS bit-exact lands — it needs a second `pyscf-grids` instance (`nlcgrids`) and the double-loop port; it is orthogonal to the SVWN/PBE/B3LYP headline.
+   - RESOLVED: VV10 shipped in Plan 04-07 as a follow-on plan. `vv10_nlc_runs_end_to_end_over_coarser_nlcgrids` test passes. Bit-exact VV10 energy is CI-only (deferred per Phase-2 ERI gap).
 
 ## Environment Availability
 
