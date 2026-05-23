@@ -101,8 +101,8 @@ fn main() -> Result<ExitCode> {
 /// to this parser. The `parser_returns_none_on_multiline_table_form`
 /// unit test enforces this invariant.
 fn workspace_pre_pinned_versions(root: &Path) -> Result<Option<(String, String)>> {
-    let cargo_toml = std::fs::read_to_string(root.join("Cargo.toml"))
-        .context("read workspace Cargo.toml")?;
+    let cargo_toml =
+        std::fs::read_to_string(root.join("Cargo.toml")).context("read workspace Cargo.toml")?;
     let mut matmul: Option<String> = None;
     let mut reduce: Option<String> = None;
     for line in cargo_toml.lines() {
@@ -113,16 +113,14 @@ fn workspace_pre_pinned_versions(root: &Path) -> Result<Option<(String, String)>
             ("cubecl-matmul", &mut matmul),
             ("cubecl-reduce", &mut reduce),
         ] {
-            if trimmed.starts_with(crate_name) {
+            if let Some(after) = trimmed.strip_prefix(crate_name) {
                 // Make sure the next char is whitespace or '=' — i.e. we
                 // don't match `cubecl-matmul-extra` accidentally.
-                let after = &trimmed[crate_name.len()..];
                 let next = after.chars().next();
                 if !matches!(next, Some(c) if c.is_whitespace() || c == '=') {
                     continue;
                 }
-                let rest =
-                    after.trim_start_matches(|c: char| c.is_whitespace() || c == '=');
+                let rest = after.trim_start_matches(|c: char| c.is_whitespace() || c == '=');
                 // Find the first `version` field (inline table) or a bare
                 // version string.
                 let v = if let Some(start) = rest.find("version") {
@@ -324,6 +322,12 @@ fn audit(metadata: &Value, root: &Path) -> Result<ExitCode> {
             }
             continue;
         }
+        // `-sys` crates (e.g. cubecl-hip-sys) are FFI bindings versioned
+        // against the native library they wrap (HIP SDK 7.1.x), NOT against
+        // cubecl, so they are exempt from the 0.10.0 family lockstep.
+        if name.starts_with(CUBECL_FAMILY_PREFIX) && name.ends_with("-sys") {
+            continue;
+        }
         // Other cubecl-* crates (cubecl-common, cubecl-core, cubecl-ir,
         // cubecl-macros, cubecl-macros-internal, cubecl-std, …) are
         // not in PINNED_CRATES because they're internal to the cubecl
@@ -462,12 +466,37 @@ mod tests {
         // Top-level: cubecl 0.10.0, cubecl-{cpu,cuda,hip,wgpu,runtime} 0.10.0
         // Transitive carve-out: cubecl-runtime 0.9.0-pre.5 reachable only from cubecl-matmul/reduce
         let m = synth_metadata(&[
-            ("cubecl", "0.10.0", "cubecl 0.10.0", &["cubecl-runtime 0.10.0"]),
+            (
+                "cubecl",
+                "0.10.0",
+                "cubecl 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
             ("cubecl-runtime", "0.10.0", "cubecl-runtime 0.10.0", &[]),
-            ("cubecl-cpu", "0.10.0", "cubecl-cpu 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-cuda", "0.10.0", "cubecl-cuda 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-hip", "0.10.0", "cubecl-hip 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-wgpu", "0.10.0", "cubecl-wgpu 0.10.0", &["cubecl-runtime 0.10.0"]),
+            (
+                "cubecl-cpu",
+                "0.10.0",
+                "cubecl-cpu 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-cuda",
+                "0.10.0",
+                "cubecl-cuda 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-hip",
+                "0.10.0",
+                "cubecl-hip 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-wgpu",
+                "0.10.0",
+                "cubecl-wgpu 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
             (
                 "cubecl-matmul",
                 "0.9.0-pre.5",
@@ -531,10 +560,30 @@ mod tests {
         let m = synth_metadata(&[
             ("cubecl", "0.10.0", "cubecl 0.10.0", &[]),
             ("cubecl-runtime", "0.10.0", "cubecl-runtime 0.10.0", &[]),
-            ("cubecl-cpu", "0.10.0", "cubecl-cpu 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-cuda", "0.10.0", "cubecl-cuda 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-hip", "0.10.0", "cubecl-hip 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-wgpu", "0.10.0", "cubecl-wgpu 0.10.0", &["cubecl-runtime 0.10.0"]),
+            (
+                "cubecl-cpu",
+                "0.10.0",
+                "cubecl-cpu 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-cuda",
+                "0.10.0",
+                "cubecl-cuda 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-hip",
+                "0.10.0",
+                "cubecl-hip 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-wgpu",
+                "0.10.0",
+                "cubecl-wgpu 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
             (
                 "cubecl-matmul",
                 "0.9.0-pre.5",
@@ -573,10 +622,30 @@ mod tests {
         let m = synth_metadata(&[
             ("cubecl", "0.10.0", "cubecl 0.10.0", &[]),
             ("cubecl-runtime", "0.10.0", "cubecl-runtime 0.10.0", &[]),
-            ("cubecl-cpu", "0.10.0", "cubecl-cpu 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-cuda", "0.10.0", "cubecl-cuda 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-hip", "0.10.0", "cubecl-hip 0.10.0", &["cubecl-runtime 0.10.0"]),
-            ("cubecl-wgpu", "0.10.0", "cubecl-wgpu 0.10.0", &["cubecl-runtime 0.10.0"]),
+            (
+                "cubecl-cpu",
+                "0.10.0",
+                "cubecl-cpu 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-cuda",
+                "0.10.0",
+                "cubecl-cuda 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-hip",
+                "0.10.0",
+                "cubecl-hip 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
+            (
+                "cubecl-wgpu",
+                "0.10.0",
+                "cubecl-wgpu 0.10.0",
+                &["cubecl-runtime 0.10.0"],
+            ),
             ("cubecl-matmul", "0.10.0", "cubecl-matmul 0.10.0", &[]),
             ("cubecl-reduce", "0.10.0", "cubecl-reduce 0.10.0", &[]),
             (

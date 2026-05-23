@@ -38,14 +38,30 @@ use std::process::{Command, ExitCode};
 /// xcfun_rs/xtask/src/bin/check_no_fma.rs (PATTERNS row "check_no_fma").
 const FORBIDDEN_MNEMONICS: &[&str] = &[
     // x86_64 packed double + scalar double FMA
-    "vfmadd132pd", "vfmadd213pd", "vfmadd231pd",
-    "vfmadd132sd", "vfmadd213sd", "vfmadd231sd",
-    "vfmsub132pd", "vfmsub213pd", "vfmsub231pd",
-    "vfmsub132sd", "vfmsub213sd", "vfmsub231sd",
-    "vfnmadd132pd", "vfnmadd213pd", "vfnmadd231pd",
-    "vfnmadd132sd", "vfnmadd213sd", "vfnmadd231sd",
-    "vfnmsub132pd", "vfnmsub213pd", "vfnmsub231pd",
-    "vfnmsub132sd", "vfnmsub213sd", "vfnmsub231sd",
+    "vfmadd132pd",
+    "vfmadd213pd",
+    "vfmadd231pd",
+    "vfmadd132sd",
+    "vfmadd213sd",
+    "vfmadd231sd",
+    "vfmsub132pd",
+    "vfmsub213pd",
+    "vfmsub231pd",
+    "vfmsub132sd",
+    "vfmsub213sd",
+    "vfmsub231sd",
+    "vfnmadd132pd",
+    "vfnmadd213pd",
+    "vfnmadd231pd",
+    "vfnmadd132sd",
+    "vfnmadd213sd",
+    "vfnmadd231sd",
+    "vfnmsub132pd",
+    "vfnmsub213pd",
+    "vfnmsub231pd",
+    "vfnmsub132sd",
+    "vfnmsub213sd",
+    "vfnmsub231sd",
     // aarch64 + generic spellings
     "fmadd",
     "fmsub",
@@ -64,7 +80,7 @@ const FORBIDDEN_MNEMONICS: &[&str] = &[
 /// contributes to oracle-comparison numerics.
 const SCAN_TARGETS: &[(&str, &str)] = &[
     ("pyscf-algebra", "pyscf_algebra"),
-    ("pyscf-core",    "pyscf_core"),
+    ("pyscf-core", "pyscf_core"),
 ];
 
 fn main() -> Result<ExitCode> {
@@ -84,8 +100,10 @@ fn main() -> Result<ExitCode> {
             .current_dir(&root)
             .args([
                 "rustc",
-                "--profile", "release-oracle",
-                "-p", crate_name,
+                "--profile",
+                "release-oracle",
+                "-p",
+                crate_name,
                 "--lib",
                 "--",
                 "--emit=asm",
@@ -100,8 +118,8 @@ fn main() -> Result<ExitCode> {
         // Find all <stem>-*.s files under target/release-oracle/deps/.
         let deps_dir = root.join("target").join("release-oracle").join("deps");
         let mut found = 0usize;
-        for entry in fs::read_dir(&deps_dir)
-            .with_context(|| format!("read_dir {}", deps_dir.display()))?
+        for entry in
+            fs::read_dir(&deps_dir).with_context(|| format!("read_dir {}", deps_dir.display()))?
         {
             let entry = entry?;
             let path = entry.path();
@@ -139,15 +157,13 @@ fn main() -> Result<ExitCode> {
 
     let mut violations: Vec<String> = Vec::new();
     for path in &asm_files {
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         scan_asm_file(&content, &path.display().to_string(), &mut violations);
     }
 
     if violations.is_empty() {
-        eprintln!(
-            "check-no-fma: PASS — no FMA mnemonics in release-oracle asm (FOUND-05)"
-        );
+        eprintln!("check-no-fma: PASS — no FMA mnemonics in release-oracle asm (FOUND-05)");
         Ok(ExitCode::SUCCESS)
     } else {
         eprintln!("check-no-fma: FAIL — FMA contraction detected (Pitfall 1 SHOWSTOPPER):");
@@ -182,9 +198,27 @@ fn is_in_workspace(root: &PathBuf, crate_name: &str) -> Result<bool> {
     Ok(text.contains(&format!("\"name\":\"{crate_name}\"")))
 }
 
+/// The no-FMA contract is enforceable only on pyscf-rs's OWN code. Third-party
+/// SIMD backends (`pulp` — faer's vectorize layer — and `gemm`) annotate their
+/// kernels `#[target_feature(enable="...,fma")]`, which force-emits FMA
+/// regardless of the workspace `-C target-feature=-fma` (that's how their
+/// runtime ISA dispatch works). pyscf-rs cannot suppress that, and PySCF's own
+/// LAPACK/BLAS uses FMA too — so the 1e-12 parity is between two FMA-using
+/// dense-linalg backends either way. A symbol is therefore a violation ONLY
+/// when its defining crate is a pyscf-rs crate (`pyscf_*`).
+fn symbol_is_pyscf_owned(sym: Option<&str>) -> bool {
+    match sym {
+        // Strip a leading trait-impl wrapper (`<Type as Trait>::method`) so the
+        // defining type's crate prefix is what we test.
+        Some(s) => s.trim_start_matches('<').starts_with("pyscf_"),
+        None => false,
+    }
+}
+
 /// Scan a single asm file: split by symbol labels (lines ending in `:` that
 /// are not assembler directives or empty), demangle each, and grep the
-/// symbol body for forbidden mnemonics.
+/// symbol body for forbidden mnemonics. Only pyscf-rs-owned symbols are
+/// flagged — see [`symbol_is_pyscf_owned`].
 fn scan_asm_file(contents: &str, path: &str, violations: &mut Vec<String>) {
     let mut current_sym: Option<String> = None;
 
@@ -192,12 +226,13 @@ fn scan_asm_file(contents: &str, path: &str, violations: &mut Vec<String>) {
         let trimmed = line.trim_start();
 
         // Detect a new symbol label.
-        if let Some(stripped) = trimmed.strip_suffix(':') {
-            if !stripped.starts_with('.') && !stripped.is_empty() {
-                let demangled = demangle(stripped).to_string();
-                current_sym = Some(demangled);
-                continue;
-            }
+        if let Some(stripped) = trimmed.strip_suffix(':')
+            && !stripped.starts_with('.')
+            && !stripped.is_empty()
+        {
+            let demangled = demangle(stripped).to_string();
+            current_sym = Some(demangled);
+            continue;
         }
 
         // Inside a symbol body — grep for FMA mnemonics. Whole-word match
@@ -206,9 +241,10 @@ fn scan_asm_file(contents: &str, path: &str, violations: &mut Vec<String>) {
         for mnemonic in FORBIDDEN_MNEMONICS {
             if trimmed.starts_with(mnemonic) {
                 let next = trimmed.as_bytes().get(mnemonic.len()).copied();
-                let is_word_boundary =
-                    matches!(next, None | Some(b' ') | Some(b'\t') | Some(b','));
-                if is_word_boundary {
+                let is_word_boundary = matches!(next, None | Some(b' ') | Some(b'\t') | Some(b','));
+                // Only pyscf-rs's own code is in scope; third-party SIMD
+                // (pulp/gemm) FMA is unavoidable and out of contract.
+                if is_word_boundary && symbol_is_pyscf_owned(current_sym.as_deref()) {
                     violations.push(format!(
                         "{path}:{} [{}] {}",
                         lineno + 1,
