@@ -889,4 +889,56 @@ mod tests {
         assert_eq!(NumInt::xc_type_of("pbe").unwrap(), XcType::Gga);
         assert_eq!(NumInt::xc_type_of("b3lyp").unwrap(), XcType::Gga);
     }
+
+    /// CR-01 regression test (the BLOCKER fix). `nr_uks` MUST evaluate the
+    /// alpha and beta spin channels independently: for an ASYMMETRIC density
+    /// (`dm_a != dm_b`) it must return TWO DISTINCT Vxc matrices, not the same
+    /// matrix cloned into both spin channels (the old wrong body returned
+    /// `(r.vmat.clone(), r.vmat)`).
+    ///
+    /// Fixture: H2 / sto-3g (nao = 2). `dm_a` places one electron in AO 0,
+    /// `dm_b` places one electron in AO 1. The AO-0 and AO-1 amplitudes differ
+    /// across the grid, so `rho_a != rho_b`, the spin-polarized XC eval yields
+    /// `vrho_a != vrho_b`, and the two back-contracted Vxc matrices differ.
+    #[test]
+    fn nr_uks_asymmetric_spin_gives_different_vmat() {
+        use pyscf_core::Unit;
+        use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
+
+        let mol = M(MoleBuildArgs {
+            atom: AtomInput::String("H 0 0 0; H 0 0 1.4".into()),
+            basis: BasisInput::Name("sto-3g".into()),
+            unit: Unit::Bohr,
+            ..Default::default()
+        })
+        .expect("build H2 sto-3g");
+        let nao = mol.nao_nr;
+        assert_eq!(nao, 2, "H2/sto-3g must have nao=2");
+
+        let mut grids = Grids::new();
+        let _ = grids.build(&mol);
+
+        // Asymmetric spin densities: alpha electron in AO 0, beta in AO 1.
+        let dm_a = Density {
+            nao,
+            data: vec![1.0, 0.0, 0.0, 0.0],
+        };
+        let dm_b = Density {
+            nao,
+            data: vec![0.0, 0.0, 0.0, 1.0],
+        };
+
+        let ni = NumInt::new();
+        let result = ni
+            .nr_uks(&mol, &grids, "svwn", (&dm_a, &dm_b), 0, 1, 4000.0, None)
+            .expect("nr_uks must succeed for an asymmetric open-shell density");
+
+        // The KEY regression assertion (CR-01): the two spin-channel Vxc
+        // matrices must NOT be byte-identical — the dead-code clone is gone.
+        assert_ne!(
+            result.vmat.0.data, result.vmat.1.data,
+            "nr_uks with dm_a != dm_b must produce vmat_alpha != vmat_beta \
+             (not the same matrix cloned twice)"
+        );
+    }
 }
