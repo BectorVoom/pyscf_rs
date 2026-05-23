@@ -207,7 +207,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 05-05-PLAN.md — Conventional DF-MP2 (D-06 primary): `DFRMP2`/`DFUMP2` swap ERI source to the `pyscf-df` B-tensor, `*-ri` mp2fit aux (`default_ri`), `(ia|jb)=Σ_Q B^Q·B^Q`; structural/synthetic always-on, numeric cintx#11-gated (MP2-04)
+- [x] 05-05-PLAN.md — Conventional DF-MP2 (D-06 primary): `DFRMP2`/`DFUMP2` swap ERI source to the `pyscf-df` B-tensor, `*-ri` mp2fit aux (`default_ri`), `(ia|jb)=Σ_Q B^Q·B^Q`; structural/synthetic always-on, numeric cintx#11-gated (MP2-04)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -272,7 +272,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
-| 5. MP2 | 4/7 | In Progress|  |
+| 5. MP2 | 5/7 | In Progress|  |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
