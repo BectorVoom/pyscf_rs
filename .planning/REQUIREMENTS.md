@@ -245,7 +245,7 @@ Explicit exclusions for v1 and (most likely) v2. Each entry has reasoning so the
 
 ## Traceability
 
-Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
+Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `## v1.x Requirements` section) are listed at the end with Phase = `v1.x` and Status = `Deferred`; they are NOT part of the 113-requirement v1 count and are not phase-mapped. Filled by the roadmapper 2026-05-10; v1.x deferred rows appended 2026-05-23 for traceability completeness.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
@@ -362,12 +362,29 @@ Each requirement maps to exactly one phase. Filled by the roadmapper 2026-05-10.
 | DIST-04 | Phase 8 | Pending |
 | DIST-05 | Phase 8 | Pending |
 | DIST-06 | Phase 8 | Pending |
+| — v1.x deferred (not counted in v1 total) — |||
+| CCSD-T-01 | v1.x | Deferred |
+| SCF-EXT-01 | v1.x | Deferred |
+| SCF-EXT-02 | v1.x | Deferred |
+| SCF-EXT-03 | v1.x | Deferred |
+| SCF-EXT-04 | v1.x | Deferred |
+| SCF-EXT-05 | v1.x | Deferred |
+| DFT-EXT-01 | v1.x | Deferred |
+| DFT-EXT-02 | v1.x | Deferred |
+| HESS-01 | v1.x | Deferred |
+| HESS-02 | v1.x | Deferred |
+| HESS-03 | v1.x | Deferred |
+| CCSD-EXT-01 | v1.x | Deferred |
+| CCSD-EXT-02 | v1.x | Deferred |
+| GEOMOPT-EXT-01 | v1.x | Deferred |
+| DIST-EXT-01 | v1.x | Deferred |
 
 **Coverage:**
 
 - v1 requirements: 113 total (10 FOUND + 11 GTO + 14 SCF + 11 DFT + 8 MP2 + 11 CCSD + 10 GRAD + 7 GEOMOPT + 9 BIND + 9 ORACLE + 7 PERF + 6 DIST)
 - Mapped to phases: 113 / 113 ✓
 - Unmapped: 0
+- v1.x deferred (listed in table for traceability completeness, excluded from the 113 v1 count): 15 — CCSD-T-01, SCF-EXT-01..05, DFT-EXT-01..02, HESS-01..03, CCSD-EXT-01..02, GEOMOPT-EXT-01, DIST-EXT-01
 - Phase distribution: Phase 1 = 13 (FOUND-01..10 + ORACLE-01,05,09); Phase 2 = 11 (GTO-01..11); Phase 3 = 23 (SCF-01..14 + BIND-01,02,04,05,06,07,09 + ORACLE-02,08); Phase 4 = 11 (DFT-01..11); Phase 5 = 8 (MP2-01..08); Phase 6 = 11 (CCSD-01..11); Phase 7 = 17 (GRAD-01..10 + GEOMOPT-01..07); Phase 8 = 19 (PERF-01..07 + DIST-01..06 + ORACLE-03,04,06,07 + BIND-03,08)
 
 > **Counting note**: The previous version of this section asserted "116 total ... + 3 cross-listed". On enumeration, the v1 requirements list contains 113 unique REQ-IDs. The "116" figure double-counted three cross-cutting concerns that are mentioned in multiple categories' prose (subclass-override re-validation in DFT-08, frozen-core re-validation in CCSD-10, MP2 helper exposure for CCSD in MP2-08) but are encoded as single REQ-IDs. The 113 figure is the correct unique-ID count.
