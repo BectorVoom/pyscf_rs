@@ -191,7 +191,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 05-01-PLAN.md — Scaffold: create `pyscf-ao2mo` (20th `pyscf-*` member, D-01) + register in workspace, wire `pyscf-mp2` deps (pyo3-free), Wave-0 test scaffolds + MP2 oracle arms + CI structural/cintx-gated jobs (MP2-01,02,04,05,08)
+- [x] 05-01-PLAN.md — Scaffold: create `pyscf-ao2mo` (20th `pyscf-*` member, D-01) + register in workspace, wire `pyscf-mp2` deps (pyo3-free), Wave-0 test scaffolds + MP2 oracle arms + CI structural/cintx-gated jobs (MP2-01,02,04,05,08)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -272,7 +272,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
-| 5. MP2 | 0/7 | Planned | - |
+| 5. MP2 | 1/7 | In Progress|  |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |

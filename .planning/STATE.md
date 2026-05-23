@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 5 context gathered
-last_updated: "2026-05-23T06:47:47.080Z"
-last_activity: 2026-05-23 -- Phase 05 planning complete
+last_updated: "2026-05-23T07:42:17.298Z"
+last_activity: 2026-05-23
 progress:
   total_phases: 8
   completed_phases: 2
   total_plans: 51
-  completed_plans: 42
+  completed_plans: 43
   percent: 25
 ---
 
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 04 — dft
+**Current focus:** Phase 05 — mp2
 
 ## Current Position
 
-Phase: 5
-Plan: Not started
+Phase: 05 (mp2) — EXECUTING
+Plan: 2 of 7
 Status: Ready to execute
-Last activity: 2026-05-23 -- Phase 05 planning complete
+Last activity: 2026-05-23
 
 Progress: [██████████] 95% (42/44 plans done across all phases; Phase 04 gap closure: 4/4 gap plans done)
 
@@ -65,6 +65,7 @@ Progress: [██████████] 95% (42/44 plans done across all phas
 | Phase 04 P04-12 | 6min | 1 task (TDD) | 2 files |
 | Phase 04 P04-13 | 11min | 1 task (TDD) | 2 files |
 | Phase 04 P04-14 | 13min | 3 tasks | 6 files |
+| Phase 05 P01 | 9min | 3 tasks | 24 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,7 @@ Recent decisions affecting current work:
 - [Phase 04]: Gap closure CR-01 (04-14) — `NumInt::nr_uks` was DEAD CODE: it ran `nr_rks` on the TOTAL density (`Dα + Dβ`, the closed-shell path) and returned `vmat: (r.vmat.clone(), r.vmat)` — the SAME Vxc matrix cloned into both spin channels, so it could never produce an open-shell potential. Fixed across 3 files. (1) `xc_backend.rs`: added `UksXcOutput` (per-spin `vrho_a`/`vrho_b` + GGA `vsigma_aa`/`ab`/`bb`) + `XcBackend::eval_uks` + private `xcfun_eval_uks` that builds the per-point xcfun input from the GENUINE `rho_a[ip]`/`rho_b[ip]` (NOT the closed-shell `rho/2` symmetric split), using spin-resolved `Vars::A_B` (LDA) / `A_B_GAA_GAB_GBB` (GGA) — so `vrho_a != vrho_b` for asymmetric densities; MGGA + libxc UKS arms return clean `BackendEval`. (2) `numint.rs`: rewrote `nr_uks` as a genuine open-shell loop — eval the AO block once, contract `rho_a`/`rho_b` (+`∇rho`) INDEPENDENTLY, build `sigma_aa`/`sigma_bb`/`sigma_ab` for GGA, call `eval_uks`, then a new `uks_vmat(grad_this, grad_other)` helper back-contracts TWO DISTINCT Vxc matrices (LDA `0.5·w·vrho·φμφν`; GGA adds same-spin `2·w·vsigma_same·(∇rho_this·∇φμ)·φν` + cross-spin `w·vsigma_ab·(∇rho_other·∇φμ)·φν`, `V+Vᵀ` symmetrized); per-spin nelec + combined excsum via `oracle_sum`. `nr_uks` runs f64-only (xcfun is f64-host; the D-08 f32 matmul chain stays the closed-shell `nr_rks` concern — scope boundary). (3) `hooks.rs` + `uks.rs` + `pyscf-py/dft.rs`: added `UksKsHooks` (open-shell KS hooks; `get_veff` routes through `nr_uks`, combined `Vxc = Vxc_a + Vxc_b`, RSH-aware vk; `UksEnergyCache` keyed on TWO injective fingerprints reusing the CR-04 `dm_fingerprint`); `UKS::kernel` uses `UksKsHooks::new` (NOT `KsHooks::new`); `PyUKS::get_veff` routes through `UksKsHooks::get_veff_ks`→`nr_uks` (NOT `ks_default_get_veff`/`nr_rks`). Symmetric `dm_a=dm_b=dm/2` split is the STRUCTURAL-WIRING contract: the generic `pyscf_scf::kernel<H>` (kernel_impl.rs:59,127) carries a SINGLE total `Density` and calls `get_veff(mol,&dm)` once per cycle, so genuine asymmetric alpha/beta SCF state is out of scope (requires generalizing `kernel<H>`) — the open-shell machinery is complete and yields distinct per-spin Vxc the moment an asymmetric `(dm_a,dm_b)` is fed to `nr_uks` directly. DEVIATION (Rule 3): the GGA input-build loop's `saa/sab/sbb.unwrap()` tripped the crate's `#![warn(clippy::unwrap_used)]` under the `-D warnings` CI gate → rewrote as `if let (Some,Some,Some)`. New `nr_uks_asymmetric_spin_gives_different_vmat` (H2/sto-3g, α in AO0, β in AO1) proves `vmat_alpha != vmat_beta` (RED failed on the clone; GREEN passes); `uks_kernel_uses_nr_uks_not_rks_path` structural test confirms `UksKsHooks` satisfies both `OverrideHooks` + `KsOverrideHooks`. `cargo test -p pyscf-dft -p pyscf-py` exits 0 (47 dft lib + all integration + py tests green); clippy `-D warnings` + fmt clean. No new crate dep; libxc NEVER compiled. This was the FINAL Phase-04 gap-closure plan — all 4 BLOCKERs (CR-01..04) now closed.
 - [Phase 04]: Gap closure CR-03 (04-11) — `c2s_coeff` in `pyscf-kernels::eval_gto` was `fn(u32,usize,usize)->f64` with an unconditional `panic!` on l>4 (h-shells: cc-pV5Z, ANO). Through the PyO3 panic→exception bridge this still aborts the Python process (FOUND-07 never-panic violation). Converted to `-> Result<f64, PyscfRsError>`: l<=4 arms wrapped in `Ok(...)` (FROZEN libcint coeffs byte-unchanged), l>4 wildcard returns `Err(NotYetImplemented{phase:4})`. `?`-propagated through `eval_gto_sph_cpu`/`eval_gto_sph_deriv1_cpu` and the public `eval_gto_sph`/`eval_gto_sph_deriv1` (now `Result`-returning). `pyscf_gto::eval_gto` was ALREADY `Result`-returning, so its public signature is unchanged — `numint.rs` `eval_gto_block` and every other downstream consumer compile untouched; only the two internal `?` additions and 3 integration-test `.expect(...)` were needed. No new dependency; libxc never compiled.
 - [Phase ?]: [Phase 04]: DF-DFT + KsResult chkfile (DFT-07, D-10/D-06 reuse) — RKS::density_fit precomputes pyscf_df B integrals; DfKsHooks routes the Coulomb-J build through get_jk_df ((J_df, K_standard) split, T-04-08b) while Vxc/K stay standard, so get_veff_ks is identical to the non-DF KS path. KsResult wraps ScfResult: on-disk /scf group byte-identical to the SCF schema (upstream from_chk compat) PLUS xc/grids_level/grids_scheme metadata; impl Checkpointable via pyscf_chkfile primitives + the re-exported hdf5 alias (NO own hdf5-metno dep, D-05); load bounded/validated, never panics (T-04-08). ndarray added (F-order view, not hdf5). DFT-07 energy + ORACLE-08 h5py gates CI-only behind the Phase-2 int3c2e_sph gap + libpython/h5py; structural + Rust-Rust round-trip layers always-on. libxc NEVER compiled.
+- [Phase 05]: 05-01 scaffold — `pyscf-ao2mo` registered as the 20th `pyscf-*` member (D-01) with `general`/`full` stub surface + `Ao2moError` bridging to `PyscfRsError`. `pyscf-mp2` deps wired (ao2mo/scf/df/gto/algebra/runtime) strictly pyo3-free + cubecl-free (`xtask check-dependency-wall` PASS), 9-module skeleton + `Mp2Error` bridge. The five MP2-08 helper signatures (`get_nocc`/`get_nmo`/`get_frozen_mask`/`get_e_hf`/`mo_without_core` — the verbatim `cc/ccsd.py:35` CCSD import contract; Python `_mo_without_core`→Rust `mo_without_core` via `#[doc(alias)]`) exported; the always-on `ccsd_import_contract` symbol-existence arm passes. Five MP2 numeric oracle arms registered in `KNOWN_METHODS` (len 13→18: `mp2_rmp2_energy`/`mp2_ump2_energy`/`dfmp2_energy`/`dfmp2_native_energy`/`mp2_rdm`), len-assert updated. CI: always-on `mp2-structural` job + `if: false` cintx#11-gated `mp2-oracle-cintx-gated` numeric job (needs arity-4 `int2e` for in-core + arity-3 `int3c2e_sph` for DF; mirrors DF-HF/DFT-01 gating). MP2 python `dispatch` match arms + all numeric/kernel bodies deferred to 05-02..05-06 (catch-all `UnknownMethod` arm covers the names until then; gated job never runs). Pure scaffolding — ships NO compute.
 
 ### Pending Todos
 
@@ -135,6 +137,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-23T06:04:30.417Z
+Last session: 2026-05-23T07:42:01.267Z
 Stopped at: Phase 5 context gathered
-Resume file: .planning/phases/05-mp2/05-CONTEXT.md
+Resume file: None
