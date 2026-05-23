@@ -26,6 +26,12 @@ pub mod rdm;
 pub mod ump2;
 
 pub use dfmp2::{DFRMP2, DFUMP2, df_ao2mo, dfrmp2_kernel, dfump2_kernel};
+// Native RI-MP2 fast path (port `pyscf/mp/dfmp2_native.py` +
+// `dfump2_native.py`). DISTINCT module path (`pyscf.mp.dfmp2_native`) from the
+// default `mp.DFMP2` factory (the conventional `dfmp2` path above) — re-exported
+// under `Native*` names so the Python overlay can expose `pyscf.mp.dfmp2_native`
+// separately from the default factory.
+pub use dfmp2_native::{NativeDFRMP2, NativeDFUMP2, emp2_rhf, emp2_uhf, solve_cphf_rhf};
 pub use error::Mp2Error;
 pub use frozen::Frozen;
 pub use helpers::{get_e_hf, get_frozen_mask, get_nmo, get_nocc, mo_without_core};
