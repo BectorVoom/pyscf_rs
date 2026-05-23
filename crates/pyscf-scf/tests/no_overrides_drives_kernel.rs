@@ -22,8 +22,8 @@ fn h2_no_overrides_converges() {
         ..Default::default()
     })
     .expect("build H2");
-    // 1e (hcore) init guess — the default `minao` mode is NotYetImplemented
-    // until plan 03-13.
+    // 1e (hcore) init guess — the default `minao` path is exercised separately
+    // by `default_minao_config_converges` (minao landed in 03-13).
     let cfg = KernelConfig {
         init_guess: InitGuessMode::OneElectron,
         ..Default::default()
@@ -41,11 +41,12 @@ fn h2_no_overrides_converges() {
     );
 }
 
+/// FLIPPED in 03-13: the DEFAULT `KernelConfig` (minao init guess) now converges
+/// — both the int2e_sph gap (05-08) AND the minao init guess (03-13) are closed,
+/// so the out-of-the-box `kernel(&mol, &NoOverrides, default())` runs a real SCF.
+/// minao and the 1e guess must converge to the SAME energy (same molecule/basis).
 #[test]
-fn kernel_propagates_jk_not_yet_implemented() {
-    // This test runs unignored — it asserts the gap closes cleanly via
-    // an error rather than panicking. Once int2e_sph lands the test
-    // either updates to assert success or moves under #[ignore].
+fn default_minao_config_converges() {
     let mol = M(MoleBuildArgs {
         atom: AtomInput::String("H 0 0 0; H 0 0 1.4".into()),
         basis: BasisInput::Name("sto-3g".into()),
@@ -53,27 +54,26 @@ fn kernel_propagates_jk_not_yet_implemented() {
         ..Default::default()
     })
     .expect("build H2");
-    let result = kernel(&mol, &NoOverrides, KernelConfig::default());
-    // Must return Err — never panic, never reach convergence (no JK builder).
-    match result {
-        Err(e) => {
-            let msg = format!("{}", e);
-            // Should be either int2e NotYetImplemented or an init_guess
-            // failure (minao mode is also not yet implemented). Both are
-            // acceptable: the kernel is well-formed, the gap is documented.
-            assert!(
-                msg.contains("not yet implemented")
-                    || msg.contains("NotYetImplemented")
-                    || msg.contains("int2e")
-                    || msg.contains("minao")
-                    || msg.contains("init_guess"),
-                "expected NotYetImplemented-flavoured error, got: {}",
-                msg
-            );
-        }
-        Ok(_) => panic!(
-            "expected NotYetImplemented (int2e_sph or minao); plan 03-11's surface ships an \
-             error, not silent convergence. Unignore the bit-exact H2 test if this changes."
-        ),
-    }
+
+    // Default config = minao init guess (no longer NotYetImplemented).
+    let minao = kernel(&mol, &NoOverrides, KernelConfig::default()).expect("minao converge");
+    assert!(minao.converged, "default (minao) SCF must converge");
+    assert!(
+        minao.e_tot.0 > -2.0 && minao.e_tot.0 < -1.0,
+        "minao H2/STO-3G e_tot ≈ -1.117, got {}",
+        minao.e_tot.0
+    );
+
+    // 1e guess on the same system → same converged energy (within conv_tol).
+    let cfg_1e = KernelConfig {
+        init_guess: InitGuessMode::OneElectron,
+        ..Default::default()
+    };
+    let one_e = kernel(&mol, &NoOverrides, cfg_1e).expect("1e converge");
+    assert!(
+        (minao.e_tot.0 - one_e.e_tot.0).abs() < 1e-7,
+        "minao ({}) and 1e ({}) must converge to the same energy",
+        minao.e_tot.0,
+        one_e.e_tot.0
+    );
 }

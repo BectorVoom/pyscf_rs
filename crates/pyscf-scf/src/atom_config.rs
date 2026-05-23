@@ -9,8 +9,6 @@
 
 /// `[n_s, n_p, n_d, n_f]` electrons per l-shell, indexed by atomic number Z.
 /// Source: `pyscf/data/elements.py:NRSRHF_CONFIGURATION`.
-// Consumed by `init_guess::init_guess_by_minao` (wired in plan 03-13 Task 3).
-#[allow(dead_code)]
 pub(crate) const NRSRHF_CONFIGURATION: [[u32; 4]; 119] = [
     [0, 0, 0, 0],
     [1, 0, 0, 0],
@@ -139,8 +137,6 @@ pub(crate) const NRSRHF_CONFIGURATION: [[u32; 4]; 119] = [
 /// Returns `(ndocc, frac)` — `ndocc` fully (doubly) occupied shells of this `l`
 /// and a fractional `frac ∈ [0, 2)` for the frontier shell. `(0, 0.0)` if `l >= 4`
 /// or the shell is empty.
-// Consumed by `init_guess::init_guess_by_minao` (wired in plan 03-13 Task 3).
-#[allow(dead_code)]
 pub(crate) fn frac_occ(z: usize, l: usize) -> (u32, f64) {
     if l >= 4 || z >= NRSRHF_CONFIGURATION.len() {
         return (0, 0.0);
