@@ -173,6 +173,12 @@ The plan's Task 1 Rust/Python code blocks were explicitly labeled speculative ("
 - **Phase 7 GRAD-07 (ECP gradients) UNBLOCKED.** cintx exposes `OperatorId::INT1E_ECP_IPNUC_{CART,SPH}` (manifest ids 28/29, component_rank=3, byte-identical to nr_ecp_deriv per `safe_api_ecp_parity.rs`). The trait's `EcpEngine::ecp_int1e_ipnuc` default still returns `NotYetImplemented{phase:7}`; Phase 7 wires it on `CintxEcpEngine` the same way `ecp_int1e` is wired here (build the ECP-augmented BasisSet, dispatch the ipnuc operator, stitch a 3×nao×nao component-leading buffer).
 - **Manual-Only follow-up:** run `pytest tests/oracle/test_ecp_int1e.py::test_cu_lanl2dz_int1e_ecp_byte_equal -v` once the oracle venv (numpy + vendored pyscf) is installed, to confirm upstream byte-identity at atol=1e-10.
 
+## Self-Check: PASSED
+
+- Created files verified on disk: `ecp_engine_cintx.rs`, `ecp_int1e_oracle.rs`, `tests/oracle/test_ecp_int1e.py`, `02-10-SUMMARY.md` — all FOUND.
+- Commits verified in `git log`: `f547b88`, `5d6db6b`, `f4ca0c7`, `415788b`, `f9587c9`, `4589f73` — all FOUND.
+- Only plan-declared files staged; `crates/pyscf-dft/src/df_dft.rs` (pre-existing rustfmt edit) and other unrelated untracked files left untouched.
+
 ---
 *Phase: 02-gto*
 *Completed: 2026-05-23*
