@@ -9,6 +9,7 @@
 
 pub mod basis; // Plan 02-03 — GTO-03 (basis loading).
 pub mod dumps_loads; // Plan 02-08 — GTO-09 (semantic JSON round-trip).
+pub mod ecp_engine_cintx; // Plan 02-10 — GTO-05 (eval half: cintx-backed engine).
 pub mod ecp_engine_stub; // Plan 02-07 — GTO-05 (engine half: stub trait impl).
 pub mod eval_gto; // Plan 02-06 — GTO-07 (eval_gto user wrapper, algebra-wall friendly).
 pub mod format_atom;
@@ -29,6 +30,7 @@ pub mod types;
 
 pub use basis::{load_basis, parse as parse_basis};
 pub use dumps_loads::{dumps, loads};
+pub use ecp_engine_cintx::CintxEcpEngine;
 pub use ecp_engine_stub::EcpEngineNotAvailable;
 pub use eval_gto::{EvalGtoOutput, eval_gto};
 pub use format_basis::format_basis;
@@ -39,16 +41,19 @@ pub use range_coulomb::{PTR_RANGE_OMEGA, get_k_with_omega, intor_with_omega};
 pub use set_geom::set_geom_;
 pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
 
-/// Returns the active ECP engine. Phase 2 returns the
-/// `EcpEngineNotAvailable` stub per D-06 sequencing; gap-closure plan
-/// 02-10 swaps to the cintx-backed impl when cintx ECP merges.
+/// Returns the active ECP engine. Gap-closure plan 02-10 swapped this from
+/// the Phase 2 `EcpEngineNotAvailable` stub to the cintx-backed
+/// [`CintxEcpEngine`] now that the cintx Phase 19 workstream shipped
+/// `int1e_ecp_{cart,sph}` Type-1 + Type-2 projector integrals.
 ///
 /// The intor dispatcher (`pyscf_gto::intor::intor`) calls this for any
-/// `int1e_ecp*` / `ECPscalar*` name and routes through the
-/// `EcpEngine` trait — meaning 02-10 needs to change only the impl
-/// returned here, not any caller's code.
-pub fn ecp_engine() -> ecp_engine_stub::EcpEngineNotAvailable {
-    ecp_engine_stub::EcpEngineNotAvailable
+/// `int1e_ecp*` / `ECPscalar*` name and routes through the `EcpEngine`
+/// trait — so the swap here is the single integration point; no caller's
+/// code changed. The `EcpEngineNotAvailable` stub remains in the codebase
+/// (`ecp_engine_stub`) as documentation of the pre-merge state and so its
+/// error path stays testable (instantiate it directly).
+pub fn ecp_engine() -> ecp_engine_cintx::CintxEcpEngine {
+    ecp_engine_cintx::CintxEcpEngine
 }
 
 /// Shortcut to build a Mole. Equivalent to `pyscf.M(...)` upstream.
