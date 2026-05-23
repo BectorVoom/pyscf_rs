@@ -122,7 +122,7 @@ pub fn eval_gto(
                 &mol.ao_loc_nr,
                 mol.nao_nr,
                 spherical,
-            );
+            )?;
             Ok(EvalGtoOutput {
                 values: buffers.values,
                 shape: buffers.shape,
@@ -151,7 +151,7 @@ pub fn eval_gto(
                 &mol._env,
                 &mol.ao_loc_nr,
                 mol.nao_nr,
-            );
+            )?;
             Ok(EvalGtoOutput {
                 values: buffers.values,
                 shape: buffers.shape,

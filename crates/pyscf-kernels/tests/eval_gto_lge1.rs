@@ -364,7 +364,8 @@ fn eval_gto_lge1_gtoval_sph_matches_reference_on_1000_point_grid() {
     let client = cpu_client();
     let got = eval_gto_sph(
         &client, &flat, ngrids, &fx.atm, &fx.bas, &fx.env, &fx.ao_loc, fx.nao, true,
-    );
+    )
+    .expect("l<=2 fixture must evaluate without NotYetImplemented");
     let expect = reference_gtoval_sph(&flat, ngrids, &fx.atm, &fx.bas, &fx.env, &fx.ao_loc, fx.nao);
 
     assert_eq!(got.shape, vec![ngrids, fx.nao]);
@@ -426,7 +427,8 @@ fn eval_gto_lge1_p_shell_sph_components_proportional_to_xyz() {
         &fx.ao_loc,
         fx.nao,
         true,
-    );
+    )
+    .expect("l<=2 fixture must evaluate without NotYetImplemented");
 
     let px = out.values[(ao_off) * ngrids];
     let py = out.values[(ao_off + 1) * ngrids];
@@ -470,7 +472,8 @@ fn eval_gto_lge1_d_shell_sph_ratio_matches_real_solid_harmonics() {
         &fx.ao_loc,
         fx.nao,
         true,
-    );
+    )
+    .expect("l<=2 fixture must evaluate without NotYetImplemented");
 
     // m order -2,-1,0,+1,+2: m=0 at +2, m=+2 at +4.
     let dz2 = out.values[(ao_off + 2) * ngrids];
