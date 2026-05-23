@@ -16,7 +16,7 @@
 //! an upstream-pyscf venv). This in-tree test is the always-on regression
 //! gate: it must exit 0 in plain `cargo test -p pyscf-gto`.
 
-use pyscf_core::Unit;
+use pyscf_core::{PyscfRsError, Unit};
 use pyscf_gto::{AtomInput, BasisInput, EcpInput, M, MoleBuildArgs, intor};
 
 fn cu_lanl2dz() -> pyscf_core::Mole {
@@ -54,7 +54,10 @@ fn cu_lanl2dz_int1e_ecp_returns_finite_matrix() {
 
     // Every value finite (catches NaN/uninitialised-buffer regressions).
     for (idx, &v) in out.values.iter().enumerate() {
-        assert!(v.is_finite(), "int1e_ecp values[{idx}] = {v} must be finite");
+        assert!(
+            v.is_finite(),
+            "int1e_ecp values[{idx}] = {v} must be finite"
+        );
     }
 
     // Non-zero: a regression to EcpEngineNotAvailable (all-zeros) or a
@@ -87,4 +90,22 @@ fn cu_lanl2dz_int1e_ecp_is_symmetric() {
             );
         }
     }
+}
+
+#[test]
+fn cu_lanl2dz_int1e_ecp_ipnuc_is_rejected_not_silently_scalar() {
+    // WR-01 (02-10 code review): on an ECP-BEARING molecule, the gradient
+    // name `int1e_ecp_ipnuc` must NOT silently resolve to the scalar operator
+    // and return a wrong-shaped nao×nao matrix mislabeled as a 3-component
+    // gradient. ECP derivative integrals are Phase 7 GRAD-07, so the engine
+    // rejects the name with NotYetImplemented{phase:7}. This is the live-ECP
+    // counterpart to the ECP-less guard test in ecp_engine_stub.rs.
+    let mol = cu_lanl2dz();
+    let r = intor(&mol, "int1e_ecp_ipnuc");
+    assert!(
+        matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 7, .. })),
+        "int1e_ecp_ipnuc on an ECP molecule must be NotYetImplemented{{phase:7}}, \
+         not a silently-wrong scalar result; got {:?}",
+        r
+    );
 }

@@ -30,9 +30,12 @@
 //! (`int1e_ecp` → `int1e_ecp_sph` for spherical molecules). The four typed
 //! cintx ECP operators live at manifest positions 26..=29
 //! (`OperatorId::INT1E_ECP_{CART,SPH,IPNUC_*}`). We resolve scalar names
-//! (`int1e_ecp_sph`, `int1e_ecp_cart`, and the `ECPscalar*` aliases) to the
-//! scalar operator for the active representation; the `ipnuc` gradient arm
-//! is gated to Phase 7 GRAD-07 via the trait's `ecp_int1e_ipnuc` default.
+//! (`int1e_ecp_sph`, `int1e_ecp_cart`, and the `ECPscalar` aliases) to the
+//! scalar operator for the active representation. Derivative/gradient names
+//! (`int1e_ecp_ipnuc`/`iprinv`, `ECPscalar_ip*`) are rejected up front in
+//! `ecp_int1e` with `NotYetImplemented{phase:7}` — Phase 7 GRAD-07 wires them
+//! through `ecp_int1e_ipnuc` — so a gradient name can never silently resolve
+//! to the scalar operator (02-10 code review WR-01).
 
 use cintx_core::{BasisSet as CintxBasisSet, OperatorId, Representation};
 use cintx_rs::SessionRequest;
@@ -52,6 +55,28 @@ impl EcpEngine for CintxEcpEngine {
                 "CintxEcpEngine: Mole not built — call pyscf_gto::M(args) or mol.build() first"
                     .into(),
             )));
+        }
+
+        // WR-01 (02-10 code review): Phase 2 wires ONLY the scalar ECP
+        // operator. Derivative/gradient ECP names — int1e_ecp_ipnuc /
+        // int1e_ecp_iprinv and the ECPscalar_ip* aliases used for ECP
+        // gradients — must NOT fall through to the scalar OperatorId (that
+        // would return a wrong-shaped scalar matrix mislabeled as a gradient).
+        // Reject anything whose representation-suffix-stripped core is not the
+        // bare scalar name, BEFORE the _ecp guard so the contract does not
+        // depend on guard ordering. Phase 7 GRAD-07 wires these through
+        // `ecp_int1e_ipnuc`.
+        let core = name
+            .strip_suffix("_sph")
+            .or_else(|| name.strip_suffix("_cart"))
+            .or_else(|| name.strip_suffix("_spinor"))
+            .unwrap_or(name);
+        if core != "int1e_ecp" && core != "ECPscalar" {
+            return Err(PyscfRsError::NotYetImplemented {
+                phase: 7,
+                what: "ECP derivative/gradient integrals \
+                       (int1e_ecp_ipnuc/iprinv, ECPscalar_ip* — Phase 7 GRAD-07)",
+            });
         }
 
         // A molecule with no ECP entries cannot evaluate an ECP integral —
@@ -106,12 +131,30 @@ impl EcpEngine for CintxEcpEngine {
         let nbas = basis_ref.shells().len();
         let nao = basis_ref.meta().total_ao;
 
-        // Cache per-shell AO offsets + counts from BasisMeta.
+        // Cache per-shell AO offsets + counts from BasisMeta. WR-02 (02-10
+        // code review): a missing offset/count for a valid shell index is an
+        // invariant break — surface it as a loud internal error rather than
+        // silently substituting 0 (which would corrupt the stitch into M[0,0]
+        // and still pass the oracle's finite/non-zero checks).
         let meta = basis_ref.meta();
         let shell_offsets: Vec<usize> = (0..nbas)
-            .map(|s| meta.shell_offset(s).unwrap_or(0))
-            .collect();
-        let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
+            .map(|s| {
+                meta.shell_offset(s).ok_or_else(|| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "ECP basis meta missing shell_offset for shell {s} of {nbas}"
+                    )))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let shell_counts: Vec<usize> = (0..nbas)
+            .map(|s| {
+                meta.ao_count(s).ok_or_else(|| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "ECP basis meta missing ao_count for shell {s} of {nbas}"
+                    )))
+                })
+            })
+            .collect::<Result<_, _>>()?;
 
         // F-order nao × nao output buffer (matches every other arity-2 1e
         // intor; the dispatcher promises this layout).
