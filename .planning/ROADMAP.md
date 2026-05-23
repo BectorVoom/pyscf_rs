@@ -199,7 +199,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 05-03-PLAN.md — In-core RMP2 headline: closed-form `rmp2_kernel` + SCS factors (MP2-06) + the five MP2-08 helpers (CCSD import contract) + frozen-core int/list/'auto'/window (MP2-03) + `Mp2OverrideHooks` trait (D-08) (MP2-01,03,06,08)
+- [x] 05-03-PLAN.md — In-core RMP2 headline: closed-form `rmp2_kernel` + SCS factors (MP2-06) + the five MP2-08 helpers (CCSD import contract) + frozen-core int/list/'auto'/window (MP2-03) + `Mp2OverrideHooks` trait (D-08) (MP2-01,03,06,08)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -272,7 +272,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
-| 5. MP2 | 2/7 | In Progress|  |
+| 5. MP2 | 3/7 | In Progress|  |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
