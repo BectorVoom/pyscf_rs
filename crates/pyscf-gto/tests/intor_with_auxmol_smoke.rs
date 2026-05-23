@@ -1,10 +1,9 @@
 //! Smoke: `intor_with_auxmol` returns correctly-shaped `IntorOutput`.
 //!
-//! Numerical correctness is gated by plan 03-10 (oracle harness wave 2),
-//! once cintx-ops adds the `int3c2e_sph` base symbol and cintx-rs flips
-//! from synthetic-staging to real evaluation. Phase 3 plan 03-05 Task 0
-//! only asserts shape — the buffer is zero-filled for `int3c2e_sph` and
-//! cintx-stub-filled for `int2c2e_sph`.
+//! These arms assert SHAPE only. As of 05-08 (cintx#11 closed) `int3c2e_sph`
+//! and `int2c2e_sph` evaluate for real; the numeric finite/non-zero/symmetry
+//! gate lives in `int3c2e_auxmol.rs`, and bit-exact-vs-upstream-PySCF is the
+//! CI-gated/human-verify arm.
 //!
 //! Source: plan 03-05 Task 0 (`<verify>` block).
 

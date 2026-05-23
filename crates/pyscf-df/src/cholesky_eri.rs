@@ -101,11 +101,11 @@ pub fn cholesky_eri(mol: &Mole, auxbasis: &str) -> Result<DfIntegrals, PyscfRsEr
     );
 
     // Step 2: (μν|P) — 3-center 2-electron integrals.
-    // NOTE: int3c2e_sph base op is currently a cintx-ops upstream gap;
-    // pyscf_gto::intor_with_auxmol returns a zero-filled buffer of the
-    // correct shape until cintx lands the base symbol. B integrals built
-    // here will be all-zero — sufficient for shape/wiring tests, NOT for
-    // bit-exact DF-HF energy (plan 03-10 gates that).
+    // As of 05-08 (cintx#11 closed) intor_with_auxmol evaluates int3c2e_sph for
+    // real over a combined orbital+aux basis (no longer a zero-filled stub), so
+    // these B integrals are genuine. Bit-exact DF energy vs upstream PySCF is
+    // still the CI-gated/human-verify arm. NOTE: the (P|Q) Cholesky below can
+    // reject an ill-conditioned aux metric — a separate Phase-3 robustness gap.
     let int3c = pyscf_gto::intor_with_auxmol(mol, "int3c2e_sph", &auxmol)?;
     if int3c.values.len() != nao * nao * naux {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(

@@ -78,6 +78,14 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **MP2-07**: `mp2.as_scanner()` works (used by gradients and geomopt)
 - [x] **MP2-08**: MP2 helpers (`get_nocc`, `get_nmo`, `get_frozen_mask`, `get_e_hf`, `_mo_without_core`) are exported because CCSD imports them
 
+> **Numeric closure (plan 05-08, 2026-05-23):** the cintx#11 ERI gate is closed —
+> cintx ships arity-4 `int2e` + arity-3 `int3c2e_sph`, wired in pyscf-gto. The
+> in-core RMP2 numeric path is now proven always-on in-tree (MP2-01; finite
+> e_corr ≤ 0). DF-MP2 numeric (MP2-04) is unblocked at the `int3c2e` layer but
+> still needs a Phase-3 rank-revealing DF-metric Cholesky for the `(P|Q)` metric.
+> Upstream-PySCF byte-identity for all arms is the CI-gated (`workflow_dispatch`)
+> / human-verify arm (sandbox lacks numpy/PySCF). See `phases/05-mp2/05-08-PLAN.md`.
+
 ### Coupled cluster (CCSD)
 
 - [ ] **CCSD-01**: `cc.RCCSD(mf).kernel()` returns CCSD correlation energy matching upstream to chemical accuracy (≤1 µHartree); convergence criteria match

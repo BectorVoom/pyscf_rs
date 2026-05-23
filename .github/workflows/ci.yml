@@ -400,8 +400,11 @@ jobs:
         run: cargo test -p pyscf-dft --locked dtype_f32_smoke -- --test-threads=1
 
   # ── Phase 5 plan 05-01 ─────────────────────────────────────────────
-  # MP2 CI surface: an always-on structural job + a cintx#11-gated numeric
-  # oracle job, mirroring the DF-HF / DFT-01 (rks_energy/uks_energy) split.
+  # MP2 CI surface: an always-on structural job + a manual-dispatch upstream
+  # numeric oracle job (cintx#11 closed in 05-08; the oracle now needs only an
+  # upstream-PySCF install, hence workflow_dispatch). The always-on in-tree
+  # numeric proof lives in pyscf-{gto,mp2}/tests (int2e_arity4, int3c2e_auxmol,
+  # mp2_numeric_smoke).
 
   # ACTIVE — runs on every push/PR. Does NOT touch `--features python` or
   # `--features libxc`, so it is safe (no libpython, no 266-kernel libxc
@@ -423,23 +426,27 @@ jobs:
       - name: cargo test -p pyscf-mp2 -p pyscf-ao2mo (structural, no python)
         run: cargo test -p pyscf-mp2 -p pyscf-ao2mo --locked -- --test-threads=1
 
-  # DISABLED pending cintx#11. The MP2 numeric oracle (mp2_rmp2_energy,
-  # mp2_ump2_energy, dfmp2_energy, dfmp2_native_energy, mp2_rdm) compares
-  # correlation energies ≤ 1 µHartree vs upstream `mp.RMP2(mf).kernel()` etc.
-  # under `--features python`. It needs WORKING ERIs from cintx: arity-4
-  # `int2e` for the in-core RMP2/UMP2 path AND arity-3 `int3c2e_sph` for the
-  # DF-MP2 path — both are NotYetImplemented{phase:2} (the cintx#11 cross-repo
-  # gap, exactly as DF-HF and DFT-01's rks_energy/uks_energy are gated). This
-  # job mirrors the libxc `dft-libxc-bitexact` `if: false` disabled-job pattern.
-  # ENABLE CONDITION: flip `if: false` → a real gate (e.g.
-  # `if: github.event_name == 'workflow_dispatch'`) once cintx#11 ships the
-  # arity-3/4 `int2e`/`int3c2e_sph` safe-API path.
-  mp2-oracle-cintx-gated:
-    name: mp2-oracle-cintx-gated (DISABLED pending cintx#11 int2e/int3c2e_sph)
-    # HARD GATE: never run automatically. The MP2 numeric oracle cannot produce
-    # a real result until cintx#11 lands arity-3/4 ERIs; keep `if: false` until
-    # then. Mirrors the DF-HF / DFT-01 numeric gating.
-    if: false
+  # MANUAL-DISPATCH numeric oracle (upstream-PySCF byte-identity, ≤ 1 µHartree).
+  # cintx#11 is CLOSED (05-08): cintx ships arity-4 `int2e` + arity-3
+  # `int3c2e_sph` and pyscf-gto evaluates them, so the MP2 numeric oracle
+  # (mp2_rmp2_energy, mp2_ump2_energy, dfmp2_energy, dfmp2_native_energy,
+  # mp2_rdm) can now produce real correlation energies to compare vs upstream
+  # `mp.RMP2(mf).kernel()` etc. under `--features python`. The REMAINING gate is
+  # the same one every numeric oracle has — it needs an upstream-PySCF install,
+  # which the default push/PR runners do not provide — so this is a
+  # `workflow_dispatch` (manual / human-verify) arm, never auto-run (default CI
+  # stays green). The always-on IN-TREE numeric proof (real int2e/int3c2e →
+  # finite RMP2 e_corr; int3c2e finite/non-zero/symmetric) lives in
+  # pyscf-gto/tests/int2e_arity4.rs + int3c2e_auxmol.rs +
+  # pyscf-mp2/tests/mp2_numeric_smoke.rs. NOTE: the DF-MP2 numeric arm
+  # additionally needs the Phase-3 rank-revealing DF-metric Cholesky
+  # (the cc-pvdz-jkfit / weigend (P|Q) metric is ill-conditioned under the
+  # current plain Cholesky-Banachiewicz).
+  mp2-oracle-upstream-manual:
+    name: mp2-oracle-upstream-manual (workflow_dispatch — upstream PySCF byte-identity)
+    # Manual only: never auto-trigger on push/PR (default runners have no
+    # upstream PySCF). cintx#11 is closed; this is the human-verify arm.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -447,8 +454,11 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
+      # The oracle imports upstream `pyscf` via PyO3 (`--features python`) and
+      # compares it against pyscf-rs in-process — install the reference.
+      - name: Install upstream PySCF (oracle reference)
+        run: pip install "numpy>=1.26" "pyscf>=2.5"
       # The ONLY MP2 `--features python` invocation. Exercises the five MP2
-      # numeric oracle arms once cintx#11 unblocks the ERIs (until then this
-      # job stays disabled — see the `if: false` above).
-      - name: cargo test --features python (gated MP2 numeric oracle)
+      # numeric oracle arms vs upstream PySCF now that cintx#11 ERIs land.
+      - name: cargo test --features python (MP2 numeric oracle vs upstream)
         run: cargo test -p pyscf-oracle --features python --locked -- --test-threads=1

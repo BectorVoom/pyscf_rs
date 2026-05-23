@@ -13,6 +13,27 @@ created: 2026-05-23
 
 ---
 
+## 05-08 cintx#11 Numeric Closure (gap-closure addendum, 2026-05-23)
+
+cintx shipped arity-4 `int2e` + arity-3 `int3c2e_sph`; plan 05-08 wired the
+pyscf-gto dispatch that consumes them. Resulting numeric status:
+
+| Surface | Requirement | Status | Evidence (always-on, in-tree) |
+|---------|-------------|--------|-------------------------------|
+| `int2e` arity-4 dispatch | (GTO/infra) | ✅ green | `pyscf-gto/tests/int2e_arity4.rs` (finite, non-zero, 8-fold symmetric) |
+| `int3c2e_sph` orbital×aux | (GTO/infra) | ✅ green | `pyscf-gto/tests/int3c2e_auxmol.rs` (finite, non-zero, bra-symmetric) |
+| In-core RMP2 numeric path | MP2-01 | ✅ green | `pyscf-mp2/tests/mp2_numeric_smoke.rs` (finite e_corr ≤ 0, thread-invariant) |
+| `default_ao2mo` (real int2e) | MP2-01/05 | ✅ green | `rmp2_structural::default_ao2mo_succeeds_after_cintx11_closure` |
+| Conventional DF-MP2 numeric | MP2-04 | ⚠️ blocked | int3c2e ships; blocked on Phase-3 rank-revealing DF-metric Cholesky (`(P|Q)` ill-conditioned) — see `pyscf-df/tests/df_integrals_shape.rs` |
+| Upstream-PySCF byte-identity (all arms) | MP2-01..05 | 🔬 human-verify / CI-gated | `mp2-oracle-upstream-manual` (workflow_dispatch); sandbox lacks numpy/PySCF |
+
+**Out of scope (deliberately not chased):** the DF `(P|Q)` Cholesky robustness
+(Phase-3/DF), Phase-3 DF-HF numeric, Phase-4 bit-exact RKS/UKS, RSH ranged-`int2e`
+(needs cintx safe-API `env[8]` omega threading), `make_rdm2` AO back-transform
+(Phase-7), native RI-MP2 relaxed RDM CPHF.
+
+---
+
 ## Test Infrastructure
 
 | Property | Value |

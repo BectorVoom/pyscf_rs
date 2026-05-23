@@ -29,16 +29,16 @@
 //! sets/restores `mol._env[PTR_RANGE_OMEGA]` directly (a `pyscf-gto`-side
 //! `with_range_coulomb`-equivalent — the slot is owned by `make_env`, D-03).
 //!
-//! **cintx gap-closure marker (cintx#11-style):** the safe-API `int2e`
-//! evaluation does not yet *consume* the `_env[8]` slot the way the
-//! `cintx-compat::raw` path does (and arity-4 `int2e` is itself
-//! `NotYetImplemented{phase:2}`). So while the set/restore semantics are
-//! complete and tested here, the *numerical* RSH ERI flips on only once
-//! cintx (a) ships a safe-API `with_range_coulomb`/`range_omega` knob (or
-//! threads `mol._env[8]` into the safe `int2e` plan) and (b) lands the
-//! arity-4 `int2e` rollup (the Phase-2 verification gap, cintx#11). Until
-//! then the CAM-B3LYP/H2O bit-exact energy assertion is CI-gated (mirrors
-//! the 04-06 DFT-01 oracle convention).
+//! **cintx gap-closure marker (RSH-specific):** the *full-range* arity-4
+//! `int2e` rollup landed in 05-08 (cintx#11 closed — `intor("int2e")` now
+//! evaluates with `ExecutionOptions::default()`, i.e. omega=0). What remains
+//! for RSH is the *ranged* path: the safe-API `int2e` does not yet *consume*
+//! the `_env[8]` omega slot the way the `cintx-compat::raw` path does. So while
+//! the set/restore semantics are complete and tested here, the *numerical* RSH
+//! ERI (erf(ωr)/r) flips on only once cintx ships a safe-API
+//! `with_range_coulomb`/`range_omega` knob (or threads `mol._env[8]` into the
+//! safe `int2e` plan). Until then the CAM-B3LYP/H2O bit-exact energy assertion
+//! is CI-gated (mirrors the 04-06 DFT-01 oracle convention).
 
 use pyscf_core::{Density, Mole, PyscfRsError};
 
@@ -111,11 +111,11 @@ impl Drop for OmegaGuard<'_> {
 /// Mole's `_env[8]` is byte-identical to its value on entry, so subsequent
 /// (non-ranged) intor calls are unaffected (tested in `range_coulomb_env`).
 ///
-/// NOTE (cintx gap, see module docs): the set/restore is complete, but the
-/// cintx safe-API `int2e` evaluator does not yet read `_env[8]` and arity-4
-/// `int2e` is `NotYetImplemented{phase:2}` — so the *numerical* long/short-
-/// range ERI flips on only once cintx#11 lands. The env-slot contract this
-/// function owns is verified independently of that.
+/// NOTE (RSH-specific cintx gap, see module docs): full-range arity-4 `int2e`
+/// lands as of 05-08, but the cintx safe-API `int2e` evaluator does not yet
+/// read `_env[8]` — so the *numerical* long/short-range (ranged-omega) ERI
+/// flips on only once cintx threads omega into the safe `int2e` plan. The
+/// env-slot set/restore contract this function owns is verified independently.
 pub fn intor_with_omega(
     mol: &mut Mole,
     name: &str,

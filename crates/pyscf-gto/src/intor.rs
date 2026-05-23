@@ -557,33 +557,25 @@ fn evaluate_arity4(
 }
 
 /// Compute the named integral over `mol` using `auxmol` as the auxiliary
-/// basis for the third (and fourth, where applicable) index. Equivalent to
-/// upstream `mol.intor('int3c2e_sph', auxmol=auxmol)` or the explicit
-/// shls_slice over a merged Mole. (Plan 03-05 Task 0 — checker iteration 1
-/// WARNING 5 case (b) fix; Phase 2's `intor` dispatcher gates arity-3/4 at
-/// `NotYetImplemented{phase:2}`, so plan 03-05 (DF-HF) consumers need this
-/// thin wrapper before they can compile.)
+/// basis for the third index. Equivalent to upstream
+/// `mol.intor('int3c2e_sph', auxmol=auxmol)` or the explicit shls_slice over a
+/// merged Mole.
 ///
-/// Supported names (Phase 3 plan 03-05 scope):
+/// Supported names:
 ///   - `int3c2e_sph` : 3-center (μ ν | P) — shape `[nao, nao, naux]`, F-order
 ///   - `int2c2e_sph` : 2-center (P | Q)   — shape `[naux, naux]`,       F-order
 ///     (mol is unused; operates on auxmol alone)
 ///
 /// For any other name, returns `Err(NotYetImplemented{ phase: 3 })`.
 ///
-/// Numerical correctness note: `int3c2e_sph` is NOT in the current
-/// cintx-ops `api_manifest.rs` base symbol list (only the derivative
-/// `int3c2e_ip1_sph` and the unstable `int3c2e_sph_ssc` ship). The base
-/// `int3c2e_sph` operator id lands in a future cintx release. Until
-/// then, this wrapper returns a **shape-correct zero-filled buffer** for
-/// `int3c2e_sph` — sufficient for `df_integrals_shape` smoke tests but
-/// NOT for numerical assertions. Plan 03-10 (oracle harness wave 2)
-/// unignores the bit-exact DF-HF energy assertion once the cintx-ops
-/// manifest gains `int3c2e_sph` AND cintx-rs flips from synthetic-staging
-/// to real evaluation. For now, `cholesky_eri` consumers should expect
-/// the `int3c2e` block to be all-zeros; the cholesky of the (P|Q) block
-/// itself routes through plain `intor("int2c2e_sph")` and gets cintx's
-/// current synthetic pattern.
+/// Numerical correctness: as of 05-08 (cintx#11 closed) `int3c2e_sph` is a base
+/// cintx operator (api_manifest.rs) and this wrapper evaluates it for real over
+/// a combined orbital+aux basis (PySCF fakemol pattern — see
+/// `evaluate_int3c2e_with_auxmol`), libcint-byte-identical at the cintx source
+/// (`center_3c2e_parity`). The bit-exact DF-HF energy vs upstream PySCF is the
+/// CI-gated/human-verify arm. NOTE: a downstream `cholesky_eri` consumer can
+/// still fail on an ill-conditioned `(P|Q)` metric — a Phase-3 DF-metric
+/// robustness gap independent of `int3c2e_sph` itself.
 ///
 /// Source: `pyscf/df/incore.py:cholesky_eri` — the canonical caller
 /// pattern that motivates this API.

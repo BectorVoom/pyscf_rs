@@ -57,19 +57,20 @@ pub trait Mp2OverrideHooks {
     ///
     /// The RDM math itself ships in plan 05-04 as the free function
     /// [`crate::rdm::make_rdm1`] (consuming a stored `t2` [`pyscf_core::Amplitudes`]).
-    /// This hook seam stays gated because producing the `t2` for an arbitrary
-    /// reference requires running the kernel through `default_ao2mo`, whose
-    /// `int2e` is `NotYetImplemented{phase:2}` until cintx#11 — so the seam
-    /// returns the same gated error the energy path does. Once the integral
-    /// lands, the pyscf-py bridge (05-07) calls `rmp2_kernel(..,with_t2=true)`
-    /// then `crate::rdm::make_rdm1(&res.t2, ..)` with no change here.
+    /// This trait-default seam returns `NotYetImplemented{plan:4}` because the
+    /// supported route is the PyO3 bridge (05-07): it runs
+    /// `rmp2_kernel(.., with_t2=true)` then `crate::rdm::make_rdm1(&res.t2, ..)`.
+    /// As of 05-08 the `int2e` gate (cintx#11) is closed, so that bridge path
+    /// produces a real `t2` and a real RDM end-to-end; this hook default stays a
+    /// stub for callers that have not run the kernel themselves.
     fn make_rdm1(&self, _refr: &Mp2Reference, _frozen: &Frozen) -> Result<Density, PyscfRsError> {
         Err(crate::error::Mp2Error::NotYetImplemented { plan: 4 }.into())
     }
 
     /// MP2 two-particle reduced density matrix. See [`make_rdm1`] — the math
-    /// ships as [`crate::rdm::make_rdm2`]; this seam stays cintx#11-gated for the
-    /// same `int2e`-dependent reason.
+    /// ships as [`crate::rdm::make_rdm2`]; this trait-default seam is a
+    /// `NotYetImplemented{plan:4}` stub for the same reason (the bridge path
+    /// runs the kernel for `t2`). The `int2e` gate is closed as of 05-08.
     ///
     /// [`make_rdm1`]: Mp2OverrideHooks::make_rdm1
     fn make_rdm2(&self, _refr: &Mp2Reference, _frozen: &Frozen) -> Result<Density, PyscfRsError> {

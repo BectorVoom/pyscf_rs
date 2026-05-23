@@ -10,10 +10,11 @@
 //!
 //! `default_ao2mo` builds the occupied/virtual MO column subsets and calls
 //! `pyscf_ao2mo::general(eri_ao, nao, [&co,&cv,&co,&cv])` where
-//! `eri_ao = pyscf_gto::intor(&refr.mol, "int2e")?`. CRITICAL: `int2e` is
-//! `NotYetImplemented{phase:2}` today — the `?` propagates that error; we never
-//! panic and never substitute a zero buffer (T-05-03-FFI). The numeric energy
-//! flips on with NO code change once cintx#11 lands arity-4 `int2e` (D-05).
+//! `eri_ao = pyscf_gto::intor(&refr.mol, "int2e")?`. As of 05-08 cintx#11 is
+//! closed — `int2e` is a real arity-4 tensor, so this path runs end-to-end and
+//! yields finite correlation energies (D-05's "no kernel change" promise).
+//! Errors still `?`-propagate; we never panic and never substitute a zero
+//! buffer (T-05-03-FFI).
 
 use crate::frozen::{self, Frozen};
 use crate::helpers;
@@ -126,11 +127,13 @@ fn mo_subset(
 /// the `(i,a,j,b)` C-order layout that [`rmp2_kernel`] consumes.
 ///
 /// # Errors
-/// Propagates [`PyscfRsError::NotYetImplemented`] from `intor("int2e")`
-/// (arity-4 int2e is `NotYetImplemented{phase:2}` until cintx#11) — the error
-/// propagates with `?`; this function NEVER panics and NEVER substitutes a
-/// zero buffer (T-05-03-FFI). Numeric energy flips on with no code change once
-/// the integral lands (D-05).
+/// `?`-propagates any error from `intor("int2e")` or `ao2mo::general`; this
+/// function NEVER panics and NEVER substitutes a zero buffer (T-05-03-FFI).
+/// As of 05-08 the cintx#11 gate is CLOSED — `intor("int2e")` returns a real
+/// arity-4 tensor, so this path runs end-to-end and yields finite correlation
+/// energies (the D-05 "numeric flips on with no kernel change" promise; see
+/// pyscf-mp2/tests/mp2_numeric_smoke.rs). A genuine shape surprise from cintx
+/// still propagates as a descriptive error.
 pub fn default_ao2mo(refr: &Mp2Reference, frozen: &Frozen) -> Result<ChemistsEris, PyscfRsError> {
     let elements = reference_elements(refr);
     let mask = frozen::frozen_mask(frozen, &refr.mo_occ, &refr.mo_energy, &elements)?;
@@ -141,8 +144,9 @@ pub fn default_ao2mo(refr: &Mp2Reference, frozen: &Frozen) -> Result<ChemistsEri
     let nvir = cv.nmo;
     let nao = refr.mol.nao_nr;
 
-    // CRITICAL: int2e is NotYetImplemented{phase:2} today — `?` propagates the
-    // error; do NOT panic, do NOT substitute zeros (D-05/T-05-03-FFI).
+    // int2e is a real arity-4 tensor as of 05-08 (cintx#11 closed). Any error
+    // (e.g. a cintx shape surprise) `?`-propagates — never panic, never
+    // substitute zeros (D-05/T-05-03-FFI).
     let eri = pyscf_gto::intor(&refr.mol, "int2e")?;
 
     // ao2mo.general expects the (o,v,o,v) ordering → (ia|jb) block.

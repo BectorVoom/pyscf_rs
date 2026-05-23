@@ -41,14 +41,17 @@
 //! `make_auxbasis(mol, mp2fit=True)`. Using the wrong aux silently shifts the
 //! DF energy (T-05-05-AUX), so the choice is pinned by an acceptance grep gate.
 //!
-//! ## cintx#11 gating (D-05)
+//! ## cintx#11 closure (D-05) — DF half
 //!
-//! [`pyscf_df::cholesky_eri`] builds `b_uvq` from `int3c2e_sph`, which is a
-//! cintx-ops upstream gap (returns the gated error today). [`df_ao2mo`] and the
-//! DF kernels `?`-propagate that error — they NEVER panic and NEVER substitute
-//! a zero B-tensor (the Phase-4 CR-02 silent-substitution lesson; T-05-05-FFI).
-//! When cintx lands the `int3c2e_sph` base op, the SAME code returns the
-//! numeric DF-MP2 result with no change.
+//! [`pyscf_df::cholesky_eri`] builds `b_uvq` from `int3c2e_sph`. As of 05-08
+//! cintx ships that base operator and pyscf-gto evaluates it for real (the SAME
+//! code now returns a real B-tensor — the D-05 "no kernel change" promise).
+//! [`df_ao2mo`] and the DF kernels still `?`-propagate any error — they NEVER
+//! panic and NEVER substitute a zero B-tensor (the Phase-4 CR-02 silent-
+//! substitution lesson; T-05-05-FFI). NOTE: the conventional DF path also needs
+//! a well-conditioned DF metric; `cholesky_eri`'s plain Cholesky-Banachiewicz
+//! still rejects ill-conditioned `(P|Q)` (a Phase-3 robustness follow-up — see
+//! pyscf-df/tests/df_integrals_shape.rs), independent of `int3c2e_sph` itself.
 
 use crate::frozen::{self, Frozen};
 use crate::hooks::{ChemistsEris, Mp2OverrideHooks};
@@ -211,10 +214,11 @@ fn transform_b_to_ov(
 /// # Errors
 /// - [`PyscfRsError`] (via [`crate::error::Mp2Error::ShapeMismatch`]) on a
 ///   B-tensor / MO-block / occupied-count mismatch — never indexes OOB.
-/// - Any error the caller `?`-propagated from [`pyscf_df::cholesky_eri`]
-///   (notably the `int3c2e_sph` cintx#11 gate) is surfaced by the caller that
-///   builds the [`DfIntegrals`]; `df_ao2mo` itself receives an already-built
-///   `df` and never substitutes a zero buffer (T-05-05-FFI).
+/// - Any error the caller `?`-propagated from [`pyscf_df::cholesky_eri`] (now
+///   typically a Phase-3 DF-metric Cholesky issue, since `int3c2e_sph` itself
+///   ships as of 05-08) is surfaced by the caller that builds the
+///   [`DfIntegrals`]; `df_ao2mo` itself receives an already-built `df` and
+///   never substitutes a zero buffer (T-05-05-FFI).
 pub fn df_ao2mo(
     refr: &Mp2Reference,
     frozen: &Frozen,
