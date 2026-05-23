@@ -527,24 +527,30 @@ impl PyUMP2 {
         self.os_factor = v;
     }
 
-    /// Run the open-shell UMP2 kernel. Builds the three spin-block `(ia|jb)`
-    /// ERIs (αα/αβ/ββ) via the in-core `default_ao2mo` per channel (the
-    /// cross-spin αβ block reuses the α/β reference). `int2e` is cintx#11-gated:
-    /// the error `?`-propagates, never panics.
+    /// Run the open-shell UMP2 kernel. Builds the per-spin αα/ββ `(ia|jb)` blocks
+    /// via the in-core `default_ao2mo` (cintx#11-gated `int2e` `?`-propagates).
+    /// The opposite-spin αβ block needs a genuine cross-spin ao2mo entry point
+    /// that does not exist yet, so it is gated with `NotYetImplemented` (CR-01 /
+    /// 05-VERIFICATION MP2-02 gap) rather than reusing the α same-spin block,
+    /// which would be silently wrong once `int2e` lands. Never panics.
     #[pyo3(signature = (with_t2=false))]
     fn kernel(slf: Bound<'_, Self>, _py: Python<'_>, with_t2: bool) -> PyResult<f64> {
         let (refr, frozen) = {
             let me = slf.borrow();
             (me.inner.clone(), me.frozen.clone())
         };
-        // Build the three spin-block ERIs (cintx#11-gated int2e). The αα/ββ
-        // blocks are the per-spin in-core transform; the αβ block reuses the α
-        // reference's transform as the structural cross-spin placeholder (the
-        // genuine cross-spin block needs the (o_a,v_a|o_b,v_b) ao2mo, a live-CI
-        // numeric concern). All `?`-propagate the int2e gate; never panic.
+        // Build the per-spin αα/ββ blocks (cintx#11-gated int2e `?`-propagates).
         let eris_aa = default_ao2mo(&refr.alpha, &frozen).map_err(pyscf_to_py)?;
         let eris_bb = default_ao2mo(&refr.beta, &frozen).map_err(pyscf_to_py)?;
-        let eris_ab = default_ao2mo(&refr.alpha, &frozen).map_err(pyscf_to_py)?;
+        // CR-01 / 05-VERIFICATION gap (MP2-02): the opposite-spin αβ block requires
+        // the genuine cross-spin (o_α v_α | o_β v_β) ao2mo entry point, which does
+        // not exist yet. Reusing the α same-spin transform as αβ would silently
+        // yield a WRONG open-shell energy once cintx#11 lands arity-4 int2e (the
+        // opposite-spin term is the dominant MP2 contribution). Refuse explicitly
+        // with NotYetImplemented — consistent with the int2e / make_rdm2(ao_repr)
+        // gating — instead of contracting the αα block as if it were αβ.
+        let eris_ab: ChemistsEris = Err(pyscf_mp2::Mp2Error::NotYetImplemented { plan: 4 })
+            .map_err(|e| pyscf_to_py(PyscfRsError::from(e)))?;
         let result = ump2_kernel(&refr, &frozen, &eris_aa, &eris_ab, &eris_bb, with_t2)
             .map_err(pyscf_to_py)?;
         {
@@ -803,7 +809,11 @@ impl PyMp2Scanner {
                     .detach(|| -> Result<_, PyscfRsError> {
                         let aa = default_ao2mo(&refr.alpha, &self.frozen)?;
                         let bb = default_ao2mo(&refr.beta, &self.frozen)?;
-                        let ab = default_ao2mo(&refr.alpha, &self.frozen)?;
+                        // CR-01 (MP2-02): αβ cross-spin ao2mo not yet available —
+                        // refuse rather than reuse the α same-spin block, which
+                        // would be silently wrong once int2e lands.
+                        let ab: ChemistsEris =
+                            Err(pyscf_mp2::Mp2Error::NotYetImplemented { plan: 4 })?;
                         Ok((aa, ab, bb))
                     })
                     .map_err(pyscf_to_py)?;
