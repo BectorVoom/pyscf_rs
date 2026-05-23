@@ -211,7 +211,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 05-06-PLAN.md — Native RI-MP2 fast path (D-06 additional): `emp2_rhf`/`emp2_uhf` on its own `dfmp2_native` module path, reuses the shipped 3c Cholesky; native↔conventional synthetic cross-check (MP2-04)
+- [x] 05-06-PLAN.md — Native RI-MP2 fast path (D-06 additional): `emp2_rhf`/`emp2_uhf` on its own `dfmp2_native` module path, reuses the shipped 3c Cholesky; native↔conventional synthetic cross-check (MP2-04)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
@@ -272,7 +272,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
-| 5. MP2 | 5/7 | In Progress|  |
+| 5. MP2 | 6/7 | In Progress|  |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
