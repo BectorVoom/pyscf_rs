@@ -2,29 +2,49 @@
 //! table for the cases that exercise select_backend (Plan 03's
 //! pyscf-runtime test covered the CPU-only parser cases).
 //!
-//! Run with `--test-threads=1` because tests mutate process env vars.
+//! These tests mutate process-wide `PYSCF_*` env vars, so they serialize on
+//! a shared mutex (`save()` acquires it, `restore()` releases it) — that keeps
+//! them correct under the default parallel test harness without relying on
+//! `--test-threads=1`.
 
 use pyscf_algebra::select_backend;
 use pyscf_runtime::{BackendKind, DType};
 use std::env;
+use std::sync::{Mutex, MutexGuard};
 
-fn setup_tracing() { let _ = tracing_subscriber::fmt::try_init(); }
+/// Serializes env-var mutation across the tests in this binary. Poison is
+/// recovered (a panicking test must not wedge the rest).
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-fn save() -> (Option<String>, Option<String>) {
-    (env::var("PYSCF_BACKEND").ok(), env::var("PYSCF_DTYPE").ok())
+fn setup_tracing() {
+    let _ = tracing_subscriber::fmt::try_init();
 }
 
-fn restore(saved: (Option<String>, Option<String>)) {
+/// Held state: the serialization guard plus the prior env values.
+type SavedEnv = (MutexGuard<'static, ()>, Option<String>, Option<String>);
+
+fn save() -> SavedEnv {
+    let guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    (
+        guard,
+        env::var("PYSCF_BACKEND").ok(),
+        env::var("PYSCF_DTYPE").ok(),
+    )
+}
+
+fn restore(saved: SavedEnv) {
+    let (_guard, backend, dtype) = saved;
     unsafe {
-        match saved.0 {
+        match backend {
             Some(v) => env::set_var("PYSCF_BACKEND", v),
             None => env::remove_var("PYSCF_BACKEND"),
         }
-        match saved.1 {
+        match dtype {
             Some(v) => env::set_var("PYSCF_DTYPE", v),
             None => env::remove_var("PYSCF_DTYPE"),
         }
     }
+    // `_guard` drops here, releasing the lock for the next test.
 }
 
 /// Roadmap criterion 6 row "unset" → CPU.
@@ -32,10 +52,13 @@ fn restore(saved: (Option<String>, Option<String>)) {
 fn unset_resolves_to_cpu() {
     setup_tracing();
     let s = save();
-    unsafe { env::remove_var("PYSCF_BACKEND"); env::remove_var("PYSCF_DTYPE"); }
+    unsafe {
+        env::remove_var("PYSCF_BACKEND");
+        env::remove_var("PYSCF_DTYPE");
+    }
     let sel = select_backend().expect("unset must succeed");
     assert_eq!(sel.kind, BackendKind::Cpu);
-    assert_eq!(sel.dtype, DType::F64);  // D-08 default
+    assert_eq!(sel.dtype, DType::F64); // D-08 default
     assert_eq!(sel.raw_env, None);
     restore(s);
 }
@@ -45,7 +68,10 @@ fn unset_resolves_to_cpu() {
 fn cpu_explicit_resolves_to_cpu() {
     setup_tracing();
     let s = save();
-    unsafe { env::set_var("PYSCF_BACKEND", "cpu"); env::remove_var("PYSCF_DTYPE"); }
+    unsafe {
+        env::set_var("PYSCF_BACKEND", "cpu");
+        env::remove_var("PYSCF_DTYPE");
+    }
     let sel = select_backend().expect("cpu must succeed");
     assert_eq!(sel.kind, BackendKind::Cpu);
     assert_eq!(sel.raw_env.as_deref(), Some("cpu"));
@@ -57,7 +83,9 @@ fn cpu_explicit_resolves_to_cpu() {
 fn bogus_resolves_to_cpu_with_warn() {
     setup_tracing();
     let s = save();
-    unsafe { env::set_var("PYSCF_BACKEND", "definitely-not-a-backend"); }
+    unsafe {
+        env::set_var("PYSCF_BACKEND", "definitely-not-a-backend");
+    }
     let sel = select_backend().expect("bogus must fall back to CPU per ALG-04");
     assert_eq!(sel.kind, BackendKind::Cpu);
     assert_eq!(sel.raw_env.as_deref(), Some("definitely-not-a-backend"));
@@ -71,7 +99,10 @@ fn bogus_resolves_to_cpu_with_warn() {
 fn auto_on_cpu_only_build_resolves_to_cpu() {
     setup_tracing();
     let s = save();
-    unsafe { env::set_var("PYSCF_BACKEND", "auto"); env::set_var("PYSCF_DTYPE", "f64"); }
+    unsafe {
+        env::set_var("PYSCF_BACKEND", "auto");
+        env::set_var("PYSCF_DTYPE", "f64");
+    }
     let sel = select_backend().expect("auto must succeed");
     // On CPU-only Phase 1 build (no cuda/wgpu/rocm features), auto
     // resolves to Cpu.
@@ -84,7 +115,10 @@ fn auto_on_cpu_only_build_resolves_to_cpu() {
 fn case_insensitive_env_parsing() {
     setup_tracing();
     let s = save();
-    unsafe { env::set_var("PYSCF_BACKEND", "AUTO"); env::set_var("PYSCF_DTYPE", "F64"); }
+    unsafe {
+        env::set_var("PYSCF_BACKEND", "AUTO");
+        env::set_var("PYSCF_DTYPE", "F64");
+    }
     let sel = select_backend().expect("AUTO uppercase must work");
     assert_eq!(sel.kind, BackendKind::Cpu);
     assert_eq!(sel.dtype, DType::F64);
@@ -96,7 +130,10 @@ fn case_insensitive_env_parsing() {
 fn dtype_f32_honored() {
     setup_tracing();
     let s = save();
-    unsafe { env::remove_var("PYSCF_BACKEND"); env::set_var("PYSCF_DTYPE", "f32"); }
+    unsafe {
+        env::remove_var("PYSCF_BACKEND");
+        env::set_var("PYSCF_DTYPE", "f32");
+    }
     let sel = select_backend().expect("f32 dtype must succeed");
     assert_eq!(sel.dtype, DType::F32);
     restore(s);
@@ -111,7 +148,10 @@ fn dtype_f32_honored() {
 fn alg08_log_resolution_invoked() {
     setup_tracing();
     let s = save();
-    unsafe { env::remove_var("PYSCF_BACKEND"); env::remove_var("PYSCF_DTYPE"); }
+    unsafe {
+        env::remove_var("PYSCF_BACKEND");
+        env::remove_var("PYSCF_DTYPE");
+    }
     // No assertion on log content (would need tracing-test); the test
     // value is "select_backend doesn't panic when log_resolution
     // executes its tracing::info! macro".
