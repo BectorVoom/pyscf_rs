@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 05-03-PLAN.md
-last_updated: "2026-05-23T08:06:51.708Z"
+stopped_at: Completed 05-04-PLAN.md
+last_updated: "2026-05-23T08:20:06.116Z"
 last_activity: 2026-05-23
 progress:
   total_phases: 8
   completed_phases: 2
   total_plans: 51
-  completed_plans: 45
+  completed_plans: 46
   percent: 25
 ---
 
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 05 (mp2) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
 Last activity: 2026-05-23
 
@@ -68,6 +68,7 @@ Progress: [██████████] 95% (42/44 plans done across all phas
 | Phase 05 P01 | 9min | 3 tasks | 24 files |
 | Phase 05 P02 | 10min | 2 tasks | 3 files |
 | Phase 05 P03 | 14min | 2 tasks | 7 files |
+| Phase 05 P04 | 18min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -98,6 +99,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-01 scaffold — `pyscf-ao2mo` registered as the 20th `pyscf-*` member (D-01) with `general`/`full` stub surface + `Ao2moError` bridging to `PyscfRsError`. `pyscf-mp2` deps wired (ao2mo/scf/df/gto/algebra/runtime) strictly pyo3-free + cubecl-free (`xtask check-dependency-wall` PASS), 9-module skeleton + `Mp2Error` bridge. The five MP2-08 helper signatures (`get_nocc`/`get_nmo`/`get_frozen_mask`/`get_e_hf`/`mo_without_core` — the verbatim `cc/ccsd.py:35` CCSD import contract; Python `_mo_without_core`→Rust `mo_without_core` via `#[doc(alias)]`) exported; the always-on `ccsd_import_contract` symbol-existence arm passes. Five MP2 numeric oracle arms registered in `KNOWN_METHODS` (len 13→18: `mp2_rmp2_energy`/`mp2_ump2_energy`/`dfmp2_energy`/`dfmp2_native_energy`/`mp2_rdm`), len-assert updated. CI: always-on `mp2-structural` job + `if: false` cintx#11-gated `mp2-oracle-cintx-gated` numeric job (needs arity-4 `int2e` for in-core + arity-3 `int3c2e_sph` for DF; mirrors DF-HF/DFT-01 gating). MP2 python `dispatch` match arms + all numeric/kernel bodies deferred to 05-02..05-06 (catch-all `UnknownMethod` arm covers the names until then; gated job never runs). Pure scaffolding — ships NO compute.
 - [Phase ?]: [Phase 05]: 05-02 AO→MO transform — transform::quarter_transform implements the (pq|rs)→(iq|rs)→(ij|rs)→(ij|ks)→(ij|kl) quarter-transform as host loops (gemm is NotYetImplemented{phase:2}); every per-index sum materializes products into a reused Vec then oracle_sum (4 call sites, 0 bare += in the contraction) → bit-exact + thread-count invariant (T-05-02-FP). general(eri_ao,nao,[&MOCoefficients;4]) ports the eri_ao.size==nao**4 einsum branch of ao2mo/incore.py:125-128 (real-only: .conj() no-op); full = general(..,[mo_coeff;4]). F-order flat-index doc-commented at every boundary (Pitfall 3). T-05-02-SHAPE: validated at entry → ShapeMismatch, never OOB/panic. The 05-01 stub signatures (&[&[f64]]/&[f64]) were replaced (no external callers). Always-on synthetic-ERI roundtrip (the ONE un-gated numeric assertion this phase) asserts general/full/identity bit-exact vs an independent staged longhand reference. check-no-fma + check-dependency-wall PASS.
 - [Phase ?]: [Phase 05]: 05-03 in-core RMP2 — rmp2_kernel ports mp2.py:47-76 closed-form (t2=(ia|jb)/(εi+εj−εa−εb), edi=2·oracle_dot(gi,t2i), exi=−oracle_dot((ib|ja),t2i)); EVERY reduction via oracle_dot/oracle_sum (no += accumulator) → bit-exact + thread-count invariant (T-05-03-FP); verified vs synthetic ChemistsEris (1×1 e_corr=−0.125, 1×2 longhand). default_ao2mo builds frozen-aware co/cv subsets + ao2mo::general([co,cv,co,cv]) with eri_ao=intor(int2e); int2e NotYetImplemented{phase:2} propagates with ? (never panics/zeros, T-05-03-FFI), numeric flips on at cintx#11 (D-05). Five MP2-08 helpers real bodies over (mo_occ,&Frozen) = always-on CCSD import contract. Frozen enum None/Count/List/Auto/Window; chemcore element→ORBITAL OnceLock table VERBATIM from elements.py:1079 (119 entries bit-identical) summed DIRECTLY no ÷2 (PLAN said /2 but upstream chemcore() returns sum; O→1/Si→5). scs_energy 1.0/1.0=plain, 1/3,1.2=SCS. Mp2OverrideHooks+ChemistsEris+NoMp2Overrides pyo3-free (D-08); energy default→default_energy, rdm1/rdm2→NotYetImplemented{plan:4} (05-04). check-no-fma + dependency-wall PASS.
+- [Phase ?]: [Phase 05]: 05-04 UMP2 + RDMs — ump2_kernel ports ump2.py:35-109 open-shell e_corr = e_aa + e_bb + e_ab: same-spin (aa/bb) antisymmetrized 0.5·(direct − exchange), opposite-spin (ab) direct-only (no exchange), each channel using its own α/β orbital energies; e_corr via oracle_sum([e_aa,e_ab,e_bb]). New UmpAmplitudes { t2aa, t2ab, t2bb } spin-resolved triple (NO in-repo analog; single-channel pyscf-core::Amplitudes does not cover it); UmpReference reuses Mp2Reference twice (alpha/beta, mirrors ump2.py mo_*[0/1]). ump2_kernel takes the three ChemistsEris blocks DIRECTLY (synthetic-block always-on test path; pyscf-py/default_ao2mo build them per channel once arity-4 int2e lands). RDMs: gamma1_intermediates (doo=−dm1occ / dvv) ports mp2.py:175-203; make_rdm1 assembles nmo×nmo MO 1-RDM (doo+dooᵀ, dvv+dvvᵀ, +2 occ diag) with ao_repr (C·γ·Cᵀ) + with_frozen core-diag embedding; make_rdm2 builds nmo0^4 Chemist 2-RDM (dovov occ/vir placement + Chemist transpose, dm1 contribution, separable HF +4/−2, frozen oidx/vidx fancy-index maps). make_rdm2 ao_repr=true returns NotYetImplemented (nmo^4 AO back-transform deferred to Phase-7 gradients) — never silently-wrong. EVERY reduction via oracle_sum/oracle_dot (no += ; T-05-04-FP, bit-exact + RAYON 1==8). Tr(γ)==2·nocc proven analytically (Tr(doo)==−Tr(dvv)). RDM hooks seams stay cintx#11-gated (need default_ao2mo int2e to produce t2); free fns ship now. check-no-fma + check-dependency-wall PASS. requirements MP2-02 + MP2-05 complete.
 
 ### Pending Todos
 
@@ -141,6 +143,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-23T08:06:51.705Z
-Stopped at: Completed 05-03-PLAN.md
+Last session: 2026-05-23T08:20:06.113Z
+Stopped at: Completed 05-04-PLAN.md
 Resume file: None

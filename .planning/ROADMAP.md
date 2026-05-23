@@ -203,7 +203,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 05-04-PLAN.md — Open-shell UMP2 spin-block kernel + `UmpAmplitudes (t2aa/t2ab/t2bb)` container + `make_rdm1`/`make_rdm2` via `_gamma1_intermediates` (MP2-02,05)
+- [x] 05-04-PLAN.md — Open-shell UMP2 spin-block kernel + `UmpAmplitudes (t2aa/t2ab/t2bb)` container + `make_rdm1`/`make_rdm2` via `_gamma1_intermediates` (MP2-02,05)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -272,7 +272,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 2. GTO | 0/10 | Plans created (9 active + 1 deferred gap-closure for cintx ECP) | - |
 | 3. SCF + PyO3 bindings | 0/11 | Planned | - |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
-| 5. MP2 | 3/7 | In Progress|  |
+| 5. MP2 | 4/7 | In Progress|  |
 | 6. CCSD | 0/TBD | Not started | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
