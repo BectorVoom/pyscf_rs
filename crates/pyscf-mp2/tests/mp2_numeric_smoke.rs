@@ -9,8 +9,9 @@
 //! end-to-end path int2e → ao2mo → kernel → energy lights up: a closed-shell
 //! RMP2 correlation energy is finite, non-zero, and `e_corr ≤ 0`.
 
+use pyscf_algebra::oracle_dot;
 use pyscf_core::MOCoefficients;
-use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor};
 use pyscf_mp2::{Frozen, Mp2Reference, NoMp2Overrides, dfrmp2_kernel, rmp2_kernel};
 
 /// Build a REAL `Mp2Reference` on `atom`/`basis` with an identity `mo_coeff`
@@ -105,44 +106,96 @@ fn rmp2_energy_is_thread_count_invariant() {
     );
 }
 
-/// Conventional DF-MP2 through the REAL int3c2e_sph path (cholesky_eri →
-/// B-tensor → df_ao2mo → kernel). The DF metric Cholesky for some auxiliary
-/// bases is ill-conditioned under the current plain Cholesky-Banachiewicz (a
-/// known Phase-3 robustness gap — see pyscf-df/tests/df_integrals_shape.rs);
-/// when the metric is well-formed, the kernel must yield a finite e_corr ≤ 0.
-/// int3c2e_sph itself is verified always-on by pyscf-gto/tests/int3c2e_auxmol.rs.
+/// Conventional DF-MP2 end-to-end through the REAL int3c2e_sph + the 05-09
+/// rank-revealing DF-metric fallback: cholesky_eri → B-tensor → df_ao2mo →
+/// kernel now SUCCEEDS for the weigend (*-ri) aux (previously rank-deficient),
+/// yielding a finite, physically-signed correlation energy.
 #[test]
-fn dfmp2_h2_sto3g_finite_when_metric_well_formed() {
+fn dfmp2_h2_sto3g_finite_negative_corr() {
     let refr = real_identity_reference("H 0 0 0; H 0 0 0.74", "sto-3g");
     let aux = pyscf_df::default_ri("sto-3g");
 
-    match pyscf_df::cholesky_eri(&refr.mol, aux) {
-        Ok(df) => {
-            let res = dfrmp2_kernel(&refr, &Frozen::None, &df, false)
-                .expect("DF-MP2 numeric must run end-to-end with a real B-tensor");
-            assert!(
-                res.e_corr.is_finite(),
-                "DF e_corr finite, got {}",
-                res.e_corr
-            );
-            assert!(
-                res.e_corr <= 1e-12,
-                "closed-shell DF-MP2 correlation energy must be ≤ 0, got {}",
-                res.e_corr
-            );
-            eprintln!(
-                "DF-MP2 H2/STO-3G e_corr = {} (naux={})",
-                res.e_corr, df.naux
-            );
-        }
-        Err(e) => {
-            // Known Phase-3 DF-metric robustness limitation, NOT an int3c2e
-            // failure (int3c2e_auxmol.rs proves int3c2e evaluates). The call
-            // must still be a clean Result, never a panic.
-            eprintln!(
-                "DF-MP2 numeric skipped: cholesky_eri returned Err (Phase-3 metric \
-                 robustness, not int3c2e): {e}"
-            );
+    let df = pyscf_df::cholesky_eri(&refr.mol, aux)
+        .expect("cholesky_eri must succeed via the 05-09 rank-revealing fallback");
+    let res = dfrmp2_kernel(&refr, &Frozen::None, &df, false)
+        .expect("DF-MP2 numeric must run end-to-end with a real B-tensor");
+
+    assert!(
+        res.e_corr.is_finite(),
+        "DF e_corr finite, got {}",
+        res.e_corr
+    );
+    assert!(
+        res.e_corr <= 1e-12,
+        "closed-shell DF-MP2 correlation energy must be ≤ 0, got {}",
+        res.e_corr
+    );
+    eprintln!(
+        "DF-MP2 H2/STO-3G e_corr = {} (eff. naux={})",
+        res.e_corr, df.naux
+    );
+}
+
+/// The DF B-tensor must reconstruct the exact 2-electron integrals within DF
+/// accuracy: `Σ_Q B^Q_{μν} B^Q_{λσ} ≈ (μν|λσ)` where the RHS is the real
+/// `intor("int2e")` (now available, 05-08). This is the gold-standard in-tree
+/// correctness check for the whole DF path (int3c2e + int2c2e + the metric
+/// fit) — independent of any MP2 kernel. DF is an approximation, so the
+/// tolerance is loose (aux-incompleteness), but the reconstruction must be
+/// finite, bra-ket symmetric, and close.
+#[test]
+fn df_b_tensor_reconstructs_exact_eri() {
+    let mol = M(MoleBuildArgs {
+        atom: AtomInput::String("H 0 0 0; H 0 0 0.74".into()),
+        basis: BasisInput::Name("sto-3g".into()),
+        ..Default::default()
+    })
+    .expect("build H2/STO-3G");
+    let nao = mol.nao_nr;
+
+    let exact = intor(&mol, "int2e").expect("int2e");
+    let df = pyscf_df::cholesky_eri(&mol, pyscf_df::default_ri("sto-3g"))
+        .expect("cholesky_eri (rank-revealing fallback)");
+    let naux = df.naux;
+
+    // b_uvq row-major [nao,nao,naux]: the Q-vector for (μν) is contiguous at
+    // (μ*nao+ν)*naux .. +naux. df_eri(μν,λσ) = Σ_Q B[μν,Q]·B[λσ,Q].
+    let bvec = |mu: usize, nu: usize| {
+        let base = (mu * nao + nu) * naux;
+        &df.b_uvq[base..base + naux]
+    };
+    // exact int2e is F-order [nao;4]: (μ,ν,λ,σ) at μ + ν*nao + λ*nao² + σ*nao³.
+    let exact_at = |mu: usize, nu: usize, la: usize, si: usize| {
+        exact.values[mu + nu * nao + la * nao * nao + si * nao * nao * nao]
+    };
+
+    let mut max_err = 0.0f64;
+    for mu in 0..nao {
+        for nu in 0..nao {
+            for la in 0..nao {
+                for si in 0..nao {
+                    let df_val = oracle_dot(bvec(mu, nu), bvec(la, si));
+                    assert!(df_val.is_finite(), "DF-reconstructed ERI must be finite");
+                    // Bra-ket symmetry of the reconstruction.
+                    let swapped = oracle_dot(bvec(la, si), bvec(mu, nu));
+                    assert!(
+                        (df_val - swapped).abs() < 1e-12,
+                        "DF reconstruction symmetric"
+                    );
+                    max_err = max_err.max((df_val - exact_at(mu, nu, la, si)).abs());
+                }
+            }
         }
     }
+    // Diagonal Coulomb self-repulsion stays positive after DF.
+    assert!(
+        oracle_dot(bvec(0, 0), bvec(0, 0)) > 0.0,
+        "(00|00)_DF must be > 0"
+    );
+    eprintln!("DF reconstruction max abs error vs exact int2e = {max_err:.3e}");
+    // Loose DF-accuracy bound (the largest H2/STO-3G ERI ~0.77 Hartree).
+    assert!(
+        max_err < 5e-2,
+        "DF reconstruction error {max_err:.3e} exceeds the loose DF-accuracy bound"
+    );
 }
