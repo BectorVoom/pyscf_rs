@@ -62,7 +62,7 @@ pub mod chkfile;
 // XC parsing / eval (04-05 modules, surfaced here).
 pub use error::DftError;
 pub use parser::{Component, HybCoeffs, XcSpec};
-pub use xc_backend::{DerivOrder, Family, RhoBlock, XcBackend, XcOutput};
+pub use xc_backend::{DerivOrder, Family, RhoBlock, UksXcOutput, XcBackend, XcOutput};
 
 // KS SCF surface (04-06).
 pub use hooks::{KsOverrideHooks, NoKsOverrides};

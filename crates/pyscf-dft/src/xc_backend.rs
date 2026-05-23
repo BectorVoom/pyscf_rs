@@ -161,6 +161,31 @@ pub struct XcOutput {
     pub vsigma: Vec<f64>,
 }
 
+/// Spin-polarized (open-shell, UKS) XC evaluation output over a grid block
+/// (CR-01).
+///
+/// Unlike [`XcOutput`] (which is the closed-shell `rho/2`-split surface), this
+/// carries the GENUINE per-spin first derivatives: `vrho_a[ip] = ∂f/∂rho_a`
+/// and `vrho_b[ip] = ∂f/∂rho_b` are computed from independent `rho_a`/`rho_b`
+/// inputs, so they DIFFER for an asymmetric (`rho_a != rho_b`) density. The
+/// `vsigma_*` fields are the GGA gradient-variable derivatives
+/// (`∂f/∂sigma_aa`, `∂f/∂sigma_ab`, `∂f/∂sigma_bb`); they are all-zero for LDA.
+#[derive(Debug, Clone, Default)]
+pub struct UksXcOutput {
+    /// Per-point XC energy density `f` (xcfun `output[0]`).
+    pub exc: Vec<f64>,
+    /// Per-point ∂f/∂rho_a — the alpha-spin LDA/GGA potential.
+    pub vrho_a: Vec<f64>,
+    /// Per-point ∂f/∂rho_b — the beta-spin LDA/GGA potential.
+    pub vrho_b: Vec<f64>,
+    /// Per-point ∂f/∂sigma_aa (GGA; zero for LDA).
+    pub vsigma_aa: Vec<f64>,
+    /// Per-point ∂f/∂sigma_ab (GGA cross-term; zero for LDA).
+    pub vsigma_ab: Vec<f64>,
+    /// Per-point ∂f/∂sigma_bb (GGA; zero for LDA).
+    pub vsigma_bb: Vec<f64>,
+}
+
 /// The cfg-gated XC backend seam (D-03). `Xcfun` is the default-compiled
 /// backend; `Libxc` is only present under `--features libxc`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -200,6 +225,46 @@ impl XcBackend {
             XcBackend::Xcfun => xcfun_eval(spec, rho, order),
             #[cfg(feature = "libxc")]
             XcBackend::Libxc => libxc_impl::libxc_eval(spec, rho, order),
+        }
+    }
+
+    /// Spin-polarized (open-shell, UKS) evaluation (CR-01).
+    ///
+    /// Evaluates the functional `spec` over INDEPENDENT alpha/beta densities
+    /// `rho_a`/`rho_b` (and, for GGA, the gradient variables `sigma_aa`,
+    /// `sigma_ab`, `sigma_bb`) and returns the per-spin first derivatives in a
+    /// [`UksXcOutput`]. This is the genuine open-shell path: `vrho_a` and
+    /// `vrho_b` differ whenever `rho_a != rho_b`, so the caller can build two
+    /// distinct `Vxc` matrices (NOT one cloned twice).
+    ///
+    /// Family is inferred from `sigma_aa`: `None` → LDA (`A_B`), `Some` → GGA
+    /// (`A_B_GAA_GAB_GBB`). It is cross-checked against the functional's
+    /// declared family; a mismatch is a clean [`DftError::BackendEval`].
+    ///
+    /// # Errors
+    /// [`DftError::BackendEval`] on a backend-side failure (unknown name,
+    /// family mismatch, buffer mismatch). The `libxc` backend arm returns
+    /// `BackendEval("libxc UKS eval not yet implemented")` — UKS libxc support
+    /// is deferred (CR-01 scopes the xcfun default path only).
+    #[allow(clippy::too_many_arguments)]
+    pub fn eval_uks(
+        &self,
+        spec: &XcSpec,
+        rho_a: &[f64],
+        rho_b: &[f64],
+        sigma_aa: Option<&[f64]>,
+        sigma_ab: Option<&[f64]>,
+        sigma_bb: Option<&[f64]>,
+        order: DerivOrder,
+    ) -> Result<UksXcOutput, DftError> {
+        match self {
+            XcBackend::Xcfun => {
+                xcfun_eval_uks(spec, rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb, order)
+            }
+            #[cfg(feature = "libxc")]
+            XcBackend::Libxc => Err(DftError::BackendEval(
+                "libxc UKS eval not yet implemented".into(),
+            )),
         }
     }
 
@@ -464,6 +529,162 @@ fn xcfun_eval(spec: &XcSpec, rho: &RhoBlock<'_>, order: DerivOrder) -> Result<Xc
                 // For A_B_GAA_GAB_GBB the order-1 block is
                 // [f, da, db, dgaa, dgab, dgbb]; index 3 = ∂f/∂gaa.
                 out.vsigma[ip] = out_buf[base + 3];
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The xcfun_rs spin-polarized (open-shell, UKS) evaluation path (CR-01).
+///
+/// Mirrors [`xcfun_eval`] but builds the per-point input from the GENUINE
+/// `rho_a[ip]`/`rho_b[ip]` (NOT a `rho/2` symmetric split), so the returned
+/// `vrho_a`/`vrho_b` differ for an asymmetric density. Family is inferred from
+/// `sigma_aa` (`None` → LDA, `Some` → GGA) and cross-checked against the
+/// functional's declared family.
+///
+/// xcfun spin-resolved layout:
+///   - LDA (`A_B`):              input `[rho_a, rho_b]`,
+///     order-1 output `[f, ∂f/∂rho_a, ∂f/∂rho_b]`.
+///   - GGA (`A_B_GAA_GAB_GBB`):  input `[rho_a, rho_b, gaa, gab, gbb]`,
+///     order-1 output `[f, ∂f/∂rho_a, ∂f/∂rho_b, ∂f/∂gaa, ∂f/∂gab, ∂f/∂gbb]`.
+#[allow(clippy::too_many_arguments)]
+fn xcfun_eval_uks(
+    spec: &XcSpec,
+    rho_a: &[f64],
+    rho_b: &[f64],
+    sigma_aa: Option<&[f64]>,
+    sigma_ab: Option<&[f64]>,
+    sigma_bb: Option<&[f64]>,
+    order: DerivOrder,
+) -> Result<UksXcOutput, DftError> {
+    use xcfun_rs::{Functional, Mode, Vars};
+
+    let np = rho_a.len();
+    if rho_b.len() != np {
+        return Err(DftError::BackendEval(format!(
+            "xcfun_eval_uks: rho_a len {np} != rho_b len {}",
+            rho_b.len()
+        )));
+    }
+
+    let mut func = Functional::new();
+    for &(id, fac) in spec.components() {
+        let name = xcfun_id_to_name(id).ok_or_else(|| {
+            DftError::BackendEval(format!("xcfun: no name mapping for functional id {id}"))
+        })?;
+        func.set(name, fac)
+            .map_err(|e| DftError::BackendEval(format!("xcfun set('{name}',{fac}): {e:?}")))?;
+    }
+
+    // Family detection from the functional's declared dependencies, cross-
+    // checked against the supplied gradient-variable inputs (sigma_aa present
+    // ⇒ caller intends GGA; absent ⇒ LDA). MGGA UKS is deferred (CR-01).
+    let detected = if func.is_metagga() {
+        Family::Mgga
+    } else if func.is_gga() {
+        Family::Gga
+    } else {
+        Family::Lda
+    };
+    let supplied = if sigma_aa.is_some() {
+        Family::Gga
+    } else {
+        Family::Lda
+    };
+    if detected == Family::Mgga {
+        return Err(DftError::BackendEval(
+            "xcfun_eval_uks: MGGA open-shell eval not yet implemented (CR-01 covers LDA + GGA)"
+                .into(),
+        ));
+    }
+    if detected != supplied {
+        return Err(DftError::BackendEval(format!(
+            "xcfun_eval_uks: functional family {detected:?} does not match supplied input \
+             family {supplied:?} (sigma_aa {} present)",
+            if sigma_aa.is_some() { "is" } else { "is NOT" }
+        )));
+    }
+
+    // Spin-resolved Vars per family — A_B (LDA) / A_B_GAA_GAB_GBB (GGA).
+    let vars = match detected {
+        Family::Lda => Vars::A_B,
+        Family::Gga => Vars::A_B_GAA_GAB_GBB,
+        Family::Mgga => unreachable!("MGGA rejected above"),
+    };
+
+    let mut out = UksXcOutput {
+        exc: vec![0.0; np],
+        vrho_a: vec![0.0; np],
+        vrho_b: vec![0.0; np],
+        vsigma_aa: vec![0.0; np],
+        vsigma_ab: vec![0.0; np],
+        vsigma_bb: vec![0.0; np],
+    };
+    if np == 0 {
+        return Ok(out);
+    }
+
+    func.eval_setup(vars, Mode::PartialDerivatives, order.as_u32())
+        .map_err(|e| DftError::BackendEval(format!("xcfun eval_setup: {e:?}")))?;
+
+    let inlen = func.input_length();
+    let outlen = func
+        .output_length()
+        .map_err(|e| DftError::BackendEval(format!("xcfun output_length: {e:?}")))?;
+
+    // For GGA the caller must supply all three sigma channels.
+    let (saa, sab, sbb) = if detected == Family::Gga {
+        let saa = sigma_aa.ok_or_else(|| {
+            DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_aa".into())
+        })?;
+        let sab = sigma_ab.ok_or_else(|| {
+            DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_ab".into())
+        })?;
+        let sbb = sigma_bb.ok_or_else(|| {
+            DftError::BackendEval("xcfun_eval_uks: GGA requires sigma_bb".into())
+        })?;
+        if saa.len() != np || sab.len() != np || sbb.len() != np {
+            return Err(DftError::BackendEval(
+                "xcfun_eval_uks: sigma_* length must equal rho length".into(),
+            ));
+        }
+        (Some(saa), Some(sab), Some(sbb))
+    } else {
+        (None, None, None)
+    };
+
+    // Build the per-point input from the GENUINE rho_a/rho_b (NOT a rho/2
+    // split). Point p reads density[p*inlen .. p*inlen+inlen].
+    let mut density = vec![0.0_f64; np * inlen];
+    for ip in 0..np {
+        let base = ip * inlen;
+        density[base] = rho_a[ip]; // a
+        density[base + 1] = rho_b[ip]; // b
+        if detected == Family::Gga {
+            density[base + 2] = saa.unwrap()[ip]; // gaa
+            density[base + 3] = sab.unwrap()[ip]; // gab
+            density[base + 4] = sbb.unwrap()[ip]; // gbb
+        }
+    }
+    let mut out_buf = vec![0.0_f64; np * outlen];
+
+    func.eval_vec(&density, inlen, &mut out_buf, outlen, np)
+        .map_err(|e| DftError::BackendEval(format!("xcfun eval_vec: {e:?}")))?;
+
+    // Output layout (PartialDerivatives, spin-resolved):
+    //   LDA: [f, ∂f/∂rho_a, ∂f/∂rho_b]                         (indices 0..2)
+    //   GGA: [f, ∂f/∂rho_a, ∂f/∂rho_b, ∂f/∂gaa, ∂f/∂gab, ∂f/∂gbb] (0..5)
+    for ip in 0..np {
+        let base = ip * outlen;
+        out.exc[ip] = out_buf[base];
+        if order >= DerivOrder::Vxc && outlen > 2 {
+            out.vrho_a[ip] = out_buf[base + 1];
+            out.vrho_b[ip] = out_buf[base + 2];
+            if detected == Family::Gga && outlen > 5 {
+                out.vsigma_aa[ip] = out_buf[base + 3];
+                out.vsigma_ab[ip] = out_buf[base + 4];
+                out.vsigma_bb[ip] = out_buf[base + 5];
             }
         }
     }
