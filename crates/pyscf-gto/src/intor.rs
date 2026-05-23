@@ -612,7 +612,7 @@ pub fn intor_with_auxmol(
 /// cintx ships `int3c2e_sph` as a base arity-3 operator (api_manifest.rs:404),
 /// libcint-byte-identical via cintx's `center_3c2e_parity`/`safe_api_arity3_parity`
 /// suites. Wired in 05-08 (cintx#11 DF half): a combined orbital+aux `BasisSet`
-/// is built (PySCF fakemol/`conc_mol` pattern — `build_int3c2e_combined_basis`),
+/// is built (PySCF fakemol/`conc_mol` pattern — `projection::build_combined_basis`),
 /// then `(μ ν | P)` is evaluated over shell triples with μ,ν drawn from the
 /// orbital shell range and P from the auxiliary shell range. The per-triple
 /// F-order block `[ni,nj,nk]` is stitched into the global F-order `[nao,nao,naux]`
@@ -631,7 +631,7 @@ fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput
         })?;
 
     // Combined orbital+aux basis (orbital shells lead, aux shells follow).
-    let (combined, n_orb_shells, n_aux_shells) = crate::projection::build_int3c2e_combined_basis(
+    let (combined, n_orb_shells, n_aux_shells) = crate::projection::build_combined_basis(
         &mol._atom,
         &mol._basis,
         mol.cart,
@@ -750,6 +750,163 @@ fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput
 /// `int2c2e_sph` only consults auxmol.)
 fn evaluate_int2c2e_aux(auxmol: &Mole) -> Result<IntorOutput, PyscfRsError> {
     intor(auxmol, "int2c2e_sph")
+}
+
+/// Cross-basis arity-2 integral between two DIFFERENT built molecules. Equivalent
+/// to upstream `gto.mole.intor_cross(name, mol_a, mol_b)` — e.g. the cross-overlap
+/// `<A_μ | int1e_ovlp | B_ν>`, shape `[nao_a, nao_b]` in F-order. Built over the
+/// combined two-basis `BasisSet` (`projection::build_combined_basis`), stitching
+/// the off-diagonal A×B block. Scalar (1-component) arity-2 only (overlap etc.);
+/// used by the minao init guess (`S_cross = <working|minao>`, plan 03-13).
+///
+/// `name` may be given with or without the `_sph`/`_cart` suffix (it is added per
+/// `mol_a.cart`, matching `intor`).
+///
+/// # Errors
+/// Unbuilt mol, unknown/non-arity-2/spinor/component-leading name, shape overflow,
+/// or a cintx evaluate failure — all `?`-propagated, never a panic.
+pub fn intor_cross(mol_a: &Mole, mol_b: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
+    if !mol_a._built || !mol_b._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "intor_cross: both molecules must be built — call pyscf_gto::M(args) first".into(),
+        )));
+    }
+
+    let full_name = add_suffix(name, mol_a.cart);
+
+    let layout = layout_table::lookup(&full_name).ok_or_else(|| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_cross: unknown intor '{full_name}' (not in INTOR_LAYOUTS)",
+        )))
+    })?;
+    if !matches!(layout, IntorLayout::ScalarFOrder) {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "component-leading arity-2 intor_cross (only scalar, e.g. int1e_ovlp)",
+        });
+    }
+
+    let representation = if full_name.ends_with("_cart") {
+        Representation::Cart
+    } else if full_name.ends_with("_sph") {
+        Representation::Spheric
+    } else if full_name.ends_with("_spinor") {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "spinor representation (out of v1 scope)",
+        });
+    } else {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_cross name lacks _sph/_cart/_spinor suffix after normalisation: {full_name}",
+        ))));
+    };
+
+    let descriptor = Resolver::descriptor_by_symbol(&full_name).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx-ops resolver does not know symbol '{full_name}': {e}"
+        )))
+    })?;
+    if descriptor.entry.arity != 2 {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_cross supports arity-2 integrals only; '{full_name}' is arity {}",
+            descriptor.entry.arity,
+        ))));
+    }
+    let operator = descriptor.id;
+
+    // Combined basis: A shells lead, B shells follow.
+    let (combined, n_a_shells, n_b_shells) = crate::projection::build_combined_basis(
+        &mol_a._atom,
+        &mol_a._basis,
+        mol_a.cart,
+        &mol_b._atom,
+        &mol_b._basis,
+        mol_b.cart,
+    )?;
+
+    let nao_a = mol_a.nao_nr;
+    let nao_b = mol_b.nao_nr;
+    let total = nao_a.checked_mul(nao_b).ok_or_else(|| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_cross '{full_name}': shape overflow nao_a={nao_a} nao_b={nao_b}",
+        )))
+    })?;
+
+    let meta = combined.meta();
+    let total_shells = n_a_shells + n_b_shells;
+    let shell_offsets: Vec<usize> = (0..total_shells)
+        .map(|s| meta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let shell_counts: Vec<usize> = (0..total_shells)
+        .map(|s| meta.ao_count(s).unwrap_or(0))
+        .collect();
+
+    let mut out = vec![0.0f64; total];
+
+    // A×B off-diagonal block: i ∈ A shells, j ∈ B shells.
+    for i in 0..n_a_shells {
+        for j in n_a_shells..total_shells {
+            let shells = combined.shell_tuple_for_indices([i, j]).map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "shell_tuple_for_indices(i={i}, j={j}) failed for '{full_name}': {e}",
+                )))
+            })?;
+            let outcome = SessionRequest::new(
+                operator,
+                representation,
+                &combined,
+                shells,
+                ExecutionOptions::default(),
+            )
+            .query_workspace()
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx workspace query failed for cross '{full_name}' pair ({i},{j}): {e}",
+                )))
+            })?
+            .evaluate()
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx evaluate failed for cross '{full_name}' pair ({i},{j}): {e}",
+                )))
+            })?;
+
+            let ni = shell_counts[i];
+            let nj = shell_counts[j];
+            let oi = shell_offsets[i];
+            // B AO offset within [0, nao_b): combined offset minus the A block.
+            let ob = shell_offsets[j].checked_sub(nao_a).ok_or_else(|| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "intor_cross: B shell {j} AO offset {} < nao_a {nao_a} (combined layout invariant)",
+                    shell_offsets[j]
+                )))
+            })?;
+
+            let block = &outcome.tensor.owned_values;
+            if block.len() != ni * nj {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx returned {} elements for cross '{full_name}' pair ({i},{j}), \
+                     expected {} (ni={ni}, nj={nj}, extents={:?})",
+                    block.len(),
+                    ni * nj,
+                    outcome.tensor.extents,
+                ))));
+            }
+
+            // Block F-order [ni,nj] → global F-order [nao_a,nao_b].
+            for jj in 0..nj {
+                for ii in 0..ni {
+                    out[(oi + ii) + (ob + jj) * nao_a] = block[ii + jj * ni];
+                }
+            }
+        }
+    }
+
+    Ok(IntorOutput {
+        values: out,
+        shape: vec![nao_a, nao_b],
+        layout: IntorLayout::ScalarFOrder,
+    })
 }
 
 /// Append `_sph` / `_cart` suffix per upstream `_add_suffix`

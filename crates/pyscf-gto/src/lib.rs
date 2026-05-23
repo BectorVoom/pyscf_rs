@@ -35,7 +35,7 @@ pub use ecp_engine_stub::EcpEngineNotAvailable;
 pub use eval_gto::{EvalGtoOutput, eval_gto};
 pub use format_basis::format_basis;
 pub use format_ecp::{format_ecp, make_ecp_env};
-pub use intor::{IntorOutput, intor, intor_with_auxmol};
+pub use intor::{IntorOutput, intor, intor_cross, intor_with_auxmol};
 pub use pyscf_core::{Mole, Unit};
 pub use range_coulomb::{PTR_RANGE_OMEGA, get_k_with_omega, intor_with_omega};
 pub use set_geom::set_geom_;

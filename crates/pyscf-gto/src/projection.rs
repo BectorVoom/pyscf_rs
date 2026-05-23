@@ -170,52 +170,51 @@ fn build_atoms_and_shells(
     build_atoms_and_shells_with_base(atoms, basis, cart, 0)
 }
 
-/// Combined orbital + auxiliary `BasisSet` for the 3-center 2-electron
-/// integral `(μν|P)` (DF / RI-MP2). Mirrors upstream's `conc_mol`/fakemol
-/// pattern (`pyscf/df/incore.py`): the orbital shells (`mol`) occupy the
-/// leading shell range and the auxiliary shells (`auxmol`) follow, with aux
-/// shells re-based onto the appended aux atoms so the combined `BasisSet`
-/// owns one contiguous atom + shell table.
+/// Combined two-basis `BasisSet` (the PySCF `conc_mol`/fakemol pattern,
+/// `pyscf/df/incore.py` + `gto.mole.intor_cross`): the "A" shells occupy the
+/// leading shell range and the "B" shells follow, with B shells re-based onto
+/// the appended B atoms so the combined `BasisSet` owns one contiguous atom +
+/// shell table.
 ///
-/// Returns `(basis, n_orb_shells, n_aux_shells)`. The caller iterates
-/// `i,j ∈ 0..n_orb_shells` (orbital μ,ν) and `k ∈ n_orb_shells..` (aux P);
-/// orbital AOs occupy combined AO range `[0, nao)` and aux AOs `[nao, nao+naux)`,
-/// so an aux shell's AO offset within the aux block is `shell_offset(k) - nao`.
-pub(crate) fn build_int3c2e_combined_basis(
-    orb_atoms: &[ParsedAtom],
-    orb_basis: &HashMap<String, ParsedBasis>,
-    orb_cart: bool,
-    aux_atoms: &[ParsedAtom],
-    aux_basis: &HashMap<String, ParsedBasis>,
-    aux_cart: bool,
+/// Returns `(basis, n_a_shells, n_b_shells)`. The caller iterates the A range
+/// `0..n_a_shells` and the B range `n_a_shells..`; A AOs occupy combined AO
+/// range `[0, nao_a)` and B AOs `[nao_a, nao_a+nao_b)`, so a B shell's AO offset
+/// within the B block is `shell_offset(j) - nao_a`. Used by int3c2e (orbital×aux,
+/// the third center) and by `intor_cross` (cross-basis arity-2, e.g. overlap).
+pub(crate) fn build_combined_basis(
+    a_atoms: &[ParsedAtom],
+    a_basis: &HashMap<String, ParsedBasis>,
+    a_cart: bool,
+    b_atoms: &[ParsedAtom],
+    b_basis: &HashMap<String, ParsedBasis>,
+    b_cart: bool,
 ) -> Result<(Arc<BasisSet>, usize, usize), PyscfRsError> {
-    let (mut atoms, orb_shells) =
-        build_atoms_and_shells_with_base(orb_atoms, orb_basis, orb_cart, 0)?;
-    let n_orb_atoms = atoms.len() as u32;
-    let (aux_atoms_cintx, aux_shells) =
-        build_atoms_and_shells_with_base(aux_atoms, aux_basis, aux_cart, n_orb_atoms)?;
+    let (mut atoms, a_shells) = build_atoms_and_shells_with_base(a_atoms, a_basis, a_cart, 0)?;
+    let n_a_atoms = atoms.len() as u32;
+    let (b_atoms_cintx, b_shells) =
+        build_atoms_and_shells_with_base(b_atoms, b_basis, b_cart, n_a_atoms)?;
 
-    atoms.extend(aux_atoms_cintx);
-    let n_orb_shells = orb_shells.len();
-    let n_aux_shells = aux_shells.len();
-    let mut shells = orb_shells;
-    shells.extend(aux_shells);
+    atoms.extend(b_atoms_cintx);
+    let n_a_shells = a_shells.len();
+    let n_b_shells = b_shells.len();
+    let mut shells = a_shells;
+    shells.extend(b_shells);
 
     let atoms_arc: Arc<[CintxAtom]> = Arc::from(atoms.into_boxed_slice());
     let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(shells.into_boxed_slice());
     let basis_set = BasisSet::try_new(atoms_arc, shells_arc).map_err(|e| {
         PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-            "cintx combined orbital+aux BasisSet::try_new failed: {e}"
+            "cintx combined two-basis BasisSet::try_new failed: {e}"
         )))
     })?;
 
-    Ok((Arc::new(basis_set), n_orb_shells, n_aux_shells))
+    Ok((Arc::new(basis_set), n_a_shells, n_b_shells))
 }
 
 /// Build typed cintx atoms + shells, with each shell's `atom_index` offset by
 /// `atom_id_base`. `atom_id_base == 0` reproduces the standalone-Mole layout;
 /// a non-zero base lets the auxiliary shells reference atoms appended after
-/// the orbital atoms in a combined `BasisSet` (see [`build_int3c2e_combined_basis`]).
+/// the orbital atoms in a combined `BasisSet` (see [`build_combined_basis`]).
 fn build_atoms_and_shells_with_base(
     atoms: &[ParsedAtom],
     basis: &HashMap<String, ParsedBasis>,
