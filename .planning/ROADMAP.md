@@ -152,7 +152,7 @@ Plans:
 **Wave 14** *(blocked on Wave 13 completion)*
 
 - [ ] 03-14-PLAN.md — atom + huckel init guesses (get_atm_nrhf per-element spherically-averaged atomic RHF; SCF-05 complete — all 5 modes) — gap-closure
-- [ ] 03-15-PLAN.md — mulliken_meta meta-Löwdin population analysis (orth_ao; SCF-09) — gap-closure
+- [x] 03-15-PLAN.md — mulliken_meta meta-Löwdin population analysis (orth_ao; SCF-09) — gap-closure
 
 **UI hint**: yes
 
@@ -306,7 +306,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 |-------|----------------|--------|-----------|
 | 1. Foundation | 9/9 | Complete    | 2026-05-23 |
 | 2. GTO | 11/11 | Complete    | 2026-05-23 |
-| 3. SCF + PyO3 bindings | 0/11 | Planned | - |
+| 3. SCF + PyO3 bindings | 14/15 | In Progress|  |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 0/TBD | Not started | - |

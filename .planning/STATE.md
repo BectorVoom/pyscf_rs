@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-10-PLAN.md (GTO-05 eval half)
-last_updated: "2026-05-24T11:14:39.661Z"
-last_activity: 2026-05-24 -- Phase 03 planning complete
+stopped_at: Completed 03-15-PLAN.md (SCF-09 mulliken_meta gap closure)
+last_updated: "2026-05-24T11:48:56.723Z"
+last_activity: 2026-05-24 -- Completed 03-15 (mulliken_meta / orth_ao, SCF-09 → [~])
 progress:
   total_phases: 8
   completed_phases: 4
   total_plans: 58
-  completed_plans: 56
+  completed_plans: 57
   percent: 50
 ---
 
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 03
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-05-24 -- Phase 03 planning complete
+Plan: 03-15 complete (mulliken_meta / orth_ao gap closure)
+Status: Executing — Phase 03 gap closures
+Last activity: 2026-05-24 -- Completed 03-15 (SCF-09 mulliken_meta → [~])
 
 Progress: [██████████] 100% (56/56 plans done across all phases; Phase 02 gap closure 02-11 done)
 
@@ -75,6 +75,7 @@ Progress: [██████████] 100% (56/56 plans done across all pha
 | Phase 05 P06 | 18min | 2 tasks | 3 files |
 | Phase 05 P07 | 8min | 2 tasks | 6 files |
 | Phase 02 P02-11 | 35min | 2 tasks | 5 files |
+| Phase 03 P03-15 | 13min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -115,6 +116,7 @@ Recent decisions affecting current work:
 - [Phase 05]: 05-08 cintx#11 numeric gap-closure — cintx now ships arity-4 `int2e_{sph,cart}` (api_manifest.rs:166/183, SHELL_TUPLE_CAPACITY=4) + arity-3 `int3c2e_sph` (api_manifest.rs:404), libcint-byte-identical at the cintx source (`safe_api_arity4_parity`/`center_3c2e_parity`; cintx-rs now asserts against all-zero output, api.rs:750). Wired the missing pyscf-gto dispatch layer: `intor.rs` `evaluate_arity4` (shell-quad loop → SessionRequest → F-order `[nao;4]` stitch, the `eri_ao` convention pyscf_ao2mo::transform documents) replaces the `3|4 => NotYetImplemented{phase:2}` branch (component-leading arity-4 = int2e_ip gradients → `NotYetImplemented{phase:7}`; plain arity-3 → clear error, int3c2e uses intor_with_auxmol). `evaluate_int3c2e_with_auxmol` replaces the all-zeros stub with real evaluation over a COMBINED orbital+aux BasisSet (`projection::build_int3c2e_combined_basis`, PySCF fakemol/conc_mol — aux shells re-based onto appended aux atoms; i,j∈orbital, k∈aux; aux AO offset = shell_offset(k)−nao). Shape surprises ?-propagate (no panic/no zero-substitute, T-05-08-FFI). The MP2 kernels are UNCHANGED (D-05): in-core RMP2 numeric now runs end-to-end (mp2_numeric_smoke.rs: H2/STO-3G `e_corr=-0.04428`, finite ≤0, thread-invariant); flipped `default_ao2mo_propagates_int2e_not_yet_implemented` → `..._succeeds_after_cintx11_closure`. Always-on in-tree gates: int2e_arity4.rs (finite/non-zero/8-fold) + int3c2e_auxmol.rs (finite/non-zero/bra-symmetric). CI: `mp2-oracle-cintx-gated` (if: false) → `mp2-oracle-upstream-manual` (workflow_dispatch + pyscf install) — upstream byte-identity is the human-verify arm (sandbox lacks numpy/PySCF, 02-10 precedent). FINDING (NOT chased, T-05-08-SCOPE): unignoring the H2O/cc-pVDZ DF shape test surfaced a SEPARATE Phase-3 issue — the cc-pvdz-jkfit AND weigend `(P|Q)` DF metrics are ill-conditioned and the plain Cholesky-Banachiewicz (`s<=0` pivot) rejects them; int3c2e itself ships (int3c2e_auxmol.rs proves it). So DF-MP2 numeric (MP2-04) is unblocked at the integral layer but gated on a Phase-3 rank-revealing DF-metric Cholesky in pyscf-algebra. No new crate dep; Cargo.lock UNCHANGED; libxc NEVER compiled. clippy -D warnings + fmt + check-no-fma + check-dependency-wall PASS. Also unblocks Phase-3 DF-HF + Phase-4 bit-exact RKS/UKS (int2e/int3c2e now real) — their own oracle closures.
 - [Phase 02]: 02-10 GTO-05 eval-half gap-closure — the cintx Phase-19/20 workstream SHIPPED `int1e_ecp_{cart,sph}` (Type-1 local + Type-2 projector) byte-identical to vendored PySCF nr_ecp (cintx `safe_api_ecp_parity.rs` pins atol=1e-12). cintx is a PATH dep already pointing at the merged tree (Cargo.lock UNCHANGED — no git-rev pin bump needed; the plan's git-rev sketch was superseded by the Phase-1 D-15 path-dep topology). New `ecp_engine_cintx::CintxEcpEngine` replaces `EcpEngineNotAvailable` as the default `pyscf_gto::ecp_engine()`; the stub stays in-tree (documentation + testable error path, exercised DIRECTLY in updated `ecp_engine_stub.rs` tests rather than via `ecp_engine()`). KEY DEVIATION from the plan's speculative sketch: the cintx safe-API ECP preflight (`SessionRequest::query_workspace`) returns `FacadeError::MissingEcpBasis` unless `basis.ecp_shells()` is non-empty, but `mol.basis_set` is built ECP-free (`build_cintx_basis_set` → `BasisSet::try_new`). So the engine builds an ECP-augmented `BasisSet` on demand via a NEW `projection::build_cintx_basis_set_with_ecp` (projects per-element `mol._ecp` ParsedEcp → cintx `EcpChannel::Local`/`Projected(l)` + `EcpShell`, one shell per (atom,channel,distinct n_power) — mirrors make_ecp_env's `_ecpbas` row grouping), then iterates AO shell pairs through `SessionRequest` exactly like the non-ECP `intor::evaluate_arity2` and stitches an F-order nao×nao matrix into `Density::from_flat` (new pyscf-core helper). int1e_ecp on an ECP-LESS mol returns the canonical `EcpEngineNotAvailable` via a `mol._ecp.is_empty()` guard (preserves the 02-07 user-facing error contract). Always-on in-tree gate `crates/pyscf-gto/tests/ecp_int1e_oracle.rs` (Cu/LANL2DZ → finite, non-zero, symmetric matrix) PASSES under `cargo test -p pyscf-gto --test ecp_int1e_oracle`. The upstream byte-identity pytest `tests/oracle/test_ecp_int1e.py` is shipped + the `dump_intor_for_oracle` harness extended with `PYSCF_RS_ORACLE_ECP`, but it CANNOT run in this sandbox (no numpy/upstream-pyscf; the entire oracle suite is gated on `tests/oracle/requirements.txt`) — downgraded to a human-verify item (cintx already pins 1e-12 byte-identity to nr_ecp at the source). xtask check-dependency-wall + check-cubecl-pin PASS. No `#[ignore = "Pending cintx ECP"]` annotations existed to remove. Phase 7 GRAD-07 (ECP gradients via `int1e_ecp_ipnuc_*`, manifest ids 28/29) now unblocked. GTO-05 fully closed: loading ✅ + eval ✅.
 - [Phase 02]: 02-11 general-contraction parser fix: nwchem.rs emits N contractions per N coeff columns (was truncating to col 1); projection.rs feeds cintx ROW-MAJOR coeffs [prim*nctr+ctr]. Closes 03-13 minao heavy-atom caveat (H2O Tr(dm.S) 7.9->9.86; minao unnormalized so <nelec, H2 dm traces 1.976/2.0). cintx l>=3 nctr>1 asymmetry surfaced as DI-02-11-CINTX-NCTR-HIGHL. Consumed cintx 6b14d48 via path-dep. GTO-02/03 done.
+- [Phase 03]: 03-15 mulliken_meta (SCF-09) — shipped the real `mulliken_meta` (meta-Löwdin population analysis, `pyscf/scf/hf.py:1301-1340`) via a NEW `crate::orth::orth_ao` (`crates/pyscf-scf/src/orth.rs`). orth_ao = the GLOBALLY-ORTHONORMAL sequential block-Löwdin scheme of `pyscf/lo/nao.py::_nao_sub`: partition AOs into per-`l` angular-momentum CHANNELS (cross-atom — `_bas[ANG_OF]` walk; spans atoms like upstream's core/valence/Rydberg classes so HOMONUCLEAR SYMMETRY is preserved), then for each channel project out the previously-orthogonalized span in the S-metric (`c ← c − C_done·C_doneᵀ·S·c`) and Löwdin within block (`lowdin` = `S^{-1/2}` via `eigh_gen(S,I)` + λ^{-1/2}, drop λ≤1e-15), final phase-adjust (flip column if diagonal<0). KEY DEVIATION (Rule 1): the plan said partition by (atom,l) + naive block-diagonal Löwdin, but that is NOT globally orthonormal — leaves cross-block overlap (H2 `C_orthᵀ·S·C_orth` off-diag 0.659; H2 charges ±0.659 asymmetric), failing both the orthonormality gate AND the Σ ao_pop≈nelec conservation invariant. Fixed to per-`l` channels + the `_nao_sub` project-then-Löwdin order. mulliken_meta then: `c_inv=C_orthᵀ·S`, `D'=c_inv·D·c_invᵀ`, `pop[μ]=D'[μ,μ]` (S=I), shared `aggregate_pop_to_charges` (refactored out of mulliken_pop — single oracle-reduction site, mulliken_pop tests stay green). Conservation MEASURED: H2 Σ ao_pop=2.0/Σ chg≈−2.7e-15/H charges equal to 1e-15; H2O Σ ao_pop=10.0/Σ chg≈−6.2e-15 (O +0.622, H −0.314/−0.309). All reductions via oracle_sum (10 sites in orth.rs); no FMA; no new unwrap; no new crate dep; `cargo tree -p pyscf-scf`=0 libxc; clippy -D warnings + fmt + check-no-fma + check-dependency-wall PASS. SCF-09 → `[~]` (partial; full NAO `_nao_sub` core/valence/Rydberg byte-identity is a documented future enhancement + human-verify, mirrors SCF-07). NotYetImplemented gone from analyze.rs.
 
 ### Pending Todos
 
@@ -158,6 +160,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-23T23:06:59.782Z
-Stopped at: Completed 02-10-PLAN.md (GTO-05 eval half)
+Last session: 2026-05-24T11:47:22Z
+Stopped at: Completed 03-15-PLAN.md (SCF-09 mulliken_meta gap closure)
 Resume file: None
