@@ -101,7 +101,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [ ] **CCSD-08**: DF-CCSD (`mycc = mf.density_fit().CCSD()` or `cc.dfccsd.RCCSD(mf)`) works with bounded memory; spills to HDF5 when `PYSCF_MAX_MEMORY` is exceeded
 - [ ] **CCSD-09**: T1/D1/D2 diagnostics expose `mycc.t1diagnostic()`, `mycc.d1diagnostic()`
 - [ ] **CCSD-10**: Frozen-core options match MP2 (`frozen=int`, `frozen=list`, `frozen='auto'`)
-- [ ] **CCSD-11**: Tensor-arena/scratchpad pattern in `pyscf-runtime` is in place from the start of CCSD work — not retrofitted; `Wabef` and other large intermediates do not allocate-and-drop per iteration
+- [~] **CCSD-11**: Tensor-arena/scratchpad pattern in `pyscf-runtime` is in place from the start of CCSD work — not retrofitted; `Wabef` and other large intermediates do not allocate-and-drop per iteration (06-01 ships the scaffold contract — `CcsdError::Backend(#[from] BackendError)` D-01 pre-flight bridge; the `WorkspacePool` arena body lands in 06-02 and the kernel integration in 06-03)
 
 ### Gradients (GRAD)
 
@@ -324,7 +324,7 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | CCSD-08 | Phase 6 | Pending |
 | CCSD-09 | Phase 6 | Pending |
 | CCSD-10 | Phase 6 | Pending |
-| CCSD-11 | Phase 6 | Pending |
+| CCSD-11 | Phase 6 | In Progress |
 | GRAD-01 | Phase 7 | Pending |
 | GRAD-02 | Phase 7 | Pending |
 | GRAD-03 | Phase 7 | Pending |

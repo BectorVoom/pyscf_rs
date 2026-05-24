@@ -271,7 +271,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 06-01-PLAN.md — Crate scaffold: fill the pyscf-ccsd stub (17-module upstream-mirror skeleton + Cargo deps, no pyo3/cubecl/hdf5) + CcsdError/ChemistsEris/CcsdOverrideHooks/CcsdReference contracts + check_no_fma SCAN_TARGETS (CCSD-11)
+- [x] 06-01-PLAN.md — Crate scaffold: fill the pyscf-ccsd stub (17-module upstream-mirror skeleton + Cargo deps, no pyo3/cubecl/hdf5) + CcsdError/ChemistsEris/CcsdOverrideHooks/CcsdReference contracts + check_no_fma SCAN_TARGETS (CCSD-11)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -345,7 +345,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. SCF + PyO3 bindings | 15/15 | Complete    | 2026-05-24 |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
-| 6. CCSD | 0/11 | Planned     | - |
+| 6. CCSD | 1/11 | In Progress|  |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
