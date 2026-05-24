@@ -37,7 +37,10 @@ pub mod ulambda;
 pub mod update_amps;
 pub mod urdm;
 
-pub use ccsd::{CcsdResult, ccsd_kernel, default_ao2mo, default_energy};
+pub use ccsd::{
+    CONV_TOL, CONV_TOL_NORMT, CcsdResult, DIIS_SPACE, DIIS_START_CYCLE, MAX_CYCLE, ccsd_kernel,
+    default_ao2mo, default_energy, init_amps,
+};
 pub use eris::ChemistsEris;
 pub use error::CcsdError;
 pub use hooks::{CcsdOverrideHooks, NoCcsdOverrides};
