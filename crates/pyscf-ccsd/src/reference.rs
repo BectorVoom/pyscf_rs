@@ -27,3 +27,21 @@ pub struct CcsdReference {
     /// Molecule snapshot — needed by `default_ao2mo` for the intor call.
     pub mol: Mole,
 }
+
+/// Unrestricted-CCSD reference: the α/β reference pair (port of the upstream
+/// `uccsd.UCCSD` `(mo_coeff[0], mo_coeff[1])` / `(mo_energy[0], mo_energy[1])`
+/// / `(mo_occ[0], mo_occ[1])` indexing). Mirrors the Phase-5 `UmpReference
+/// { alpha, beta }` two-channel snapshot shape (`crates/pyscf-mp2/src/ump2.rs`).
+///
+/// Each spin channel carries its OWN coefficients / energies / occupations —
+/// the αα and ββ same-spin channels transform their own block, and the αβ
+/// cross channel mixes α (for the `i`,`a` slots) with β (for the `J`,`B` slots).
+/// The `mol` is shared content (one molecule); only the spin-resolved MO data
+/// differs between `alpha` and `beta`.
+#[derive(Debug, Clone)]
+pub struct UccsdReference {
+    /// α-spin reference snapshot.
+    pub alpha: CcsdReference,
+    /// β-spin reference snapshot.
+    pub beta: CcsdReference,
+}
