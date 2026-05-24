@@ -81,6 +81,10 @@ const FORBIDDEN_MNEMONICS: &[&str] = &[
 const SCAN_TARGETS: &[(&str, &str)] = &[
     ("pyscf-algebra", "pyscf_algebra"),
     ("pyscf-core", "pyscf_core"),
+    // Phase 6: CCSD-own symbols FMA-free under release-oracle (06-01, Pitfall
+    // 1/2). The `is_in_workspace` guard below is forward-compatible, so this is
+    // safe even though pyscf-ccsd has no release-oracle asm yet.
+    ("pyscf-ccsd", "pyscf_ccsd"),
 ];
 
 fn main() -> Result<ExitCode> {
