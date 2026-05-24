@@ -23,7 +23,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 
 - [x] **Phase 1: Foundation** — Workspace (15 crates including `pyscf-algebra`), core types, runtime + env-driven backend selection (`PYSCF_BACKEND`), workspace `gpu` feature (OFF by default → CPU is the default backend), single-owner cubecl algebra crate (GEMM/reduce/AXPY/dot via `cubecl-matmul`/`cubecl-reduce`/`#[cube]`), FMA-free oracle profile, ordered-reduction primitives, panic policy, cubecl pin, scope-creep + dependency-wall lints, nightly cross-crate matrix CI (completed 2026-05-23)
 - [x] **Phase 2: GTO** — Mole, basis-set loading (5 atom-input × 11 basis-input forms), ECP, intor wrappers via cintx, eval_gto for grids (completed 2026-05-23)
-- [ ] **Phase 3: SCF + PyO3 bindings** — RHF/UHF/GHF + DIIS + chkfile + sign canonicalization + first end-to-end energy AND lock the entire PyO3 contract (subclass-override dispatch, NumPy contiguity, GIL release seam, abi3-py310 wheel skeleton, oracle harness bootstrap)
+- [x] **Phase 3: SCF + PyO3 bindings** — RHF/UHF/GHF + DIIS + chkfile + sign canonicalization + first end-to-end energy AND lock the entire PyO3 contract (subclass-override dispatch, NumPy contiguity, GIL release seam, abi3-py310 wheel skeleton, oracle harness bootstrap) (completed 2026-05-24)
 - [x] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT (all 10 plans executed 2026-05-22; verification = gaps_found 3/5 — 4 BLOCKERs in 04-VERIFICATION.md: UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key → gap closure required before complete) (completed 2026-05-23)
 - [x] **Phase 5: MP2** — RMP2/UMP2/DF-MP2 + frozen-core + AO→MO transformation kernel + helpers CCSD imports (completed 2026-05-23)
 - [ ] **Phase 6: CCSD** — RCCSD/UCCSD + amplitude DIIS + Lambda + RDMs + AO-direct + DF-CCSD with HDF5 spill + tensor-arena from day one + T1/D1/D2 diagnostics
@@ -151,7 +151,7 @@ Plans:
 
 **Wave 14** *(blocked on Wave 13 completion)*
 
-- [ ] 03-14-PLAN.md — atom + huckel init guesses (get_atm_nrhf per-element spherically-averaged atomic RHF; SCF-05 complete — all 5 modes) — gap-closure
+- [x] 03-14-PLAN.md — atom + huckel init guesses (get_atm_nrhf per-element spherically-averaged atomic RHF; SCF-05 complete — all 5 modes) — gap-closure
 - [x] 03-15-PLAN.md — mulliken_meta meta-Löwdin population analysis (orth_ao; SCF-09) — gap-closure
 
 **UI hint**: yes
@@ -306,7 +306,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 |-------|----------------|--------|-----------|
 | 1. Foundation | 9/9 | Complete    | 2026-05-23 |
 | 2. GTO | 11/11 | Complete    | 2026-05-23 |
-| 3. SCF + PyO3 bindings | 14/15 | In Progress|  |
+| 3. SCF + PyO3 bindings | 15/15 | Complete   | 2026-05-24 |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 0/TBD | Not started | - |
