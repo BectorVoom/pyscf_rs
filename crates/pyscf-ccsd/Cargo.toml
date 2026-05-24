@@ -10,3 +10,28 @@ description = "Coupled-cluster singles-doubles (RCCSD/UCCSD). Implemented in Pha
 path = "src/lib.rs"
 
 [dependencies]
+# Full workspace-internal dep set (06-RESEARCH.md:115-130). Internal crates are
+# referenced via `{ path = "../..." }` (the proven sibling idiom, mirroring
+# pyscf-mp2/Cargo.toml) — they are NOT registered as `[workspace.dependencies]`,
+# so a `{ workspace = true }` form would not resolve.
+#
+# NO pyo3 (D-09 — the bridge lives exclusively in pyscf-py).
+# NO cubecl-* (algebra wall — denylist auto-enforced; only pyscf-algebra/
+#   pyscf-runtime may name cubecl).
+# NO hdf5-metno (D-07 — the HDF5 spill goes through pyscf-chkfile's re-exported
+#   `hdf5` alias; pyscf-chkfile is the sole hdf5 owner).
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+pyscf-ao2mo   = { path = "../pyscf-ao2mo" }
+pyscf-mp2     = { path = "../pyscf-mp2" }
+pyscf-scf     = { path = "../pyscf-scf" }
+pyscf-df      = { path = "../pyscf-df" }
+pyscf-diis    = { path = "../pyscf-diis" }
+pyscf-chkfile = { path = "../pyscf-chkfile" }
+pyscf-gto     = { path = "../pyscf-gto" }
+pyscf-runtime = { path = "../pyscf-runtime" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+
+[dev-dependencies]
+approx = "0.5"
