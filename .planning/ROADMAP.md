@@ -275,7 +275,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 06-02-PLAN.md — Tensor-arena from day one: WorkspacePool reserve/release free-list reuse + InMemory|Spilled backends + opaque Amplitudes handles (D-01/D-08) + heap-alloc-count & refusal gates (CCSD-11)
+- [x] 06-02-PLAN.md — Tensor-arena from day one: WorkspacePool reserve/release free-list reuse + InMemory|Spilled backends + opaque Amplitudes handles (D-01/D-08) + heap-alloc-count & refusal gates (CCSD-11) (completed 2026-05-25)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -345,7 +345,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. SCF + PyO3 bindings | 15/15 | Complete    | 2026-05-24 |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
-| 6. CCSD | 1/11 | In Progress|  |
+| 6. CCSD | 2/11 | In Progress|  |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 

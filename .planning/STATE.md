@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-01-PLAN.md (pyscf-ccsd crate scaffold)
-last_updated: "2026-05-24T22:43:04.560Z"
-last_activity: 2026-05-24 -- Completed 06-01 (pyscf-ccsd scaffold)
+stopped_at: Completed 06-02-PLAN.md (WorkspacePool arena body + opaque Amplitudes handles)
+last_updated: "2026-05-25T00:00:00.000Z"
+last_activity: 2026-05-25 -- Completed 06-02 (WorkspacePool arena body + opaque Amplitudes handles, CCSD-11/D-01/D-08)
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 69
-  completed_plans: 59
-  percent: 63
+  completed_plans: 60
+  percent: 87
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 06 (ccsd) — EXECUTING
-Plan: 2 of 11
+Plan: 3 of 11
 Status: Ready to execute
-Last activity: 2026-05-24 -- Completed 06-01 (pyscf-ccsd scaffold)
+Last activity: 2026-05-25 -- Completed 06-02 (WorkspacePool arena body + opaque Amplitudes handles)
 
-Progress: [█████████░] ~63% (5/8 phases complete; Phase 6 planned — 11 plans, 8 waves)
+Progress: [████████▋░] ~87% (60/69 plans; Phase 6 in progress — Wave 2 done, 9 plans remain)
 
 ## Performance Metrics
 
@@ -78,6 +78,7 @@ Progress: [█████████░] ~63% (5/8 phases complete; Phase 6 pl
 | Phase 03 P03-15 | 13min | 2 tasks | 5 files |
 | Phase 03 P03-14 | 12min | 3 tasks | 5 files |
 | Phase 06 P06-01 | 5min | 2 tasks | 20 files |
+| Phase 06 P06-02 | 30min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -121,6 +122,7 @@ Recent decisions affecting current work:
 - [Phase 03]: 03-15 mulliken_meta (SCF-09) — shipped the real `mulliken_meta` (meta-Löwdin population analysis, `pyscf/scf/hf.py:1301-1340`) via a NEW `crate::orth::orth_ao` (`crates/pyscf-scf/src/orth.rs`). orth_ao = the GLOBALLY-ORTHONORMAL sequential block-Löwdin scheme of `pyscf/lo/nao.py::_nao_sub`: partition AOs into per-`l` angular-momentum CHANNELS (cross-atom — `_bas[ANG_OF]` walk; spans atoms like upstream's core/valence/Rydberg classes so HOMONUCLEAR SYMMETRY is preserved), then for each channel project out the previously-orthogonalized span in the S-metric (`c ← c − C_done·C_doneᵀ·S·c`) and Löwdin within block (`lowdin` = `S^{-1/2}` via `eigh_gen(S,I)` + λ^{-1/2}, drop λ≤1e-15), final phase-adjust (flip column if diagonal<0). KEY DEVIATION (Rule 1): the plan said partition by (atom,l) + naive block-diagonal Löwdin, but that is NOT globally orthonormal — leaves cross-block overlap (H2 `C_orthᵀ·S·C_orth` off-diag 0.659; H2 charges ±0.659 asymmetric), failing both the orthonormality gate AND the Σ ao_pop≈nelec conservation invariant. Fixed to per-`l` channels + the `_nao_sub` project-then-Löwdin order. mulliken_meta then: `c_inv=C_orthᵀ·S`, `D'=c_inv·D·c_invᵀ`, `pop[μ]=D'[μ,μ]` (S=I), shared `aggregate_pop_to_charges` (refactored out of mulliken_pop — single oracle-reduction site, mulliken_pop tests stay green). Conservation MEASURED: H2 Σ ao_pop=2.0/Σ chg≈−2.7e-15/H charges equal to 1e-15; H2O Σ ao_pop=10.0/Σ chg≈−6.2e-15 (O +0.622, H −0.314/−0.309). All reductions via oracle_sum (10 sites in orth.rs); no FMA; no new unwrap; no new crate dep; `cargo tree -p pyscf-scf`=0 libxc; clippy -D warnings + fmt + check-no-fma + check-dependency-wall PASS. SCF-09 → `[~]` (partial; full NAO `_nao_sub` core/valence/Rydberg byte-identity is a documented future enhancement + human-verify, mirrors SCF-07). NotYetImplemented gone from analyze.rs.
 - [Phase 03]: 03-14 atom + huckel init guesses (SCF-05 → [x]) — shipped the LAST 2 of 5 init_guess modes. NEW `crate::atom_hf::get_atm_nrhf` (`crates/pyscf-scf/src/atom_hf.rs`) is the shared per-unique-element spherically-averaged atomic-RHF engine (port of `pyscf/scf/atom_hf.py:27-205`): builds a single-atom neutral Mole (working basis restricted to that element, spin=Z%2, cart=false), runs a small SCF whose eig step is the ANGULAR-AVERAGED solve (atom_hf.py:109-140 — group AOs by l, average the per-l Fock/overlap over the m-diagonal `einsum('piqi->pq')/degen`, `eigh_gen` the nsh×nsh block, scatter eigvecs back over the 2l+1 m-components), occupations from `frac_occ(Z,l)` (atom_hf.py:142-171), 1-electron H takes the AtomHF1e no-2e branch. `init_guess_by_atom` (hf.py:495-535) superposes per-atom dm blocks `atm_dm[i,j]=Σ_p occ·c·c` block-diagonally at each atom's molecular AO range (new shared `aoslice_by_atom` ATOM_OF+ao_loc_nr walk). `init_guess_by_huckel` (hf.py:537-555 + _init_guess_huckel_orbitals:577-670, GWH Kgwh=1.75 NON-updated rule) collects occupied atomic orbitals into the molecular AO basis, builds `orb_S=orb_Cᵀ·S·orb_C`, GWH `orb_H[io,jo]=0.5·1.75·orb_S·(Ei+Ej)`, `eigh_gen(orb_H,orb_S)`, back-transform to AO, Aufbau-fill + make_rdm1. CLOSING GATE PASSES (T-03-14-CORRECT): atom & huckel-seeded RHF on H2/STO-3G each converge to the SAME e_tot as the 1e guess — all three = −1.1167143250625533 (bit-identical). Tr(D·S): atom=2.0 (exact, normalized atomic orbitals — minao non-normalization caveat does NOT apply), huckel=2.000000000000001. All reductions via oracle_sum/oracle_dot (10 sites atom_hf.rs + 6 sites init_guess.rs); no FMA; no new unwrap in production; no new crate dep; `cargo tree -p pyscf-scf`=0 libxc; clippy -D warnings + fmt + check-no-fma + check-dependency-wall PASS. Cartesian cart2sph branches in both return a clear NotYetImplemented Err (spherical-only; STO-3G is spherical). DEVIATION (Rule 3): module-scoped `#![allow(dead_code)]` on atom_hf.rs so the Task-1 commit is independently -D-warnings-clean while Tasks 2/3 wire in the consumers (inert once reached). SCF-05 → `[x]`: all 5 init_guess modes (minao/atom/1e/huckel/chkfile) + user-dm0 ship.
 
+- [Phase 06]: 06-02 WorkspacePool arena body + opaque Amplitudes handles (CCSD-11/D-01/D-08) — filled the Phase-1 budget-check-only `WorkspacePool` skeleton into a REAL reuse-pool: `reserve(shape, allow_spill) -> BufferId` scans the free-list for a released allocation of fitting size and REUSES it before allocating fresh (allocate-once-reuse, Pitfall 20); `release(id)` returns the buffer to the free-list WITHOUT dropping it. `TensorBackend { InMemory(Box<[f64]>) | Spilled(SpillHandle) }` — `SpillHandle` wraps a `pyscf_chkfile::hdf5` temp file (D-07, NO new hdf5 dep) and RAII-drop-DELETES it (T-06-02-LEAK). HARD `PYSCF_MAX_MEMORY` refusal (D-01): over-budget in-core `reserve(allow_spill=false)` returns `MemoryLimitExceeded` BEFORE allocating (no buffer-id consumed, NO silent downgrade; T-06-02-OOM). Accessors `as_slice`/`write_slice`/`with_mut_slice` for the 06-03+ kernel working store. **A2 single-handle resolution:** pool-owned `pyscf-runtime` `BufferId` (NOT `pyscf_algebra::Tensor`'s — its inner field is `pub(crate)` to algebra AND pyscf-runtime must not dep pyscf-algebra, wrong direction). **D-01 handle home (deviation from the plan's literal text — Rule-4-avoided architectural constraint):** `AmplitudeStore { Owned(Vec<f64>) | Pooled(PooledRef{buffer_id:u64,shape}) }` lives IN `pyscf-core`, NOT pyscf-runtime — pyscf-runtime already deps pyscf-core (a reverse dep CYCLES) and its default `cpu` feature pulls cubecl (would violate pyscf-core FOUND-02). `PooledRef` is dependency-free; the CCSD call site reads the buffer through the pool. `Amplitudes::from_vec` (MP2/owned) + `from_pooled` (CCSD/arena) + `t1_slice`/`t2_slice` accessors keep the MP2 construction site (`mp2.rs`) + RDM readers (`rdm.rs` gamma1/make_rdm2 + toy_amps) + `rmp2_structural` test compiling — MP2 numeric behavior UNCHANGED (19 lib + integration green). Two CCSD-11 test targets: `tests/heap_alloc_count.rs` (A3 DEDICATED counting `#[global_allocator]` scoped to this test binary, NOT linked to oracle/determinism arms — proves bounded allocation across N=5 iters + pool never grows past 1 alloc under 50-cycle reuse), `tests/refusal.rs` (4 arms: over-budget try_reserve/reserve refuse with named bytes, one-byte-over still refuses, spill is opt-in not auto-downgrade). Rule-1 bug fixed: first cut called `try_reserve(need_bytes)?` before the spill decision so an over-budget buffer was refused even with `allow_spill=true` — moved the ceiling into the `!fits_inmem && !allow_spill` branch (spill bypasses the in-memory budget). DEFERRED: Cargo.lock NOT staged — the dirty working-tree lock has ~100 unrelated `libxc-kernel-*` drift entries (HEAD already stale at 856; the libxc_rs path members re-resolve on any cargo lock op); a surgical 2-line edit fails `--locked` (cargo wants the extra entries). The dirty lock-on-disk already satisfies `--locked` builds; lock-unification belongs to the integration gate (mirrors 06-01). `cargo check -p pyscf-runtime -p pyscf-core -p pyscf-mp2 -p pyscf-ccsd --locked` exits 0; clippy -D warnings clean; `cargo tree -p pyscf-runtime` libxc=0 + cubecl unchanged (only NEW transitive crate is hdf5-metno via pyscf-chkfile); libxc NEVER compiled.
 - [Phase 06]: 06-01 pyscf-ccsd crate scaffold (CCSD-11) — filled the 5-line stub into a real compiling crate: full workspace-internal dep set (`pyscf-core`/`algebra`/`ao2mo`/`mp2`/`scf`/`df`/`diis`/`chkfile`/`gto`/`runtime` + thiserror/tracing) wired via `{ path = "../..." }` (NOT `{ workspace = true }` — the pyscf-* members are not registered as `[workspace.dependencies]`, only as `members`; the RESEARCH/PLAN sketch's `workspace = true` form would not resolve, so used the proven pyscf-mp2 sibling idiom). 17-module skeleton mirroring upstream `pyscf/cc/*.py` (error/eris/hooks/reference/ccsd/rintermediates/update_amps/uccsd/uintermediates/diis_amps/lambda/ulambda/rdm/urdm/diagnostics/dfccsd/direct). Four contract types: `CcsdError` (`ShapeMismatch{expected,got}` + `NotYetImplemented{wave:u8}` — field is `wave` NOT MP2's `plan` — + `#[from]` arms for `AlgebraError`/`CoreError`/`Ao2moError` PLUS the two CCSD additions `pyscf_runtime::BackendError` (D-01 try_reserve) and `pyscf_diis::DiisError`; bridge to PyscfRsError via `Core(InvalidMolecule)`); `ChemistsEris` (port of `_ChemistsERIs` ccsd.py:1389 — carries `oooo`/`ovoo`/`oovv`/`ovov`/`ovvo`/`ovvv`/`vvvv` flat C-order blocks + `fock`/`mo_energy` + nocc/nvir vs MP2's single ovov; re-exported from `eris` module not `hooks`); `CcsdOverrideHooks` (D-09 set: ao2mo/update_amps/energy/make_rdm1/make_rdm2; energy default-delegates to `ccsd::default_energy`, rdm1/rdm2→`NotYetImplemented{wave:3}`) + `NoCcsdOverrides`; `CcsdReference` (field-for-field Mp2Reference mirror). `update_amps` hook uses `pyscf_core::Amplitudes` for now (Wave-2 opaque-Tensor D-01 upgrade flows through same signature). Stub modules: `#![allow(dead_code)]` + bodies `NotYetImplemented{wave:N}` (1: ccsd/rintermediates/update_amps; 2: uccsd/uintermediates/diis_amps; 3: lambda/ulambda/rdm/urdm/diagnostics; 4: dfccsd/direct) — math lands 06-02..06-11. Added `("pyscf-ccsd","pyscf_ccsd")` to check_no_fma SCAN_TARGETS (FMA-scan scans 3 asm files now, PASS); check_dependency_wall LEFT UNMODIFIED (denylist already covers the cubecl-free crate — the CONTEXT.md "extend allowlist" phrasing was the inaccurate one per RESEARCH Pitfall 3; verified PASS). `cargo build/check -p pyscf-ccsd` exit 0; ZERO libxc + ZERO pyo3 anywhere in tree; transitive cubecl (via pyscf-algebra) + hdf5-metno (via pyscf-chkfile) are the legal carve-out owners (the wall invariant — NOT a violation; the PLAN's `cargo tree | grep` empty-expectation was a verify-command inaccuracy since pyscf-ccsd legitimately deps the cubecl/hdf5 owner crates). No external package installed; libxc NEVER compiled. Pure scaffolding — ships NO compute.
 
 ### Pending Todos
@@ -165,6 +167,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-24T12:54:53.365Z
+Last session: 2026-05-24T23:00:35.580Z
 Stopped at: Phase 6 planned (11 plans, 8 waves)
-Resume file: .planning/phases/06-ccsd/06-01-PLAN.md
+Resume file: None

@@ -101,7 +101,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [ ] **CCSD-08**: DF-CCSD (`mycc = mf.density_fit().CCSD()` or `cc.dfccsd.RCCSD(mf)`) works with bounded memory; spills to HDF5 when `PYSCF_MAX_MEMORY` is exceeded
 - [ ] **CCSD-09**: T1/D1/D2 diagnostics expose `mycc.t1diagnostic()`, `mycc.d1diagnostic()`
 - [ ] **CCSD-10**: Frozen-core options match MP2 (`frozen=int`, `frozen=list`, `frozen='auto'`)
-- [~] **CCSD-11**: Tensor-arena/scratchpad pattern in `pyscf-runtime` is in place from the start of CCSD work — not retrofitted; `Wabef` and other large intermediates do not allocate-and-drop per iteration (06-01 ships the scaffold contract — `CcsdError::Backend(#[from] BackendError)` D-01 pre-flight bridge; the `WorkspacePool` arena body lands in 06-02 and the kernel integration in 06-03)
+- [~] **CCSD-11**: Tensor-arena/scratchpad pattern in `pyscf-runtime` is in place from the start of CCSD work — not retrofitted; `Wabef` and other large intermediates do not allocate-and-drop per iteration (06-01 ships the scaffold contract — `CcsdError::Backend(#[from] BackendError)` D-01 pre-flight bridge; **06-02 ships the `WorkspacePool` arena BODY** — reserve/release free-list reuse + InMemory|Spilled backends + opaque `Amplitudes` handles (D-01/D-08) + the `heap_alloc_count` allocate-once-reuse proof and the `refusal` no-downgrade `MemoryLimitExceeded` proof; the kernel integration that reserves real `Wabef`/`Wvvvv` intermediates lands in 06-03)
 
 ### Gradients (GRAD)
 
