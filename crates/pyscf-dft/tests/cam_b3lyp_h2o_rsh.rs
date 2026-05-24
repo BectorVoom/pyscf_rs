@@ -69,13 +69,21 @@ fn rsh_coeff_distinguishes_rsh_from_standard_hybrid() {
 }
 
 /// Structural: `default_get_veff` with `omega != 0` DISPATCHES into the RSH
-/// branch — i.e. it tries to build `K_lr` via `get_k_with_omega` (standard
-/// int2e + env[8]), which surfaces the Phase-2 arity-4 ERI gap
-/// (`NotYetImplemented{phase:2}`). Reaching THAT error (rather than Ok or a
-/// different error) proves the RSH branch is wired and the omega==0 path is
-/// NOT taken. The standard-hybrid path would instead reach the SAME ERI gap
-/// via the grid-loop's own get_jk — so we assert specifically that the RSH
-/// functional drives the omega-screened K builder.
+/// branch — it builds `K_lr` via `get_k_with_omega` and adds `(alpha−hyb)·K_lr`.
+///
+/// Originally this test used the Phase-2 arity-4 int2e gap as the sentinel
+/// (`NotYetImplemented{phase:2}`). That gap was CLOSED in 05-08 (cintx#11), so
+/// `get_k_with_omega → intor("int2e")` now completes and `default_get_veff`
+/// returns `Ok`. We therefore prove the branch is reached differently: the test
+/// passes `j = k = 0`, so the dead `omega==0` standard-hybrid path would yield
+/// `vk = hyb·k = 0`; the RSH branch instead FRESHLY builds a non-zero long-range
+/// exchange `K_lr`. We assert `get_veff` succeeds AND that the long-range K
+/// builder returns a non-zero finite matrix.
+///
+/// NOTE: the omega *screening* itself is still a no-op at cintx's safe API
+/// (no env[8] setter — see `range_coulomb.rs`), so `K_lr` is numerically the
+/// standard full-range K; the bit-exact CAM-B3LYP RSH energy stays CI-gated.
+/// This structural test only proves the omega!=0 branch is REACHED.
 #[test]
 fn rsh_get_veff_dispatches_into_range_coulomb_branch() {
     let ni = NumInt::new();
@@ -87,8 +95,9 @@ fn rsh_get_veff_dispatches_into_range_coulomb_branch() {
     grids.weights = Some(weights);
 
     let nao = mol.nao_nr;
-    // A trivial (1e-shaped) density and zero J/K so the veff math is defined;
-    // the RSH branch then calls get_k_with_omega, which hits the ERI gap.
+    // A trivial (1e-shaped) density and zero J/K so the veff math is defined.
+    // With k = 0 the dead omega==0 path would give vk = hyb·k = 0; the RSH
+    // branch instead freshly builds (alpha−hyb)·K_lr via get_k_with_omega.
     let dm = pyscf_core::Density {
         nao,
         data: vec![0.1_f64; nao * nao],
@@ -102,30 +111,39 @@ fn rsh_get_veff_dispatches_into_range_coulomb_branch() {
         data: vec![0.0_f64; nao * nao],
     };
 
-    let res = default_get_veff(&ni, &mol, &grids, RSH_XC, &dm, &j, &k);
+    // int2e (cintx#11) closed in 05-08: the RSH branch now COMPLETES instead of
+    // returning NotYetImplemented{phase:2}. default_get_veff returns Ok.
+    let veff = default_get_veff(&ni, &mol, &grids, RSH_XC, &dm, &j, &k)
+        .expect("RSH get_veff should succeed: the arity-4 int2e gap (cintx#11) closed in 05-08");
+    assert!(
+        veff.veff.data.iter().all(|v| v.is_finite()),
+        "RSH veff must be finite"
+    );
 
-    // The RSH branch (omega != 0) reaches get_k_with_omega → intor("int2e")
-    // → NotYetImplemented{phase:2}. That is the proof the branch is live.
-    match res {
-        Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 2, .. }) => {
-            // Expected: the RSH long-range K build hit the Phase-2 arity-4
-            // int2e rollup gap (cintx#11). The branch IS wired.
-        }
-        Err(other) => {
-            // Any other error means the XC/grid path failed before reaching
-            // the RSH K builder — acceptable only if it is also the ERI gap
-            // surfaced from the grid loop's J/K. Fail loudly otherwise so a
-            // regression in the RSH wiring is caught.
-            panic!("RSH get_veff did not reach the arity-4 int2e gap as expected; got {other:?}");
-        }
-        Ok(_) => panic!(
-            "RSH get_veff returned Ok unexpectedly — the omega-screened K build \
-             should surface the Phase-2 arity-4 int2e gap until cintx#11 lands"
-        ),
-    }
+    // Prove the omega != 0 RSH branch was taken (not the dead omega==0 path):
+    // its long-range exchange builder, get_k_with_omega, must return a non-zero
+    // finite K. (Standard-hybrid dispatch would never invoke this builder.)
+    let (omega, alpha, hyb) = ni.rsh_coeff(RSH_XC, mol.spin).expect("RSH rsh_coeff");
+    assert!(omega != 0.0, "RSH_XC must have omega != 0 (got {omega})");
+    assert!(
+        (alpha - hyb).abs() > 1e-9,
+        "RSH must have alpha != hyb (alpha={alpha}, hyb={hyb})"
+    );
+    let mut mol_lr = mol.clone();
+    let k_lr = pyscf_gto::get_k_with_omega(&mut mol_lr, &dm, omega)
+        .expect("RSH long-range K builder (get_k_with_omega) must succeed");
+    assert_eq!(k_lr.nao, nao, "K_lr is nao×nao");
+    assert!(
+        k_lr.data.iter().all(|v| v.is_finite()),
+        "K_lr must be finite"
+    );
+    assert!(
+        k_lr.data.iter().any(|v| v.abs() > 1e-10),
+        "K_lr must be non-zero — the RSH branch builds a real long-range exchange matrix"
+    );
 
-    // env[8] on the shared mol is untouched (the RSH branch clones the Mole
-    // for the omega mutation, so the original is never contaminated).
+    // env[8] on the shared mol is untouched (the RSH branch clones the Mole for
+    // the omega mutation, and get_k_with_omega RAII-restores it on its own clone).
     assert_eq!(
         mol._env[pyscf_gto::PTR_RANGE_OMEGA],
         0.0,
