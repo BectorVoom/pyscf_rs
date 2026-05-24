@@ -91,9 +91,9 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 
 ### Coupled cluster (CCSD)
 
-- [ ] **CCSD-01**: `cc.RCCSD(mf).kernel()` returns CCSD correlation energy matching upstream to chemical accuracy (≤1 µHartree); convergence criteria match
+- [x] **CCSD-01**: `cc.RCCSD(mf).kernel()` returns CCSD correlation energy matching upstream to chemical accuracy (≤1 µHartree); convergence criteria match (06-03: in-core RCCSD converges to H2/STO-3G e_corr=-0.0205245 Ha, ~0.5µH vs the published FCI/CCSD reference; rintermediates+update_amps host-loop oracle_sum, no gemm)
 - [ ] **CCSD-02**: `cc.UCCSD(uhf_mf).kernel()` matches upstream
-- [ ] **CCSD-03**: T1 and T2 amplitudes converge to the same minimum as upstream (energy is the convergence target, amplitude paths may differ within tolerance)
+- [x] **CCSD-03**: T1 and T2 amplitudes converge to the same minimum as upstream (energy is the convergence target, amplitude paths may differ within tolerance) (06-03: dual-criterion convergence |dE|<1e-7 AND normt<1e-5 within max_cycle=50, verified RAYON 1==8 bit-identical e_corr)
 - [ ] **CCSD-04**: Amplitude-DIIS (default `mycc.diis = True`, `mycc.diis_space = 6`) converges within the same iteration count as upstream on the test corpus
 - [ ] **CCSD-05**: `mycc.solve_lambda()` produces λ amplitudes for response densities
 - [ ] **CCSD-06**: `mycc.make_rdm1()`, `mycc.make_rdm2()` match upstream
@@ -101,7 +101,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [ ] **CCSD-08**: DF-CCSD (`mycc = mf.density_fit().CCSD()` or `cc.dfccsd.RCCSD(mf)`) works with bounded memory; spills to HDF5 when `PYSCF_MAX_MEMORY` is exceeded
 - [ ] **CCSD-09**: T1/D1/D2 diagnostics expose `mycc.t1diagnostic()`, `mycc.d1diagnostic()`
 - [ ] **CCSD-10**: Frozen-core options match MP2 (`frozen=int`, `frozen=list`, `frozen='auto'`)
-- [~] **CCSD-11**: Tensor-arena/scratchpad pattern in `pyscf-runtime` is in place from the start of CCSD work — not retrofitted; `Wabef` and other large intermediates do not allocate-and-drop per iteration (06-01 ships the scaffold contract — `CcsdError::Backend(#[from] BackendError)` D-01 pre-flight bridge; **06-02 ships the `WorkspacePool` arena BODY** — reserve/release free-list reuse + InMemory|Spilled backends + opaque `Amplitudes` handles (D-01/D-08) + the `heap_alloc_count` allocate-once-reuse proof and the `refusal` no-downgrade `MemoryLimitExceeded` proof; the kernel integration that reserves real `Wabef`/`Wvvvv` intermediates lands in 06-03)
+- [x] **CCSD-11**: Tensor-arena/scratchpad pattern in `pyscf-runtime` is in place from the start of CCSD work — not retrofitted; `Wabef` and other large intermediates do not allocate-and-drop per iteration (06-01 ships the scaffold contract — `CcsdError::Backend(#[from] BackendError)` D-01 pre-flight bridge; 06-02 ships the `WorkspacePool` arena BODY — reserve/release free-list reuse + InMemory|Spilled backends + opaque `Amplitudes` handles (D-01/D-08) + the `heap_alloc_count` allocate-once-reuse proof and the `refusal` no-downgrade `MemoryLimitExceeded` proof; **06-03 wires the kernel integration under REAL math** — `ccsd_kernel` runs the HARD `try_reserve(nv⁴·8)` pre-flight before building eris, `pool.reserve`s the `cc_Wvvvv` tenant ONCE before the loop and reuses it every cycle via `with_mut_slice` (`cc_Wvvvv_into`/`default_update_amps_with_wvvvv`), and `convergence.rs::over_budget_in_core_run_refuses` proves the no-downgrade `MemoryLimitExceeded`)
 
 ### Gradients (GRAD)
 
@@ -314,9 +314,9 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | MP2-06 | Phase 5 | Complete |
 | MP2-07 | Phase 5 | Complete |
 | MP2-08 | Phase 5 | Complete |
-| CCSD-01 | Phase 6 | Pending |
+| CCSD-01 | Phase 6 | Complete |
 | CCSD-02 | Phase 6 | Pending |
-| CCSD-03 | Phase 6 | Pending |
+| CCSD-03 | Phase 6 | Complete |
 | CCSD-04 | Phase 6 | Pending |
 | CCSD-05 | Phase 6 | Pending |
 | CCSD-06 | Phase 6 | Pending |
@@ -324,7 +324,7 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | CCSD-08 | Phase 6 | Pending |
 | CCSD-09 | Phase 6 | Pending |
 | CCSD-10 | Phase 6 | Pending |
-| CCSD-11 | Phase 6 | In Progress |
+| CCSD-11 | Phase 6 | Complete |
 | GRAD-01 | Phase 7 | Pending |
 | GRAD-02 | Phase 7 | Pending |
 | GRAD-03 | Phase 7 | Pending |

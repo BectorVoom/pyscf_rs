@@ -279,7 +279,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 06-03-PLAN.md — In-core RCCSD headline (un-gated): rintermediates + update_amps (host-loop oracle, no gemm) + ccsd_kernel + init_amps MP2 seed + pre-flight arena + ≤1µH small-system oracle (CCSD-01/03/11)
+- [x] 06-03-PLAN.md — In-core RCCSD headline (un-gated): rintermediates + update_amps (host-loop oracle, no gemm) + ccsd_kernel + init_amps MP2 seed + pre-flight arena + ≤1µH small-system oracle (CCSD-01/03/11) (completed 2026-05-25 — H2/STO-3G e_corr=-0.0205245 Ha, ~0.5µH vs FCI ref, RAYON 1==8 bit-identical)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
