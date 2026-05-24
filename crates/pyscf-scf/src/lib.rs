@@ -24,6 +24,8 @@ pub mod init_guess;
 pub mod kernel;
 pub mod kernel_impl;
 pub mod occ;
+// Plan 03-15 — meta-Löwdin / Löwdin AO orthogonalization (orth_ao) for SCF-09.
+pub mod orth;
 pub mod rdm;
 pub mod rhf;
 pub mod scanner;
