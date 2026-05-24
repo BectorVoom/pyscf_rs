@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 6 context gathered
-last_updated: "2026-05-24T12:54:53.369Z"
-last_activity: 2026-05-24
+stopped_at: Phase 6 planned (11 plans, 8 waves)
+last_updated: "2026-05-24T13:44:39.047Z"
+last_activity: 2026-05-24 -- Phase 06 planning complete
 progress:
   total_phases: 8
   completed_phases: 5
-  total_plans: 58
+  total_plans: 69
   completed_plans: 58
   percent: 63
 ---
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 06 — ccsd (context gathered; ready to plan. Phases 01–05 complete)
+**Current focus:** Phase 06 — ccsd (planned: 11 plans in 8 waves; ready to execute. Phases 01–05 complete)
 
 ## Current Position
 
 Phase: 06
-Plan: Not started (context gathered → /gsd:plan-phase 6)
-Status: Phase 6 CCSD context gathered (06-CONTEXT.md committed f4a7e47). 4 core decisions locked: D-01 opaque spillable Tensor + hard PYSCF_MAX_MEMORY refusal (CCSD-11); D-02 in-core RCCSD headline, AO-direct + DF-CCSD-spill sequenced; D-03 full numeric λ + RDMs incl. ao_repr; D-04 tiered oracle (small in-tree, caffeine/DF-spill CI/human-verify). Phases 01–05 complete (58/58 plans).
-Last activity: 2026-05-24
+Plan: 11 plans in 8 waves complete (→ /gsd:execute-phase 6)
+Status: Ready to execute
+Last activity: 2026-05-24 -- Phase 06 planning complete
 
-Progress: [█████████░] ~63% (5/8 phases complete; Phase 6 context gathered, plans TBD)
+Progress: [█████████░] ~63% (5/8 phases complete; Phase 6 planned — 11 plans, 8 waves)
 
 ## Performance Metrics
 
@@ -163,5 +163,5 @@ Items acknowledged and carried forward:
 ## Session Continuity
 
 Last session: 2026-05-24T12:54:53.365Z
-Stopped at: Phase 6 context gathered
-Resume file: .planning/phases/06-ccsd/06-CONTEXT.md
+Stopped at: Phase 6 planned (11 plans, 8 waves)
+Resume file: .planning/phases/06-ccsd/06-01-PLAN.md
