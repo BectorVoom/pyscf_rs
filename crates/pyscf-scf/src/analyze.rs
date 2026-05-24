@@ -7,9 +7,15 @@
 //!   - `mulliken_pop(rhf)` — closed-shell Mulliken population analysis.
 //!   - `dip_moment(rhf)` — electric dipole moment (uses int1e_r).
 //!
-//! `mulliken_meta` (meta-Löwdin variant) stays NotYetImplemented for
-//! plan 03-11; oracle Arms 7 + 8 (plan 03-08) consume the simpler
-//! `mulliken_pop` body, so the meta variant is a follow-up.
+//! Plan 03-15 ships the real `mulliken_meta(rhf)` body — meta-Löwdin
+//! population analysis (`pyscf/scf/hf.py:1301-1340`). It re-expresses the
+//! density in a meta-Löwdin-orthogonalized AO basis (built by
+//! `crate::orth::orth_ao`) then reuses the same AO→atom aggregation as
+//! `mulliken_pop` (the shared `aggregate_pop_to_charges` helper) with the
+//! overlap = identity. The per-`l`-channel meta-Löwdin satisfies the
+//! conservation invariants (`Σ ao_pop ≈ nelec`, `Σ chg ≈ molecule charge`);
+//! the full NAO core/valence/Rydberg byte-identity is a documented future
+//! enhancement (SCF-09 `[~]`).
 //!
 //! AO→atom mapping: walks `mol._bas` rows (each shell carries an
 //! `ATOM_OF` slot per libcint's BAS_SLOTS layout) plus `mol.ao_loc_nr`
@@ -84,11 +90,27 @@ pub fn mulliken_pop(rhf: &RHF) -> Result<MullikenResult, PyscfRsError> {
         ao_pop[mu] = pyscf_algebra::oracle_sum(&terms);
     }
 
-    // Aggregate AO populations onto atoms via mol._bas[shell, ATOM_OF]
-    // + mol.ao_loc_nr (cumulative AO offsets per shell).
+    // AO→atom aggregation + charges (shared with mulliken_meta).
+    aggregate_pop_to_charges(rhf, ao_pop)
+}
+
+/// Shared AO→atom aggregator + charge builder.
+///
+/// Both `mulliken_pop` (`pop[μ] = (D·S)[μ,μ]`) and `mulliken_meta`
+/// (`pop[μ] = D'[μ,μ]`, basis orthonormal so `S = I`) produce a per-AO
+/// population vector; the downstream aggregation is identical. Extracting it
+/// here gives a SINGLE oracle-reduction site to audit (threat T-03-15-NUM)
+/// and avoids duplicating the ~40-line `_bas[ATOM_OF]` / `ao_loc_nr` walk.
+///
+/// Aggregates `ao_pop` onto atoms via `mol._bas[shell, ATOM_OF]` +
+/// `mol.ao_loc_nr` (cumulative AO offsets per shell, `oracle_sum` per shell),
+/// then `chg[A] = Z_A − pop[A]` from `rhf.mol.atom_charges()`. AO-range /
+/// atom-index overruns return `Err` (never panics — T-03-15-PANIC).
+fn aggregate_pop_to_charges(rhf: &RHF, ao_pop: Vec<f64>) -> Result<MullikenResult, PyscfRsError> {
     let natm = rhf.mol.natm;
-    let mut atom_pop = vec![0.0_f64; natm];
     let nbas = rhf.mol.nbas;
+    let nao = ao_pop.len();
+    let mut atom_pop = vec![0.0_f64; natm];
     if !rhf.mol._bas.is_empty() && rhf.mol.ao_loc_nr.len() > nbas {
         // Standard path (post mol.build()): ao_loc_nr is `nbas+1` long.
         for shell in 0..nbas {
@@ -96,13 +118,21 @@ pub fn mulliken_pop(rhf: &RHF) -> Result<MullikenResult, PyscfRsError> {
             if atom >= natm {
                 return Err(
                     ScfError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
-                        "mulliken_pop: _bas[{shell}, ATOM_OF] = {atom} but natm = {natm}"
+                        "mulliken: _bas[{shell}, ATOM_OF] = {atom} but natm = {natm}"
                     )))
                     .into(),
                 );
             }
             let lo = rhf.mol.ao_loc_nr[shell] as usize;
             let hi = rhf.mol.ao_loc_nr[shell + 1] as usize;
+            if hi > nao || lo > hi {
+                return Err(
+                    ScfError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
+                        "mulliken: shell {shell} AO range {lo}..{hi} overruns nao {nao}"
+                    )))
+                    .into(),
+                );
+            }
             let pop_shell = pyscf_algebra::oracle_sum(&ao_pop[lo..hi]);
             atom_pop[atom] += pop_shell;
         }
@@ -126,12 +156,97 @@ pub fn mulliken_pop(rhf: &RHF) -> Result<MullikenResult, PyscfRsError> {
     })
 }
 
-/// Meta-Löwdin Mulliken variant. Deferred — plan 03-10 follow-up.
-pub fn mulliken_meta(_rhf: &RHF) -> Result<MullikenResult, PyscfRsError> {
-    Err(PyscfRsError::NotYetImplemented {
-        phase: 3,
-        what: "mulliken_meta (meta-Löwdin variant; plan 03-10 follow-up)",
-    })
+/// Meta-Löwdin Mulliken population analysis (SCF-09).
+///
+/// Source: `pyscf/scf/hf.py:1301-1340`. Re-expresses the density in a
+/// meta-Löwdin-orthogonalized AO basis (built by `crate::orth::orth_ao`),
+/// then runs the SAME AO→atom aggregation `mulliken_pop` does but with the
+/// overlap = identity (the basis is now orthonormal):
+///
+///   1. `dm`/`s` as in `mulliken_pop`.
+///   2. `C_orth = orth_ao(mol, s)` (nao×nao, F-order; columns are the
+///      meta-Löwdin AOs).
+///   3. `c_inv = C_orthᵀ · S` (nao×nao); `D' = c_inv · D · c_invᵀ` — the
+///      density in the orthogonal basis.
+///   4. `pop[μ] = D'[μ, μ]` (diagonal, since S = I); aggregate onto atoms and
+///      form charges via the shared `aggregate_pop_to_charges`.
+///
+/// Because `C_orth` is a complete S-orthonormalization
+/// (`C_orthᵀ·S·C_orth = I`), the transform preserves the electron count:
+/// `Σ pop = Tr(D') = Tr(c_invᵀ·c_inv·D) = Tr(S·D) = nelec` — the conservation
+/// invariant the integration test asserts.
+///
+/// All matrix-product reductions go through `oracle_sum` on materialized term
+/// Vecs (threat T-03-15-NUM); no FMA; never panics (missing-mo_coeff guard +
+/// dimension checks return `Err`).
+pub fn mulliken_meta(rhf: &RHF) -> Result<MullikenResult, PyscfRsError> {
+    let mo = rhf.mo_coeff.as_ref().ok_or_else(|| {
+        ScfError::Core(pyscf_core::CoreError::InvalidMolecule(
+            "mulliken_meta: kernel not run yet — mo_coeff is None".into(),
+        ))
+    })?;
+    let dm = crate::rdm::default_make_rdm1(mo)?;
+    let s = crate::fock::default_get_ovlp(&rhf.mol)?;
+    let nao = dm.nao;
+    if s.nao != nao {
+        return Err(ScfError::Core(pyscf_core::CoreError::DimensionMismatch {
+            expected: nao,
+            actual: s.nao,
+        })
+        .into());
+    }
+
+    // (2) C_orth: nao×nao F-order — c_orth[μ + i*nao].
+    let c_orth = crate::orth::orth_ao(&rhf.mol, &s)?;
+    if c_orth.len() != nao * nao {
+        return Err(ScfError::Core(pyscf_core::CoreError::DimensionMismatch {
+            expected: nao * nao,
+            actual: c_orth.len(),
+        })
+        .into());
+    }
+
+    // (3a) c_inv = C_orthᵀ · S  (nao×nao).
+    //   c_inv[i, ν] = Σ_μ C_orth[μ, i] · S[μ, ν]
+    //              = Σ_μ c_orth[μ + i*nao] · s.data[μ*nao + ν]
+    // Store c_inv row-major: c_inv[i*nao + ν].
+    let mut c_inv = vec![0.0_f64; nao * nao];
+    let mut terms = vec![0.0_f64; nao];
+    for i in 0..nao {
+        for nu in 0..nao {
+            for mu in 0..nao {
+                terms[mu] = c_orth[mu + i * nao] * s.data[mu * nao + nu];
+            }
+            c_inv[i * nao + nu] = pyscf_algebra::oracle_sum(&terms);
+        }
+    }
+
+    // (3b) D' = c_inv · D · c_invᵀ. Build M = c_inv · D first (row-major),
+    //   M[i, σ] = Σ_λ c_inv[i, λ] · D[λ, σ]
+    //          = Σ_λ c_inv[i*nao + λ] · dm.data[λ*nao + σ]
+    // then D'[i, j] = Σ_σ M[i, σ] · c_invᵀ[σ, j] = Σ_σ M[i, σ] · c_inv[j, σ].
+    let mut m = vec![0.0_f64; nao * nao];
+    for i in 0..nao {
+        for sigma in 0..nao {
+            for lam in 0..nao {
+                terms[lam] = c_inv[i * nao + lam] * dm.data[lam * nao + sigma];
+            }
+            m[i * nao + sigma] = pyscf_algebra::oracle_sum(&terms);
+        }
+    }
+
+    // (4) AO populations in the orthogonal basis are the diagonal of D':
+    //   pop[i] = D'[i, i] = Σ_σ M[i, σ] · c_inv[i*nao + σ].
+    let mut ao_pop = vec![0.0_f64; nao];
+    for i in 0..nao {
+        for sigma in 0..nao {
+            terms[sigma] = m[i * nao + sigma] * c_inv[i * nao + sigma];
+        }
+        ao_pop[i] = pyscf_algebra::oracle_sum(&terms);
+    }
+
+    // AO→atom aggregation + charges (shared with mulliken_pop, S = I here).
+    aggregate_pop_to_charges(rhf, ao_pop)
 }
 
 /// Electric dipole moment in atomic units (e · Bohr).

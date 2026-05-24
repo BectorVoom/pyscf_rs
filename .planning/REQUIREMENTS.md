@@ -46,7 +46,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [ ] **SCF-06**: `mf.level_shift`, `mf.damp`, `mf.max_cycle`, `mf.conv_tol`, `mf.conv_tol_grad` controls match upstream semantics
 - [~] **SCF-07**: `mf.density_fit(auxbasis=...)` returns an SCF object that solves DF-HF; auxbasis defaults match upstream (`weigend`, `cc-pvdz-jkfit`) (plan 03-12 — DF-HF now solves END-TO-END in-tree: `RHF::density_fit` + `DfHooks` + the SCF kernel converge and match non-DF RHF within DF accuracy (H2/STO-3G: weigend 4.6e-5, cc-pvdz-jkfit 2.0e-4 Hartree), enabled by 05-08 int2e + 05-09 rank-revealing DF-metric fit; `crates/pyscf-scf/tests/dfhf_end_to_end.rs`. The default `minao` init guess landed in 03-13, so `RHF(mol).density_fit().kernel()` now works fully out-of-the-box; the only remaining item for full closure is upstream-PySCF byte-identity of the converged energy (CI-gated/human-verify))
 - [ ] **SCF-08**: All overrideable hooks dispatch via PyO3 `slf.call_method1` so Python subclasses correctly override `get_jk`, `get_veff`, `get_hcore`, `get_init_guess`, `get_fock`, `get_occ`, `eig`, `make_rdm1`, `energy_elec`, `energy_tot`
-- [ ] **SCF-09**: `mf.analyze()`, `mf.mulliken_pop()`, `mf.mulliken_meta()`, `mf.dip_moment()` produce the same numbers as upstream
+- [~] **SCF-09**: `mf.analyze()`, `mf.mulliken_pop()`, `mf.mulliken_meta()`, `mf.dip_moment()` produce the same numbers as upstream (plans 03-11/03-15 — `analyze`/`mulliken_pop`/`dip_moment` shipped real bodies in 03-11; 03-15 ships the real `mulliken_meta` (meta-Löwdin population analysis, `pyscf/scf/hf.py:1301-1340`) via the new `crate::orth::orth_ao` (per-`l`-channel sequential Löwdin, the `_nao_sub` scheme). `mulliken_meta` no longer returns `NotYetImplemented` and satisfies the physical conservation invariants — `Σ ao_pop ≈ nelec` and `Σ chg ≈ molecule charge` on H2 + H2O, plus orthonormality `C_orthᵀ·S·C_orth ≈ I` and homonuclear symmetry (equal H charges on H2); `crates/pyscf-scf/tests/mulliken_meta.rs` + `orth` unit tests. PARTIAL because upstream byte-identity of the meta-Löwdin charges needs the full NAO core/valence/Rydberg `_nao_sub` partition (~230 LoC of `pyscf/lo/nao.py`, no in-tree analog) — a documented future enhancement and a CI-gated/human-verify item (the sandbox has no maturin/upstream-pyscf), mirroring SCF-07's Rust-satisfied + upstream-byte-identity treatment)
 - [ ] **SCF-10**: `mf.chkfile = path` writes an HDF5 chkfile that h5py can read with the upstream PySCF schema; `mf.from_chk(path)` reads upstream-written chkfiles
 - [ ] **SCF-11**: Cross-module dispatch helpers (`mf.to_uhf()`, `mf.to_rhf()`, `mf.to_uks()`, `mf.to_rks()`, `mf.to_ghf()`) work as upstream because MP2/CCSD dispatch depends on them
 - [ ] **SCF-12**: `mf.as_scanner()` returns a callable that takes a Mole and returns the energy (used by geomopt)
@@ -289,7 +289,7 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | SCF-06 | Phase 3 | Pending |
 | SCF-07 | Phase 3 | Pending |
 | SCF-08 | Phase 3 | Pending |
-| SCF-09 | Phase 3 | Pending |
+| SCF-09 | Phase 3 | Partial (03-15) — mulliken_meta ships; upstream byte-identity human-verify |
 | SCF-10 | Phase 3 | Pending |
 | SCF-11 | Phase 3 | Pending |
 | SCF-12 | Phase 3 | Pending |
