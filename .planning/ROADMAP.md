@@ -306,7 +306,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 |-------|----------------|--------|-----------|
 | 1. Foundation | 9/9 | Complete    | 2026-05-23 |
 | 2. GTO | 11/11 | Complete    | 2026-05-23 |
-| 3. SCF + PyO3 bindings | 15/15 | Complete   | 2026-05-24 |
+| 3. SCF + PyO3 bindings | 15/15 | Complete    | 2026-05-24 |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 0/TBD | Not started | - |

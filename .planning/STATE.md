@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-14-PLAN.md (SCF-05 atom/huckel init-guess gap closure)
-last_updated: "2026-05-24T12:03:19.121Z"
-last_activity: 2026-05-24 -- Completed 03-14 (atom/huckel init guesses + get_atm_nrhf, SCF-05 → [x])
+stopped_at: Phase 03 complete (15/15; SCF-05 atom/huckel + SCF-09 mulliken_meta gap closures landed)
+last_updated: "2026-05-24T12:24:15.332Z"
+last_activity: 2026-05-24
 progress:
   total_phases: 8
   completed_phases: 5
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 02 — gto
+**Current focus:** Phase 04 — dft (Phase 03 complete: SCF + PyO3 bindings)
 
 ## Current Position
 
-Phase: 03
-Plan: 03-14 complete (atom/huckel init guesses — SCF-05 → [x])
-Status: Executing — Phase 03 gap closures
-Last activity: 2026-05-24 -- Completed 03-14 (atom/huckel init guesses + get_atm_nrhf, SCF-05 → [x])
+Phase: 04
+Plan: Not started
+Status: Phase 03 complete (15/15; SCF-05 + SCF-09 gap closures landed; 6 CI/human-verify items tracked in 03-HUMAN-UAT.md). Phase 04 not started.
+Last activity: 2026-05-24
 
 Progress: [██████████] 100% (56/56 plans done across all phases; Phase 02 gap closure 02-11 done)
 
@@ -36,7 +36,7 @@ Progress: [██████████] 100% (56/56 plans done across all pha
 
 **Velocity:**
 
-- Total plans completed: 71
+- Total plans completed: 86
 - Average duration: — (no plans run yet)
 - Total execution time: 0 hours
 
@@ -45,7 +45,7 @@ Progress: [██████████] 100% (56/56 plans done across all pha
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 02 | 11 | - | - |
-| 03 | 11 | - | - |
+| 03 | 15 | - | - |
 | 04 | 14 | - | - |
 | 05 | 7 | - | - |
 | 01 | 9 | - | - |
