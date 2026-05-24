@@ -8,9 +8,7 @@ use pyscf_core::{Density, Mole, PyscfRsError};
 pub fn default_get_init_guess(mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
     match mode {
         InitGuessMode::Minao => init_guess_by_minao(mol),
-        InitGuessMode::Atom => {
-            Err(ScfError::InitGuessNotYetImplemented("atom", "03-03 follow-up").into())
-        }
+        InitGuessMode::Atom => init_guess_by_atom(mol),
         InitGuessMode::OneElectron => init_guess_by_1e(mol),
         InitGuessMode::Huckel => {
             Err(ScfError::InitGuessNotYetImplemented("huckel", "03-03 follow-up").into())
@@ -207,6 +205,136 @@ pub(crate) fn init_guess_by_minao(mol: &Mole) -> Result<Density, PyscfRsError> {
                 .map(|p| occ[p] * mo[mu + p * nao] * mo[nu + p * nao])
                 .collect();
             data[mu * nao + nu] = pyscf_algebra::oracle_sum(&terms);
+        }
+    }
+
+    Ok(Density { nao, data })
+}
+
+/// Per-atom molecular AO range `[lo, hi)` (the in-tree `aoslice_by_atom`
+/// equivalent). For each atom `ia`, walks `mol._bas` rows whose `ATOM_OF`
+/// slot equals `ia` and unions their `ao_loc_nr[shell]..ao_loc_nr[shell+1]`
+/// AO ranges. Shells are atom-ordered post-build, so each atom's AO block is
+/// contiguous. Returns `natm` `(lo, hi)` pairs.
+///
+/// Shared by `init_guess_by_atom` (block placement) and `init_guess_by_huckel`
+/// (occupied-orbital scatter). Mirrors `analyze.rs`'s `ATOM_OF` + `ao_loc_nr`
+/// walk. AO-range / atom-index overruns return `Err` (never panics —
+/// T-03-14-PANIC).
+fn aoslice_by_atom(mol: &Mole) -> Result<Vec<(usize, usize)>, PyscfRsError> {
+    use pyscf_core::CoreError;
+    use pyscf_core::raw_layout::{ATOM_OF, BAS_SLOTS};
+
+    let natm = mol.natm;
+    let nbas = mol.nbas;
+    let nao = mol.nao_nr;
+    if mol.ao_loc_nr.len() <= nbas {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "aoslice_by_atom: ao_loc_nr len {} <= nbas {} (Mole not built?)",
+            mol.ao_loc_nr.len(),
+            nbas
+        ))));
+    }
+    // Per-atom [lo, hi). Initialize lo = nao (sentinel), hi = 0.
+    let mut slices = vec![(nao, 0usize); natm];
+    for shell in 0..nbas {
+        let atom = mol._bas[shell * BAS_SLOTS + ATOM_OF] as usize;
+        if atom >= natm {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "aoslice_by_atom: _bas[{shell}, ATOM_OF] = {atom} but natm = {natm}"
+            ))));
+        }
+        let lo = mol.ao_loc_nr[shell] as usize;
+        let hi = mol.ao_loc_nr[shell + 1] as usize;
+        if hi > nao || lo > hi {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "aoslice_by_atom: shell {shell} AO range [{lo},{hi}) invalid (nao={nao})"
+            ))));
+        }
+        let (cur_lo, cur_hi) = slices[atom];
+        slices[atom] = (cur_lo.min(lo), cur_hi.max(hi));
+    }
+    // Atoms with no basis get an empty [lo, lo) range (lo defaults to its
+    // contiguous position; if never touched the sentinel collapses to (nao,0)
+    // → normalize to an empty slice anchored at the running offset).
+    let mut next = 0usize;
+    for slot in slices.iter_mut() {
+        if slot.0 == nao && slot.1 == 0 {
+            // Basis-less atom: empty range at the current running offset.
+            *slot = (next, next);
+        } else {
+            next = slot.1;
+        }
+    }
+    Ok(slices)
+}
+
+/// `init_guess_by_atom(mol)` — superposition of spherically-averaged atomic
+/// densities (SCF-05). Port of `pyscf/scf/hf.py:495-535`.
+///
+/// Algorithm:
+///   1. `atm_scf = get_atm_nrhf(mol)` — per-unique-element `(mo_coeff c, mo_occ
+///      occ)` from the spherically-averaged atomic RHF (atom_hf.rs).
+///   2. For each atom, build the per-atom density block
+///      `atm_dm[μ,ν] = Σ_p occ[p]·c[μ,p]·c[ν,p]` (row-major, oracle_sum over p).
+///   3. Place each block on the block-diagonal of the molecular `nao×nao`
+///      Density at the atom's molecular AO range `[lo, hi)` (the
+///      `scipy.linalg.block_diag` placement — atom blocks at their AO offsets).
+///
+/// `mo_coeff.data` is F-order (`c[μ,p] = data[μ + p*nao_atm]`). The atomic dm
+/// is built from normalized atomic orbitals, so `Tr(D·S) ≈ nelec` (the minao
+/// non-normalization caveat does NOT apply here).
+///
+/// Cartesian basis (upstream's `cart2sph` branch at hf.py:528-531) is out of
+/// scope: STO-3G is spherical. A cartesian Mole returns a clear `Err`.
+pub(crate) fn init_guess_by_atom(mol: &Mole) -> Result<Density, PyscfRsError> {
+    use pyscf_core::CoreError;
+
+    if mol.cart {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "init_guess_by_atom cartesian-basis cart2sph branch (spherical basis only)",
+        });
+    }
+
+    let nao = mol.nao_nr;
+    let atm_scf = crate::atom_hf::get_atm_nrhf(mol)?;
+    let slices = aoslice_by_atom(mol)?;
+
+    let mut data = vec![0.0f64; nao * nao];
+
+    for (ia, (sym, _xyz)) in mol._atom.iter().enumerate() {
+        let (lo, hi) = slices[ia];
+        let nao_atm = hi - lo;
+        if nao_atm == 0 {
+            continue; // basis-less atom → zero block.
+        }
+        // Look up the element's atomic-RHF result (keyed by the exact symbol).
+        let res = atm_scf.get(sym).ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "init_guess_by_atom: no atomic-RHF result for element '{sym}'"
+            )))
+        })?;
+        let c = &res.mo_coeff;
+        if c.nao != nao_atm {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "init_guess_by_atom: atom {ia} ({sym}) molecular AO span {nao_atm} \
+                 != atomic nao {} (basis mismatch)",
+                c.nao
+            ))));
+        }
+        let occ = &res.mo_occ;
+        let nmo = c.nmo;
+        // Per-atom block atm_dm[i,j] = Σ_p occ[p]·c[i,p]·c[j,p] (row-major),
+        // placed at molecular [lo+i, lo+j]. oracle_sum over the occupied p.
+        for i in 0..nao_atm {
+            for j in 0..nao_atm {
+                let terms: Vec<f64> = (0..nmo)
+                    .filter(|&p| occ[p] != 0.0)
+                    .map(|p| occ[p] * c.data[i + p * nao_atm] * c.data[j + p * nao_atm])
+                    .collect();
+                data[(lo + i) * nao + (lo + j)] = pyscf_algebra::oracle_sum(&terms);
+            }
         }
     }
 
