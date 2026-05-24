@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-03-PLAN.md (in-core RCCSD numeric headline — CCSD-01/03/11)
+stopped_at: Completed 06-04-PLAN.md (in-core UCCSD open-shell — CCSD-02)
 last_updated: "2026-05-25T00:00:00.000Z"
-last_activity: 2026-05-25 -- Completed 06-03 (in-core RCCSD headline: rintermediates + update_amps + kernel, e_corr ≤1µHartree)
+last_activity: 2026-05-25 -- Completed 06-04 (in-core spin-orbital UCCSD: uintermediates + uccsd_kernel + UccsdAmplitudes triple, e_corr=e_aa+e_bb+e_ab, UCCSD(α==β)==RCCSD bit-identical)
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 69
-  completed_plans: 61
-  percent: 88
+  completed_plans: 62
+  percent: 90
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 06 (ccsd) — EXECUTING
-Plan: 4 of 11
+Plan: 5 of 11
 Status: Ready to execute
-Last activity: 2026-05-25 -- Completed 06-03 (in-core RCCSD numeric headline — CCSD-01/03/11)
+Last activity: 2026-05-25 -- Completed 06-04 (in-core UCCSD open-shell — CCSD-02)
 
-Progress: [████████▊░] ~88% (61/69 plans; Phase 6 in progress — Wave 3 done, 8 plans remain)
+Progress: [█████████░] ~90% (62/69 plans; Phase 6 in progress — Wave 4 UCCSD done, 7 plans remain)
 
 ## Performance Metrics
 
@@ -80,6 +80,7 @@ Progress: [████████▊░] ~88% (61/69 plans; Phase 6 in progres
 | Phase 06 P06-01 | 5min | 2 tasks | 20 files |
 | Phase 06 P06-02 | 30min | 2 tasks | 9 files |
 | Phase 06 P06-03 | 25min | 2 tasks (TDD) | 6 files |
+| Phase 06 P06-04 | 30min | 2 tasks (TDD) | 5 files |
 
 ## Accumulated Context
 

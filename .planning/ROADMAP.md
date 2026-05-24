@@ -283,7 +283,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 06-04-PLAN.md — In-core UCCSD (open-shell): uintermediates + uccsd_kernel + UccsdAmplitudes triple + e_aa+e_bb+e_ab + small open-shell smoke (CCSD-02)
+- [x] 06-04-PLAN.md — In-core UCCSD (open-shell): uintermediates + uccsd_kernel + UccsdAmplitudes triple + e_aa+e_bb+e_ab + small open-shell smoke (CCSD-02) (completed 2026-05-25 — spin-orbital UCCSD; UCCSD(α==β) H2/STO-3G e_corr=-0.0205245 Ha bit-identical to 06-03 RCCSD; asymmetric α/β converges with e_aa≠e_bb; RAYON 1==8 bit-identical)
 - [ ] 06-05-PLAN.md — Amplitude-DIIS: AmplitudeSubspace: DiisStorable (dot via oracle_dot, byte-match amplitudes_to_vector) + Diis::new(6) wired into the kernel (D-06, Pitfall 9) (CCSD-04)
 
 **Wave 5** *(blocked on Wave 4 completion)*
