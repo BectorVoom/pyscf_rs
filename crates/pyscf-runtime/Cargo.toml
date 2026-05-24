@@ -28,6 +28,15 @@ metal   = ["wgpu"]
 
 [dependencies]
 pyscf-core   = { path = "../pyscf-core" }
+# D-07/D-08: the HDF5 spill backend uses pyscf-chkfile's re-exported `hdf5`
+# alias (pyscf-chkfile is the sole hdf5-metno owner). This adds NO new
+# cubecl/libxc — chkfile's only extra transitive crate is hdf5-metno; its
+# cubecl arrives via the same pyscf-core → cintx-compat chain pyscf-runtime
+# already carries. libxc stays 0.
+pyscf-chkfile = { path = "../pyscf-chkfile" }
+# ndarray drives the hdf5-metno dataset read/write (write(&Array1)/read_1d);
+# workspace dep, no cubecl/libxc (it is already in the pyscf-chkfile tree).
+ndarray      = { workspace = true }
 thiserror    = { workspace = true }
 tracing      = { workspace = true }
 tracing-subscriber = { workspace = true }
