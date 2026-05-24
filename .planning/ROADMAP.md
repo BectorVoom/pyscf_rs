@@ -102,7 +102,7 @@ Plans:
   5. **PyO3 boundary discipline locked**: every public PyO3 entry point that takes a NumPy array calls `to_owned()` on input that is not `is_standard_layout()`, and a stride-fuzz CI test that calls each entry with `a`, `a.T`, `a[::2]`, `a[:, 1:5]` produces identical answers (BIND-04, Pitfall 5); long compute calls `Python::detach` and a `python3.13t` free-threaded CI build runs the SCF test corpus without deadlocks (BIND-05, Pitfall 6); `pyo3::sync::GILOnceCell` replaces every `lazy_static!` (BIND-06); a Rust panic in any kernel called via FFI surfaces as a Python exception with the original error chain preserved, **never** as a process abort or undefined behavior (BIND-09, Pitfall 14); `from pyscf import scf` works exactly as upstream via `_native.scf` PyO3 submodule + `python/pyscf/__init__.py` re-export shim (BIND-01, BIND-02).
   6. **Oracle harness bootstrap**: the `oracle_check!(method, tolerance, fixture)` macro is implemented in `pyscf-oracle` (dev-deps only); every SCF success-criterion above is asserted via this macro on a curated H2O/benzene/water-trimer corpus; chkfile round-trip oracle (PySCF writes → pyscf-rs reads asserts identical, pyscf-rs writes → PySCF reads runs downstream calc asserts agreement) is in CI (ORACLE-02, ORACLE-08); `mf.analyze()`, `mf.mulliken_pop()`, `mf.mulliken_meta()`, `mf.dip_moment()` produce upstream-matching numbers (SCF-09); cross-module dispatch helpers `mf.to_uhf()`, `mf.to_rhf()`, `mf.to_uks()`, `mf.to_rks()`, `mf.to_ghf()` work (SCF-11) because MP2/CCSD will depend on them; `mf.as_scanner()` returns a callable used by geomopt (SCF-12).
 
-**Plans**: 11 plans across 8 waves (split per checker iteration 1 WARNING 3)
+**Plans**: 15 plans across 10 waves (split per checker iteration 1 WARNING 3; + 4 gap-closure: 03-12 DF-HF lock-in, 03-13 minao, 03-14 atom/huckel, 03-15 mulliken_meta)
 
 Plans:
 
@@ -117,6 +117,10 @@ Plans:
 - [x] 03-09-PLAN.md — CI jobs (maturin-smoke, stride-fuzz, xplat-uhartree Linux x86_64 + macOS aarch64 matrix, python313t-smoke NON-abi3 separate build per RESEARCH Pitfall (NEW); BIND-05, Pitfall 12)
 - [x] 03-10-PLAN.md — Python test bodies (replace 19 xfail stubs with real ≤1 µHartree / element-wise / bit-identical assertions; verifies SCF-01..14 + BIND-02/04/07/09 + ORACLE-08)
 - [x] 03-11-PLAN.md — pyscf-scf kernel internals (SCF cycle loop body, Fock build, eig+canonicalize_signs, occ+rdm+energy, '1e' init_guess body, analyze/mulliken/dip, convert helpers, as_scanner; SCF-01..03, SCF-05, SCF-06, SCF-09, SCF-11, SCF-12, SCF-13) — NEW, WARNING 3 split
+- [x] 03-12-PLAN.md — DF-HF end-to-end lock-in (RHF::density_fit + DfHooks converge with int2e/int3c2e real; SCF-07) — gap-closure
+- [x] 03-13-PLAN.md — minao default init guess (intor_cross + NRSRHF_CONFIGURATION/frac_occ; byte-matches upstream H2 dm; SCF-05) — gap-closure
+- [ ] 03-14-PLAN.md — atom + huckel init guesses (get_atm_nrhf per-element spherically-averaged atomic RHF; SCF-05 complete — all 5 modes) — gap-closure
+- [ ] 03-15-PLAN.md — mulliken_meta meta-Löwdin population analysis (orth_ao; SCF-09) — gap-closure
 
 **UI hint**: yes
 
