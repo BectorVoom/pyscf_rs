@@ -13,6 +13,9 @@
 pub mod analyze;
 // Plan 03-13 — per-element electron configuration + frac_occ for the minao guess.
 mod atom_config;
+// Plan 03-14 — per-element spherically-averaged atomic RHF (get_atm_nrhf), the
+// shared engine that BOTH the `atom` and `huckel` init guesses consume (SCF-05).
+mod atom_hf;
 pub mod convert;
 pub mod eig;
 pub mod energy;
