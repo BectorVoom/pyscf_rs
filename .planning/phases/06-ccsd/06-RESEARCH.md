@@ -434,7 +434,13 @@ pub struct Diis<S: DiisStorable + Clone> { space: usize, ... }
 | A5 | UCCSD snapshot mirrors the Phase-5 `UmpReference { alpha, beta }` two-channel shape and the env-can't-run-libpython caveat applies equally | Pattern (UCCSD) | LOW: the structural contract is established; only live-CI UHF numeric needs the human-verify arm. |
 | A6 | `solve_lambda` in base `CCSDBase` raises NotImplementedError; only the concrete `CCSD` class wires `ccsd_lambda.kernel` | CCSD-05 | LOW: VERIFIED — `CCSDBase.solve_lambda` @1118 raises; `CCSD.solve_lambda` @1273 dispatches. Port the concrete-class behavior. |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> Resolution status (annotated during planning, 2026-05-24 — Phase 6 plan-phase):
+> - **Q1 (`conv_tol_normt`) — RESOLVED in 06-03-PLAN.md:** use the verified class defaults `conv_tol=1e-7`, `conv_tol_normt=1e-5`, `max_cycle=50`, `diis_space=6` (`ccsd.py:920-928`); the small-system oracle fixture confirms ≤1 µHartree.
+> - **Q2 (one vs two `Tensor` handle types) — RESOLVED-AT-EXECUTION (06-02-PLAN.md, Task 1):** single-handle direction (WorkspacePool owns backing storage keyed by `BufferId`; `Amplitudes`/intermediates carry the handle); executor finalizes the newtype shape in Wave 2.
+> - **Q3 (counting-allocator harness) — RESOLVED in 06-02-PLAN.md, Task 2:** dedicated `tests/heap_alloc_count.rs` target with its own counting `#[global_allocator]`, NOT linked to the oracle/determinism binaries.
+> - **Q4 (AO-direct ERI streaming API) — RESOLVED-AT-EXECUTION (06-08-PLAN.md, Task 1):** executor greps the `pyscf-gto` intor surface; both acceptable paths (shell-sliced streaming vs full-tensor-once + MO-space tiling) satisfy CCSD-07's "vvvv MO tensor not materialized" contract and are documented in the plan.
 
 1. **`conv_tol_normt` = 1e-5 or 1e-6?**
    - What we know: CONTEXT.md Discretion says `1e-6`; the kernel-signature default is `1e-6` (@45); the `CCSDBase` class attribute is `1e-5` (@923); at runtime the class attribute wins.
