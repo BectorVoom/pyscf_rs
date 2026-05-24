@@ -10,9 +10,7 @@ pub fn default_get_init_guess(mol: &Mole, mode: &InitGuessMode) -> Result<Densit
         InitGuessMode::Minao => init_guess_by_minao(mol),
         InitGuessMode::Atom => init_guess_by_atom(mol),
         InitGuessMode::OneElectron => init_guess_by_1e(mol),
-        InitGuessMode::Huckel => {
-            Err(ScfError::InitGuessNotYetImplemented("huckel", "03-03 follow-up").into())
-        }
+        InitGuessMode::Huckel => init_guess_by_huckel(mol),
         InitGuessMode::Chkfile(path) => init_guess_by_chkfile(mol, path),
         InitGuessMode::UserDM(d) => Ok(d.clone()),
     }
@@ -339,6 +337,162 @@ pub(crate) fn init_guess_by_atom(mol: &Mole) -> Result<Density, PyscfRsError> {
     }
 
     Ok(Density { nao, data })
+}
+
+/// The Generalized Wolfsberg-Helmholtz parameter (non-updated rule).
+/// Source: `pyscf/scf/hf.py:563-575` — `Kgwh`. The default
+/// `init_guess_by_huckel` uses `updated_rule=False`, so `Kgwh = 1.75`
+/// (constant; the updated-rule Δ-dependent form is `init_guess_by_mod_huckel`,
+/// out of scope here).
+const KGWH: f64 = 1.75;
+
+/// `init_guess_by_huckel(mol)` — extended-Hückel (GWH) init guess (SCF-05).
+/// Port of `pyscf/scf/hf.py:537-555` + `_init_guess_huckel_orbitals`
+/// (`:577-670`), `updated_rule=False`.
+///
+/// Algorithm:
+///   1. `atm = get_atm_nrhf(mol)` — per-element atomic-RHF orbitals/energies/occ.
+///   2. Collect the OCCUPIED atomic orbitals into the molecular AO basis:
+///      `orb_C[lo..hi, iocc] = c[:, iorb]` for each atomic MO with `occ>0`
+///      (`lo..hi` = the atom's molecular AO range), `orb_E[iocc] = e[iorb]`.
+///   3. `orb_S = orb_Cᵀ · S · orb_C` (S = molecular overlap).
+///   4. GWH Hückel matrix: `orb_H[io,io] = orb_E[io]`; off-diagonal
+///      `orb_H[io,jo] = 0.5·KGWH·orb_S[io,jo]·(orb_E[io]+orb_E[jo])`.
+///   5. `(mo_E, atmo_C) = eigh_gen(orb_H, orb_S, nocc)`; back-transform
+///      `mo_C[μ,k] = Σ_o orb_C[μ,o]·atmo_C[o,k]` (F-order).
+///   6. Aufbau-fill (`default_get_occ`) + `default_make_rdm1`.
+///
+/// All reductions go through `oracle_sum`/`oracle_dot` (T-03-14-NUM). Cartesian
+/// basis (upstream's `atcart2sph` branch) is out of scope (spherical only).
+pub(crate) fn init_guess_by_huckel(mol: &Mole) -> Result<Density, PyscfRsError> {
+    use pyscf_core::{CoreError, MOCoefficients};
+
+    if mol.cart {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "init_guess_by_huckel cartesian-basis atcart2sph branch (spherical basis only)",
+        });
+    }
+
+    let nao = mol.nao_nr;
+    let atm_scf = crate::atom_hf::get_atm_nrhf(mol)?;
+    let slices = aoslice_by_atom(mol)?;
+
+    // 1+2. Count occupied atomic orbitals and scatter them into orb_C (F-order
+    //       [nao, nocc]) with energies orb_E.
+    let mut nocc = 0usize;
+    for (ia, (sym, _xyz)) in mol._atom.iter().enumerate() {
+        let (lo, hi) = slices[ia];
+        if hi == lo {
+            continue;
+        }
+        let res = atm_scf.get(sym).ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "init_guess_by_huckel: no atomic-RHF result for element '{sym}'"
+            )))
+        })?;
+        nocc += res.mo_occ.iter().filter(|&&o| o > 0.0).count();
+    }
+
+    if nocc == 0 {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "init_guess_by_huckel: no occupied atomic orbitals (all-GHOST molecule?)".into(),
+        )));
+    }
+
+    let mut orb_c = vec![0.0f64; nao * nocc]; // F-order [nao, nocc]
+    let mut orb_e = vec![0.0f64; nocc];
+    let mut iocc = 0usize;
+    for (ia, (sym, _xyz)) in mol._atom.iter().enumerate() {
+        let (lo, hi) = slices[ia];
+        let nao_atm = hi - lo;
+        if nao_atm == 0 {
+            continue;
+        }
+        let res = atm_scf.get(sym).ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "init_guess_by_huckel: no atomic-RHF result for element '{sym}'"
+            )))
+        })?;
+        let c = &res.mo_coeff;
+        if c.nao != nao_atm {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "init_guess_by_huckel: atom {ia} ({sym}) AO span {nao_atm} != atomic nao {}",
+                c.nao
+            ))));
+        }
+        for iorb in 0..c.nmo {
+            if res.mo_occ[iorb] > 0.0 {
+                // orb_C[lo+i, iocc] = c[i, iorb]  (both F-order).
+                for i in 0..nao_atm {
+                    orb_c[(lo + i) + iocc * nao] = c.data[i + iorb * nao_atm];
+                }
+                orb_e[iocc] = res.mo_energy[iorb];
+                iocc += 1;
+            }
+        }
+    }
+    debug_assert_eq!(iocc, nocc);
+
+    // 3. orb_S = orb_Cᵀ · S · orb_C  (nocc × nocc, row-major).
+    //    First SC = S · orb_C (F-order [nao, nocc]), then orb_S = orb_Cᵀ · SC.
+    let s1e = crate::fock::default_get_ovlp(mol)?; // row-major nao×nao
+    // sc[μ, o] = Σ_ν S[μ,ν]·orb_C[ν,o]  (F-order [nao, nocc]).
+    let mut sc = vec![0.0f64; nao * nocc];
+    for o in 0..nocc {
+        for mu in 0..nao {
+            let terms: Vec<f64> = (0..nao)
+                .map(|nu| s1e.data[mu * nao + nu] * orb_c[nu + o * nao])
+                .collect();
+            sc[mu + o * nao] = pyscf_algebra::oracle_sum(&terms);
+        }
+    }
+    // orb_S[i, j] = Σ_μ orb_C[μ,i]·SC[μ,j]  (row-major nocc×nocc).
+    let mut orb_s = vec![0.0f64; nocc * nocc];
+    for i in 0..nocc {
+        let ci = &orb_c[i * nao..i * nao + nao];
+        for j in 0..nocc {
+            let scj = &sc[j * nao..j * nao + nao];
+            orb_s[i * nocc + j] = pyscf_algebra::oracle_dot(ci, scj);
+        }
+    }
+
+    // 4. GWH Hückel matrix (row-major nocc×nocc, symmetric).
+    let mut orb_h = vec![0.0f64; nocc * nocc];
+    for io in 0..nocc {
+        orb_h[io * nocc + io] = orb_e[io];
+        for jo in 0..io {
+            let v = 0.5 * KGWH * orb_s[io * nocc + jo] * (orb_e[io] + orb_e[jo]);
+            orb_h[io * nocc + jo] = v;
+            orb_h[jo * nocc + io] = v;
+        }
+    }
+
+    // 5. Solve generalized eig in the minimal orbital basis, back-transform to AO.
+    let (mo_e, atmo_c) =
+        pyscf_algebra::eigh_gen(&orb_h, &orb_s, nocc).map_err(ScfError::Algebra)?;
+    // atmo_c is F-order nocc×nocc: atmo_C[o, k] = atmo_c[o + k*nocc].
+    // mo_C[μ, k] = Σ_o orb_C[μ,o]·atmo_C[o,k]  (F-order [nao, nocc]).
+    let mut mo_c = vec![0.0f64; nao * nocc];
+    for k in 0..nocc {
+        for mu in 0..nao {
+            let terms: Vec<f64> = (0..nocc)
+                .map(|o| orb_c[mu + o * nao] * atmo_c[o + k * nocc])
+                .collect();
+            mo_c[mu + k * nao] = pyscf_algebra::oracle_sum(&terms);
+        }
+    }
+
+    // 6. Aufbau-fill the Hückel MOs, build the RDM1.
+    let occ = crate::occ::default_get_occ(&mo_e, mol.nelectron)?;
+    let mo = MOCoefficients {
+        nao,
+        nmo: nocc,
+        data: mo_c,
+        energies: mo_e,
+        occupations: occ,
+    };
+    crate::rdm::default_make_rdm1(&mo)
 }
 
 /// Parse a string mode name (used by oracle Arm 4).
