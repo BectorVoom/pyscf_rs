@@ -42,4 +42,8 @@ pub use eris::ChemistsEris;
 pub use error::CcsdError;
 pub use hooks::{CcsdOverrideHooks, NoCcsdOverrides};
 pub use reference::CcsdReference;
-pub use update_amps::default_update_amps;
+pub use rintermediates::{
+    Loo, Lvv, cc_Foo, cc_Fov, cc_Fvv, cc_Woooo, cc_Wvoov, cc_Wvovo, cc_Wvvvv, cc_Wvvvv_into,
+    make_tau,
+};
+pub use update_amps::{default_update_amps, default_update_amps_with_wvvvv};
