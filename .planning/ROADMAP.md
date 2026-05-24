@@ -266,7 +266,20 @@ Plans:
   4. `mycc.direct = True` (AO-direct CCSD) works; DF-CCSD via `mf.density_fit().CCSD()` or `cc.dfccsd.RCCSD(mf)` works with bounded memory and spills `Wabef` to HDF5 when `PYSCF_MAX_MEMORY` is exceeded — proven by a benzene-dimer/cc-pVDZ DF-CCSD run on a deliberately constrained memory budget (CCSD-07, CCSD-08).
   5. T1/D1/D2 diagnostics expose `mycc.t1diagnostic()`, `mycc.d1diagnostic()` matching upstream values; frozen-core options match MP2 (`frozen=int`, `frozen=list`, `frozen='auto'`) (CCSD-09, CCSD-10).
 
-**Plans**: TBD
+**Plans**: 11 plans
+
+Plans:
+- [ ] 06-01-PLAN.md — Crate scaffold: fill the pyscf-ccsd stub (17-module upstream-mirror skeleton + Cargo deps, no pyo3/cubecl/hdf5) + CcsdError/ChemistsEris/CcsdOverrideHooks/CcsdReference contracts + check_no_fma SCAN_TARGETS (CCSD-11)
+- [ ] 06-02-PLAN.md — Tensor-arena from day one: WorkspacePool reserve/release free-list reuse + InMemory|Spilled backends + opaque Amplitudes handles (D-01/D-08) + heap-alloc-count & refusal gates (CCSD-11)
+- [ ] 06-03-PLAN.md — In-core RCCSD headline (un-gated): rintermediates + update_amps (host-loop oracle, no gemm) + ccsd_kernel + init_amps MP2 seed + pre-flight arena + ≤1µH small-system oracle (CCSD-01/03/11)
+- [ ] 06-04-PLAN.md — In-core UCCSD (open-shell): uintermediates + uccsd_kernel + UccsdAmplitudes triple + e_aa+e_bb+e_ab + small open-shell smoke (CCSD-02)
+- [ ] 06-05-PLAN.md — Amplitude-DIIS: AmplitudeSubspace: DiisStorable (dot via oracle_dot, byte-match amplitudes_to_vector) + Diis::new(6) wired into the kernel (D-06, Pitfall 9) (CCSD-04)
+- [ ] 06-06-PLAN.md — λ + RDMs incl. ao_repr (D-03): solve_lambda/update_lambda (port ccsd_lambda) + make_rdm1/make_rdm2 + the nmo⁴ AO back-transform (heaviest arena tenant) (CCSD-05/06)
+- [ ] 06-07-PLAN.md — Diagnostics + frozen-core: t1/d1/d2 diagnostics (Frobenius/eigh) + the CCSD-10 frozen contract reusing the MP2 helpers (CCSD-09/10)
+- [ ] 06-08-PLAN.md — AO-direct CCSD: the _contract_vvvv_t2 AO-direct branch + direct:bool flag; AO-direct == in-core e_corr equivalence, lower peak reservation (CCSD-07)
+- [ ] 06-09-PLAN.md — DF-CCSD + HDF5 spill: DFRCCSD/DFUCCSD ERI swap (vvL B-tensor via the ao2mo hook) + dmax/vvblk sizing + Spilled backend (D-07, no new hdf5 dep) + the ao2mo outcore surface (CCSD-08)
+- [ ] 06-10-PLAN.md — PyO3 bridge (D-09): pyscf-py::cc PyRCCSD/PyUCCSD/PyDFCCSD + CcsdPyBridge (call_method1 / py.detach) + factory + scanner + solve_lambda/make_rdm + python/pyscf/cc overlay (CCSD-01/02/05/06/08)
+- [ ] 06-11-PLAN.md — Oracle/CI close-out: pyscf-oracle CCSD fixtures (small always-on; caffeine/DF-spill/λ-RDM byte-identity gated) + ccsd-structural + heap-alloc-count + ccsd-oracle-upstream-manual + python3.13t CCSD smoke arms (D-04) (CCSD-01/02/05/06/08/11)
 
 ### Phase 7: Gradients + Geomopt
 
@@ -309,7 +322,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. SCF + PyO3 bindings | 15/15 | Complete    | 2026-05-24 |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
-| 6. CCSD | 0/TBD | Not started | - |
+| 6. CCSD | 0/11 | Planned     | - |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
