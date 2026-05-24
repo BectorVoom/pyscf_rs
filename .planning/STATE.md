@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 03 complete (15/15; SCF-05 atom/huckel + SCF-09 mulliken_meta gap closures landed)
-last_updated: "2026-05-24T12:24:15.332Z"
+stopped_at: Phase 6 context gathered
+last_updated: "2026-05-24T12:54:53.369Z"
 last_activity: 2026-05-24
 progress:
   total_phases: 8
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 04 — dft (Phase 03 complete: SCF + PyO3 bindings)
+**Current focus:** Phase 06 — ccsd (context gathered; ready to plan. Phases 01–05 complete)
 
 ## Current Position
 
-Phase: 04
-Plan: Not started
-Status: Phase 03 complete (15/15; SCF-05 + SCF-09 gap closures landed; 6 CI/human-verify items tracked in 03-HUMAN-UAT.md). Phase 04 not started.
+Phase: 06
+Plan: Not started (context gathered → /gsd:plan-phase 6)
+Status: Phase 6 CCSD context gathered (06-CONTEXT.md committed f4a7e47). 4 core decisions locked: D-01 opaque spillable Tensor + hard PYSCF_MAX_MEMORY refusal (CCSD-11); D-02 in-core RCCSD headline, AO-direct + DF-CCSD-spill sequenced; D-03 full numeric λ + RDMs incl. ao_repr; D-04 tiered oracle (small in-tree, caffeine/DF-spill CI/human-verify). Phases 01–05 complete (58/58 plans).
 Last activity: 2026-05-24
 
-Progress: [██████████] 100% (56/56 plans done across all phases; Phase 02 gap closure 02-11 done)
+Progress: [█████████░] ~63% (5/8 phases complete; Phase 6 context gathered, plans TBD)
 
 ## Performance Metrics
 
@@ -162,6 +162,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-24T12:03:19.115Z
-Stopped at: Completed 03-15-PLAN.md (SCF-09 mulliken_meta gap closure)
-Resume file: None
+Last session: 2026-05-24T12:54:53.365Z
+Stopped at: Phase 6 context gathered
+Resume file: .planning/phases/06-ccsd/06-CONTEXT.md
