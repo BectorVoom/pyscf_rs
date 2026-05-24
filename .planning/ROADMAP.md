@@ -106,19 +106,51 @@ Plans:
 
 Plans:
 
+**Wave 1**
+
 - [x] 03-01-PLAN.md — Workspace scaffolding (+3 crates: pyscf-chkfile/diis/df, pyscf-algebra::solve_linear, pyscf-core::canonicalize_signs; SCF-13)
 - [x] 03-02-PLAN.md — Wave-0 test stubs (pyproject.toml maturin config, python overlay shim, 19 pytest xfail stubs, oracle macro stub, forbid-lazy-static lint; BIND-02 scaffolding, BIND-06)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [x] 03-03-PLAN.md — pyscf-scf trait + struct scaffolding (OverrideHooks trait, RHF/UHF/GHF + 30-attribute floor, InitGuessMode declarations, kernel signature; SCF-01..03, SCF-05, SCF-06, SCF-14) — WARNING 3 split
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 03-11-PLAN.md — pyscf-scf kernel internals (SCF cycle loop body, Fock build, eig+canonicalize_signs, occ+rdm+energy, '1e' init_guess body, analyze/mulliken/dip, convert helpers, as_scanner; SCF-01..03, SCF-05, SCF-06, SCF-09, SCF-11, SCF-12, SCF-13) — NEW, WARNING 3 split
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [x] 03-04-PLAN.md — pyscf-diis crate (CDIIS, SDF-FDS error vector, B-matrix via pyscf-algebra::solve_linear, FockSubspace impl DiisStorable; SCF-04, Pitfall 9 mitigation)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [x] 03-05-PLAN.md — pyscf-df crate (DfIntegrals, cholesky_eri, DEFAULT_AUXBASIS, get_jk_df, RHF::density_fit; SCF-07)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [x] 03-06-PLAN.md — pyscf-chkfile crate + pyscf-scf chkfile schema + 'chkfile' init_guess mode (D-05/D-06; SCF-10, DIST-05 baseline)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [x] 03-07-PLAN.md — pyscf-py PyO3 bridge (#[pymodule] _native, PyRHF/UHF/GHF, PyOverrideBridge, NumPy converters, create_exception!, abi3-py310 + free-threading features, python/pyscf overlay; BIND-01, BIND-02, BIND-04, BIND-06, BIND-07, BIND-09, SCF-08)
 - [x] 03-08-PLAN.md — pyscf-oracle macro body + chkfile round-trip oracle (ORACLE-08 empirical h5py↔hdf5-metno seal — STATE.md blocker; ORACLE-02, ORACLE-08)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [x] 03-09-PLAN.md — CI jobs (maturin-smoke, stride-fuzz, xplat-uhartree Linux x86_64 + macOS aarch64 matrix, python313t-smoke NON-abi3 separate build per RESEARCH Pitfall (NEW); BIND-05, Pitfall 12)
 - [x] 03-10-PLAN.md — Python test bodies (replace 19 xfail stubs with real ≤1 µHartree / element-wise / bit-identical assertions; verifies SCF-01..14 + BIND-02/04/07/09 + ORACLE-08)
-- [x] 03-11-PLAN.md — pyscf-scf kernel internals (SCF cycle loop body, Fock build, eig+canonicalize_signs, occ+rdm+energy, '1e' init_guess body, analyze/mulliken/dip, convert helpers, as_scanner; SCF-01..03, SCF-05, SCF-06, SCF-09, SCF-11, SCF-12, SCF-13) — NEW, WARNING 3 split
+
+**Wave 12** *(blocked on Wave 8 completion)*
+
 - [x] 03-12-PLAN.md — DF-HF end-to-end lock-in (RHF::density_fit + DfHooks converge with int2e/int3c2e real; SCF-07) — gap-closure
+
+**Wave 13** *(blocked on Wave 12 completion)*
+
 - [x] 03-13-PLAN.md — minao default init guess (intor_cross + NRSRHF_CONFIGURATION/frac_occ; byte-matches upstream H2 dm; SCF-05) — gap-closure
+
+**Wave 14** *(blocked on Wave 13 completion)*
+
 - [ ] 03-14-PLAN.md — atom + huckel init guesses (get_atm_nrhf per-element spherically-averaged atomic RHF; SCF-05 complete — all 5 modes) — gap-closure
 - [ ] 03-15-PLAN.md — mulliken_meta meta-Löwdin population analysis (orth_ao; SCF-09) — gap-closure
 
