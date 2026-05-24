@@ -297,12 +297,9 @@ pub fn rmp2_kernel<H: Mp2OverrideHooks>(
     let e_os = oracle_sum(&e_os_terms);
     let e_corr = e_ss + e_os;
 
-    let amplitudes = t2_store.map(|t2| Amplitudes {
-        nocc,
-        nvir,
-        t1: Vec::new(),
-        t2,
-    });
+    // D-01: Amplitudes now holds opaque AmplitudeStore handles. MP2 has no
+    // arena, so it uses the owned-Vec constructor (t1 empty for RMP2).
+    let amplitudes = t2_store.map(|t2| Amplitudes::from_vec(nocc, nvir, Vec::new(), t2));
 
     Ok(Mp2Result {
         e_corr,

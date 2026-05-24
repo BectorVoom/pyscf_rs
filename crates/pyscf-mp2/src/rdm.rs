@@ -47,22 +47,29 @@ use pyscf_core::{Amplitudes, Density, MOCoefficients, PyscfRsError};
 ///
 /// # Errors
 /// Returns [`PyscfRsError`] (via [`crate::error::Mp2Error::ShapeMismatch`]) when
-/// `t2.t2.len() != nocc*nocc*nvir*nvir`. Never panics / indexes OOB.
+/// `t2.t2_slice().len() != nocc*nocc*nvir*nvir`. Never panics / indexes OOB.
 pub fn gamma1_intermediates(
     t2: &Amplitudes,
     nocc: usize,
     nvir: usize,
 ) -> Result<(Vec<f64>, Vec<f64>), PyscfRsError> {
+    // D-01: t2 is now an opaque AmplitudeStore. MP2 RDMs always receive owned
+    // (in-memory) amplitudes; pull the resident slice (a pooled CCSD store has
+    // no resident slice and is not a valid MP2 RDM input).
+    let t2_data = t2.t2_slice().ok_or(crate::error::Mp2Error::ShapeMismatch {
+        expected: nocc * nocc * nvir * nvir,
+        got: 0,
+    })?;
     let expected = nocc * nocc * nvir * nvir;
-    if t2.t2.len() != expected {
+    if t2_data.len() != expected {
         return Err(crate::error::Mp2Error::ShapeMismatch {
             expected,
-            got: t2.t2.len(),
+            got: t2_data.len(),
         }
         .into());
     }
-    // Flat (i,j,a,b) index into t2.t2 (C-order [nocc,nocc,nvir,nvir]).
-    let t = |i: usize, j: usize, a: usize, b: usize| t2.t2[((i * nocc + j) * nvir + a) * nvir + b];
+    // Flat (i,j,a,b) index into t2_data (C-order [nocc,nocc,nvir,nvir]).
+    let t = |i: usize, j: usize, a: usize, b: usize| t2_data[((i * nocc + j) * nvir + a) * nvir + b];
 
     // dm1occ[p,q] = Σ_i [ 2·Σ_ab t2[i,p,a,b]·t2[i,q,a,b] − Σ_ab t2[i,p,a,b]·t2[i,q,b,a] ].
     let mut doo = vec![0.0_f64; nocc * nocc]; // doo = −dm1occ.
@@ -356,11 +363,17 @@ pub fn make_rdm2(
         (nact, nocc, oidx, vidx)
     };
 
+    // D-01: pull the resident slice from the opaque AmplitudeStore (MP2 RDMs
+    // always receive owned amplitudes).
+    let t2_data = t2.t2_slice().ok_or(crate::error::Mp2Error::ShapeMismatch {
+        expected: nocc * nocc * nvir * nvir,
+        got: 0,
+    })?;
     let expected_t2 = nocc * nocc * nvir * nvir;
-    if t2.t2.len() != expected_t2 {
+    if t2_data.len() != expected_t2 {
         return Err(crate::error::Mp2Error::ShapeMismatch {
             expected: expected_t2,
-            got: t2.t2.len(),
+            got: t2_data.len(),
         }
         .into());
     }
@@ -378,7 +391,7 @@ pub fn make_rdm2(
     let mut dm2 = vec![0.0_f64; nmo0 * nmo0 * nmo0 * nmo0];
     let idx4 = |p: usize, q: usize, r: usize, s: usize| ((p * nmo0 + q) * nmo0 + r) * nmo0 + s;
     // t2 per-i block accessor: t2i[j,a,b] = t2[i,j,a,b].
-    let t = |i: usize, j: usize, a: usize, b: usize| t2.t2[((i * nocc + j) * nvir + a) * nvir + b];
+    let t = |i: usize, j: usize, a: usize, b: usize| t2_data[((i * nocc + j) * nvir + a) * nvir + b];
 
     // 2. dovov placement (mp2.py:309-327).
     //    dovov[a,j,b] = (2·t2i[j,a,b] − t2i[j,b,a]) · 2.
@@ -457,12 +470,7 @@ mod tests {
                 }
             }
         }
-        Amplitudes {
-            nocc,
-            nvir,
-            t1: Vec::new(),
-            t2,
-        }
+        Amplitudes::from_vec(nocc, nvir, Vec::new(), t2)
     }
 
     fn identity_mo(nmo: usize, mo_occ: &[f64], mo_energy: &[f64]) -> MOCoefficients {

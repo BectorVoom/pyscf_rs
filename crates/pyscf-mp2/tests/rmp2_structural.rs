@@ -92,7 +92,9 @@ fn rmp2_kernel_hand_computed_energy() {
     let t2 = res.t2.expect("t2 stored");
     assert_eq!(t2.nocc, 1);
     assert_eq!(t2.nvir, 1);
-    assert!((t2.t2[0] - (-0.25)).abs() < 1e-12, "t2 = {}", t2.t2[0]);
+    // D-01: t2 is now an opaque AmplitudeStore; read the resident slice.
+    let t2_data = t2.t2_slice().expect("owned t2 slice");
+    assert!((t2_data[0] - (-0.25)).abs() < 1e-12, "t2 = {}", t2_data[0]);
 }
 
 /// ALWAYS-ON: a richer 1-occupied / 2-virtual block exercises the inner
