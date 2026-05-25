@@ -27,6 +27,7 @@
 
 pub mod bridge;
 pub mod caches;
+pub mod cc;
 pub mod dft;
 pub mod errors;
 pub mod mp;
@@ -70,6 +71,14 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let mp_mod = PyModule::new(py, "mp")?;
     crate::mp::register(py, &mp_mod)?;
     m.add_submodule(&mp_mod)?;
+
+    // Plan 06-10 (CCSD / D-09) — `cc` submodule containing
+    // PyRCCSD/PyUCCSD/PyDFCCSD + the CCSD() factory + PyCcsdScanner. The Python
+    // overlay `python/pyscf/cc/__init__.py` re-exports `pyscf._native.cc.*` and
+    // grafts the `mf.CCSD()` / `mf.density_fit().CCSD()` cross-module dispatch.
+    let cc_mod = PyModule::new(py, "cc")?;
+    crate::cc::register(py, &cc_mod)?;
+    m.add_submodule(&cc_mod)?;
 
     Ok(())
 }

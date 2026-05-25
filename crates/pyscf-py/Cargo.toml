@@ -48,5 +48,11 @@ pyscf-grids   = { path = "../pyscf-grids" }
 # pyscf-mp2 stays pyo3-free + cubecl-free (the PyO3 wall) — pyscf-py is the
 # sole crate that names pyo3. Default features only (no libxc).
 pyscf-mp2     = { path = "../pyscf-mp2" }
+# Plan 06-10 (CCSD / D-09): the CCSD PyO3 boundary wraps pyscf-ccsd's
+# RCCSD/UCCSD/DFCCSD kernels + CcsdOverrideHooks + the CcsdReference snapshot +
+# solve_lambda/make_rdm1/make_rdm2. pyscf-ccsd stays pyo3-free + cubecl-free
+# (the PyO3 wall) — pyscf-py is the sole crate that names pyo3. Default features
+# only (no libxc; pyscf-ccsd does not pull libxc anyway).
+pyscf-ccsd    = { path = "../pyscf-ccsd" }
 ndarray       = { workspace = true }
 thiserror     = { workspace = true }
