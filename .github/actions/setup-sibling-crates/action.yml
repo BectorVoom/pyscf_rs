@@ -32,7 +32,8 @@ runs:
                 /Cargo.toml \
                 /src/** \
                 /crates/kernels/math/** \
-                /crates/kernels/*/*/Cargo.toml
+                /crates/kernels/*/*/Cargo.toml \
+                /crates/kernels/*/*/src/lib.rs
               ;;
           esac
         }
