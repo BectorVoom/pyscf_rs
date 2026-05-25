@@ -20,7 +20,7 @@
 //! and dropped at end-of-kernel.
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
-use pyscf_core::{Density, Energy, MOCoefficients, Mole, PyscfRsError};
+use pyscf_core::{Density, Energy, MOCoefficients, Mole, PyscfRsError, Unit};
 use pyscf_dft::{KsOverrideHooks, KsVeff, NumInt, XcSpec};
 use pyscf_grids::Grids;
 use pyscf_scf::{InitGuessMode, OverrideHooks};
@@ -339,7 +339,14 @@ pub fn extract_mole_from_pyany(py: Python<'_>, mol: &Py<PyAny>) -> PyResult<Mole
     let bound = mol.bind(py);
     if bound.hasattr("dumps")? {
         let json: String = bound.call_method0("dumps")?.extract()?;
-        return pyscf_gto::loads(&json).map_err(pyscf_to_py);
+        match pyscf_gto::loads(&json) {
+            Ok(mol) => return Ok(mol),
+            Err(_) => {
+                if let Some(mol) = mole_from_upstream_attrs(&bound)? {
+                    return Ok(mol);
+                }
+            }
+        }
     }
     if let Ok(s) = bound.extract::<String>() {
         return pyscf_gto::loads(&s).map_err(pyscf_to_py);
@@ -347,4 +354,48 @@ pub fn extract_mole_from_pyany(py: Python<'_>, mol: &Py<PyAny>) -> PyResult<Mole
     Err(pyo3::exceptions::PyTypeError::new_err(
         "expected pyscf.gto.Mole (with .dumps() method) or a serialized Mole JSON string",
     ))
+}
+
+fn mole_from_upstream_attrs(bound: &Bound<'_, PyAny>) -> PyResult<Option<Mole>> {
+    let atom = match bound.getattr("atom").and_then(|v| v.extract::<String>()) {
+        Ok(atom) => atom,
+        Err(_) => return Ok(None),
+    };
+    let basis = match bound.getattr("basis").and_then(|v| v.extract::<String>()) {
+        Ok(basis) => basis,
+        Err(_) => return Ok(None),
+    };
+    let charge = bound
+        .getattr("charge")
+        .and_then(|v| v.extract::<i32>())
+        .unwrap_or(0);
+    let spin = bound
+        .getattr("spin")
+        .and_then(|v| v.extract::<i32>())
+        .unwrap_or(0);
+    let cart = bound
+        .getattr("cart")
+        .and_then(|v| v.extract::<bool>())
+        .unwrap_or(false);
+    let unit = bound
+        .getattr("unit")
+        .and_then(|v| v.extract::<String>())
+        .map(|u| match u.to_ascii_lowercase().as_str() {
+            "bohr" => Unit::Bohr,
+            "au" => Unit::AU,
+            _ => Unit::Ang,
+        })
+        .unwrap_or(Unit::Ang);
+
+    pyscf_gto::M(pyscf_gto::MoleBuildArgs {
+        atom: pyscf_gto::AtomInput::String(atom),
+        basis: pyscf_gto::BasisInput::Name(basis),
+        charge,
+        spin,
+        cart,
+        unit,
+        ..Default::default()
+    })
+    .map(Some)
+    .map_err(pyscf_to_py)
 }
