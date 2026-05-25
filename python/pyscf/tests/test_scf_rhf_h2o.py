@@ -10,20 +10,19 @@ side-by-side comparison is safe and ~10× faster than subprocess isolation.
 from pyscf import scf
 
 
-def test_scf_rhf_h2o_uhartree_oracle(h2o_mol, upstream):
+H2O_ATOM = "O 0.0 0.0 0.0; H 0.757 0.587 0.0; H -0.757 0.587 0.0"
+
+
+def test_scf_rhf_h2o_uhartree_oracle(h2o_mol, upstream_rhf_energy):
     """RHF on H2O/cc-pVDZ — |e_rs - e_up| < 1 µHartree."""
     mf_rs = scf.RHF(h2o_mol).run()
     assert mf_rs.converged, "pyscf-rs RHF did not converge"
 
-    mol_up = upstream.gto.M(
-        atom="O 0.0 0.0 0.0; H 0.757 0.587 0.0; H -0.757 0.587 0.0",
-        basis="cc-pvdz",
-    )
-    mf_up = upstream.scf.RHF(mol_up).run()
-    assert mf_up.converged, "upstream RHF did not converge"
+    mf_up = upstream_rhf_energy(H2O_ATOM, "cc-pvdz")
+    assert mf_up["converged"], "upstream RHF did not converge"
 
-    diff = abs(mf_rs.e_tot - mf_up.e_tot)
+    diff = abs(mf_rs.e_tot - mf_up["e_tot"])
     assert diff < 1e-6, (
         f"|e_rs - e_up| = {diff:.3e} > 1 µHartree (SCF-01); "
-        f"e_rs={mf_rs.e_tot:.12f} e_up={mf_up.e_tot:.12f}"
+        f"e_rs={mf_rs.e_tot:.12f} e_up={mf_up['e_tot']:.12f}"
     )

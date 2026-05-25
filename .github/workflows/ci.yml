@@ -251,7 +251,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           python -m venv .venv
-          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
+          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "pyscf==2.12.1" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
       - run: .venv/bin/maturin develop --release
       - run: .venv/bin/pytest python/pyscf/tests/test_scf_stride_fuzz.py -x
 
@@ -292,10 +292,14 @@ jobs:
         # BLOCKER 2. The literal fallback-string is NOT present here on
         # purpose so the verify grep stays clean.
         run: |
+          python -m venv .upstream-venv
+          .upstream-venv/bin/pip install "pyscf==2.12.1" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
           python -m venv .venv
-          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
+          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "pyscf==2.12.1" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
           .venv/bin/maturin develop --profile release-oracle
       - name: H2O/cc-pVDZ RHF — assert ≤ 1 µHartree vs upstream
+        env:
+          PYSCF_RS_UPSTREAM_PYTHON: ${{ github.workspace }}/.upstream-venv/bin/python
         run: .venv/bin/pytest python/pyscf/tests/test_scf_rhf_h2o.py -x --tb=short
 
   python313t-smoke:

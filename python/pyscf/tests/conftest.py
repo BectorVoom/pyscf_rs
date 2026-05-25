@@ -9,8 +9,11 @@ subprocess isolation and good enough for the µHartree contract because
 the Rust kernel cannot mutate upstream Python state).
 """
 import importlib.util
+import json
 import os
+import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -49,6 +52,49 @@ def _load_upstream():
 def upstream():
     """Upstream PySCF imported as `_upstream_pyscf` — coexists with overlay."""
     return _load_upstream()
+
+
+@pytest.fixture
+def upstream_rhf_energy():
+    """Return upstream RHF energy, using a separate interpreter when provided."""
+
+    def calculate(atom: str, basis: str):
+        upstream_python = os.environ.get("PYSCF_RS_UPSTREAM_PYTHON")
+        if upstream_python:
+            code = textwrap.dedent(
+                """
+                import json
+                import sys
+
+                from pyscf import gto, scf
+
+                request = json.load(sys.stdin)
+                mol = gto.M(atom=request["atom"], basis=request["basis"])
+                mf = scf.RHF(mol).run()
+                print(json.dumps({"converged": bool(mf.converged), "e_tot": float(mf.e_tot)}))
+                """
+            )
+            proc = subprocess.run(
+                [upstream_python, "-c", code],
+                input=json.dumps({"atom": atom, "basis": basis}),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if proc.returncode != 0:
+                pytest.fail(
+                    "upstream PySCF subprocess failed\n"
+                    f"stdout:\n{proc.stdout}\n"
+                    f"stderr:\n{proc.stderr}"
+                )
+            return json.loads(proc.stdout)
+
+        upstream = _load_upstream()
+        mol = upstream.gto.M(atom=atom, basis=basis)
+        mf = upstream.scf.RHF(mol).run()
+        return {"converged": bool(mf.converged), "e_tot": float(mf.e_tot)}
+
+    return calculate
 
 
 @pytest.fixture
