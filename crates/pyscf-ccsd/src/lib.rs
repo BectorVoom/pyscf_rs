@@ -46,6 +46,7 @@ pub use eris::ChemistsEris;
 pub use error::CcsdError;
 pub use hooks::{CcsdOverrideHooks, NoCcsdOverrides};
 pub use lambda::{LambdaAmplitudes, solve_lambda, update_lambda};
+pub use rdm::{Gamma1, gamma1_intermediates, make_rdm1, make_rdm2};
 pub use reference::{CcsdReference, UccsdReference};
 pub use rintermediates::{
     Loo, Lvv, cc_Foo, cc_Fov, cc_Fvv, cc_Woooo, cc_Wvoov, cc_Wvovo, cc_Wvvvv, cc_Wvvvv_into,
