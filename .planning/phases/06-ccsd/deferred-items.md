@@ -33,3 +33,24 @@ fall outside the current plan's file set).
   `#[allow(clippy::type_complexity)]` on the single-use test fixture. Confirmed
   via `cargo clippy -p pyscf-ccsd -p pyscf-oracle -p pyscf-py --all-targets -- -D warnings`
   (EXIT 0, libxc never compiled).
+
+## Phase-6 verification investigation (2026-05-25) — the "larger-nvir vvvv" finding
+
+Plan 06-07 reported a "larger-`nvir` `vvvv` int2e shape error" on H2O/HF all-electron
+runs. **This was a misdiagnosis.** Reproduced across 8 systems during phase-6
+verification: CCSD handles large `nvir` fine (H2/cc-pVDZ nvir=9, vvvv=6561 converges;
+H2O/STO-3G, HF/STO-3G converge). The real failure is in the SIBLING **cintx** repo:
+`cintx-cubecl/src/kernels/one_electron.rs:322` panicked (out-of-bounds on a `[f64;2]`
+Rys array) for `li+lj>=4` (d-functions on cc-pVDZ heavy atoms), during the **RHF SCF**
+reference build — nothing to do with CCSD's vvvv/int2e path.
+
+- **FIXED:** cintx commit `13fe9d3` (branch `fix/general-contraction-nctr-1e`) routes the
+  nuclear path through the existing general `rys_roots_host` dispatcher. Panic gone;
+  cintx tests green; bit-identical for s/p.
+- **STILL OPEN (out of phase-6 scope — SCF/integral territory):** after the fix,
+  H2O/cc-pVDZ RHF computes integrals but **SCF does not converge** (|ΔE|≈3.6e-2 after
+  50 cycles). Likely d-function integral accuracy or SCF convergence-acceleration
+  robustness; needs its own investigation. This (plus caffeine's compute weight) is why
+  the caffeine/cc-pVDZ upstream byte-identity arm (06-HUMAN-UAT item 1) remains pending.
+- **Conclusion:** Phase-6 CCSD is correct for its scope; the caffeine headline is blocked
+  by upstream SCF/integral concerns, not by any CCSD defect.
