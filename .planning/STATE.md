@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 06-08-PLAN.md (AO-direct CCSD — CCSD-07)
-last_updated: "2026-05-25T03:53:25.295Z"
-last_activity: 2026-05-25 -- Completed 06-11 (CCSD oracle fixtures + 4 CI arms; Phase 6 Nyquist contract closed)
+status: phase_complete
+stopped_at: Phase 06 (ccsd) COMPLETE — 11/11 plans; 5 human-verify items tracked in 06-HUMAN-UAT.md
+last_updated: "2026-05-25T04:31:49.281Z"
+last_activity: 2026-05-25
 progress:
   total_phases: 8
   completed_phases: 6
@@ -21,22 +21,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 06 — ccsd
+**Current focus:** Phase 07 — gradients + geomopt (Phase 6 CCSD complete)
 
 ## Current Position
 
-Phase: 06 (ccsd) — COMPLETE
-Plan: 11 of 11 (all complete)
-Status: Phase complete — ready for verification
-Last activity: 2026-05-25 -- Completed 06-11 (CCSD oracle fixtures + 4 CI arms; Phase 6 Nyquist contract closed)
+Phase: 7
+Plan: Not started
+Status: Phase 6 (CCSD) COMPLETE — verification human_needed; 5 upstream/byte-identity arms tracked in 06-HUMAN-UAT.md. Phase 7 not started.
+Last activity: 2026-05-25
 
-Progress: [██████████] 100% (69/69 plans; Phase 6 CCSD COMPLETE — all 11 plans landed; the live byte-identity + python3.13t GIL re-validation are the documented workflow_dispatch phase-gate human-verify arms)
+Progress: [███████░░░] 75% (6/8 phases; Phase 6 CCSD COMPLETE — 11/11 plans landed. Caffeine/cc-pVDZ upstream byte-identity + python3.13t GIL = workflow_dispatch human-verify arms; one-electron Rys d-function blocker fixed in cintx 13fe9d3, d-function SCF convergence is a separate tracked workstream item)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 86
+- Total plans completed: 97
 - Average duration: — (no plans run yet)
 - Total execution time: 0 hours
 
@@ -49,6 +49,7 @@ Progress: [██████████] 100% (69/69 plans; Phase 6 CCSD COMPL
 | 04 | 14 | - | - |
 | 05 | 7 | - | - |
 | 01 | 9 | - | - |
+| 06 | 11 | - | - |
 
 **Recent Trend:**
 
