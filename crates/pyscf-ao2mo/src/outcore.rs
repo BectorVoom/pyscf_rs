@@ -464,10 +464,10 @@ mod tests {
         let c_r = mk_coeff(nao, 2, -0.4);
         let c_s = mk_coeff(nao, 1, 0.9);
 
-        let incore = crate::incore::general(&eri, nao, [&c_p, &c_q, &c_r, &c_s])
-            .expect("in-core general");
-        let outcore = general_outcore(&eri, nao, [&c_p, &c_q, &c_r, &c_s])
-            .expect("outcore general");
+        let incore =
+            crate::incore::general(&eri, nao, [&c_p, &c_q, &c_r, &c_s]).expect("in-core general");
+        let outcore =
+            general_outcore(&eri, nao, [&c_p, &c_q, &c_r, &c_s]).expect("outcore general");
 
         assert_eq!(incore.len(), outcore.len());
         for (idx, (a, b)) in incore.iter().zip(outcore.iter()).enumerate() {
@@ -488,7 +488,10 @@ mod tests {
         let c = mk_coeff(nao, nao, 0.3);
         let incore = crate::incore::full(&eri, nao, &c).expect("in-core full");
         let outcore = full_outcore(&eri, nao, &c).expect("outcore full");
-        assert_eq!(incore, outcore, "full_outcore must be bit-identical to in-core full");
+        assert_eq!(
+            incore, outcore,
+            "full_outcore must be bit-identical to in-core full"
+        );
     }
 
     /// ALWAYS-ON: the scratch HDF5 file is created during the transform and

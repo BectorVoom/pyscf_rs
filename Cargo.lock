@@ -4065,6 +4065,60 @@ version = "0.1.0"
 dependencies = [
  "cubecl",
  "libxc-kernel-math",
+ "libxc-kernel-mgga_c_kcisk_p0",
+ "libxc-kernel-mgga_c_kcisk_p1",
+ "libxc-kernel-mgga_c_kcisk_p2",
+ "libxc-kernel-mgga_c_kcisk_p3",
+ "libxc-kernel-mgga_c_kcisk_p4",
+ "libxc-kernel-mgga_c_kcisk_p5",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p5"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
 ]
 
 [[package]]
@@ -4200,6 +4254,123 @@ version = "0.1.0"
 dependencies = [
  "cubecl",
  "libxc-kernel-math",
+ "libxc-kernel-mgga_c_rmggac_p0",
+ "libxc-kernel-mgga_c_rmggac_p1",
+ "libxc-kernel-mgga_c_rmggac_p10",
+ "libxc-kernel-mgga_c_rmggac_p11",
+ "libxc-kernel-mgga_c_rmggac_p12",
+ "libxc-kernel-mgga_c_rmggac_p2",
+ "libxc-kernel-mgga_c_rmggac_p3",
+ "libxc-kernel-mgga_c_rmggac_p4",
+ "libxc-kernel-mgga_c_rmggac_p5",
+ "libxc-kernel-mgga_c_rmggac_p6",
+ "libxc-kernel-mgga_c_rmggac_p7",
+ "libxc-kernel-mgga_c_rmggac_p8",
+ "libxc-kernel-mgga_c_rmggac_p9",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p10"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p11"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p12"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p5"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p6"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p7"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p8"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p9"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
 ]
 
 [[package]]
@@ -4236,6 +4407,60 @@ dependencies = [
 
 [[package]]
 name = "libxc-kernel-mgga_c_tpss"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+ "libxc-kernel-mgga_c_tpss_p0",
+ "libxc-kernel-mgga_c_tpss_p1",
+ "libxc-kernel-mgga_c_tpss_p2",
+ "libxc-kernel-mgga_c_tpss_p3",
+ "libxc-kernel-mgga_c_tpss_p4",
+ "libxc-kernel-mgga_c_tpss_p5",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p5"
 version = "0.1.0"
 dependencies = [
  "cubecl",
@@ -5013,6 +5238,12 @@ dependencies = [
  "libxc-kernel-mgga_c_cs",
  "libxc-kernel-mgga_c_kcis",
  "libxc-kernel-mgga_c_kcisk",
+ "libxc-kernel-mgga_c_kcisk_p0",
+ "libxc-kernel-mgga_c_kcisk_p1",
+ "libxc-kernel-mgga_c_kcisk_p2",
+ "libxc-kernel-mgga_c_kcisk_p3",
+ "libxc-kernel-mgga_c_kcisk_p4",
+ "libxc-kernel-mgga_c_kcisk_p5",
  "libxc-kernel-mgga_c_ltapw",
  "libxc-kernel-mgga_c_m05",
  "libxc-kernel-mgga_c_m06l",
@@ -5029,11 +5260,30 @@ dependencies = [
  "libxc-kernel-mgga_c_revtpss_p5",
  "libxc-kernel-mgga_c_revtpss_p6",
  "libxc-kernel-mgga_c_rmggac",
+ "libxc-kernel-mgga_c_rmggac_p0",
+ "libxc-kernel-mgga_c_rmggac_p1",
+ "libxc-kernel-mgga_c_rmggac_p10",
+ "libxc-kernel-mgga_c_rmggac_p11",
+ "libxc-kernel-mgga_c_rmggac_p12",
+ "libxc-kernel-mgga_c_rmggac_p2",
+ "libxc-kernel-mgga_c_rmggac_p3",
+ "libxc-kernel-mgga_c_rmggac_p4",
+ "libxc-kernel-mgga_c_rmggac_p5",
+ "libxc-kernel-mgga_c_rmggac_p6",
+ "libxc-kernel-mgga_c_rmggac_p7",
+ "libxc-kernel-mgga_c_rmggac_p8",
+ "libxc-kernel-mgga_c_rmggac_p9",
  "libxc-kernel-mgga_c_rppscan",
  "libxc-kernel-mgga_c_rregtm",
  "libxc-kernel-mgga_c_rscan",
  "libxc-kernel-mgga_c_scan",
  "libxc-kernel-mgga_c_tpss",
+ "libxc-kernel-mgga_c_tpss_p0",
+ "libxc-kernel-mgga_c_tpss_p1",
+ "libxc-kernel-mgga_c_tpss_p2",
+ "libxc-kernel-mgga_c_tpss_p3",
+ "libxc-kernel-mgga_c_tpss_p4",
+ "libxc-kernel-mgga_c_tpss_p5",
  "libxc-kernel-mgga_c_tpssloc",
  "libxc-kernel-mgga_c_tpssloc_p0",
  "libxc-kernel-mgga_c_tpssloc_p1",
@@ -5953,7 +6203,9 @@ dependencies = [
 name = "pyscf-ao2mo"
 version = "0.1.0"
 dependencies = [
+ "ndarray",
  "pyscf-algebra",
+ "pyscf-chkfile",
  "pyscf-core",
  "pyscf-gto",
  "thiserror 2.0.18",
@@ -5967,6 +6219,21 @@ version = "0.1.0"
 [[package]]
 name = "pyscf-ccsd"
 version = "0.1.0"
+dependencies = [
+ "approx",
+ "pyscf-algebra",
+ "pyscf-ao2mo",
+ "pyscf-chkfile",
+ "pyscf-core",
+ "pyscf-df",
+ "pyscf-diis",
+ "pyscf-gto",
+ "pyscf-mp2",
+ "pyscf-runtime",
+ "pyscf-scf",
+ "thiserror 2.0.18",
+ "tracing",
+]
 
 [[package]]
 name = "pyscf-chkfile"
@@ -6136,6 +6403,7 @@ dependencies = [
  "ndarray",
  "numpy",
  "pyo3",
+ "pyscf-ccsd",
  "pyscf-chkfile",
  "pyscf-core",
  "pyscf-df",
@@ -6166,6 +6434,8 @@ dependencies = [
  "cubecl-cuda",
  "cubecl-hip",
  "cubecl-wgpu",
+ "ndarray",
+ "pyscf-chkfile",
  "pyscf-core",
  "rstest",
  "thiserror 2.0.18",
