@@ -39,7 +39,8 @@ pub mod urdm;
 
 pub use ccsd::{
     CONV_TOL, CONV_TOL_NORMT, CcsdResult, DIIS_SPACE, DIIS_START_CYCLE, MAX_CYCLE, ccsd_kernel,
-    ccsd_kernel_diis, default_ao2mo, default_energy, init_amps,
+    ccsd_kernel_diis, ccsd_kernel_direct, ccsd_kernel_direct_diis, default_ao2mo, default_energy,
+    init_amps,
 };
 pub use diagnostics::{get_d1_diagnostic, get_d2_diagnostic, get_t1_diagnostic};
 pub use direct::{contract_vvvv_t2_aodirect, contract_vvvv_t2_from_eris};
@@ -56,4 +57,6 @@ pub use rintermediates::{
 };
 pub use uccsd::{UccsdAmplitudes, UccsdResult, uccsd_kernel};
 pub use uintermediates::SpinOrbitalEris;
-pub use update_amps::{default_update_amps, default_update_amps_with_wvvvv};
+pub use update_amps::{
+    default_update_amps, default_update_amps_direct, default_update_amps_with_wvvvv,
+};

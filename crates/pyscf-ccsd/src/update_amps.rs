@@ -24,7 +24,7 @@ use crate::eris::ChemistsEris;
 use crate::error::CcsdError;
 use crate::rintermediates as imd;
 use pyscf_algebra::oracle_sum;
-use pyscf_core::{Amplitudes, PyscfRsError};
+use pyscf_core::{Amplitudes, MOCoefficients, PyscfRsError};
 
 #[inline]
 fn t1_idx(nv: usize, i: usize, a: usize) -> usize {
@@ -80,6 +80,78 @@ pub fn default_update_amps_with_wvvvv(
 ) -> Result<(Vec<f64>, Vec<f64>), CcsdError> {
     let no = eris.nocc;
     let nv = eris.nvir;
+
+    if wvvvv.len() != nv * nv * nv * nv {
+        return Err(CcsdError::ShapeMismatch {
+            expected: nv * nv * nv * nv,
+            got: wvvvv.len(),
+        });
+    }
+    if t1.len() != no * nv {
+        return Err(CcsdError::ShapeMismatch {
+            expected: no * nv,
+            got: t1.len(),
+        });
+    }
+    if t2.len() != no * no * nv * nv {
+        return Err(CcsdError::ShapeMismatch {
+            expected: no * no * nv * nv,
+            got: t2.len(),
+        });
+    }
+
+    // In-core vvvv step: build cc_Wvvvv into the caller-owned arena buffer
+    // (CCSD-11 — reserved once by the kernel, reused every cycle), then contract
+    // einsum('abcd,ijcd->ijab', Wvvvv, tau) into the [no,no,nv,nv] block.
+    imd::cc_Wvvvv_into(t1, t2, eris, wvvvv)?;
+    let ht2_vvvv = vvvv_step_from_wvvvv(t1, t2, eris, wvvvv);
+    update_amps_core(t1, t2, eris, &ht2_vvvv)
+}
+
+/// Contract the in-core `einsum('abcd,ijcd->ijab', Wvvvv, tau)` vvvv step into a
+/// flat C-order `[no,no,nv,nv]` block (the full-`nv^4`-MO in-core path). `wvvvv`
+/// holds the already-built `cc_Wvvvv` (C-order `[nv,nv,nv,nv]`).
+fn vvvv_step_from_wvvvv(t1: &[f64], t2: &[f64], eris: &ChemistsEris, wvvvv: &[f64]) -> Vec<f64> {
+    let no = eris.nocc;
+    let nv = eris.nvir;
+    let t1e = |i: usize, a: usize| t1[t1_idx(nv, i, a)];
+    let t2e = |i: usize, j: usize, a: usize, b: usize| t2[t2_idx(no, nv, i, j, a, b)];
+    let tau = |i: usize, j: usize, a: usize, b: usize| t2e(i, j, a, b) + t1e(i, a) * t1e(j, b);
+    let wvvvv_e = |a: usize, b: usize, c: usize, d: usize| wvvvv[((a * nv + b) * nv + c) * nv + d];
+    let mut ht2 = vec![0.0_f64; no * no * nv * nv];
+    for i in 0..no {
+        for j in 0..no {
+            for a in 0..nv {
+                for b in 0..nv {
+                    let mut terms: Vec<f64> = Vec::with_capacity(nv * nv);
+                    for c in 0..nv {
+                        for d in 0..nv {
+                            terms.push(wvvvv_e(a, b, c, d) * tau(i, j, c, d));
+                        }
+                    }
+                    ht2[t2_idx(no, nv, i, j, a, b)] = oracle_sum(&terms);
+                }
+            }
+        }
+    }
+    ht2
+}
+
+/// One RCCSD `(t1,t2) → (t1new,t2new)` update where the vvvv step contribution
+/// `einsum('abcd,ijcd->ijab', Wvvvv, tau)` is supplied as a precomputed flat
+/// C-order `[no,no,nv,nv]` block `ht2_vvvv`. The in-core path
+/// ([`default_update_amps_with_wvvvv`]) builds `ht2_vvvv` from the full `nv^4`
+/// `cc_Wvvvv`; the AO-direct path ([`default_update_amps_direct`]) builds it
+/// on-the-fly without the full MO tensor. Everything else (T1 eq, the other T2
+/// terms, the eia/eijab divide) is identical.
+fn update_amps_core(
+    t1: &[f64],
+    t2: &[f64],
+    eris: &ChemistsEris,
+    ht2_vvvv: &[f64],
+) -> Result<(Vec<f64>, Vec<f64>), CcsdError> {
+    let no = eris.nocc;
+    let nv = eris.nvir;
     let nmo = no + nv;
 
     // Shape validation (T-06-03-SHAPE): all reads validated before indexing.
@@ -95,10 +167,10 @@ pub fn default_update_amps_with_wvvvv(
             got: t2.len(),
         });
     }
-    if wvvvv.len() != nv * nv * nv * nv {
+    if ht2_vvvv.len() != no * no * nv * nv {
         return Err(CcsdError::ShapeMismatch {
-            expected: nv * nv * nv * nv,
-            got: wvvvv.len(),
+            expected: no * no * nv * nv,
+            got: ht2_vvvv.len(),
         });
     }
 
@@ -213,9 +285,9 @@ pub fn default_update_amps_with_wvvvv(
     // `tmp + tmp.transpose(1,0,3,2)`.
     // -----------------------------------------------------------------------
 
-    // cc_Wvvvv into the caller-owned arena buffer (CCSD-11 — reserved once by
-    // the kernel, reused every cycle; here written, not allocated).
-    imd::cc_Wvvvv_into(t1, t2, eris, wvvvv)?;
+    // The vvvv step is supplied via `ht2_vvvv` (precomputed by the caller — in-
+    // core from cc_Wvvvv, or AO-direct on-the-fly). The remaining intermediates
+    // are the small (≤ nv^3) ones built here every cycle.
     let woooo = imd::cc_Woooo(t1, t2, eris)?; // [no,no,no,no] (Wklij)
     let wvoov = imd::cc_Wvoov(t1, t2, eris)?; // [nv,no,no,nv] (Wakic)
     let wvovo = imd::cc_Wvovo(t1, t2, eris)?; // [nv,no,nv,no] (Wakci)
@@ -229,8 +301,6 @@ pub fn default_update_amps_with_wvvvv(
     }
     let woooo_e =
         |k: usize, l: usize, i: usize, j: usize| woooo[((k * no + l) * no + i) * no + j];
-    let wvvvv_e =
-        |a: usize, b: usize, c: usize, d: usize| wvvvv[((a * nv + b) * nv + c) * nv + d];
     let wvoov_e =
         |a: usize, k: usize, i: usize, c: usize| wvoov[((a * no + k) * no + i) * nv + c];
     let wvovo_e =
@@ -343,12 +413,11 @@ pub fn default_update_amps_with_wvvvv(
         }
 
         // + einsum('abcd,ijcd->ijab', Wvvvv, tau): the vvvv contraction
-        //   (the '_contract_vvvv_t2' analog). Contract c,d.
-        for c in 0..nv {
-            for d in 0..nv {
-                terms.push(wvvvv_e(a, b, c, d) * tau(i, j, c, d));
-            }
-        }
+        //   (the '_contract_vvvv_t2' analog), supplied as a precomputed
+        //   [no,no,nv,nv] block. In-core builds it from cc_Wvvvv; the AO-direct
+        //   path (CCSD-07) builds the integral part on-the-fly without the full
+        //   nv^4 MO tensor. Both are bit-close-equivalent contraction orders.
+        terms.push(ht2_vvvv[t2_idx(no, nv, i, j, a, b)]);
 
         // tmp = einsum('ac,ijcb->ijab', Lvv, t2); t2new += tmp + tmp.T(1,0,3,2)
         for c in 0..nv {
@@ -426,6 +495,83 @@ pub fn default_update_amps_with_wvvvv(
     }
 
     Ok((t1new, t2new))
+}
+
+/// One RCCSD `(t1,t2) → (t1new,t2new)` update via the **AO-direct** vvvv step
+/// (CCSD-07, `direct=True`). Computes the `einsum('abcd,ijcd->ijab', Wvvvv, tau)`
+/// contribution WITHOUT the full `nv^4` `cc_Wvvvv` MO tensor: the two `ovvv·t1`
+/// t1-correction terms of `cc_Wvvvv` are contracted against `tau` directly (only
+/// the `nv^3` `ovvv` block is touched), and the heavy `nv^4` integral part is
+/// supplied by [`crate::direct::contract_vvvv_t2_aodirect`] (AO `int2e` tiled
+/// per leading-virtual index, peak `nv^3` MO buffer). The result is bit-close to
+/// the in-core [`default_update_amps_with_wvvvv`] — a different contraction
+/// ORDER of the same math.
+///
+/// `eri_ao` is the full AO `int2e` (F-order `[nao^4]`); `cv` is the virtual-MO
+/// coefficient block (`[nao, nvir]`). No `nv^4` MO tensor is ever allocated.
+///
+/// Returns t1new C-order `[no,nv]`, t2new C-order `[no,no,nv,nv]` (already
+/// divided by the `eia`/`eijab` denominators).
+pub fn default_update_amps_direct(
+    t1: &[f64],
+    t2: &[f64],
+    eris: &ChemistsEris,
+    eri_ao: &[f64],
+    nao: usize,
+    cv: &MOCoefficients,
+) -> Result<(Vec<f64>, Vec<f64>), CcsdError> {
+    let no = eris.nocc;
+    let nv = eris.nvir;
+
+    if t1.len() != no * nv {
+        return Err(CcsdError::ShapeMismatch {
+            expected: no * nv,
+            got: t1.len(),
+        });
+    }
+    if t2.len() != no * no * nv * nv {
+        return Err(CcsdError::ShapeMismatch {
+            expected: no * no * nv * nv,
+            got: t2.len(),
+        });
+    }
+
+    // (a) The integral part of the vvvv step, AO-sourced, no nv^4 MO tensor.
+    let mut ht2_vvvv = crate::direct::contract_vvvv_t2_aodirect(eri_ao, nao, cv, t1, t2, eris)?;
+
+    // (b) The t1-correction part of cc_Wvvvv contracted with tau. cc_Wvvvv's
+    //     t1-corr is  -sum_k ovvv[k,d,a,c]*t1[k,b] - sum_k ovvv[k,c,b,d]*t1[k,a]
+    //     (rintermediates cc_Wvvvv_into); contracting with tau[i,j,c,d] touches
+    //     only the nv^3 ovvv block. Add it to the integral part in place.
+    let ovvv = &eris.ovvv;
+    let t1e = |i: usize, a: usize| t1[t1_idx(nv, i, a)];
+    let t2e = |i: usize, j: usize, a: usize, b: usize| t2[t2_idx(no, nv, i, j, a, b)];
+    let tau = |i: usize, j: usize, a: usize, b: usize| t2e(i, j, a, b) + t1e(i, a) * t1e(j, b);
+    for i in 0..no {
+        for j in 0..no {
+            for a in 0..nv {
+                for b in 0..nv {
+                    let mut terms: Vec<f64> = Vec::with_capacity(nv * nv * 2 * no);
+                    for c in 0..nv {
+                        for d in 0..nv {
+                            let tcd = tau(i, j, c, d);
+                            // -sum_k ovvv[k,d,a,c]*t1[k,b]
+                            for k in 0..no {
+                                terms.push(-ovvv[ovvv_idx(nv, k, d, a, c)] * t1e(k, b) * tcd);
+                            }
+                            // -sum_k ovvv[k,c,b,d]*t1[k,a]
+                            for k in 0..no {
+                                terms.push(-ovvv[ovvv_idx(nv, k, c, b, d)] * t1e(k, a) * tcd);
+                            }
+                        }
+                    }
+                    ht2_vvvv[t2_idx(no, nv, i, j, a, b)] += oracle_sum(&terms);
+                }
+            }
+        }
+    }
+
+    update_amps_core(t1, t2, eris, &ht2_vvvv)
 }
 
 /// The `NoCcsdOverrides::update_amps` delegate: one RCCSD amplitude update,

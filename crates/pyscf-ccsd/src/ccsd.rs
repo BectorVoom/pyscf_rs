@@ -80,11 +80,25 @@ fn fock_idx(nmo: usize, p: usize, q: usize) -> usize {
     p * nmo + q
 }
 
-/// Bytes the dominant `vvvv`/`Wabef ≈ nv⁴` arena tenant needs (the pre-flight
-/// estimate). Conservative: the single largest in-core buffer (`nv^4` f64).
+/// Bytes the dominant `vvvv`/`Wabef ≈ nv⁴` arena tenant needs (the in-core
+/// pre-flight estimate). Conservative: the single largest in-core buffer
+/// (`nv^4` f64).
 fn estimate_vvvv_bytes(nvir: usize) -> usize {
     nvir.saturating_mul(nvir)
         .saturating_mul(nvir)
+        .saturating_mul(nvir)
+        .saturating_mul(8)
+}
+
+/// Bytes the AO-direct path's dominant MO `vvvv`-step tenant needs (CCSD-07).
+/// The AO-direct path NEVER materializes the `nv^4` MO `vvvv`: it tiles the
+/// AO→MO transform over the leading virtual index, holding at most ONE
+/// `[1,nv,nv,nv]` slice (`nv^3` f64). This pre-flight estimate is correspondingly
+/// LOWER than [`estimate_vvvv_bytes`] (the memory-frugality whole point — D-01 /
+/// T-06-08-OOM). The AO source `int2e` is held separately (the v1 path-b cost);
+/// the GATED reservation is the MO `vvvv`-step peak.
+fn estimate_direct_vvvv_bytes(nvir: usize) -> usize {
+    nvir.saturating_mul(nvir)
         .saturating_mul(nvir)
         .saturating_mul(8)
 }
@@ -101,6 +115,23 @@ pub fn ccsd_kernel<H: crate::hooks::CcsdOverrideHooks>(
     pool: &WorkspacePool,
 ) -> Result<CcsdResult, PyscfRsError> {
     ccsd_kernel_diis(refr, frozen, hooks, pool, true)
+}
+
+/// AO-direct (R)CCSD driver — port of `pyscf/cc/ccsd.py` with `mycc.direct=True`
+/// (CCSD-07). Thin wrapper over [`ccsd_kernel_direct_diis`] with `diis = true`.
+///
+/// The AO-direct path routes the heavy `nv^4` vvvv contraction through
+/// [`crate::direct`] (the AO `int2e` is contracted on-the-fly, tiled per
+/// leading-virtual index) instead of holding the full `vvvv` MO tensor — so the
+/// pre-flight arena reservation is the LOWER `nv^3` peak, not `nv^4`. It
+/// converges to the SAME `e_corr` as the in-core [`ccsd_kernel`] (a different
+/// contraction order of the same math; CCSD-07's equivalence contract).
+pub fn ccsd_kernel_direct(
+    refr: &CcsdReference,
+    frozen: &Frozen,
+    pool: &WorkspacePool,
+) -> Result<CcsdResult, PyscfRsError> {
+    ccsd_kernel_direct_diis(refr, frozen, pool, true)
 }
 
 /// (R)CCSD driver with an explicit DIIS toggle — port of
@@ -199,6 +230,13 @@ pub fn ccsd_kernel_diis<H: crate::hooks::CcsdOverrideHooks>(
 
         // run_diis (port `ccsd.py:1206`): extrapolate the amplitudes through
         // the DIIS ring buffer when enabled and `istep >= DIIS_START_CYCLE`.
+        // `DIIS_START_CYCLE` is the verified `ccsd.py:928` configurable
+        // start-cycle constant (currently 0); keeping the `>=` guard preserves
+        // its configurable semantics (raise the const → DIIS starts later). With
+        // the const pinned at 0 the comparison is trivially true, which clippy's
+        // `absurd_extreme_comparisons` flags — allowed here BECAUSE the
+        // start-cycle is intentionally a tunable constant, not a literal `0`.
+        #[allow(clippy::absurd_extreme_comparisons)]
         match diis_stack.as_mut() {
             Some(stack) if istep >= DIIS_START_CYCLE => {
                 // Current iterate = packed (t1new, t2new); error vector =
@@ -230,6 +268,118 @@ pub fn ccsd_kernel_diis<H: crate::hooks::CcsdOverrideHooks>(
 
     // (6) Release the arena tenant back to the free-list.
     pool.release(wvvvv_id);
+
+    let amplitudes = Amplitudes::from_vec(nocc, nvir, t1_cur, t2_cur);
+    Ok(CcsdResult {
+        e_corr: eccsd,
+        converged,
+        niter,
+        emp2,
+        amplitudes,
+    })
+}
+
+/// AO-direct (R)CCSD driver with an explicit DIIS toggle (CCSD-07,
+/// `mycc.direct=True`). Mirrors [`ccsd_kernel_diis`] but routes the heavy `nv^4`
+/// vvvv contraction through [`crate::update_amps::default_update_amps_direct`]
+/// (AO `int2e` tiled per leading-virtual index) instead of the in-core
+/// `cc_Wvvvv`. Sequence:
+/// 1. PRE-FLIGHT `pool.try_reserve(estimate_direct_vvvv_bytes(nvir))?` — the
+///    LOWER `nv^3` MO `vvvv`-step peak (vs the in-core `nv^4`), the
+///    memory-frugality proof (D-01 / T-06-08-OOM). Over-budget still HARD-refuses.
+/// 2. Build the AO `int2e` + the virtual MO coeff block `cv` ONCE (the AO source
+///    the per-cycle AO-direct contraction tiles over).
+/// 3. Build eris through the in-tree default ao2mo; `init_amps` MP2 seed.
+/// 4. iterate `default_update_amps_direct` → `normt` → `run_diis` → `energy`.
+///
+/// Bound to the in-tree default ao2mo (NOT the hook seam): the AO-direct path
+/// needs the raw AO `int2e` + MO coeffs, which only the default in-tree path
+/// exposes. Converges to the SAME `e_corr` as [`ccsd_kernel_diis`].
+pub fn ccsd_kernel_direct_diis(
+    refr: &CcsdReference,
+    frozen: &Frozen,
+    pool: &WorkspacePool,
+    diis: bool,
+) -> Result<CcsdResult, PyscfRsError> {
+    let nocc = get_nocc(&refr.mo_occ, frozen)?;
+    let nmo_active = pyscf_mp2::get_nmo(&refr.mo_occ, frozen)?;
+    let nvir = nmo_active.saturating_sub(nocc);
+
+    // (1) HARD pre-flight refusal on the LOWER AO-direct peak (nv^3, not nv^4).
+    pool.try_reserve(estimate_direct_vvvv_bytes(nvir))
+        .map_err(CcsdError::from)?;
+
+    // (2) The AO source: full int2e + the active virtual MO coeff block. Built
+    // ONCE; the per-cycle AO-direct vvvv contraction tiles over it.
+    let mask: Vec<bool> = pyscf_mp2::get_frozen_mask(&refr.mo_occ, frozen)?;
+    let cv = mo_subset(refr, &mask, false)?;
+    let nao = refr.mol.nao_nr;
+    let eri_ao = pyscf_gto::intor(&refr.mol, "int2e")?;
+    let eri_ao_vals = eri_ao.values;
+
+    // (3) Build eris through the in-tree default ao2mo + MP2 seed.
+    let eris = default_ao2mo(refr, frozen)?;
+    if eris.nocc != nocc || eris.nvir != nvir {
+        return Err(CcsdError::ShapeMismatch {
+            expected: nocc * nvir,
+            got: eris.nocc * eris.nvir,
+        }
+        .into());
+    }
+    let (emp2, t1, t2) = init_amps(&eris)?;
+    let mut eccsd = default_energy(&amps_t1(&eris, &t1), &amps_t2(&eris, &t2), &eris)?.0;
+
+    let mut t1_cur = t1;
+    let mut t2_cur = t2;
+    let mut converged = false;
+    let mut niter = 0usize;
+
+    let mut diis_stack: Option<Diis<AmplitudeSubspace>> = if diis {
+        Some(Diis::<AmplitudeSubspace>::new(DIIS_SPACE))
+    } else {
+        None
+    };
+
+    // (4) Amplitude iteration through the AO-direct vvvv step.
+    for istep in 0..MAX_CYCLE {
+        niter = istep + 1;
+
+        let (t1new, t2new) = crate::update_amps::default_update_amps_direct(
+            &t1_cur,
+            &t2_cur,
+            &eris,
+            &eri_ao_vals,
+            nao,
+            &cv,
+        )
+        .map_err(PyscfRsError::from)?;
+
+        let normt = amplitude_delta_norm(nocc, nvir, &t1_cur, &t2_cur, &t1new, &t2new);
+
+        match diis_stack.as_mut() {
+            Some(stack) if diis => {
+                let current = AmplitudeSubspace::from_amplitudes(&t1new, &t2new, nocc, nvir);
+                let prev = AmplitudeSubspace::from_amplitudes(&t1_cur, &t2_cur, nocc, nvir);
+                let err: Vec<f64> = current.as_flat_residual(&prev);
+                let extrap = stack.extrapolate(current, err).map_err(CcsdError::from)?;
+                let (t1e, t2e) = extrap.to_amplitudes();
+                t1_cur = t1e;
+                t2_cur = t2e;
+            }
+            _ => {
+                t1_cur = t1new;
+                t2_cur = t2new;
+            }
+        }
+
+        let eold = eccsd;
+        eccsd = default_energy(&amps_t1(&eris, &t1_cur), &amps_t2(&eris, &t2_cur), &eris)?.0;
+
+        if (eccsd - eold).abs() < CONV_TOL && normt < CONV_TOL_NORMT {
+            converged = true;
+            break;
+        }
+    }
 
     let amplitudes = Amplitudes::from_vec(nocc, nvir, t1_cur, t2_cur);
     Ok(CcsdResult {
