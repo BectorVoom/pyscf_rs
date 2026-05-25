@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 06-07-PLAN.md (T1/D1/D2 diagnostics + frozen-core contract — CCSD-09/10)
-last_updated: "2026-05-25T02:53:15.000Z"
-last_activity: 2026-05-25 -- Completed 06-07 (CCSD diagnostics + frozen contract: get_t1/d1/d2_diagnostic port ccsd.py:748-776 — T1=||t1||_F/sqrt(nelec) via oracle_sum, D1/D2=max sqrt(|eig|) over the ij/ab Gram blocks via eigh_gen against identity S; CCSD-10 frozen int/list/auto active space == MP2 helpers verbatim (no new frozen logic) validated on a real LiH/STO-3G CCSD run + frozen-core e_corr rises toward zero; Frozen::Auto through the CCSD helper path is element-blind == None)
+stopped_at: Completed 06-08-PLAN.md (AO-direct CCSD — CCSD-07)
+last_updated: "2026-05-25T03:06:34.000Z"
+last_activity: 2026-05-25 -- Completed 06-08 (AO-direct CCSD / CCSD-07: contract_vvvv_t2_aodirect ports ccsd.py:473-570 — full AO int2e tiled per leading-virtual index a, peak nv^3, never the full nv^4 MO vvvv; ccsd_kernel_direct routes the vvvv step through the AO-direct branch with the lower nv^3 pre-flight; AO-direct e_corr == in-core e_corr bit-identical on LiH/STO-3G (-0.020449057574, 8 iters, ≤1e-9) + a budget the in-core path HARD-refuses but direct accepts; incidental clippy absurd_extreme_comparisons on the DIIS start-cycle guard fixed)
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 69
-  completed_plans: 65
-  percent: 94
+  completed_plans: 66
+  percent: 96
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 06 (ccsd) — EXECUTING
-Plan: 8 of 11
+Plan: 9 of 11
 Status: Ready to execute
-Last activity: 2026-05-25 -- Completed 06-07 (T1/D1/D2 diagnostics + frozen-core contract — CCSD-09/10)
+Last activity: 2026-05-25 -- Completed 06-08 (AO-direct CCSD — CCSD-07)
 
-Progress: [█████████░] ~94% (65/69 plans; Phase 6 in progress — Wave 5 λ+RDM+diagnostics+frozen done, 4 plans remain)
+Progress: [█████████░] ~96% (66/69 plans; Phase 6 in progress — Wave 6 AO-direct done, 3 plans remain: 06-09 DF-CCSD, 06-10 PyO3 bridge, 06-11 oracle/CI)
 
 ## Performance Metrics
 
@@ -84,6 +84,7 @@ Progress: [█████████░] ~94% (65/69 plans; Phase 6 in progres
 | Phase 06 P06-05 | 18min | 2 tasks (1 TDD) | 4 files |
 | Phase 06 P06-06 | 22min | 2 tasks (TDD) | 7 files |
 | Phase 06 P06-07 | 5min | 2 tasks (1 TDD) | 4 files |
+| Phase 06 P06-08 | 8min | 2 tasks (1 TDD) | 5 files |
 
 ## Accumulated Context
 
@@ -135,6 +136,8 @@ Recent decisions affecting current work:
 
 - [Phase 06]: 06-06 CCSD λ-equations + RDMs incl. ao_repr (CCSD-05/06, D-03) — filled the lambda/rdm Wave-3 stubs with the CCSD response surface. **lambda.rs (CCSD-05):** ported the closed-shell `ccsd_lambda.py` — `solve_lambda` (the CONCRETE `CCSD.solve_lambda`, `ccsd.py:1273`→`ccsd_lambda.kernel`, RESEARCH A6; the base `CCSDBase.solve_lambda` raises NotImplementedError — port the concrete-class behavior), `update_lambda` (the λ iterate; L1/L2 equations symmetrized `tmp + tmp.T(1,0,3,2)` like t2), `LambdaImds` (the `cc_Fov`/`Loo`/`Lvv`/`cc_Woooo`/`cc_Wvoov`/`cc_Wvovo` blocks reused from rintermediates). Seeds l1=t1/l2=t2 (the ground-state λ fixed point), iterates to `||Δl||<CONV_TOL_NORMT` within MAX_CYCLE (the verified 06-03 constants), HARD `try_reserve`+`reserve`-once on the wvvvv≈nv⁴ tenant; λ converges on H2/STO-3G. **rdm.rs (CCSD-06):** ported `ccsd_rdm.py` — `gamma1_intermediates` (doo/dov/dvo/dvv from t1/t2/l1/l2 via theta=2t2−t2_swap), `make_rdm1` (nmo×nmo MO 1-RDM: doo+dooᵀ / dvv+dvvᵀ / dov+dvoᵀ + `+2` occ-diag mean-field; Tr(γ)==nelec; ao_repr=true → C·γ·Cᵀ), `make_rdm2` (nmo⁴ MO 2-RDM: dovov + dm1 cross-term + HF separable +4/−2, mirroring pyscf-mp2/src/rdm.rs). **D-03 SHIPPED:** `make_rdm2(ao_repr=true)` returns a REAL nao⁴ AO 2-RDM NUMERICALLY this phase (unlike Phase-5 MP2's NotYetImplemented) — the MO 2-RDM routes through `pyscf_ao2mo::general` by treating it as the 'eri' (dim nmo) and passing the MO-coeff TRANSPOSE Cᵀ[mo,ao]=C[ao,mo] (shape [nmo,nao]) as each coefficient block → Γ_ao[μνλσ]=Σ C[μp]C[νq]C[λr]C[σs]Γ_mo[pqrs]; the nao⁴ AO RDM is the HEAVIEST arena tenant (try_reserve HARD pre-flight + reserve once + with_mut_slice write + as_slice read + release). EVERY contraction host-loop oracle_sum (the RDM `+=` are independent output-element scatter-adds, the MP2-rdm pattern, NOT contracted-axis accumulation); RAYON 1==8 bit-invariant on update_lambda AND the make_rdm2(ao_repr) path. **DEVIATION (Rule-1 test fix):** the first AO 'partial-trace invariant' assertion was mathematically wrong (Σ_μ C[μp]C[μq]=CCᵀ≠δ unless C is orthonormal in the IDENTITY metric, but RHF C is orthonormal in the AO-OVERLAP metric CᵀSC=I) — replaced with the rigorous C=I identity-transform check (AO==MO bit-for-bit) + the C≠I differs-from-MO check. **DEVIATION (documented deferral):** ulambda.rs/urdm.rs (open-shell UCCSD λ/RDM) shipped as documented module mirrors (NOT silent wrong numeric code) — the spin-resolved path reuses the closed-shell discipline and is wired with the Phase-7 open-shell response consumer (Known Stub). Tests: tests/lambda.rs (3 — λ converges/structural l~t/RAYON), tests/rdm.rs (4 — Tr==nelec/nmo⁴/ao_repr ships+differs/over-budget refusal); 6 rdm lib + 3 lambda lib green; prior-wave regression (rccsd_numeric_smoke/convergence/uccsd_smoke/diis_amps) green; AO_REPR_ARENA_OK confirmed. ccsd.rs NOT modified (constraint honored). NO new crate dep; Cargo.lock NOT staged (no new dep; dirty lock already satisfies --locked); libxc NEVER compiled. Out-of-scope: a pre-existing clippy absurd_extreme_comparisons in ccsd.rs:203 (06-05, file NOT modified by this plan) logged to deferred-items.md.
 
+- [Phase 06]: 06-08 AO-direct CCSD (CCSD-07, mycc.direct=True) — ported the `_contract_vvvv_t2` AO-direct branch (`ccsd.py:473-570` / `_contract_s4vvvv_t2`) into `direct.rs`, trading the in-memory `nv^4` `vvvv` MO tensor for an on-the-fly AO-integral contraction. **RESEARCH Open Q4 RESOLVED-AT-EXECUTION (path b):** a grep of `pyscf-gto`'s intor surface (`intor.rs`) confirms there is NO shell-sliced streaming `int2e` primitive in-tree — only `intor("int2e")` returning the full arity-4 AO tensor. So `contract_vvvv_t2_aodirect` sources the full AO `int2e` ONCE and tiles the AO→MO `vvvv` transform over the LEADING virtual index `a` (one `[1,nv,nv,nv]` slice via `ao2mo::general([&cv_a,&cv,&cv,&cv])` at a time), contracting each slice against `tau` and discarding it → peak `vvvv`-MO buffer = `nv^3`, the full `nv^4` MO `vvvv` is NEVER materialized (satisfies CCSD-07's `direct=True` contract; a shell-sliced primitive that also streams the AO source is the documented v2 upgrade). **The vvvv-step split:** `cc_Wvvvv[a,b,c,d] = (two ovvv·t1 t1-corrections, nv^3) + vvvv[a,c,b,d] (the nv^4 integral part)`; only the heavy integral part moves to AO-direct (`= einsum('ijcd,acbd->ijab', tau, vvvv)`, `ccsd.py:474`), the t1-corrections stay in-core (`default_update_amps_direct` contracts them against `tau` touching only the `nv^3` ovvv block), both reassembled into the `[no,no,nv,nv]` block a NEW shared `update_amps_core` consumes — so in-core (`default_update_amps_with_wvvvv` via `vvvv_step_from_wvvvv`, byte-unchanged) and AO-direct differ ONLY in how the block is produced. **Kernel wiring:** `ccsd_kernel_direct`/`ccsd_kernel_direct_diis` route the vvvv step through the AO-direct branch + use `estimate_direct_vvvv_bytes`=`nv^3·8` (the LOWER pre-flight, skipping the full-`nv^4` arena reservation); wired as a separate entrypoint (not a bool threaded through `ccsd_kernel_diis`) because the AO-direct path needs the raw AO `int2e` + MO coeffs which only the in-tree default ao2mo exposes (not the generic `hooks.ao2mo` seam); the in-core `ccsd_kernel`/`ccsd_kernel_diis` are UNCHANGED. **PROOF (two levels):** (1) lib test — `contract_vvvv_t2_from_eris` (per-`a` tiled) == `contract_vvvv_t2_incore_full` (full `nv^4`) bit-close across (2,2)/(2,3)/(3,4); (2) integration test `tests/direct.rs` — `ccsd_kernel_direct` `e_corr` == `ccsd_kernel` `e_corr` on LiH/STO-3G, BIT-IDENTICAL `-0.020449057574` (both 8 iters, ≤1e-9 gate), PLUS the memory-frugality proof: a pool budget between `nv^3·8` and `nv^4·8` (LiH: 512 < 1280 < 2048) makes in-core HARD-REFUSE (`MemoryLimitExceeded` on the `nv^4` `try_reserve`, D-01 no downgrade) but AO-direct ACCEPT and converge — the on-disk witness of the lower peak reservation. RAYON 1==8 bit-invariant; ShapeMismatch-validated (T-06-08-SHAPE). **DEVIATION (Rule-1, plan-mandated incidental fix):** the clippy `absurd_extreme_comparisons` on `ccsd.rs` `Some(stack) if istep >= DIIS_START_CYCLE` (const `usize` 0 → always true, introduced by 06-05) is FIXED via a documented `#[allow(clippy::absurd_extreme_comparisons)]` preserving the configurable `>=` start-cycle semantics; confirmed gone (`cargo clippy -p pyscf-ccsd --tests | grep -i absurd` no match); `deferred-items.md` entry marked resolved. **DEVIATION (Rule-3):** the `update_amps` vvvv-step refactor (extract into a swappable block) was necessary to route the step through AO-direct without duplicating the amplitude equation; in-core path byte-unchanged (39 lib + all integration green; rccsd_numeric_smoke/uccsd_smoke/diis_amps no regression). System note: LiH/STO-3G (not H2/STO-3G) for the integration test because H2 has nvir=1 (`nv^4==nv^3==1`, can't distinguish reservations). NO new crate dep; Cargo.lock NOT staged; libxc NEVER compiled. CCSD-07 complete.
+
 ### Pending Todos
 
 [From .planning/todos/pending/ — ideas captured during sessions]
@@ -177,6 +180,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-25T00:00:00.000Z
-Stopped at: Completed 06-03-PLAN.md (in-core RCCSD numeric headline — CCSD-01/03/11)
+Last session: 2026-05-25T03:06:34.000Z
+Stopped at: Completed 06-08-PLAN.md (AO-direct CCSD — CCSD-07)
 Resume file: None

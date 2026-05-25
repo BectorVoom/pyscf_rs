@@ -293,7 +293,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 06-08-PLAN.md — AO-direct CCSD: the _contract_vvvv_t2 AO-direct branch + direct:bool flag; AO-direct == in-core e_corr equivalence, lower peak reservation (CCSD-07)
+- [x] 06-08-PLAN.md — AO-direct CCSD: the _contract_vvvv_t2 AO-direct branch + direct:bool flag; AO-direct == in-core e_corr equivalence, lower peak reservation (CCSD-07) (completed 2026-05-25 — contract_vvvv_t2_aodirect ports ccsd.py:473-570: Open Q4 resolved path-b, full AO int2e tiled per leading-virtual index, peak nv^3, never the full nv^4 MO vvvv; ccsd_kernel_direct routes the vvvv step + uses the lower nv^3 pre-flight; AO-direct e_corr == in-core e_corr bit-identical on LiH/STO-3G (-0.020449057574, 8 iters, ≤1e-9) + a budget the in-core path HARD-refuses but direct accepts; incidental clippy absurd_extreme_comparisons fixed)
 - [ ] 06-09-PLAN.md — DF-CCSD + HDF5 spill: DFRCCSD/DFUCCSD ERI swap (vvL B-tensor via the ao2mo hook) + dmax/vvblk sizing + Spilled backend (D-07, no new hdf5 dep) + the ao2mo outcore surface (CCSD-08)
 
 **Wave 7** *(blocked on Wave 6 completion)*
