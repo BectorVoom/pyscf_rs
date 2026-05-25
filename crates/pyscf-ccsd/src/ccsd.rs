@@ -469,7 +469,8 @@ pub fn init_amps(eris: &ChemistsEris) -> Result<(f64, Vec<f64>, Vec<f64>), CcsdE
             for a in 0..nv {
                 for b in 0..nv {
                     let denom = eia(i, a) + eia(j, b);
-                    t2[t2_idx(no, nv, i, j, a, b)] = eris.ovov[ovov_idx(no, nv, i, a, j, b)] / denom;
+                    t2[t2_idx(no, nv, i, j, a, b)] =
+                        eris.ovov[ovov_idx(no, nv, i, a, j, b)] / denom;
                 }
             }
         }
@@ -650,10 +651,7 @@ fn fto_c_order(f: &[f64], n0: usize, n1: usize, n2: usize, n3: usize) -> Vec<f64
 ///
 /// `int2e` is a real arity-4 tensor since 05-08 (cintx#11 closed), so this path
 /// runs end-to-end. Errors `?`-propagate; never panics, never substitutes zeros.
-pub fn default_ao2mo(
-    refr: &CcsdReference,
-    frozen: &Frozen,
-) -> Result<ChemistsEris, PyscfRsError> {
+pub fn default_ao2mo(refr: &CcsdReference, frozen: &Frozen) -> Result<ChemistsEris, PyscfRsError> {
     // The frozen mask resolves None/Count/List directly. (Frozen::Auto element
     // resolution via mol charges is exercised by the MP2 path; the CCSD smoke
     // uses Frozen::None.) reference_elements is available for the Auto path.

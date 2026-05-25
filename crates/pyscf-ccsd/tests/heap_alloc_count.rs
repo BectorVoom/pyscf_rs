@@ -78,7 +78,9 @@ fn wabef_buffer_allocates_once_and_reuses() {
     let pool = WorkspacePool::new(WorkspacePool::DEFAULT_BUDGET_BYTES);
 
     // Iteration 1: the buffer is allocated fresh here (the "allocate once").
-    let id = pool.reserve(&shape, false).expect("iter-1 reserve fits budget");
+    let id = pool
+        .reserve(&shape, false)
+        .expect("iter-1 reserve fits budget");
     pool.release(id);
     // The pool must hold exactly one allocation after the first cycle.
     assert_eq!(

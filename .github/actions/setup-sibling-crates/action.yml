@@ -1,0 +1,28 @@
+name: Setup sibling crates
+description: Clone sibling Rust crates expected by local path dependencies.
+runs:
+  using: composite
+  steps:
+    - name: Clone sibling repositories
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        parent="$(dirname "$GITHUB_WORKSPACE")"
+
+        clone_sibling() {
+          local repo="$1"
+          local dest="$parent/$repo"
+
+          rm -rf "$dest"
+          git clone --depth 1 "https://github.com/BectorVoom/${repo}.git" "$dest"
+        }
+
+        clone_sibling cintx
+        clone_sibling xcfun_rs
+
+        case "${SETUP_LIBXC_RS:-}" in
+          1|true|TRUE|yes|YES)
+            clone_sibling libxc_rs
+            ;;
+        esac

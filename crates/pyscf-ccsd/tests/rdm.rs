@@ -112,7 +112,10 @@ fn make_rdm2_ao_repr_ships_and_is_real() {
     let dm2_mo =
         make_rdm2(&t1, &t2, &l1, &l2, &eris, false, &refr.mo_coeff, &pool).expect("rdm2 mo");
     let any_nonzero = dm2_ao.iter().any(|&x| x.abs() > 1e-12);
-    assert!(any_nonzero, "AO 2-RDM must not be all-zero (real transform ran)");
+    assert!(
+        any_nonzero,
+        "AO 2-RDM must not be all-zero (real transform ran)"
+    );
     let differs = dm2_ao
         .iter()
         .zip(dm2_mo.iter())

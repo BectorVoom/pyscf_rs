@@ -69,7 +69,8 @@ pub fn gamma1_intermediates(
         .into());
     }
     // Flat (i,j,a,b) index into t2_data (C-order [nocc,nocc,nvir,nvir]).
-    let t = |i: usize, j: usize, a: usize, b: usize| t2_data[((i * nocc + j) * nvir + a) * nvir + b];
+    let t =
+        |i: usize, j: usize, a: usize, b: usize| t2_data[((i * nocc + j) * nvir + a) * nvir + b];
 
     // dm1occ[p,q] = Σ_i [ 2·Σ_ab t2[i,p,a,b]·t2[i,q,a,b] − Σ_ab t2[i,p,a,b]·t2[i,q,b,a] ].
     let mut doo = vec![0.0_f64; nocc * nocc]; // doo = −dm1occ.
@@ -391,7 +392,8 @@ pub fn make_rdm2(
     let mut dm2 = vec![0.0_f64; nmo0 * nmo0 * nmo0 * nmo0];
     let idx4 = |p: usize, q: usize, r: usize, s: usize| ((p * nmo0 + q) * nmo0 + r) * nmo0 + s;
     // t2 per-i block accessor: t2i[j,a,b] = t2[i,j,a,b].
-    let t = |i: usize, j: usize, a: usize, b: usize| t2_data[((i * nocc + j) * nvir + a) * nvir + b];
+    let t =
+        |i: usize, j: usize, a: usize, b: usize| t2_data[((i * nocc + j) * nvir + a) * nvir + b];
 
     // 2. dovov placement (mp2.py:309-327).
     //    dovov[a,j,b] = (2·t2i[j,a,b] − t2i[j,b,a]) · 2.

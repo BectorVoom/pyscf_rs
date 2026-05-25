@@ -200,11 +200,7 @@ struct CcsdPyBridge {
 }
 
 impl CcsdOverrideHooks for CcsdPyBridge {
-    fn ao2mo(
-        &self,
-        refr: &CcsdReference,
-        frozen: &Frozen,
-    ) -> Result<ChemistsEris, PyscfRsError> {
+    fn ao2mo(&self, refr: &CcsdReference, frozen: &Frozen) -> Result<ChemistsEris, PyscfRsError> {
         // Pitfall 7: if a Python subclass overrides `ao2mo`, dispatch through
         // call_method1 (MRO resolution). Otherwise run the pure-Rust default
         // under py.detach (BIND-05) — the kernel holds the GIL, so we release
@@ -302,9 +298,7 @@ impl CcsdPyBridge {
         frozen: &Frozen,
     ) -> Result<ChemistsEris, PyscfRsError> {
         match &self.default_source {
-            DefaultAo2mo::InCore => {
-                Python::attach(|py| py.detach(|| default_ao2mo(refr, frozen)))
-            }
+            DefaultAo2mo::InCore => Python::attach(|py| py.detach(|| default_ao2mo(refr, frozen))),
             DefaultAo2mo::Df(df) => Python::attach(|py| {
                 // `df_ao2mo` reserves its own scratch through a budget-matched
                 // pool (PYSCF_MAX_MEMORY); build a fresh from_env pool for the
@@ -478,9 +472,11 @@ impl PyRCCSD {
         };
         let d = py
             .detach(|| -> Result<Density, PyscfRsError> {
-                let (t1, t2, _no, _nv) = amps.ok_or(PyscfRsError::from(
-                    pyscf_ccsd::CcsdError::ShapeMismatch { expected: 1, got: 0 },
-                ))?;
+                let (t1, t2, _no, _nv) =
+                    amps.ok_or(PyscfRsError::from(pyscf_ccsd::CcsdError::ShapeMismatch {
+                        expected: 1,
+                        got: 0,
+                    }))?;
                 let pool = WorkspacePool::from_env();
                 let eris = default_ao2mo(&refr, &frozen)?;
                 let lam = solve_lambda(&t1, &t2, &eris, &pool)?;
@@ -514,9 +510,11 @@ impl PyRCCSD {
         };
         let (flat, side) = py
             .detach(|| -> Result<(Vec<f64>, usize), PyscfRsError> {
-                let (t1, t2, _no, _nv) = amps.ok_or(PyscfRsError::from(
-                    pyscf_ccsd::CcsdError::ShapeMismatch { expected: 1, got: 0 },
-                ))?;
+                let (t1, t2, _no, _nv) =
+                    amps.ok_or(PyscfRsError::from(pyscf_ccsd::CcsdError::ShapeMismatch {
+                        expected: 1,
+                        got: 0,
+                    }))?;
                 let pool = WorkspacePool::from_env();
                 let eris = default_ao2mo(&refr, &frozen)?;
                 let lam = solve_lambda(&t1, &t2, &eris, &pool)?;
@@ -831,11 +829,7 @@ struct ScannerDfBridge {
 }
 
 impl CcsdOverrideHooks for ScannerDfBridge {
-    fn ao2mo(
-        &self,
-        refr: &CcsdReference,
-        frozen: &Frozen,
-    ) -> Result<ChemistsEris, PyscfRsError> {
+    fn ao2mo(&self, refr: &CcsdReference, frozen: &Frozen) -> Result<ChemistsEris, PyscfRsError> {
         let pool = WorkspacePool::from_env();
         df_ao2mo(refr, frozen, &self.df, &pool)
     }

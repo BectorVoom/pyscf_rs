@@ -201,18 +201,14 @@ pub fn update_lambda(
     let loo_e = |k: usize, i: usize| imds.loo[k * no_ + i];
     let lvv_e = |a: usize, c: usize| imds.lvv[a * nv_ + c];
     let fov_e = |k: usize, c: usize| imds.fov[k * nv_ + c];
-    let woooo_e = |k: usize, l: usize, i: usize, j: usize| {
-        imds.woooo[((k * no_ + l) * no_ + i) * no_ + j]
-    };
-    let wvvvv_e = |a: usize, b: usize, c: usize, d: usize| {
-        wvvvv[((a * nv_ + b) * nv_ + c) * nv_ + d]
-    };
-    let wvoov_e = |a: usize, k: usize, i: usize, c: usize| {
-        imds.wvoov[((a * no_ + k) * no_ + i) * nv_ + c]
-    };
-    let wvovo_e = |a: usize, k: usize, c: usize, i: usize| {
-        imds.wvovo[((a * no_ + k) * nv_ + c) * no_ + i]
-    };
+    let woooo_e =
+        |k: usize, l: usize, i: usize, j: usize| imds.woooo[((k * no_ + l) * no_ + i) * no_ + j];
+    let wvvvv_e =
+        |a: usize, b: usize, c: usize, d: usize| wvvvv[((a * nv_ + b) * nv_ + c) * nv_ + d];
+    let wvoov_e =
+        |a: usize, k: usize, i: usize, c: usize| imds.wvoov[((a * no_ + k) * no_ + i) * nv_ + c];
+    let wvovo_e =
+        |a: usize, k: usize, c: usize, i: usize| imds.wvovo[((a * no_ + k) * nv_ + c) * no_ + i];
 
     // -----------------------------------------------------------------------
     // L1 equation (closed-shell ccsd_lambda.update_lambda, l1new[i,a]):
@@ -531,7 +527,9 @@ mod tests {
     }
 
     fn synthetic_amps(no: usize, nv: usize) -> (Vec<f64>, Vec<f64>) {
-        let t1: Vec<f64> = (0..no * nv).map(|i| 0.012 + ((i % 5) as f64) * 0.005).collect();
+        let t1: Vec<f64> = (0..no * nv)
+            .map(|i| 0.012 + ((i % 5) as f64) * 0.005)
+            .collect();
         let t2: Vec<f64> = (0..no * no * nv * nv)
             .map(|i| 0.003 + ((i % 9) as f64) * 0.0015 - ((i % 4) as f64) * 0.0012)
             .collect();

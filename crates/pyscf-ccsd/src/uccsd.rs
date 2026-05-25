@@ -166,10 +166,7 @@ fn channel_subset(
 
 /// The per-spin active occ/vir counts (frozen-aware) of an unrestricted
 /// reference.
-fn channel_counts(
-    refr: &CcsdReference,
-    frozen: &Frozen,
-) -> Result<(usize, usize), PyscfRsError> {
+fn channel_counts(refr: &CcsdReference, frozen: &Frozen) -> Result<(usize, usize), PyscfRsError> {
     let mask = get_frozen_mask(&refr.mo_occ, frozen)?;
     let mut nocc = 0usize;
     let mut nvir = 0usize;
@@ -320,10 +317,7 @@ fn build_spin_orbital_eris(
     // Antisymmetrized physicist integral <pq||rs> = (pr|qs) − (ps|qr) where p,q
     // are bra spin-orbitals and r,s ket spin-orbitals. Each of p,q,r,s is a
     // (spin, column) pair already resolved to occ/vir active columns.
-    let asym = |p: (bool, usize),
-                q: (bool, usize),
-                r: (bool, usize),
-                s: (bool, usize)| {
+    let asym = |p: (bool, usize), q: (bool, usize), r: (bool, usize), s: (bool, usize)| {
         chem_so(p, r, q, s) - chem_so(p, s, q, r)
     };
 
@@ -490,9 +484,7 @@ fn energy_so(t1: &[f64], t2: &[f64], eris: &SpinOrbitalEris) -> Result<f64, Ccsd
     // Σ_ia f_ov[i,a]·t1[i,a]  (0 for a canonical reference).
     for i in 0..no {
         for a in 0..nv {
-            terms.push(
-                eris.fock[imd::fock_idx(nmo, i, no + a)] * t1[imd::t1_idx(nv, i, a)],
-            );
+            terms.push(eris.fock[imd::fock_idx(nmo, i, no + a)] * t1[imd::t1_idx(nv, i, a)]);
         }
     }
     for i in 0..no {
@@ -501,11 +493,7 @@ fn energy_so(t1: &[f64], t2: &[f64], eris: &SpinOrbitalEris) -> Result<f64, Ccsd
                 for b in 0..nv {
                     let g = eris.oovv[imd::oovv_idx(no, nv, i, j, a, b)];
                     terms.push(0.25 * g * t2[imd::t2_idx(no, nv, i, j, a, b)]);
-                    terms.push(
-                        0.5 * g
-                            * t1[imd::t1_idx(nv, i, a)]
-                            * t1[imd::t1_idx(nv, j, b)],
-                    );
+                    terms.push(0.5 * g * t1[imd::t1_idx(nv, i, a)] * t1[imd::t1_idx(nv, j, b)]);
                 }
             }
         }
@@ -635,9 +623,7 @@ fn update_amps_so(
             //   <na||if> = −<na||fi> = − ovvo[n,a,f,i]).
             for n in 0..no {
                 for f in 0..nv {
-                    terms.push(
-                        -t1e(n, f) * (-eris.ovvo[imd::ovvo_idx(no, nv, n, a, f, i)]),
-                    );
+                    terms.push(-t1e(n, f) * (-eris.ovvo[imd::ovvo_idx(no, nv, n, a, f, i)]));
                 }
             }
             let denom = eo[i] - ev[a];

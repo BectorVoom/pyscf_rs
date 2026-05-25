@@ -23,9 +23,7 @@
 
 use std::fs;
 
-use pyscf_ccsd::{
-    ChemistsEris, CcsdOverrideHooks, NoCcsdOverrides, default_energy,
-};
+use pyscf_ccsd::{CcsdOverrideHooks, ChemistsEris, NoCcsdOverrides, default_energy};
 use pyscf_core::Amplitudes;
 use pyscf_mp2::Frozen;
 
@@ -34,7 +32,13 @@ use pyscf_mp2::Frozen;
 #[test]
 fn cc_rs_defines_the_ccsd_surface() {
     let src = fs::read_to_string("src/cc.rs").expect("cc.rs readable");
-    for cls in ["PyRCCSD", "PyUCCSD", "PyDFCCSD", "PyCcsdScanner", "CcsdPyBridge"] {
+    for cls in [
+        "PyRCCSD",
+        "PyUCCSD",
+        "PyDFCCSD",
+        "PyCcsdScanner",
+        "CcsdPyBridge",
+    ] {
         assert!(
             src.contains(cls),
             "cc.rs must define `{cls}` (the CCSD PyO3 surface, D-09)"

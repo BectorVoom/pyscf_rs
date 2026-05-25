@@ -299,19 +299,14 @@ fn update_amps_core(
     for a in 0..nv {
         lvv[a * nv + a] -= mo_e_v[a];
     }
-    let woooo_e =
-        |k: usize, l: usize, i: usize, j: usize| woooo[((k * no + l) * no + i) * no + j];
-    let wvoov_e =
-        |a: usize, k: usize, i: usize, c: usize| wvoov[((a * no + k) * no + i) * nv + c];
-    let wvovo_e =
-        |a: usize, k: usize, c: usize, i: usize| wvovo[((a * no + k) * nv + c) * no + i];
+    let woooo_e = |k: usize, l: usize, i: usize, j: usize| woooo[((k * no + l) * no + i) * no + j];
+    let wvoov_e = |a: usize, k: usize, i: usize, c: usize| wvoov[((a * no + k) * no + i) * nv + c];
+    let wvovo_e = |a: usize, k: usize, c: usize, i: usize| wvovo[((a * no + k) * nv + c) * no + i];
     let lvv_e = |a: usize, c: usize| lvv[a * nv + c];
     let loo_e = |k: usize, i: usize| loo[k * no + i];
 
     // tau = t2 + einsum('ia,jb->ijab', t1, t1)  (rccsd.py:123)
-    let tau = |i: usize, j: usize, a: usize, b: usize| {
-        t2e(i, j, a, b) + t1e(i, a) * t1e(j, b)
-    };
+    let tau = |i: usize, j: usize, a: usize, b: usize| t2e(i, j, a, b) + t1e(i, a) * t1e(j, b);
 
     // Helper computing the FULL (non-divided) t2new[i,j,a,b] per rccsd.py.
     // We compute the value at a given (i,j,a,b); the "tmp + tmp.T(1,0,3,2)"
@@ -596,8 +591,7 @@ pub fn default_update_amps(
         got: 0,
     })?;
     let mut wvvvv = vec![0.0_f64; nv * nv * nv * nv];
-    let (t1new, t2new) =
-        default_update_amps_with_wvvvv(t1_slice, t2_slice, eris, &mut wvvvv)?;
+    let (t1new, t2new) = default_update_amps_with_wvvvv(t1_slice, t2_slice, eris, &mut wvvvv)?;
     Ok((
         Amplitudes::from_vec(no, nv, t1new, Vec::new()),
         Amplitudes::from_vec(no, nv, Vec::new(), t2new),
@@ -642,7 +636,9 @@ mod tests {
     }
 
     fn synthetic_amps(no: usize, nv: usize) -> (Vec<f64>, Vec<f64>) {
-        let t1: Vec<f64> = (0..no * nv).map(|i| 0.015 + ((i % 5) as f64) * 0.008).collect();
+        let t1: Vec<f64> = (0..no * nv)
+            .map(|i| 0.015 + ((i % 5) as f64) * 0.008)
+            .collect();
         let t2: Vec<f64> = (0..no * no * nv * nv)
             .map(|i| 0.004 + ((i % 9) as f64) * 0.0021 - ((i % 4) as f64) * 0.0017)
             .collect();

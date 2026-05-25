@@ -47,8 +47,7 @@ fn rccsd_converges_on_dual_criterion() {
 
     let refr = rhf_reference("H 0 0 0; H 0 0 0.74", "sto-3g");
     let pool = WorkspacePool::new(WorkspacePool::DEFAULT_BUDGET_BYTES);
-    let res =
-        ccsd_kernel(&refr, &Frozen::None, &NoCcsdOverrides, &pool).expect("RCCSD must run");
+    let res = ccsd_kernel(&refr, &Frozen::None, &NoCcsdOverrides, &pool).expect("RCCSD must run");
 
     assert!(
         res.converged,

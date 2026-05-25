@@ -588,7 +588,9 @@ mod tests {
     }
 
     fn synthetic_amps(no: usize, nv: usize) -> (Vec<f64>, Vec<f64>) {
-        let t1: Vec<f64> = (0..no * nv).map(|i| 0.02 + ((i % 5) as f64) * 0.011).collect();
+        let t1: Vec<f64> = (0..no * nv)
+            .map(|i| 0.02 + ((i % 5) as f64) * 0.011)
+            .collect();
         let t2: Vec<f64> = (0..no * no * nv * nv)
             .map(|i| 0.005 + ((i % 9) as f64) * 0.003 - ((i % 4) as f64) * 0.002)
             .collect();
@@ -626,12 +628,9 @@ mod tests {
             let nmo = no + nv;
             let fock = &eris.fock;
             let ovov = &eris.ovov;
-            let oo = |i: usize, a: usize, j: usize, b: usize| {
-                ovov[((i * nv + a) * no + j) * nv + b]
-            };
-            let t2e = |i: usize, j: usize, a: usize, b: usize| {
-                t2[((i * no + j) * nv + a) * nv + b]
-            };
+            let oo =
+                |i: usize, a: usize, j: usize, b: usize| ovov[((i * nv + a) * no + j) * nv + b];
+            let t2e = |i: usize, j: usize, a: usize, b: usize| t2[((i * no + j) * nv + a) * nv + b];
             let t1e = |i: usize, a: usize| t1[i * nv + a];
 
             // --- cc_Foo reference ---
@@ -707,12 +706,8 @@ mod tests {
         let w = cc_Wvvvv(&t1, &t2, &eris).expect("wvvvv");
         let ovvv = &eris.ovvv;
         let vvvv = &eris.vvvv;
-        let ov = |k: usize, d: usize, a: usize, c: usize| {
-            ovvv[((k * nv + d) * nv + a) * nv + c]
-        };
-        let vv = |a: usize, b: usize, c: usize, d: usize| {
-            vvvv[((a * nv + b) * nv + c) * nv + d]
-        };
+        let ov = |k: usize, d: usize, a: usize, c: usize| ovvv[((k * nv + d) * nv + a) * nv + c];
+        let vv = |a: usize, b: usize, c: usize, d: usize| vvvv[((a * nv + b) * nv + c) * nv + d];
         for a in 0..nv {
             for b in 0..nv {
                 for c in 0..nv {
