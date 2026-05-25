@@ -462,3 +462,157 @@ jobs:
       # numeric oracle arms vs upstream PySCF now that cintx#11 ERIs land.
       - name: cargo test --features python (MP2 numeric oracle vs upstream)
         run: cargo test -p pyscf-oracle --features python --locked -- --test-threads=1
+
+  # ── Phase 6 plan 06-11 ─────────────────────────────────────────────
+  # CCSD CI surface: two ALWAYS-ON small-system arms (ccsd-structural +
+  # heap-alloc-count) and two `workflow_dispatch`/human-verify arms
+  # (ccsd-oracle-upstream-manual + python3.13t CCSD smoke). Honors the
+  # user-memory constraint EXACTLY: the small arms run on every push; the
+  # caffeine/DF-spill/upstream-byte-identity/3.13t arms are manual-only and NEVER
+  # pull libxc (the 02-10 / 05-08 precedent + the libxc ~6h compile-freeze
+  # hazard, T-06-11-FREEZE / T-06-11-SC).
+
+  # ACTIVE — runs on every push/PR. Does NOT touch `--features python` or
+  # `--features libxc`, so it is safe (no libpython, no 266-kernel libxc
+  # compile). Runs ALL the small always-on CCSD arms (the real in-tree NUMERIC
+  # proofs already proven this phase): rccsd_numeric_smoke (CCSD-01: H2/STO-3G
+  # e_corr ~ -0.020525 to <= 1 µHartree), uccsd_smoke (CCSD-02: UCCSD(α==β) ==
+  # RCCSD), convergence, diis_amps, diagnostics, frozen, dfccsd_spill (in-tree
+  # spill proof), direct (CCSD-07: AO-direct == in-core), lambda, rdm, refusal.
+  # Clone of `mp2-structural` (ci.yml:416).
+  ccsd-structural:
+    name: ccsd-structural (always-on small-system CCSD arms; no python, no libxc)
+    runs-on: ubuntu-latest
+    needs: [build-default]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test -p pyscf-ccsd -p pyscf-oracle (structural, no python)
+        run: cargo test -p pyscf-ccsd -p pyscf-oracle --locked -- --test-threads=1
+
+  # ACTIVE — runs on every push/PR. The CCSD-11 allocate-once-reuse gate
+  # (RESEARCH §A3). The `heap_alloc_count` integration-test target installs its
+  # OWN counting `#[global_allocator]` scoped to THAT binary only (each
+  # integration test compiles to its own crate, so the counting shim never
+  # perturbs the oracle/determinism bit-exactness arms — the A3 isolation
+  # requirement). Run as a DEDICATED `--test heap_alloc_count` arm (not folded
+  # into ccsd-structural) so the allocator instrumentation stays isolated. Also
+  # runs the `refusal` arm (CCSD-11 over-budget in-core HARD-refuse,
+  # `MemoryLimitExceeded`). NO `--features python`, NO libxc.
+  ccsd-heap-alloc-count:
+    name: heap-alloc-count (CCSD-11 allocate-once + over-budget refusal; always-on)
+    runs-on: ubuntu-latest
+    needs: [build-default]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test -p pyscf-ccsd --test heap_alloc_count --test refusal
+        run: |
+          cargo test -p pyscf-ccsd --test heap_alloc_count --test refusal --locked \
+            -- --test-threads=1
+
+  # MANUAL-DISPATCH numeric oracle (upstream-PySCF byte-identity, ≤ 1 µHartree).
+  # `--features python` drives upstream `cc.CCSD(mf).kernel()` /
+  # `cc.UCCSD(uhf).kernel()` / `cc.CCSD(mf.density_fit()).kernel()` /
+  # `.solve_lambda()` / `.make_rdm1()` / `.make_rdm2()` in-process and compares
+  # against pyscf-rs: caffeine/cc-pVDZ RCCSD byte-identity, UCCSD open-shell
+  # byte-identity, the DF-CCSD `Wabef`→HDF5 spill proof on a deliberately
+  # constrained `PYSCF_MAX_MEMORY` (benzene-dimer/cc-pVDZ), and λ/RDM
+  # byte-identity. This needs an installed upstream PySCF, which the default
+  # push/PR runners do not provide — so it is `workflow_dispatch` (manual /
+  # human-verify) ONLY, never auto-run (default CI stays green + never freezes;
+  # the 05-08 mp2-oracle-upstream-manual precedent). The always-on IN-TREE
+  # small-system numeric proofs live in crates/pyscf-ccsd/tests (run by the
+  # ccsd-structural arm above). NEVER pulls libxc.
+  ccsd-oracle-upstream-manual:
+    name: ccsd-oracle-upstream-manual (workflow_dispatch — caffeine/DF-spill/λ/RDM byte-identity)
+    # Manual only: never auto-trigger on push/PR (default runners have no
+    # upstream PySCF; the caffeine/DF-spill arms are slow + memory-heavy). This
+    # is the documented phase-gate human-verify arm.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # The DF-CCSD spill proof drives a deliberately constrained memory budget so
+    # the `vvL`/`Wabef` reservation is forced through the HDF5-spill backend.
+    env:
+      PYSCF_MAX_MEMORY: "500"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      # The oracle imports upstream `pyscf` via PyO3 (`--features python`) and
+      # compares it against pyscf-rs in-process — install the reference.
+      - name: Install upstream PySCF (oracle reference)
+        run: pip install "numpy>=1.26" "pyscf>=2.5"
+      # The ONLY CCSD `--features python` invocation. Exercises the six CCSD
+      # numeric oracle arms (ccsd_rccsd_energy / ccsd_uccsd_energy /
+      # ccsd_dfccsd_energy / ccsd_lambda / ccsd_rdm1 / ccsd_rdm2) vs upstream
+      # PySCF. `--include-ignored` runs the `#[ignore]`'d live byte-identity arms.
+      - name: cargo test --features python (CCSD byte-identity vs upstream)
+        run: |
+          cargo test -p pyscf-oracle --features python --locked \
+            -- --test-threads=1 --include-ignored ccsd
+
+  # MANUAL-DISPATCH python3.13t free-threaded CCSD smoke (Pitfall 6 — the
+  # heaviest GIL re-validation in the project). Clone of the `python313t-smoke`
+  # SCF job (ci.yml:273): same 3.13t venv + `maturin develop
+  # --no-default-features --features free-threading` (abi3 is incompatible with
+  # 3.13t) + import-assert, with a CCSD smoke replacing the SCF body. Gated
+  # `workflow_dispatch` ONLY so the heavy free-threaded build never runs on the
+  # default push path. NEVER pulls libxc (free-threading feature set only).
+  python313t-ccsd-smoke:
+    name: python3.13t CCSD smoke (Pitfall 6 GIL re-validation; workflow_dispatch)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: [build-default]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Python 3.13t (free-threaded)
+        # deadsnakes PPA path. Alternative: `uv python install 3.13t`.
+        run: |
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          sudo apt-get install -y python3.13-nogil || (
+            pip install uv && uv python install 3.13t
+          )
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Create 3.13t venv with maturin
+        run: |
+          PY=$(which python3.13t || which python3.13)
+          "$PY" -m venv /tmp/venv313t
+          /tmp/venv313t/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26"
+      - name: Build pyscf-py (non-abi3 free-threading)
+        run: |
+          # abi3 wheels are incompatible with 3.13t — use
+          # --no-default-features --features free-threading (drops abi3-py310).
+          /tmp/venv313t/bin/maturin develop \
+            --no-default-features --features free-threading
+      - name: Assert pyscf._native imports cleanly under 3.13t
+        run: |
+          /tmp/venv313t/bin/python -c "import pyscf._native; print(pyscf._native.__doc__)"
+      - name: CCSD smoke (probe for GIL deadlock under the heaviest compute)
+        run: |
+          /tmp/venv313t/bin/python -c "
+          from pyscf import gto, scf
+          mol = gto.M(
+              atom='O 0 0 0; H 0 0.587 0.757; H 0 0.587 -0.757',
+              basis='sto-3g',
+          )
+          mf = scf.RHF(mol).run()
+          assert mf.converged, 'SCF failed under python3.13t (deadlock?)'
+          mycc = mf.CCSD().run()
+          assert mycc.converged, 'CCSD failed under python3.13t (deadlock?)'
+          import math
+          assert math.isfinite(mycc.e_corr), 'CCSD e_corr not finite under 3.13t'
+          print(f'OK 3.13t CCSD e_corr = {mycc.e_corr}')
+          "
