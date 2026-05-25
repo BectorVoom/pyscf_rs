@@ -6,9 +6,14 @@ sys.path ahead of the upstream `pyscf/` tree, so `import pyscf` resolves
 here, and `from pyscf import scf` resolves to the overlay submodule which
 re-exports `pyscf._native.scf` (RHF/UHF/GHF).
 """
+import pkgutil as _pkgutil
+
 from pyscf._native import scf  # type: ignore[attr-defined]
 from pyscf._native import dft  # type: ignore[attr-defined]
 from pyscf._native import PyscfRsRuntimeError as _PyscfRsBase  # type: ignore[attr-defined]
+
+__path__ = _pkgutil.extend_path(__path__, __name__)
+del _pkgutil
 
 
 class PyscfRsError(_PyscfRsBase):  # type: ignore[misc, valid-type]

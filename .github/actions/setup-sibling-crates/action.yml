@@ -18,11 +18,26 @@ runs:
           git clone --depth 1 "https://github.com/BectorVoom/${repo}.git" "$dest"
         }
 
+        clone_libxc_rs() {
+          local dest="$parent/libxc_rs"
+
+          rm -rf "$dest"
+          case "${SETUP_LIBXC_RS:-}" in
+            1|true|TRUE|yes|YES)
+              git clone --depth 1 "https://github.com/BectorVoom/libxc_rs.git" "$dest"
+              ;;
+            *)
+              git clone --depth 1 --filter=blob:none --sparse "https://github.com/BectorVoom/libxc_rs.git" "$dest"
+              git -C "$dest" sparse-checkout set --no-cone \
+                /Cargo.toml \
+                /src/** \
+                /crates/kernels/math/** \
+                /crates/kernels/*/*/Cargo.toml \
+                /crates/kernels/*/*/src/lib.rs
+              ;;
+          esac
+        }
+
         clone_sibling cintx
         clone_sibling xcfun_rs
-
-        case "${SETUP_LIBXC_RS:-}" in
-          1|true|TRUE|yes|YES)
-            clone_sibling libxc_rs
-            ;;
-        esac
+        clone_libxc_rs
