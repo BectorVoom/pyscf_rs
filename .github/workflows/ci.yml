@@ -301,6 +301,15 @@ jobs:
         env:
           PYSCF_RS_UPSTREAM_PYTHON: ${{ github.workspace }}/.upstream-venv/bin/python
         run: .venv/bin/pytest python/pyscf/tests/test_scf_rhf_h2o.py -x --tb=short
+      # cc-pVDZ general-contraction µHartree gate on d-free He/H2 (avoids the
+      # still-open l=2 Rys gap that keeps H2O/cc-pVDZ ~0.46 mHa off). REQUIRES
+      # the cintx int2e general-contraction fix (two_electron.rs) on cintx main;
+      # setup-sibling-crates clones cintx main, so this stays RED until that
+      # commit lands there. Kernel-level twin: pyscf-scf int2e_general_contraction.
+      - name: He/H2 cc-pVDZ RHF — assert ≤ 1 µHartree vs upstream (general contraction)
+        env:
+          PYSCF_RS_UPSTREAM_PYTHON: ${{ github.workspace }}/.upstream-venv/bin/python
+        run: .venv/bin/pytest python/pyscf/tests/test_scf_rhf_ccpvdz.py -x --tb=short
 
   python313t-smoke:
     name: python3.13t SCF smoke (BIND-05; NON-abi3 build per Pitfall (NEW))
