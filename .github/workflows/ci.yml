@@ -301,12 +301,15 @@ jobs:
         env:
           PYSCF_RS_UPSTREAM_PYTHON: ${{ github.workspace }}/.upstream-venv/bin/python
         run: .venv/bin/pytest python/pyscf/tests/test_scf_rhf_h2o.py -x --tb=short
-      # cc-pVDZ general-contraction µHartree gate on d-free He/H2 (avoids the
-      # still-open l=2 Rys gap that keeps H2O/cc-pVDZ ~0.46 mHa off). REQUIRES
-      # the cintx int2e general-contraction fix (two_electron.rs) on cintx main;
-      # setup-sibling-crates clones cintx main, so this stays RED until that
-      # commit lands there. Kernel-level twin: pyscf-scf int2e_general_contraction.
-      - name: He/H2 cc-pVDZ RHF — assert ≤ 1 µHartree vs upstream (general contraction)
+      # cc-pVDZ µHartree gate: He/H2 (general contraction, d-free) + H2O (O d-shell,
+      # l=2 → (dd|dd) needs nroots=5). H2O was demoted to STO-3G in 52b6965 over a
+      # ~0.46 mHa d-shell Rys residual; the cintx rys_root3/4/5 intermediate-x port
+      # closed that gap, so cc-pVDZ is a true µHartree gate again. REQUIRES two cintx
+      # fixes on cintx main — the int2e general-contraction fix (two_electron.rs) and
+      # the Rys intermediate-x branch port (math/rys.rs); setup-sibling-crates clones
+      # cintx main, so this stays RED until both land there. Kernel-level twins:
+      # pyscf-scf int2e_general_contraction (He/H2) + d_shell_rys (H2O).
+      - name: He/H2/H2O cc-pVDZ RHF — assert ≤ 1 µHartree vs upstream (gen. contraction + d-shell)
         env:
           PYSCF_RS_UPSTREAM_PYTHON: ${{ github.workspace }}/.upstream-venv/bin/python
         run: .venv/bin/pytest python/pyscf/tests/test_scf_rhf_ccpvdz.py -x --tb=short
