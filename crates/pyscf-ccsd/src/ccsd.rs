@@ -14,12 +14,14 @@
 //! loop and reused every cycle (Pitfall 20), then `release`d after.
 #![allow(clippy::needless_range_loop)]
 
+use crate::diis_amps::AmplitudeSubspace;
 use crate::eris::ChemistsEris;
 use crate::error::CcsdError;
 use crate::reference::CcsdReference;
 use crate::update_amps::default_update_amps_with_wvvvv;
 use pyscf_algebra::{oracle_dot, oracle_sum};
 use pyscf_core::{Amplitudes, Energy, MOCoefficients, PyscfRsError};
+use pyscf_diis::Diis;
 use pyscf_mp2::{Frozen, get_nocc};
 use pyscf_runtime::WorkspacePool;
 
@@ -34,9 +36,9 @@ pub const MAX_CYCLE: usize = 50;
 pub const CONV_TOL: f64 = 1e-7;
 /// Amplitude-norm convergence threshold (`ccsd.py:923`).
 pub const CONV_TOL_NORMT: f64 = 1e-5;
-/// Amplitude-DIIS subspace size (`ccsd.py:926`; consumed in 06-04).
+/// Amplitude-DIIS subspace size (`ccsd.py:926`; wired in 06-05).
 pub const DIIS_SPACE: usize = 6;
-/// Amplitude-DIIS start cycle (`ccsd.py:928`; consumed in 06-04).
+/// Amplitude-DIIS start cycle (`ccsd.py:928`; wired in 06-05).
 pub const DIIS_START_CYCLE: usize = 0;
 
 /// Result of the (R)CCSD kernel.
@@ -89,23 +91,47 @@ fn estimate_vvvv_bytes(nvir: usize) -> usize {
 
 /// (R)CCSD driver — port of `pyscf/cc/ccsd.py:44-101` `kernel`.
 ///
+/// Thin wrapper over [`ccsd_kernel_diis`] with `diis = true` (the upstream
+/// `mycc.diis = True` default, `ccsd.py:924`). Existing callers keep the
+/// 4-arg signature; the no-DIIS path is reachable via `ccsd_kernel_diis`.
+pub fn ccsd_kernel<H: crate::hooks::CcsdOverrideHooks>(
+    refr: &CcsdReference,
+    frozen: &Frozen,
+    hooks: &H,
+    pool: &WorkspacePool,
+) -> Result<CcsdResult, PyscfRsError> {
+    ccsd_kernel_diis(refr, frozen, hooks, pool, true)
+}
+
+/// (R)CCSD driver with an explicit DIIS toggle — port of
+/// `pyscf/cc/ccsd.py:44-101` `kernel` + the amplitude-DIIS slot (`:1206`).
+///
 /// Generic over the override seam (mirrors `pyscf_mp2::rmp2_kernel`). Sequence:
 /// 1. PRE-FLIGHT `pool.try_reserve(estimate_vvvv_bytes(nvir))?` — an over-budget
 ///    in-core run returns `MemoryLimitExceeded` (D-01, no downgrade).
 /// 2. Build eris via `hooks.ao2mo`.
 /// 3. `init_amps`: `t1=0`, `t2=(ia|jb)/Dijab`, compute `emp2`.
 /// 4. `pool.reserve` the `Wvvvv` buffer ONCE here (Pitfall 20).
-/// 5. iterate `update_amps` → `normt` → `energy`; converged when
+/// 5. iterate `update_amps` → `normt` → `run_diis` → `energy`; converged when
 ///    `|dE| < CONV_TOL && normt < CONV_TOL_NORMT` within `MAX_CYCLE`.
 /// 6. `pool.release` the buffer.
 ///
-/// DIIS is a NO-OP this plan (06-04 wires `AmplitudeSubspace`); the iterate is
-/// `t1,t2 = t1new,t2new` directly.
-pub fn ccsd_kernel<H: crate::hooks::CcsdOverrideHooks>(
+/// **Amplitude-DIIS (CCSD-04 / D-06):** when `diis == true`, the new amplitudes
+/// `(t1new, t2new)` and the amplitude residual `(t1new − t1, t2new − t2)` are
+/// fed to a `Diis::<AmplitudeSubspace>::new(DIIS_SPACE)` ring buffer
+/// (`DIIS_SPACE = 6`, NOT SCF's 8) and extrapolated whenever
+/// `istep >= DIIS_START_CYCLE` (`= 0`, port `ccsd.py:1206`). The extrapolated
+/// vector is unpacked back to `(t1, t2)`. `AmplitudeSubspace::dot` routes
+/// through `oracle_dot` (Pitfall 9). When `diis == false` the iterate is
+/// `t1,t2 = t1new,t2new` directly (the un-accelerated path, for the iter-count
+/// comparison). DIIS changes the path, not the minimum: both converge to the
+/// same `e_corr`.
+pub fn ccsd_kernel_diis<H: crate::hooks::CcsdOverrideHooks>(
     refr: &CcsdReference,
     frozen: &Frozen,
     hooks: &H,
     pool: &WorkspacePool,
+    diis: bool,
 ) -> Result<CcsdResult, PyscfRsError> {
     let nocc = get_nocc(&refr.mo_occ, frozen)?;
 
@@ -146,6 +172,16 @@ pub fn ccsd_kernel<H: crate::hooks::CcsdOverrideHooks>(
     let mut converged = false;
     let mut niter = 0usize;
 
+    // Amplitude-DIIS stack (CCSD-04 / D-06). ONE Diis, second storable —
+    // reuses the entire Phase-3 `pyscf-diis` machinery (NO new DIIS body),
+    // `diis_space = 6` (the verified `ccsd.py:926` constant, NOT SCF's 8).
+    // Only constructed when `diis == true`.
+    let mut diis_stack: Option<Diis<AmplitudeSubspace>> = if diis {
+        Some(Diis::<AmplitudeSubspace>::new(DIIS_SPACE))
+    } else {
+        None
+    };
+
     // (5) Amplitude iteration.
     for istep in 0..MAX_CYCLE {
         niter = istep + 1;
@@ -161,9 +197,27 @@ pub fn ccsd_kernel<H: crate::hooks::CcsdOverrideHooks>(
         // normt = ||vector(new) - vector(old)|| (the flat amplitude packing).
         let normt = amplitude_delta_norm(nocc, nvir, &t1_cur, &t2_cur, &t1new, &t2new);
 
-        // DIIS NO-OP this plan: accept the new amplitudes directly.
-        t1_cur = t1new;
-        t2_cur = t2new;
+        // run_diis (port `ccsd.py:1206`): extrapolate the amplitudes through
+        // the DIIS ring buffer when enabled and `istep >= DIIS_START_CYCLE`.
+        match diis_stack.as_mut() {
+            Some(stack) if istep >= DIIS_START_CYCLE => {
+                // Current iterate = packed (t1new, t2new); error vector =
+                // packed residual (t1new − t1, t2new − t2) — the same flat
+                // amplitudes_to_vector layout (Pitfall 9 path).
+                let current = AmplitudeSubspace::from_amplitudes(&t1new, &t2new, nocc, nvir);
+                let prev = AmplitudeSubspace::from_amplitudes(&t1_cur, &t2_cur, nocc, nvir);
+                let err: Vec<f64> = current.as_flat_residual(&prev);
+                let extrap = stack.extrapolate(current, err).map_err(CcsdError::from)?;
+                let (t1e, t2e) = extrap.to_amplitudes();
+                t1_cur = t1e;
+                t2_cur = t2e;
+            }
+            _ => {
+                // No DIIS (or below start cycle): accept the new amplitudes.
+                t1_cur = t1new;
+                t2_cur = t2new;
+            }
+        }
 
         let eold = eccsd;
         eccsd = default_energy(&amps_t1(&eris, &t1_cur), &amps_t2(&eris, &t2_cur), &eris)?.0;

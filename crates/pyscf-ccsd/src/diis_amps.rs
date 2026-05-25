@@ -139,6 +139,21 @@ impl AmplitudeSubspace {
     pub fn to_amplitudes(&self) -> (Vec<f64>, Vec<f64>) {
         vector_to_amplitudes(&self.packed, self.nocc, self.nvir)
     }
+
+    /// Element-wise residual `self.packed − prev.packed` — the DIIS error
+    /// vector (`tmpvec = amplitudes_to_vector(t1new,t2new) -
+    /// amplitudes_to_vector(t1,t2)`, port `ccsd.py:1206`). Both vectors share
+    /// the identical flat packing, so the difference is taken in the same
+    /// layout the B-matrix `oracle_dot` consumes (Pitfall 9). Panics if the
+    /// two subspaces have mismatched lengths (a kernel bug).
+    pub fn as_flat_residual(&self, prev: &Self) -> Vec<f64> {
+        debug_assert_eq!(self.packed.len(), prev.packed.len());
+        self.packed
+            .iter()
+            .zip(prev.packed.iter())
+            .map(|(n, o)| n - o)
+            .collect()
+    }
 }
 
 impl DiisStorable for AmplitudeSubspace {
