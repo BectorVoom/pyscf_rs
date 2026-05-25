@@ -95,8 +95,8 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **CCSD-02**: `cc.UCCSD(uhf_mf).kernel()` matches upstream (06-04: in-core spin-orbital UCCSD — uccsd_kernel + UccsdAmplitudes{t2aa,t2ab,t2bb} + UccsdReference{alpha,beta}; e_corr=e_aa+e_bb+e_ab; each channel reads its OWN α/β energies; UCCSD(α==β) H2/STO-3G e_corr=-0.0205245 Ha bit-identical to the 06-03 RCCSD headline, RAYON 1==8 bit-identical. The live `cc.UCCSD(uhf_mf)` PyO3 path + genuine UHF α/β reference land in 06-10; the live-PySCF byte-identity is the 06-08 workflow_dispatch arm.)
 - [x] **CCSD-03**: T1 and T2 amplitudes converge to the same minimum as upstream (energy is the convergence target, amplitude paths may differ within tolerance) (06-03: dual-criterion convergence |dE|<1e-7 AND normt<1e-5 within max_cycle=50, verified RAYON 1==8 bit-identical e_corr)
 - [x] **CCSD-04**: Amplitude-DIIS (default `mycc.diis = True`, `mycc.diis_space = 6`) converges within the same iteration count as upstream on the test corpus
-- [ ] **CCSD-05**: `mycc.solve_lambda()` produces λ amplitudes for response densities
-- [ ] **CCSD-06**: `mycc.make_rdm1()`, `mycc.make_rdm2()` match upstream
+- [x] **CCSD-05**: `mycc.solve_lambda()` produces λ amplitudes for response densities (06-06: closed-shell solve_lambda ports the concrete CCSD.solve_lambda → ccsd_lambda.kernel, RESEARCH A6; seeds l1=t1/l2=t2, iterates update_lambda from the rintermediates cc_*/L* blocks to the dual normt criterion; converges on the 06-03 H2/STO-3G amplitudes; host-loop oracle_sum, wvvvv≈nv⁴ arena tenant reserved once, RAYON 1==8. Live-PySCF byte-identity is the 06-08 workflow_dispatch arm; the open-shell ulambda is a documented Phase-7-response deferral.)
+- [x] **CCSD-06**: `mycc.make_rdm1()`, `mycc.make_rdm2()` match upstream (06-06: make_rdm1 (nmo×nmo MO 1-RDM, Tr(γ)==nelec, C·γ·Cᵀ ao_repr) + make_rdm2 (nmo⁴ MO 2-RDM) from t1/t2/l1/l2 via gamma1_intermediates; D-03 make_rdm2(ao_repr=true) SHIPS the nmo⁴→nao⁴ AO back-transform NUMERICALLY via pyscf_ao2mo::general over the heaviest arena tenant — NOT NotYetImplemented; host-loop oracle_sum, RAYON 1==8. Live-PySCF byte-identity is the 06-08 arm; open-shell urdm is a documented Phase-7-response deferral.)
 - [ ] **CCSD-07**: AO-direct CCSD (`mycc.direct = True`) works
 - [ ] **CCSD-08**: DF-CCSD (`mycc = mf.density_fit().CCSD()` or `cc.dfccsd.RCCSD(mf)`) works with bounded memory; spills to HDF5 when `PYSCF_MAX_MEMORY` is exceeded
 - [ ] **CCSD-09**: T1/D1/D2 diagnostics expose `mycc.t1diagnostic()`, `mycc.d1diagnostic()`
@@ -318,8 +318,8 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | CCSD-02 | Phase 6 | In-core landed (06-04); live PyO3/UHF arm 06-08/06-10 |
 | CCSD-03 | Phase 6 | Complete |
 | CCSD-04 | Phase 6 | Complete (06-05) |
-| CCSD-05 | Phase 6 | Pending |
-| CCSD-06 | Phase 6 | Pending |
+| CCSD-05 | Phase 6 | Complete (06-06) |
+| CCSD-06 | Phase 6 | Complete (06-06) |
 | CCSD-07 | Phase 6 | Pending |
 | CCSD-08 | Phase 6 | Pending |
 | CCSD-09 | Phase 6 | Pending |

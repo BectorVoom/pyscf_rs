@@ -288,7 +288,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 06-06-PLAN.md — λ + RDMs incl. ao_repr (D-03): solve_lambda/update_lambda (port ccsd_lambda) + make_rdm1/make_rdm2 + the nmo⁴ AO back-transform (heaviest arena tenant) (CCSD-05/06)
+- [x] 06-06-PLAN.md — λ + RDMs incl. ao_repr (D-03): solve_lambda/update_lambda (port ccsd_lambda) + make_rdm1/make_rdm2 + the nmo⁴ AO back-transform (heaviest arena tenant) (CCSD-05/06) (completed 2026-05-25 — closed-shell solve_lambda (concrete CCSD.solve_lambda → ccsd_lambda.kernel, RESEARCH A6) converges λ on the 06-03 amplitudes; make_rdm1 Tr(γ)==nelec; make_rdm2(ao_repr=true) SHIPS the nmo⁴→nao⁴ AO back-transform numerically via pyscf-ao2mo over the heaviest arena tenant — NOT NotYetImplemented; host-loop oracle_sum, RAYON 1==8; ulambda/urdm documented open-shell deferral)
 - [ ] 06-07-PLAN.md — Diagnostics + frozen-core: t1/d1/d2 diagnostics (Frobenius/eigh) + the CCSD-10 frozen contract reusing the MP2 helpers (CCSD-09/10)
 
 **Wave 6** *(blocked on Wave 5 completion)*
