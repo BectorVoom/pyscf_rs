@@ -36,6 +36,9 @@ fn rhf_reference(atom: &str, basis: &str) -> CcsdReference {
 }
 
 /// Build (refr, eris, t1, t2, l1, l2) for H2/STO-3G once.
+// Wide return tuple is intentional for this single-use test fixture; a named
+// struct would be constructed in exactly one place. (CI runs clippy -D warnings.)
+#[allow(clippy::type_complexity)]
 fn converged_lambda_state() -> (
     CcsdReference,
     pyscf_ccsd::ChemistsEris,

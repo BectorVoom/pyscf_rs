@@ -28,3 +28,8 @@ fall outside the current plan's file set).
   clippy-clean under `-D warnings`. **Action for a future cleanup plan or the
   CI gate:** factor the tuple into a `struct LambdaState { .. }` or a
   `type LambdaState = (..)` alias to satisfy `type_complexity`.
+  **RESOLVED during phase-6 verification (2026-05-25):** the verifier flagged
+  this as the lone CI-blocking gap; the orchestrator added a documented
+  `#[allow(clippy::type_complexity)]` on the single-use test fixture. Confirmed
+  via `cargo clippy -p pyscf-ccsd -p pyscf-oracle -p pyscf-py --all-targets -- -D warnings`
+  (EXIT 0, libxc never compiled).
