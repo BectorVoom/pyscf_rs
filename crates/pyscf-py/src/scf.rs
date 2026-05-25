@@ -332,23 +332,31 @@ impl PyRHF {
             let d = to_density(arr)?;
             cfg.init_guess = InitGuessMode::UserDM(d);
         }
-        // The bridge needs a Py<PyAny> handle pointing at the same Python
-        // object (so call_method1 resolves the MRO including subclass
-        // overrides). `slf.clone()` increments the refcount; `.into_any()`
-        // erases the typed Bound to a generic Py<PyAny>.
-        let bridge_slf: Py<PyAny> = slf.clone().into_any().unbind();
-        let py_mol = {
-            let me = slf.borrow();
-            me.py_mol.clone_ref(py)
+        let class_name: String = slf.get_type().name()?.extract()?;
+        let result = if class_name == "RHF" {
+            // Exact base-class RHF has no Python hook overrides. Drive the
+            // kernel through NoOverrides so CI parity runs do not repeatedly
+            // bounce through upstream-PySCF Mole objects while holding the GIL.
+            scf_kernel(&mol, &NoOverrides, cfg).map_err(pyscf_to_py)?
+        } else {
+            // The bridge needs a Py<PyAny> handle pointing at the same Python
+            // object (so call_method1 resolves the MRO including subclass
+            // overrides). `slf.clone()` increments the refcount; `.into_any()`
+            // erases the typed Bound to a generic Py<PyAny>.
+            let bridge_slf: Py<PyAny> = slf.clone().into_any().unbind();
+            let py_mol = {
+                let me = slf.borrow();
+                me.py_mol.clone_ref(py)
+            };
+            let bridge = PyOverrideBridge::new(bridge_slf, py_mol);
+            // NB: We DO NOT call `py.detach` here. The SCF kernel calls into
+            // Python on every hook (via the bridge), so holding the GIL across
+            // the kernel is mandatory — release+reacquire per hook would
+            // exceed the cost of any GPU benefit. The hook-default methods
+            // INSIDE this pyclass (get_hcore, get_ovlp, ...) DO release the
+            // GIL via py.detach during the Rust compute (D-03 / BIND-05).
+            scf_kernel(&mol, &bridge, cfg).map_err(pyscf_to_py)?
         };
-        let bridge = PyOverrideBridge::new(bridge_slf, py_mol);
-        // NB: We DO NOT call `py.detach` here. The SCF kernel calls into
-        // Python on every hook (via the bridge), so holding the GIL across
-        // the kernel is mandatory — release+reacquire per hook would
-        // exceed the cost of any GPU benefit. The hook-default methods
-        // INSIDE this pyclass (get_hcore, get_ovlp, ...) DO release the
-        // GIL via py.detach during the Rust compute (D-03 / BIND-05).
-        let result = scf_kernel(&mol, &bridge, cfg).map_err(pyscf_to_py)?;
         let e_tot = result.e_tot.0;
 
         // SCF-10 auto-write chkfile on convergence — done BEFORE the state
