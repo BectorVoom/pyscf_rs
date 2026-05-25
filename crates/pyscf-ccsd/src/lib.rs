@@ -41,6 +41,7 @@ pub use ccsd::{
     CONV_TOL, CONV_TOL_NORMT, CcsdResult, DIIS_SPACE, DIIS_START_CYCLE, MAX_CYCLE, ccsd_kernel,
     ccsd_kernel_diis, default_ao2mo, default_energy, init_amps,
 };
+pub use diagnostics::{get_d1_diagnostic, get_d2_diagnostic, get_t1_diagnostic};
 pub use diis_amps::{AmplitudeSubspace, amplitudes_to_vector, packed_len, vector_to_amplitudes};
 pub use eris::ChemistsEris;
 pub use error::CcsdError;
