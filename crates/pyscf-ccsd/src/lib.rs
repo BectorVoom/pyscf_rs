@@ -42,6 +42,7 @@ pub use ccsd::{
     ccsd_kernel_diis, ccsd_kernel_direct, ccsd_kernel_direct_diis, default_ao2mo, default_energy,
     init_amps,
 };
+pub use dfccsd::{DFRCCSD, DFUCCSD, block_sizing, df_ao2mo, dfrccsd_kernel};
 pub use diagnostics::{get_d1_diagnostic, get_d2_diagnostic, get_t1_diagnostic};
 pub use direct::{contract_vvvv_t2_aodirect, contract_vvvv_t2_from_eris};
 pub use diis_amps::{AmplitudeSubspace, amplitudes_to_vector, packed_len, vector_to_amplitudes};
