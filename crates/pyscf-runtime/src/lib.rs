@@ -10,8 +10,11 @@
 //!   * BackendKind enum + Default + from_env_str: COMPLETE (FOUND-03)
 //!   * Per-backend probes: COMPLETE — cpu/cuda/wgpu/hip with OnceLock
 //!     caching and catch_unwind discipline (Pitfall 5 + FOUND-07).
-//!   * WorkspacePool: SKELETON — Phase 6 (CCSD-11) implements the body
-//!     (RESEARCH §4).
+//!   * WorkspacePool: COMPLETE (Phase 6, CCSD-11/D-08) — the tensor-arena
+//!     body: reserve/release free-list reuse behind opaque BufferId handles,
+//!     a TensorBackend enum (InMemory | Spilled-via-HDF5, RAII drop-delete),
+//!     and the HARD PYSCF_MAX_MEMORY pre-flight refusal (D-01, no silent
+//!     downgrade).
 //!   * tracing_init: COMPLETE — library helper, no subscriber install
 //!     (RESEARCH §12).
 //!
@@ -30,4 +33,4 @@ pub mod workspace_pool;
 pub use backend::{BackendKind, DType};
 pub use error::BackendError;
 pub use tracing_init::init_tracing;
-pub use workspace_pool::WorkspacePool;
+pub use workspace_pool::{BufferId, SpillHandle, TensorBackend, WorkspacePool};

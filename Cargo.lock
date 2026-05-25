@@ -119,9 +119,9 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "autocfg"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
+checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "backtrace"
@@ -208,9 +208,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.20.2"
+version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
+checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytemuck"
@@ -340,6 +340,7 @@ dependencies = [
 name = "cintx-core"
 version = "0.1.0"
 dependencies = [
+ "num-traits",
  "smallvec",
  "thiserror 2.0.18",
 ]
@@ -372,11 +373,13 @@ dependencies = [
 name = "cintx-rs"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cintx-compat",
  "cintx-core",
  "cintx-cubecl",
  "cintx-ops",
  "cintx-runtime",
+ "num-complex",
  "thiserror 2.0.18",
 ]
 
@@ -1089,9 +1092,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.19.4"
+version = "0.19.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f071cd6a7b5d51607df76aa2d426aaabc7a74bc6bdb885b8afa63a880572ad9b"
+checksum = "1cea5f10a99e025c1b44ae2354c2d8326b25ddbd0baf76bde8e55cfd4018a2cc"
 dependencies = [
  "libloading 0.9.0",
 ]
@@ -1299,9 +1302,9 @@ checksum = "e1d926b4d407d372f141f93bb444696142c29d32962ccbd3531117cf3aa0bfa9"
 
 [[package]]
 name = "either"
-version = "1.15.0"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "embassy-futures"
@@ -1395,9 +1398,9 @@ dependencies = [
 
 [[package]]
 name = "enumset"
-version = "1.1.12"
+version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f96a4a12fe60ac746ae295a1a4ecb5bb02debc20856506c8635288065f142de"
+checksum = "839c4174b41e75c8f7306110b2c51996a293b8d1d850edd529011841d9fede7d"
 dependencies = [
  "enumset_derive",
  "serde",
@@ -1558,9 +1561,9 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "filetime"
-version = "0.2.28"
+version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d5b2eef6fafbf69f877e55509ce5b11a760690ac9700a2921be067aa6afaef6"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1701,9 +1704,9 @@ checksum = "037711b3d59c33004d3856fbdc83b99d4ff37a24768fa1be9ce3538a1cde4393"
 
 [[package]]
 name = "futures-timer"
-version = "3.0.3"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f288b0a4f20f9a56b5d1da57e2227c661b7b16168e2f72365f57b63326e29b24"
+checksum = "af43fadb8a98512d547e37b4e92e0ced13e205c061b87b4623eff01d918d6968"
 
 [[package]]
 name = "futures-util"
@@ -2056,16 +2059,15 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "hdf5-metno"
-version = "0.10.0"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9666af78aeb20b98175e8c7dbafac3393499d2b789e813d5a875aafac8397af2"
+checksum = "f43f0693fa3ce381110a9f355ba7bd2a2fb864278cc60f3307ac17fe30d6109a"
 dependencies = [
  "bitflags",
  "cfg-if",
  "hdf5-metno-derive",
  "hdf5-metno-sys",
  "hdf5-metno-types",
- "lazy_static",
  "libc",
  "ndarray",
  "paste",
@@ -2073,9 +2075,9 @@ dependencies = [
 
 [[package]]
 name = "hdf5-metno-derive"
-version = "0.9.3"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "205c825c5140aa2791cec795068e8aa8d299862009b7fbd59bd4d876b47842c5"
+checksum = "e5f5b353c797530e868881b12c1c307c0994cd3400195391d7021e6e6db02da6"
 dependencies = [
  "proc-macro-crate",
  "proc-macro-error2",
@@ -2086,18 +2088,18 @@ dependencies = [
 
 [[package]]
 name = "hdf5-metno-src"
-version = "0.9.5"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36b0303729f84fb0f2dc510d28b64cb716fb13e6a139a17e88db329123ecff82"
+checksum = "3e8dfed88a20aca1e594f0e2e2f2c9115e0812ba20bbea1ef7c99e0142dc84b9"
 dependencies = [
  "cmake",
 ]
 
 [[package]]
 name = "hdf5-metno-sys"
-version = "0.10.1"
+version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de20d5ba22c244493bdfefb91d8e9de08e3e58d96a792532da5e0df545aed279"
+checksum = "b546cf84b629a51ea1e68c783b37ce2045c80f3d56e4ba1d2d882cfba0364738"
 dependencies = [
  "hdf5-metno-src",
  "libc",
@@ -2112,9 +2114,9 @@ dependencies = [
 
 [[package]]
 name = "hdf5-metno-types"
-version = "0.10.2"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1698f197367c277fac6c3a35ad12397941b57f7554778d925ceb54c3fe754723"
+checksum = "c994ebf205f9128cb490f01e1e41742842b7171b878caadb1a44abdc6a535a88"
 dependencies = [
  "ascii",
  "cfg-if",
@@ -2453,9 +2455,9 @@ dependencies = [
 
 [[package]]
 name = "js-sys"
-version = "0.3.98"
+version = "0.3.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "67df7112613f8bfd9150013a0314e196f4800d3201ae742489d999db2f979f08"
+checksum = "142bc4740e452c1e57ade0cbc129f139c9093e354346f0872ef985f4f5cf5f11"
 dependencies = [
  "cfg-if",
  "futures-util",
@@ -2552,6 +2554,2808 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e02f3bb43d335493c96bf3fd3a321600bf6bd07ed34bc64118e9293bdffea46c"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_acgga"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_acggap"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_am05"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_bmk"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_ccdf"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_chachiyo"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_cs1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_ft97"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_gapc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_gaploc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_hcth_a"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_lm"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_lyp"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_lypr"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_op_b88"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_op_g96"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_op_pbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_op_pw91"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_op_xalpha"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_optc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_p86"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_p86vwn"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_pbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_pbe_erf_gws"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_pbe_vwn"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_pbeloc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_pw91"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_q2d"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_regtpss"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_revtca"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_scan_e0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_sg4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_sogga11"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_tca"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_w94"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_wi"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_wl"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_zpbeint"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_zvpbeint"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_c_zvpbeloc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_apbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_apbeint"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_dk"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_exp4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_lc94"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_lgap"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_lgap_ge"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_lkt"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_llp"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_meyer"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_mpbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_ol1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_ol2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_pearson"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_pg"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_pw86"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_rational_p"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_tflw"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_thakkar"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_k_vt84f"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_2d_b86"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_2d_b86_mgc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_2d_b88"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_2d_pbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_airy"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ak13"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_am05"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_b86"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_b88"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_bayesian"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_beefvdw"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_bpccac"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_c09x"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_cap"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_chachiyo"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_dk87"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ev93"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_fd_lb94"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ft97"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_g96"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_gg99"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_hcth_a"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_herman"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_hjs"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_hjs_b88_v2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_htbs"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ityh"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ityh_optx"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ityh_pbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_kt"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_lag"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_lb"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_lcgau"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_lg93"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_lspbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_lsrpbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_lv_rpw86"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_mpbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_n12"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ncap"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ol2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_optx"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_pbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_pbe_erf_gws"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_pbea"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_pbeint"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_pbepow"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_pbetrans"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_pw86"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_pw91"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_q1d"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_q2d"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_rge2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_rpbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_s12"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_sfat"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_sfat_pbe"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_sg4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_sogga11"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_ssb_sw"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_vmt"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_vmt84"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_wc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_x_wpbeh"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_xc_b97"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_xc_th1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_xc_th2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-gga_xc_th3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_gga_x_cam_s12"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_gga_xc_case21"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_gga_xc_wb97"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_lda_xc_bn05"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_mgga_x_dldf"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_mgga_x_js18"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_mgga_x_m05"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_mgga_x_pjs18"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_mgga_xc_gas22"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-hyb_mgga_xc_wb97mv"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_1d_csc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_1d_loos"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_2d_amgb"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_2d_prm"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_chachiyo"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_chachiyo_mod"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_gk72"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_gombas"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_hl"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_lp96"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_ml1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_pk09"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_pmgb06"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_pw"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_pw_erf"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_pz"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_rc04"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_rpa"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_vwn"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_vwn_1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_vwn_2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_vwn_3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_vwn_4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_vwn_rpa"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_w20"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_c_wigner"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_k_gds08_worker"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_k_tf"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_k_zlp"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_x"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_x_1d_exponential"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_x_1d_soft"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_x_2d"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_x_erf"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_x_rel"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_x_sloc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_x_yukawa"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_xc_1d_ehwlrg"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_xc_ksdt"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_xc_teter93"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_xc_tih"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-lda_xc_zlp"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-math"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_b88"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_b94"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_bc95"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_cc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_ccalda"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_cs"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcis"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+ "libxc-kernel-mgga_c_kcisk_p0",
+ "libxc-kernel-mgga_c_kcisk_p1",
+ "libxc-kernel-mgga_c_kcisk_p2",
+ "libxc-kernel-mgga_c_kcisk_p3",
+ "libxc-kernel-mgga_c_kcisk_p4",
+ "libxc-kernel-mgga_c_kcisk_p5",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_kcisk_p5"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_ltapw"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_m05"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_m06l"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_m08"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_pkzb"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_r2scan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revscan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revtpss"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+ "libxc-kernel-mgga_c_revtpss_p0",
+ "libxc-kernel-mgga_c_revtpss_p1",
+ "libxc-kernel-mgga_c_revtpss_p2",
+ "libxc-kernel-mgga_c_revtpss_p3",
+ "libxc-kernel-mgga_c_revtpss_p4",
+ "libxc-kernel-mgga_c_revtpss_p5",
+ "libxc-kernel-mgga_c_revtpss_p6",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revtpss_p0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revtpss_p1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revtpss_p2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revtpss_p3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revtpss_p4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revtpss_p5"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_revtpss_p6"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+ "libxc-kernel-mgga_c_rmggac_p0",
+ "libxc-kernel-mgga_c_rmggac_p1",
+ "libxc-kernel-mgga_c_rmggac_p10",
+ "libxc-kernel-mgga_c_rmggac_p11",
+ "libxc-kernel-mgga_c_rmggac_p12",
+ "libxc-kernel-mgga_c_rmggac_p2",
+ "libxc-kernel-mgga_c_rmggac_p3",
+ "libxc-kernel-mgga_c_rmggac_p4",
+ "libxc-kernel-mgga_c_rmggac_p5",
+ "libxc-kernel-mgga_c_rmggac_p6",
+ "libxc-kernel-mgga_c_rmggac_p7",
+ "libxc-kernel-mgga_c_rmggac_p8",
+ "libxc-kernel-mgga_c_rmggac_p9",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p10"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p11"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p12"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p5"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p6"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p7"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p8"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rmggac_p9"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rppscan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rregtm"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_rscan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_scan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+ "libxc-kernel-mgga_c_tpss_p0",
+ "libxc-kernel-mgga_c_tpss_p1",
+ "libxc-kernel-mgga_c_tpss_p2",
+ "libxc-kernel-mgga_c_tpss_p3",
+ "libxc-kernel-mgga_c_tpss_p4",
+ "libxc-kernel-mgga_c_tpss_p5",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpss_p5"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpssloc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+ "libxc-kernel-mgga_c_tpssloc_p0",
+ "libxc-kernel-mgga_c_tpssloc_p1",
+ "libxc-kernel-mgga_c_tpssloc_p2",
+ "libxc-kernel-mgga_c_tpssloc_p3",
+ "libxc-kernel-mgga_c_tpssloc_p4",
+ "libxc-kernel-mgga_c_tpssloc_p5",
+ "libxc-kernel-mgga_c_tpssloc_p6",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpssloc_p0"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpssloc_p1"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpssloc_p2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpssloc_p3"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpssloc_p4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpssloc_p5"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_tpssloc_p6"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_c_vsxc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_k_csk"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_k_csk_loc"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_k_gea2"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_k_gea4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_k_lk"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_k_pc07"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_k_pgslb"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_k_rda"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_2d_js17"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_2d_prhg07"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_2d_prp10"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_br89"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_br89_explicit"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_edmgga"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_ft98"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_gdme"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_gvt4"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_gx"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_jk"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_lta"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_m06l"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_m08"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_m11"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_m11_l"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mbeef"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mbeefvdw"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mbr"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mbrxc_bg"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mbrxh_bg"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mcml"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mggac"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mn12"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_ms"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_msb"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mvs"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_mvsb"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_pbe_gx"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_pkzb"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_r2scan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_r4scan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_regtm"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_regtpss"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_revtm"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_rlda"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_rppscan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_rscan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_rtpss"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_sa_tpss"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_scan"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_task"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_tau_hcth"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_tb09"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_th"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_tm"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_tpss"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_vcml"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_x_vt84"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_xc_b97mv"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_xc_b98"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_xc_cc06"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_xc_lp90"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc-kernel-mgga_xc_zlp"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "libxc-kernel-math",
+]
+
+[[package]]
+name = "libxc_rs"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "bytemuck",
+ "cubecl",
+ "libxc-kernel-gga_c_acgga",
+ "libxc-kernel-gga_c_acggap",
+ "libxc-kernel-gga_c_am05",
+ "libxc-kernel-gga_c_bmk",
+ "libxc-kernel-gga_c_ccdf",
+ "libxc-kernel-gga_c_chachiyo",
+ "libxc-kernel-gga_c_cs1",
+ "libxc-kernel-gga_c_ft97",
+ "libxc-kernel-gga_c_gapc",
+ "libxc-kernel-gga_c_gaploc",
+ "libxc-kernel-gga_c_hcth_a",
+ "libxc-kernel-gga_c_lm",
+ "libxc-kernel-gga_c_lyp",
+ "libxc-kernel-gga_c_lypr",
+ "libxc-kernel-gga_c_op_b88",
+ "libxc-kernel-gga_c_op_g96",
+ "libxc-kernel-gga_c_op_pbe",
+ "libxc-kernel-gga_c_op_pw91",
+ "libxc-kernel-gga_c_op_xalpha",
+ "libxc-kernel-gga_c_optc",
+ "libxc-kernel-gga_c_p86",
+ "libxc-kernel-gga_c_p86vwn",
+ "libxc-kernel-gga_c_pbe",
+ "libxc-kernel-gga_c_pbe_erf_gws",
+ "libxc-kernel-gga_c_pbe_vwn",
+ "libxc-kernel-gga_c_pbeloc",
+ "libxc-kernel-gga_c_pw91",
+ "libxc-kernel-gga_c_q2d",
+ "libxc-kernel-gga_c_regtpss",
+ "libxc-kernel-gga_c_revtca",
+ "libxc-kernel-gga_c_scan_e0",
+ "libxc-kernel-gga_c_sg4",
+ "libxc-kernel-gga_c_sogga11",
+ "libxc-kernel-gga_c_tca",
+ "libxc-kernel-gga_c_w94",
+ "libxc-kernel-gga_c_wi",
+ "libxc-kernel-gga_c_wl",
+ "libxc-kernel-gga_c_zpbeint",
+ "libxc-kernel-gga_c_zvpbeint",
+ "libxc-kernel-gga_c_zvpbeloc",
+ "libxc-kernel-gga_k_apbe",
+ "libxc-kernel-gga_k_apbeint",
+ "libxc-kernel-gga_k_dk",
+ "libxc-kernel-gga_k_exp4",
+ "libxc-kernel-gga_k_lc94",
+ "libxc-kernel-gga_k_lgap",
+ "libxc-kernel-gga_k_lgap_ge",
+ "libxc-kernel-gga_k_lkt",
+ "libxc-kernel-gga_k_llp",
+ "libxc-kernel-gga_k_meyer",
+ "libxc-kernel-gga_k_mpbe",
+ "libxc-kernel-gga_k_ol1",
+ "libxc-kernel-gga_k_ol2",
+ "libxc-kernel-gga_k_pearson",
+ "libxc-kernel-gga_k_pg",
+ "libxc-kernel-gga_k_pw86",
+ "libxc-kernel-gga_k_rational_p",
+ "libxc-kernel-gga_k_tflw",
+ "libxc-kernel-gga_k_thakkar",
+ "libxc-kernel-gga_k_vt84f",
+ "libxc-kernel-gga_x_2d_b86",
+ "libxc-kernel-gga_x_2d_b86_mgc",
+ "libxc-kernel-gga_x_2d_b88",
+ "libxc-kernel-gga_x_2d_pbe",
+ "libxc-kernel-gga_x_airy",
+ "libxc-kernel-gga_x_ak13",
+ "libxc-kernel-gga_x_am05",
+ "libxc-kernel-gga_x_b86",
+ "libxc-kernel-gga_x_b88",
+ "libxc-kernel-gga_x_bayesian",
+ "libxc-kernel-gga_x_beefvdw",
+ "libxc-kernel-gga_x_bpccac",
+ "libxc-kernel-gga_x_c09x",
+ "libxc-kernel-gga_x_cap",
+ "libxc-kernel-gga_x_chachiyo",
+ "libxc-kernel-gga_x_dk87",
+ "libxc-kernel-gga_x_ev93",
+ "libxc-kernel-gga_x_fd_lb94",
+ "libxc-kernel-gga_x_ft97",
+ "libxc-kernel-gga_x_g96",
+ "libxc-kernel-gga_x_gg99",
+ "libxc-kernel-gga_x_hcth_a",
+ "libxc-kernel-gga_x_herman",
+ "libxc-kernel-gga_x_hjs",
+ "libxc-kernel-gga_x_hjs_b88_v2",
+ "libxc-kernel-gga_x_htbs",
+ "libxc-kernel-gga_x_ityh",
+ "libxc-kernel-gga_x_ityh_optx",
+ "libxc-kernel-gga_x_ityh_pbe",
+ "libxc-kernel-gga_x_kt",
+ "libxc-kernel-gga_x_lag",
+ "libxc-kernel-gga_x_lb",
+ "libxc-kernel-gga_x_lcgau",
+ "libxc-kernel-gga_x_lg93",
+ "libxc-kernel-gga_x_lspbe",
+ "libxc-kernel-gga_x_lsrpbe",
+ "libxc-kernel-gga_x_lv_rpw86",
+ "libxc-kernel-gga_x_mpbe",
+ "libxc-kernel-gga_x_n12",
+ "libxc-kernel-gga_x_ncap",
+ "libxc-kernel-gga_x_ol2",
+ "libxc-kernel-gga_x_optx",
+ "libxc-kernel-gga_x_pbe",
+ "libxc-kernel-gga_x_pbe_erf_gws",
+ "libxc-kernel-gga_x_pbea",
+ "libxc-kernel-gga_x_pbeint",
+ "libxc-kernel-gga_x_pbepow",
+ "libxc-kernel-gga_x_pbetrans",
+ "libxc-kernel-gga_x_pw86",
+ "libxc-kernel-gga_x_pw91",
+ "libxc-kernel-gga_x_q1d",
+ "libxc-kernel-gga_x_q2d",
+ "libxc-kernel-gga_x_rge2",
+ "libxc-kernel-gga_x_rpbe",
+ "libxc-kernel-gga_x_s12",
+ "libxc-kernel-gga_x_sfat",
+ "libxc-kernel-gga_x_sfat_pbe",
+ "libxc-kernel-gga_x_sg4",
+ "libxc-kernel-gga_x_sogga11",
+ "libxc-kernel-gga_x_ssb_sw",
+ "libxc-kernel-gga_x_vmt",
+ "libxc-kernel-gga_x_vmt84",
+ "libxc-kernel-gga_x_wc",
+ "libxc-kernel-gga_x_wpbeh",
+ "libxc-kernel-gga_xc_b97",
+ "libxc-kernel-gga_xc_th1",
+ "libxc-kernel-gga_xc_th2",
+ "libxc-kernel-gga_xc_th3",
+ "libxc-kernel-hyb_gga_x_cam_s12",
+ "libxc-kernel-hyb_gga_xc_case21",
+ "libxc-kernel-hyb_gga_xc_wb97",
+ "libxc-kernel-hyb_lda_xc_bn05",
+ "libxc-kernel-hyb_mgga_x_dldf",
+ "libxc-kernel-hyb_mgga_x_js18",
+ "libxc-kernel-hyb_mgga_x_m05",
+ "libxc-kernel-hyb_mgga_x_pjs18",
+ "libxc-kernel-hyb_mgga_xc_gas22",
+ "libxc-kernel-hyb_mgga_xc_wb97mv",
+ "libxc-kernel-lda_c_1d_csc",
+ "libxc-kernel-lda_c_1d_loos",
+ "libxc-kernel-lda_c_2d_amgb",
+ "libxc-kernel-lda_c_2d_prm",
+ "libxc-kernel-lda_c_chachiyo",
+ "libxc-kernel-lda_c_chachiyo_mod",
+ "libxc-kernel-lda_c_gk72",
+ "libxc-kernel-lda_c_gombas",
+ "libxc-kernel-lda_c_hl",
+ "libxc-kernel-lda_c_lp96",
+ "libxc-kernel-lda_c_ml1",
+ "libxc-kernel-lda_c_pk09",
+ "libxc-kernel-lda_c_pmgb06",
+ "libxc-kernel-lda_c_pw",
+ "libxc-kernel-lda_c_pw_erf",
+ "libxc-kernel-lda_c_pz",
+ "libxc-kernel-lda_c_rc04",
+ "libxc-kernel-lda_c_rpa",
+ "libxc-kernel-lda_c_vwn",
+ "libxc-kernel-lda_c_vwn_1",
+ "libxc-kernel-lda_c_vwn_2",
+ "libxc-kernel-lda_c_vwn_3",
+ "libxc-kernel-lda_c_vwn_4",
+ "libxc-kernel-lda_c_vwn_rpa",
+ "libxc-kernel-lda_c_w20",
+ "libxc-kernel-lda_c_wigner",
+ "libxc-kernel-lda_k_gds08_worker",
+ "libxc-kernel-lda_k_tf",
+ "libxc-kernel-lda_k_zlp",
+ "libxc-kernel-lda_x",
+ "libxc-kernel-lda_x_1d_exponential",
+ "libxc-kernel-lda_x_1d_soft",
+ "libxc-kernel-lda_x_2d",
+ "libxc-kernel-lda_x_erf",
+ "libxc-kernel-lda_x_rel",
+ "libxc-kernel-lda_x_sloc",
+ "libxc-kernel-lda_x_yukawa",
+ "libxc-kernel-lda_xc_1d_ehwlrg",
+ "libxc-kernel-lda_xc_ksdt",
+ "libxc-kernel-lda_xc_teter93",
+ "libxc-kernel-lda_xc_tih",
+ "libxc-kernel-lda_xc_zlp",
+ "libxc-kernel-math",
+ "libxc-kernel-mgga_c_b88",
+ "libxc-kernel-mgga_c_b94",
+ "libxc-kernel-mgga_c_bc95",
+ "libxc-kernel-mgga_c_cc",
+ "libxc-kernel-mgga_c_ccalda",
+ "libxc-kernel-mgga_c_cs",
+ "libxc-kernel-mgga_c_kcis",
+ "libxc-kernel-mgga_c_kcisk",
+ "libxc-kernel-mgga_c_kcisk_p0",
+ "libxc-kernel-mgga_c_kcisk_p1",
+ "libxc-kernel-mgga_c_kcisk_p2",
+ "libxc-kernel-mgga_c_kcisk_p3",
+ "libxc-kernel-mgga_c_kcisk_p4",
+ "libxc-kernel-mgga_c_kcisk_p5",
+ "libxc-kernel-mgga_c_ltapw",
+ "libxc-kernel-mgga_c_m05",
+ "libxc-kernel-mgga_c_m06l",
+ "libxc-kernel-mgga_c_m08",
+ "libxc-kernel-mgga_c_pkzb",
+ "libxc-kernel-mgga_c_r2scan",
+ "libxc-kernel-mgga_c_revscan",
+ "libxc-kernel-mgga_c_revtpss",
+ "libxc-kernel-mgga_c_revtpss_p0",
+ "libxc-kernel-mgga_c_revtpss_p1",
+ "libxc-kernel-mgga_c_revtpss_p2",
+ "libxc-kernel-mgga_c_revtpss_p3",
+ "libxc-kernel-mgga_c_revtpss_p4",
+ "libxc-kernel-mgga_c_revtpss_p5",
+ "libxc-kernel-mgga_c_revtpss_p6",
+ "libxc-kernel-mgga_c_rmggac",
+ "libxc-kernel-mgga_c_rmggac_p0",
+ "libxc-kernel-mgga_c_rmggac_p1",
+ "libxc-kernel-mgga_c_rmggac_p10",
+ "libxc-kernel-mgga_c_rmggac_p11",
+ "libxc-kernel-mgga_c_rmggac_p12",
+ "libxc-kernel-mgga_c_rmggac_p2",
+ "libxc-kernel-mgga_c_rmggac_p3",
+ "libxc-kernel-mgga_c_rmggac_p4",
+ "libxc-kernel-mgga_c_rmggac_p5",
+ "libxc-kernel-mgga_c_rmggac_p6",
+ "libxc-kernel-mgga_c_rmggac_p7",
+ "libxc-kernel-mgga_c_rmggac_p8",
+ "libxc-kernel-mgga_c_rmggac_p9",
+ "libxc-kernel-mgga_c_rppscan",
+ "libxc-kernel-mgga_c_rregtm",
+ "libxc-kernel-mgga_c_rscan",
+ "libxc-kernel-mgga_c_scan",
+ "libxc-kernel-mgga_c_tpss",
+ "libxc-kernel-mgga_c_tpss_p0",
+ "libxc-kernel-mgga_c_tpss_p1",
+ "libxc-kernel-mgga_c_tpss_p2",
+ "libxc-kernel-mgga_c_tpss_p3",
+ "libxc-kernel-mgga_c_tpss_p4",
+ "libxc-kernel-mgga_c_tpss_p5",
+ "libxc-kernel-mgga_c_tpssloc",
+ "libxc-kernel-mgga_c_tpssloc_p0",
+ "libxc-kernel-mgga_c_tpssloc_p1",
+ "libxc-kernel-mgga_c_tpssloc_p2",
+ "libxc-kernel-mgga_c_tpssloc_p3",
+ "libxc-kernel-mgga_c_tpssloc_p4",
+ "libxc-kernel-mgga_c_tpssloc_p5",
+ "libxc-kernel-mgga_c_tpssloc_p6",
+ "libxc-kernel-mgga_c_vsxc",
+ "libxc-kernel-mgga_k_csk",
+ "libxc-kernel-mgga_k_csk_loc",
+ "libxc-kernel-mgga_k_gea2",
+ "libxc-kernel-mgga_k_gea4",
+ "libxc-kernel-mgga_k_lk",
+ "libxc-kernel-mgga_k_pc07",
+ "libxc-kernel-mgga_k_pgslb",
+ "libxc-kernel-mgga_k_rda",
+ "libxc-kernel-mgga_x_2d_js17",
+ "libxc-kernel-mgga_x_2d_prhg07",
+ "libxc-kernel-mgga_x_2d_prp10",
+ "libxc-kernel-mgga_x_br89",
+ "libxc-kernel-mgga_x_br89_explicit",
+ "libxc-kernel-mgga_x_edmgga",
+ "libxc-kernel-mgga_x_ft98",
+ "libxc-kernel-mgga_x_gdme",
+ "libxc-kernel-mgga_x_gvt4",
+ "libxc-kernel-mgga_x_gx",
+ "libxc-kernel-mgga_x_jk",
+ "libxc-kernel-mgga_x_lta",
+ "libxc-kernel-mgga_x_m06l",
+ "libxc-kernel-mgga_x_m08",
+ "libxc-kernel-mgga_x_m11",
+ "libxc-kernel-mgga_x_m11_l",
+ "libxc-kernel-mgga_x_mbeef",
+ "libxc-kernel-mgga_x_mbeefvdw",
+ "libxc-kernel-mgga_x_mbr",
+ "libxc-kernel-mgga_x_mbrxc_bg",
+ "libxc-kernel-mgga_x_mbrxh_bg",
+ "libxc-kernel-mgga_x_mcml",
+ "libxc-kernel-mgga_x_mggac",
+ "libxc-kernel-mgga_x_mn12",
+ "libxc-kernel-mgga_x_ms",
+ "libxc-kernel-mgga_x_msb",
+ "libxc-kernel-mgga_x_mvs",
+ "libxc-kernel-mgga_x_mvsb",
+ "libxc-kernel-mgga_x_pbe_gx",
+ "libxc-kernel-mgga_x_pkzb",
+ "libxc-kernel-mgga_x_r2scan",
+ "libxc-kernel-mgga_x_r4scan",
+ "libxc-kernel-mgga_x_regtm",
+ "libxc-kernel-mgga_x_regtpss",
+ "libxc-kernel-mgga_x_revtm",
+ "libxc-kernel-mgga_x_rlda",
+ "libxc-kernel-mgga_x_rppscan",
+ "libxc-kernel-mgga_x_rscan",
+ "libxc-kernel-mgga_x_rtpss",
+ "libxc-kernel-mgga_x_sa_tpss",
+ "libxc-kernel-mgga_x_scan",
+ "libxc-kernel-mgga_x_task",
+ "libxc-kernel-mgga_x_tau_hcth",
+ "libxc-kernel-mgga_x_tb09",
+ "libxc-kernel-mgga_x_th",
+ "libxc-kernel-mgga_x_tm",
+ "libxc-kernel-mgga_x_tpss",
+ "libxc-kernel-mgga_x_vcml",
+ "libxc-kernel-mgga_x_vt84",
+ "libxc-kernel-mgga_xc_b97mv",
+ "libxc-kernel-mgga_xc_b98",
+ "libxc-kernel-mgga_xc_cc06",
+ "libxc-kernel-mgga_xc_lp90",
+ "libxc-kernel-mgga_xc_zlp",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2776,9 +5580,9 @@ checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
 name = "ndarray"
-version = "0.16.1"
+version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "882ed72dce9365842bf196bdeedf5055305f11fc8c03dee7bb0194a6cad34841"
+checksum = "520080814a7a6b4a6e9070823bb24b4531daac8c4627e08ba5de8c5ef2f2752d"
 dependencies = [
  "matrixmultiply",
  "num-complex",
@@ -3396,12 +6200,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "pyscf-ao2mo"
+version = "0.1.0"
+dependencies = [
+ "ndarray",
+ "pyscf-algebra",
+ "pyscf-chkfile",
+ "pyscf-core",
+ "pyscf-gto",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "pyscf-bench"
 version = "0.1.0"
 
 [[package]]
 name = "pyscf-ccsd"
 version = "0.1.0"
+dependencies = [
+ "approx",
+ "pyscf-algebra",
+ "pyscf-ao2mo",
+ "pyscf-chkfile",
+ "pyscf-core",
+ "pyscf-df",
+ "pyscf-diis",
+ "pyscf-gto",
+ "pyscf-mp2",
+ "pyscf-runtime",
+ "pyscf-scf",
+ "thiserror 2.0.18",
+ "tracing",
+]
 
 [[package]]
 name = "pyscf-chkfile"
@@ -3421,8 +6253,10 @@ dependencies = [
 name = "pyscf-core"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cintx-compat",
  "cintx-core",
+ "num-traits",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -3442,6 +6276,25 @@ dependencies = [
 [[package]]
 name = "pyscf-dft"
 version = "0.1.0"
+dependencies = [
+ "libxc_rs",
+ "ndarray",
+ "pyscf-algebra",
+ "pyscf-chkfile",
+ "pyscf-core",
+ "pyscf-df",
+ "pyscf-grids",
+ "pyscf-gto",
+ "pyscf-oracle",
+ "pyscf-runtime",
+ "pyscf-scf",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+ "xcfun-gpu",
+ "xcfun-rs",
+]
 
 [[package]]
 name = "pyscf-diis"
@@ -3459,6 +6312,18 @@ version = "0.1.0"
 [[package]]
 name = "pyscf-grad"
 version = "0.1.0"
+
+[[package]]
+name = "pyscf-grids"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-gto",
+ "pyscf-oracle",
+ "thiserror 2.0.18",
+ "tracing",
+]
 
 [[package]]
 name = "pyscf-gto"
@@ -3503,6 +6368,18 @@ dependencies = [
 [[package]]
 name = "pyscf-mp2"
 version = "0.1.0"
+dependencies = [
+ "approx",
+ "pyscf-algebra",
+ "pyscf-ao2mo",
+ "pyscf-core",
+ "pyscf-df",
+ "pyscf-gto",
+ "pyscf-runtime",
+ "pyscf-scf",
+ "thiserror 2.0.18",
+ "tracing",
+]
 
 [[package]]
 name = "pyscf-oracle"
@@ -3511,6 +6388,8 @@ dependencies = [
  "pyo3",
  "pyscf-chkfile",
  "pyscf-core",
+ "pyscf-dft",
+ "pyscf-grids",
  "pyscf-gto",
  "pyscf-scf",
  "tempfile",
@@ -3524,10 +6403,14 @@ dependencies = [
  "ndarray",
  "numpy",
  "pyo3",
+ "pyscf-ccsd",
  "pyscf-chkfile",
  "pyscf-core",
  "pyscf-df",
+ "pyscf-dft",
+ "pyscf-grids",
  "pyscf-gto",
+ "pyscf-mp2",
  "pyscf-runtime",
  "pyscf-scf",
  "thiserror 2.0.18",
@@ -3551,6 +6434,8 @@ dependencies = [
  "cubecl-cuda",
  "cubecl-hip",
  "cubecl-wgpu",
+ "ndarray",
+ "pyscf-chkfile",
  "pyscf-core",
  "rstest",
  "thiserror 2.0.18",
@@ -4352,9 +7237,9 @@ dependencies = [
 
 [[package]]
 name = "tar"
-version = "0.4.45"
+version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
@@ -4527,7 +7412,7 @@ dependencies = [
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
  "toml_writer",
- "winnow 1.0.2",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -4557,7 +7442,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
- "winnow 1.0.2",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -4566,7 +7451,7 @@ version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2abe9b86193656635d2411dc43050282ca48aa31c2451210f4202550afb7526"
 dependencies = [
- "winnow 1.0.2",
+ "winnow 1.0.3",
 ]
 
 [[package]]
@@ -4592,9 +7477,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.6.10"
+version = "0.6.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68d6fdd9f81c2819c9a8b0e0cd91660e7746a8e6ea2ba7c6b2b057985f6bcb51"
+checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "bitflags",
  "bytes",
@@ -4945,9 +7830,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen"
-version = "0.2.121"
+version = "0.2.122"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49ace1d07c165b0864824eee619580c4689389afa9dc9ed3a4c75040d82e6790"
+checksum = "3ed04576f974d2b2fba0f38c51dbc5518011e38c36bf1143164be765528fd409"
 dependencies = [
  "cfg-if",
  "once_cell",
@@ -4958,9 +7843,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-futures"
-version = "0.4.71"
+version = "0.4.72"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96492d0d3ffba25305a7dc88720d250b1401d7edca02cc3bcd50633b424673b8"
+checksum = "9473dbd2991ae90b6291c3c32c30c6187ac49aa32f9905d1cce280ec1e110b0f"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -4968,9 +7853,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro"
-version = "0.2.121"
+version = "0.2.122"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e68e6f4afd367a562002c05637acb8578ff2dea1943df76afb9e83d177c8578"
+checksum = "916151b09da36bd82f6615cbf3a419e2f0ba23a03c6160e8e92eb6bd4aa1dec6"
 dependencies = [
  "quote",
  "wasm-bindgen-macro-support",
@@ -4978,9 +7863,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-macro-support"
-version = "0.2.121"
+version = "0.2.122"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d95a9ec35c64b2a7cb35d3fead40c4238d0940c86d107136999567a4703259f2"
+checksum = "299047362ccbfce148b67ab7e73349f77748e00c8296f9542adfad2ad82c5c5e"
 dependencies = [
  "bumpalo",
  "proc-macro2",
@@ -4991,9 +7876,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-bindgen-shared"
-version = "0.2.121"
+version = "0.2.122"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4e0100b01e9f0d03189a92b96772a1fb998639d981193d7dbab487302513441"
+checksum = "9a929b2c61f11ba3e9bc35b50c1f25cb38e0e892c0c231ae2b8cf78d5dad4437"
 dependencies = [
  "unicode-ident",
 ]
@@ -5046,9 +7931,9 @@ dependencies = [
 
 [[package]]
 name = "web-sys"
-version = "0.3.98"
+version = "0.3.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b572dff8bcf38bad0fa19729c89bb5748b2b9b1d8be70cf90df697e3a8f32aa"
+checksum = "6d621441cfc37b84979402712047321980c178f299193a3589d05b99e8763436"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
@@ -5390,15 +8275,6 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
-version = "0.48.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "677d2418bec65e3338edb076e806bc1ec15693c5d0104683f2efe857f61056a9"
-dependencies = [
- "windows-targets 0.48.5",
-]
-
-[[package]]
-name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
@@ -5422,21 +8298,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
-]
-
-[[package]]
-name = "windows-targets"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a2fa6e2155d7247be68c096456083145c183cbbbc2764150dda45a87197940c"
-dependencies = [
- "windows_aarch64_gnullvm 0.48.5",
- "windows_aarch64_msvc 0.48.5",
- "windows_i686_gnu 0.48.5",
- "windows_i686_msvc 0.48.5",
- "windows_x86_64_gnu 0.48.5",
- "windows_x86_64_gnullvm 0.48.5",
- "windows_x86_64_msvc 0.48.5",
 ]
 
 [[package]]
@@ -5489,12 +8350,6 @@ checksum = "597a5118570b68bc08d8d59125332c54f1ba9d9adeedeef5b99b02ba2b0698f8"
 
 [[package]]
 name = "windows_aarch64_gnullvm"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b38e32f0abccf9987a4e3079dfb67dcd799fb61361e53e2882c3cbaf0d905d8"
-
-[[package]]
-name = "windows_aarch64_gnullvm"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
@@ -5513,12 +8368,6 @@ checksum = "e08e8864a60f06ef0d0ff4ba04124db8b0fb3be5776a5cd47641e942e58c4d43"
 
 [[package]]
 name = "windows_aarch64_msvc"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc35310971f3b2dbbf3f0690a219f40e2d9afcf64f9ab7cc1be722937c26b4bc"
-
-[[package]]
-name = "windows_aarch64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
@@ -5534,12 +8383,6 @@ name = "windows_i686_gnu"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c61d927d8da41da96a81f029489353e68739737d3beca43145c8afec9a31a84f"
-
-[[package]]
-name = "windows_i686_gnu"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75915e7def60c94dcef72200b9a8e58e5091744960da64ec734a6c6e9b3743e"
 
 [[package]]
 name = "windows_i686_gnu"
@@ -5573,12 +8416,6 @@ checksum = "44d840b6ec649f480a41c8d80f9c65108b92d89345dd94027bfe06ac444d1060"
 
 [[package]]
 name = "windows_i686_msvc"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f55c233f70c4b27f66c523580f78f1004e8b5a8b659e05a4eb49d4166cca406"
-
-[[package]]
-name = "windows_i686_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
@@ -5594,12 +8431,6 @@ name = "windows_x86_64_gnu"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8de912b8b8feb55c064867cf047dda097f92d51efad5b491dfb98f6bbb70cb36"
-
-[[package]]
-name = "windows_x86_64_gnu"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53d40abd2583d23e4718fddf1ebec84dbff8381c07cae67ff7768bbf19c6718e"
 
 [[package]]
 name = "windows_x86_64_gnu"
@@ -5621,12 +8452,6 @@ checksum = "26d41b46a36d453748aedef1486d5c7a85db22e56aff34643984ea85514e94a3"
 
 [[package]]
 name = "windows_x86_64_gnullvm"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b7b52767868a23d5bab768e390dc5f5c55825b6d30b86c844ff2dc7414044cc"
-
-[[package]]
-name = "windows_x86_64_gnullvm"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
@@ -5642,12 +8467,6 @@ name = "windows_x86_64_msvc"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9aec5da331524158c6d1a4ac0ab1541149c0b9505fde06423b02f5ef0106b9f0"
-
-[[package]]
-name = "windows_x86_64_msvc"
-version = "0.48.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed94fce61571a4006852b7389a063ab983c02eb1bb37b47f8272ce92d06d9538"
 
 [[package]]
 name = "windows_x86_64_msvc"
@@ -5669,22 +8488,22 @@ checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 
 [[package]]
 name = "winnow"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ee1708bef14716a11bae175f579062d4554d95be2c6829f518df847b7b3fdd0"
+checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
 dependencies = [
  "memchr",
 ]
 
 [[package]]
 name = "winreg"
-version = "0.52.0"
+version = "0.56.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a277a57398d4bfa075df44f501a17cfdf8542d224f0d36095a2adc7aee4ef0a5"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
 dependencies = [
  "cfg-if",
  "serde",
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5798,6 +8617,68 @@ dependencies = [
 ]
 
 [[package]]
+name = "xcfun-ad"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "cubecl-cpu",
+]
+
+[[package]]
+name = "xcfun-core"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "xcfun-eval"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "cubecl-cpu",
+ "thiserror 2.0.18",
+ "xcfun-ad",
+ "xcfun-core",
+ "xcfun-kernels",
+]
+
+[[package]]
+name = "xcfun-gpu"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "cubecl-cpu",
+ "thiserror 2.0.18",
+ "xcfun-ad",
+ "xcfun-core",
+ "xcfun-eval",
+ "xcfun-kernels",
+]
+
+[[package]]
+name = "xcfun-kernels"
+version = "0.1.0"
+dependencies = [
+ "cubecl",
+ "thiserror 2.0.18",
+ "xcfun-ad",
+ "xcfun-core",
+]
+
+[[package]]
+name = "xcfun-rs"
+version = "0.1.0"
+dependencies = [
+ "cubecl-cpu",
+ "thiserror 2.0.18",
+ "xcfun-core",
+ "xcfun-eval",
+ "xcfun-gpu",
+]
+
+[[package]]
 name = "xml-rs"
 version = "0.8.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5866,9 +8747,9 @@ dependencies = [
 
 [[package]]
 name = "zerofrom"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69faa1f2a1ea75661980b013019ed6687ed0e83d069bc1114e2cc74c6c04c4df"
+checksum = "0ec05a11813ea801ff6d75110ad09cd0824ddba17dfe17128ea0d5f68e6c5272"
 dependencies = [
  "zerofrom-derive",
 ]
@@ -5932,8 +8813,4 @@ checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[patch.unused]]
 name = "cintx"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "xcfun-rs"
 version = "0.1.0"

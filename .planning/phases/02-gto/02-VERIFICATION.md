@@ -1,269 +1,262 @@
 ---
 phase: 02-gto
-verified: 2026-05-11T00:00:00Z
-status: passed
-score: 11/11 must-haves verified (GTO-05 evaluation half is deferred-tracked, not failed)
+verified: 2026-05-24T10:00:00Z
+status: human_needed
+score: 11/11 must-haves verified
 overrides_applied: 0
 re_verification:
-  previous_status: none
-  previous_score: n/a
-  gaps_closed: []
+  previous_status: human_needed
+  previous_score: 11/11
+  gaps_closed:
+    - "GTO-02/GTO-03 general-contraction parsing: NWChem .dat parser now emits N contractions for N coefficient columns (plan 02-11 — e9fa626)"
+    - "projection.rs coefficient layout mismatch: row-major flatten now matches cintx 1e/2e kernel contract (e9fa626)"
+    - "minao heavy-atom caveat: H2O Tr(dm·S) 7.9 → 9.86 after parser fix (b6a9898)"
+    - "DI-02-11-CINTX-NCTR, DI-02-11-CINTX-NCTR-HIGHL, DI-02-11-ECP-NCTR all RESOLVED in cintx (commit 9af2164, sibling repo)"
   gaps_remaining: []
   regressions: []
 deferred:
-  - truth: "mol.intor('int1e_ecp') matches upstream byte-equal (evaluation half of GTO-05)"
-    addressed_in: "Plan 02-10-PLAN.md (status: PENDING_CINTX_ECP_MERGE)"
-    evidence: "Plan 02-10 is a placeholder gap-closure plan gated on cintx merging Type-1 + Type-2 ECP projectors. Phase 2 D-06 (parallel sequencing) explicitly designs for this split: loading ships in Phase 2 plan 02-07, evaluation closes in 02-10 when cintx ECP lands. Documented in 02-CONTEXT.md D-06, 02-VALIDATION.md GTO-05 row, 02-VALIDATION.md Manual-Only Verifications table, and 02-10-PLAN.md frontmatter status field."
-  - truth: "eval_gto for l ≥ 1 shells (p, d, f, …) and the four derivative variants (deriv1/deriv2/ip/ig)"
-    addressed_in: "Phase 4 DFT (l ≥ 1 evaluation) + Phase 7 grad (ip/ig)"
-    evidence: "02-VALIDATION.md GTO-07 row: 'l=0 ✅ green; l ≥ 1 ⬜ pending Phase 4 DFT extension'. deriv1/deriv2 NotYetImplemented{phase:4}; ip/ig NotYetImplemented{phase:7} — see crates/pyscf-gto/src/eval_gto.rs:120-138. Tests cover the NotYetImplemented error path."
+  - truth: "eval_gto for l >= 1 shells (p, d, f, ...) and derivative variants (deriv1/deriv2/ip/ig)"
+    addressed_in: "Phase 4 DFT (l >= 1 evaluation) + Phase 7 grad (ip/ig)"
+    evidence: "02-VALIDATION.md GTO-07 row: l=0 green; l >= 1 pending Phase 4 DFT extension. deriv1/deriv2 NotYetImplemented{phase:4}; ip/ig NotYetImplemented{phase:7} in crates/pyscf-gto/src/eval_gto.rs:120-138."
   - truth: "Atom-input form 5 (Python callable)"
     addressed_in: "Phase 3 BIND-02"
-    evidence: "format_atom returns NotYetImplemented{phase:3} for AtomInput::Callable (crates/pyscf-gto/src/format_atom.rs:57). Test callable_form_returns_not_yet_implemented_phase_3 asserts the error variant. Documented in 02-VALIDATION.md Manual-Only Verifications."
-  - truth: "Full ≥184-file builtin basis sweep (GTO-03 saturation coverage)"
+    evidence: "format_atom.rs returns NotYetImplemented{phase:3} for AtomInput::Callable. Test callable_form_returns_not_yet_implemented_phase_3 asserts the error variant."
+  - truth: "Full >=184-file builtin basis sweep (GTO-03 saturation coverage)"
     addressed_in: "Phase 8 ORACLE-06"
-    evidence: "Representative 10-cargo-side + 5-oracle-side subset is green (test_basis_loads_and_matches_upstream_for_h + representative_bases_build_h_mol). Full sweep behind #[ignore] in tests/builtin_basis_sweep.rs::full_alias_sweep_proves_loader_path_robust and tests/alias_resolution.rs. Phase 8 ORACLE-06 removes the #[ignore]."
-  - truth: "Arity ≥3 intor families (int2e, int3c2e, int4c1e, …)"
-    addressed_in: "Plan 02-09 marks these xfail; 02-VALIDATION.md tracks them for Phase 3+ when cintx-rs ships the safe-API surface"
-    evidence: "intor.rs:181 returns NotYetImplemented{phase:2}; oracle test_intor_arity_ge3_deferred is xfail-marked. Phase 2 success criterion #3 calls for int2e via cintx — int2e_sph is arity-2 in cintx's resolver and IS dispatched today; arity-3/4 forms (e.g. int3c2e_ip1_sph) are deferred per 02-VALIDATION.md."
+    evidence: "Representative subset green; full sweep behind #[ignore] in tests/builtin_basis_sweep.rs::full_alias_sweep_proves_loader_path_robust."
+  - truth: "Arity >=3 intor families (int2e_sph 4-center, int3c2e, int4c1e, ...)"
+    addressed_in: "Phase 3+ (cintx safe-API arity >= 3 surface)"
+    evidence: "intor.rs xfail-tracked for arity > 2. Plans 05-08/05-09 closed the int2e/int3c2e gap; GTO-06 arity-2 is SATISFIED."
+  - truth: "cintx nuclear attraction for li+lj > 3 (DI-02-11-CINTX-NUC-HIGHL)"
+    addressed_in: "Future cintx work (rys_root3+ implementation)"
+    evidence: "deferred-items.md DI-02-11-CINTX-NUC-HIGHL: affects non-DF SCF on d/f orbital bases only; does not affect minao/overlap or any current pyscf-rs numeric path."
+human_verification:
+  - test: "Upstream byte-identity for mol.intor('int1e_ecp') on Cu/LANL2DZ"
+    expected: "pyscf-rs int1e_ecp matrix agrees with upstream PySCF to atol=1e-10 on Cu/LANL2DZ"
+    why_human: "tests/oracle/test_ecp_int1e.py requires numpy + upstream pyscf venv (tests/oracle/requirements.txt). Oracle venv unavailable in default sandbox. cintx pins atol=1e-12 vs vendored PySCF nr_ecp in cintx-oracle/tests/safe_api_ecp_parity.rs (indirect byte-identity). To run: install requirements.txt, then pytest tests/oracle/test_ecp_int1e.py::test_cu_lanl2dz_int1e_ecp_byte_equal -v"
+  - test: "Upstream byte-identity for _atm/_bas/_env/ao_loc_nr/nao_nr on H2O/cc-pVDZ, benzene/6-31G*, water-trimer/STO-3G"
+    expected: "tests/oracle/test_byte_identity.py exits 0 — 15 byte-equal assertions (3 fixtures x 5 arrays)"
+    why_human: "Requires upstream pyscf venv. Exists as tests/oracle/test_byte_identity.py."
+  - test: "mol.intor() arity-2 parity vs upstream (7 names) + Pitfall 8 F-order layout check"
+    expected: "tests/oracle/test_intor_oracle.py exits 0 — 7 arity-2 names green at atol=1e-10"
+    why_human: "Requires upstream pyscf venv. Exists as tests/oracle/test_intor_oracle.py."
 ---
 
-# Phase 02 (GTO): Verification Report
+# Phase 02 (GTO): Verification Report — Re-verification (plan 02-11 gap closure)
 
-**Phase Goal:** A user can construct a molecule with any of upstream PySCF's atom-input or basis-input forms and run any 1e/2e integral upstream supports for in-scope methods, with byte-for-byte agreement on the internal `_atm`/`_bas`/`_env` arrays.
+**Phase Goal:** Gaussian-type-orbital infrastructure — Mole construction, basis-set loading (including general contractions), the Mole-cintx bridge, mol.intor() dispatch, eval_gto, ECP loading and evaluation, JSON round-trip.
 
-**Verified:** 2026-05-11
-**Status:** passed (with cleanly-tracked deferred items, all under explicit roadmap waivers)
-**Re-verification:** No — initial verification.
-
----
-
-## 1. Executive Summary
-
-Phase 2 ships all 11 GTO-* requirements with the **only** open item being the evaluation half of GTO-05 (`mol.intor('int1e_ecp')` byte-identity), which is **intentionally deferred** to plan `02-10` per the parallel-sequencing design choice D-06 documented in `02-CONTEXT.md`. The deferred half has a tracked gap-closure plan with `status: PENDING_CINTX_ECP_MERGE` waiting for the upstream cintx workstream to merge Type-1 + Type-2 ECP projectors.
-
-Code on disk: 13 src files + 21 test files in `crates/pyscf-gto` (4 588 LoC across them), 5 oracle pytest files in `tests/oracle/` covering byte-identity / intor / eval_gto / json-interop / builtin-basis-sweep. `Mole` exposes 30 public fields + 7 attribute-floor methods. All claimed must-have artifacts exist on disk, are substantive (no stubs masquerading as implementations), and are wired through `pyscf_gto::M(...)` → `build_from` → `format_atom` / `format_basis` / `make_env` / `format_ecp` / `intor` / `eval_gto`.
-
-`cargo test -p pyscf-gto --no-default-features` builds cleanly (39.88s) and the targeted unit tests run green: 9/9 mole_construction, 9/9 basis_input_forms, 6/6 cintx_zerocopy, 1/1 attribute_floor, 6/6 ecp_load, 5/5 ecp_engine_stub, 11/11 intor_smoke (1 ignored — see below), 3/3 dumps_loads, 5/5 set_geom, 2/2 mole_copy, 1/1 builtin_basis_sweep representative subset (1 ignored — full sweep deferred to Phase 8 ORACLE-06).
+**Verified:** 2026-05-24
+**Status:** human_needed (all automated checks PASS; 3 oracle pytest items need upstream pyscf venv; unchanged from prior re-verification)
+**Re-verification:** Yes — after plan 02-11 (general-contraction parser fix + cintx coefficient-layout fix + minao heavy-atom caveat closure)
 
 ---
 
-## 2. Observable Truths (ROADMAP Success Criteria)
+## Executive Summary
 
-| # | Truth (verbatim from ROADMAP.md §Phase 2) | Status | Evidence |
+Plan 02-11 closed the final open correctness gap in Phase 2: general-contraction support in the NWChem `.dat` parser. The root cause was a single-column truncation bug (`CurrentShell::Single` pushed only `cols[1]` and discarded `cols[2..N]`). The fix emits N contractions for an `exp + N`-column primitive block. A companion bug was also fixed: `projection.rs` was flattening the cintx `Shell` coefficients column-major while the cintx 1e/2e kernel reads them row-major (`coefficients[prim*nctr+ctr]`); for nctr=1 the layouts coincide (masked by the truncating parser), but for nctr>1 the scrambling produced wrong, asymmetric overlaps.
+
+Downstream closure: three cintx-side issues exposed once bases load their real contraction counts (DI-02-11-CINTX-NCTR, DI-02-11-CINTX-NCTR-HIGHL, DI-02-11-ECP-NCTR) were all resolved in cintx (commit 9af2164, branch fix/general-contraction-nctr-1e) via the path-dep. All three deferred-item entries now read RESOLVED.
+
+The minao heavy-atom caveat from plan 03-13 is closed: H2O `Tr(dm·S)` recovered from the truncated 7.9 to the correct 9.86. The plan's stated target of `Tr(dm·S) == nelec` is documented as a plan-premise error (not a code gap) — upstream minao is intentionally unnormalised (the normalization line is commented out), which is why the byte-matched H2 docstring dm itself traces to 1.976, not 2.0. The test correctly pins 9.86 (tight bound) plus `> 9.5`.
+
+Gate result (from 02-11 SUMMARY Addendum): cintx 173 lib tests + pyscf-rs gto+scf+df+mp2 = 280 tests (0 failures) + pyscf-dft 47 lib tests. clippy -D warnings + fmt + check-no-fma + check-dependency-wall PASS; 0 libxc.
+
+Pre-existing unrelated failure: pyscf-dft `cam_b3lyp_h2o_rsh::rsh_get_veff_dispatches_into_range_coulomb_branch` — a Phase 04 RSH stale test that expects the int2e gap which Phase 05 (05-08) closed; it now returns Ok and panics on the unwrap. This is orthogonal to Phase 2's 1e/ECP work (`two_electron.rs` was untouched by 02-11) and is NOT attributed to Phase 2.
+
+---
+
+## 1. Re-verification: Gaps from Previous Verification
+
+| Previous State | Plan 02-11 Fix | Status |
+|---------------|----------------|--------|
+| GTO-02/GTO-03 general-contraction bug: ANO O S-block loaded nctr=1 (7 of 8 columns dropped) | `nwchem.rs` `CurrentShell::Single` now accumulates all `cols[1..]` columns; ragged blocks rejected with a Parse error; SharedSP path untouched | CLOSED (commit e9fa626) |
+| projection.rs column-major flatten scrambled nctr>1 coefficient blocks | Row-major flatten `coeffs_flat[prim*nctr+ctr]` to match cintx kernel contract | CLOSED (commit e9fa626) |
+| minao H2O `Tr(dm·S)` ≈ 7.9 (truncated ANO O → only 1 s-contraction for O) | Correct ANO O loads nctr=8 S-contractions → H2O Tr 9.86 | CLOSED (commit b6a9898) |
+| DI-02-11-CINTX-NCTR: cintx 1e kernel summed all (ci,cj) pairs into slot (0,0) | cintx 6b14d48 rewrites kernel to accumulate one Cart block per (ci,cj) pair | CLOSED (cintx commit 6b14d48 via path-dep) |
+| DI-02-11-CINTX-NCTR-HIGHL: cross-l blocks transposed for li≠lj, both>0 | cintx 9af2164 changes contraction functions to emit column-major `out[ket*nci+bra]` | CLOSED (cintx commit 9af2164 via path-dep) |
+| DI-02-11-ECP-NCTR: `launch_ecp` OOB panic + column-major read for ECP nctr>1 | cintx 9af2164 nctr-aware sizing + per-contraction cart→sph scatter + `coeffs_col_major()` | CLOSED (cintx commit 9af2164 via path-dep) |
+
+Regression check: no previously-passing tests regressed. Segmented bases (sto-3g, 6-31g, 6-31g*, cc-pvdz H) are byte-identical (nctr=1 row-major and column-major layouts coincide). Confirmed by `general_contraction.rs` regression pins (tests `sto3g_segmented_unchanged`, `six_31g_segmented_unchanged`, `six_31gs_segmented_unchanged`).
+
+---
+
+## 2. Plan 02-11 Must-Have Check
+
+| # | Must-Have (from 02-11-PLAN.md frontmatter) | Status | Evidence |
 |---|--------------------------------------------|--------|----------|
-| 1 | `pyscf.M(atom='O 0 0 0; H 0 1 0; H 1 0 0', basis='cc-pvdz')` and the four other atom-input forms produce a Mole whose `_atm`, `_bas`, `_env`, `ao_loc_nr`, `nao_nr` arrays match upstream PySCF byte-for-byte on the test corpus (GTO-01, GTO-04). | VERIFIED | 4 of 5 atom-input forms ship: String, Tuples, TupleVec, FilePath (crates/pyscf-gto/src/format_atom.rs and types.rs:14-29). Form 5 (Callable) returns `NotYetImplemented{phase:3}` per Phase 3 PyO3 — explicitly deferred in 02-VALIDATION.md row GTO-01. Byte-identity assertion lives in tests/oracle/test_byte_identity.py::test_atm_bas_env_byte_for_byte (3 PR-CI fixtures × `_atm`, `_bas`, `_env`) + test_ao_loc_nr_byte_for_byte. Cargo-side dumper `dump_arrays_for_oracle.rs` shipped. |
-| 2 | All 207 built-in basis-set files in `pyscf/gto/basis/` resolve correctly via `mol.basis = '<name>'`; `gto.parse(...)` accepts user-supplied Gaussian-94 and NWChem text; ECP via `mol.ecp = ...` loads and `mol.intor('int1e_ecp')` matches upstream bit-exact under `release-oracle` (GTO-02, GTO-03, GTO-05). | VERIFIED (with the eval-`int1e_ecp` half of GTO-05 explicitly deferred-tracked to plan 02-10 — NOT a gap) | All 5 BasisInput arms dispatch (format_basis.rs lines 66, 67, 92, 93, 95): Name (ALIAS), PerElement, NwchemText, Cp2kText, Parsed. ALIAS table is hand-ported. Representative 10-basis sweep passes (test_basis_loads_and_matches_upstream_for_h in tests/oracle/test_builtin_basis_sweep.py + crates/pyscf-gto/tests/builtin_basis_sweep.rs::representative_bases_build_h_mol). Full ≥184 sweep behind #[ignore] for Phase 8. ECP loading ships per plan 02-07: format_ecp + make_ecp_env + EcpEngineNotAvailable stub + EcpEngine trait. ECP evaluation (mol.intor('int1e_ecp')) deferred to plan 02-10 (cintx ECP merge gate). |
-| 3 | `mol.intor('int2e')`, `mol.intor('int1e_ovlp_sph')`, and the integral families upstream PySCF supports for SCF/DFT/MP2/CCSD/grad all dispatch to `cintx` and produce arrays that match upstream within the cintx oracle tolerance; F-order layout is preserved on output where upstream returns F-order (Pitfall 8). | VERIFIED | crates/pyscf-gto/src/intor.rs dispatches via cintx_rs::SessionRequest. Arity-2 intors (7 names) green in tests/oracle/test_intor_oracle.py::test_intor_h2o_ccpvdz. Pitfall 8 F-order preservation tested via test_int1e_ipovlp_sph_layout (ComponentLeadingFOrder layout-table entry). Arity ≥3 intors return NotYetImplemented{phase:2} pending cintx safe-API surface (test_intor_arity_ge3_deferred is xfail per VALIDATION.md). int2e_sph is arity-2 in cintx and IS dispatched today. |
-| 4 | `eval_gto(mol, name, coords, ...)` for `GTOval`, `GTOval_sph`, `GTOval_deriv1`, `GTOval_deriv2`, `GTOval_ip`, `GTOval_ig` matches upstream values element-wise on a 1000-point grid (GTO-07). | VERIFIED (l=0) + DEFERRED (l ≥ 1 to Phase 4, deriv/ip/ig to Phase 4/7) | All 6 variants registered in crates/pyscf-gto/src/eval_gto.rs (lines 122-138). GTOval / GTOval_sph green for s-shells: tests/oracle/test_eval_gto.py::test_eval_gto_h_sto3g_s_shell_only. l ≥ 1 covered by xfail test_eval_gto_h2o_ccpvdz_includes_p_shells per VALIDATION.md GTO-07 row deferred to Phase 4. Derivative variants explicitly return NotYetImplemented{phase:4|7} — exercised by deriv1/deriv2/ip/ig tests in eval_gto_smoke.rs. |
-| 5 | `Mole` exposes the ≥30 attribute floor (`atom`, `basis`, `charge`, `spin`, `nelectron`, `natm`, `nbas`, `nao_nr`, `nao_2c`, `ao_loc_nr`, `ao_labels`, `cart`, `verbose`, `max_memory`, `unit`, `output`, `_atm`, `_bas`, `_env`, …); `mol.dumps()`/`gto.Mole.loads()` JSON round-trip; `mol.copy()` deep-copies; `mol.set_geom_(new_atom)` mutates in place and returns self (GTO-08, GTO-09, GTO-10). | VERIFIED | 30 public fields on `pyscf_core::Mole` (counted via `awk` on the struct body) + 7 attribute-floor methods (atom_charges, atom_coords, atom_coord, mass_list, enuc, basis_set, cintx_basis) = 37 total attributes. Reflexive test: tests/attribute_floor.rs::h2o_attribute_floor_present_and_defaults_sane. dumps/loads round-trip: crates/pyscf-gto/src/dumps_loads.rs + tests/dumps_loads.rs (3 tests pass) + oracle cross-language test_pyscfrs_dumps_to_pyscf_loads_roundtrip. mol.copy()=`#[derive(Clone)]` on Mole — tests/mole_copy.rs (2 tests including Arc-identity check). mol.set_geom_ in crates/pyscf-gto/src/set_geom.rs — tests/set_geom.rs (5 tests). |
+| 1 | NWChem `.dat` parser supports general contractions: a primitive block with `exp + N` columns loads as N separate contractions sharing exponents | VERIFIED | `nwchem.rs` lines 183-204: `n_ctr = cols.len() - 1`; `coeffs.resize(n_ctr, Vec::new())`; per-column push in loop; ragged rejection at line 189-200. Commit e9fa626. |
+| 2 | ROOT CAUSE confirmed: `CurrentShell::Single` was pushing only `cols[1]` — diagnosed and fixed | VERIFIED | The prior bug (`exps.push(cols[0]); coeffs.push(cols[1])`) is replaced by the multi-column accumulator. The fix is substantive, not a stub. Commit e9fa626 diff shows 46-line change to nwchem.rs. |
+| 3 | ANO O S-block loads nctr=8; ANO H gains real contractions; segmented bases (sto-3g/6-31g/6-31g*/cc-pvdz) UNCHANGED | VERIFIED | `general_contraction.rs` test `ano_o_s_block_has_eight_contractions`: asserts `s_shell.coeffs.len() == 8`. Test `ano_h_gains_its_real_contractions`: asserts `[6s,4p,3d,1f]` contraction pattern. Segmented regression tests `sto3g_segmented_unchanged`, `six_31g_segmented_unchanged`, `six_31gs_segmented_unchanged` pin nctr=1 for all shells. cc-pVDZ O latent bug (nctr=2 S-block) also captured in `ccpvdz_o_general_contraction_nctr2_pinned`. |
+| 4 | minao for heavier atoms normalizes: H2O `Tr(dm·S)` recovers from ≈7.9; minao H2 byte-match still holds. DEVIATION: plan said `== nelec`; correct anchor is ≈9.86 (intentional unnormalization) | VERIFIED WITH JUSTIFIED DEVIATION — see note below | `init_guess_minao.rs` `minao_h2o_heavy_atom_normalizes_after_general_contraction_fix`: asserts `tr > 9.5` + `(tr - 9.86).abs() < 0.05`. H2 byte-match retained in `minao_h2_byte_matches_upstream_docstring`. The 9.86 value is the correct post-fix heavy-atom projection; `== nelec` would be physically wrong. |
+| 5 | cintx evaluates generally-contracted (nctr>1) shells: int1e_ovlp on ANO mol is finite/symmetric/PSD-diagonal | VERIFIED | `general_contraction.rs` tests `ccpvdz_general_contraction_overlap_unit_diagonal` (exact unit diagonal, symmetry to 1e-12 for all 14 AOs) and `ano_general_contraction_overlap_finite_unit_diagonal` (unit diagonal across all l; l≤2 sub-block symmetric to 1e-9 for 49 AOs). Both tests read real cintx output — not stubs. |
+| 6 | No new crate dep; libxc NEVER compiled; reductions stay oracle_sum/oracle_dot | VERIFIED | 02-11 SUMMARY key-decisions: `tech-stack: added: []`. Gate confirms 0 libxc in the full test run. |
 
-**Score: 5/5 ROADMAP Success Criteria verified (with explicit roadmap-documented deferrals captured in the deferred frontmatter and the per-row notes above).**
+**Deviation note — must-have #4 (`Tr(dm·S) == nelec`):** The plan's stated target was based on the incorrect premise that the ANO truncation was the only source of the 7.9 deficit. When the fix lands and minao runs correctly, upstream behavior reveals that `init_guess_by_minao` is intentionally unnormalised — the line `dm *= nelec/(dm·s).sum()` is commented out in `pyscf/scf/hf.py`. The byte-matched H2 docstring density itself traces to 1.976/2.0, confirming this is upstream behavior, not a pyscf-rs gap. The test anchors on the now-correct heavy-atom projection (9.86) which decisively exceeds the old truncated value (7.9) and is tight enough to catch regressions. This is a plan-premise correction, not a gap.
 
 ---
 
-## 3. Per-Requirement Mapping (GTO-01..11)
+## 3. Observable Truths (ROADMAP Success Criteria)
+
+| # | Truth | Status | Evidence |
+|---|-------|--------|----------|
+| 1 | `pyscf.M(...)` and 4 of 5 atom-input forms produce a Mole whose `_atm`, `_bas`, `_env`, `ao_loc_nr`, `nao_nr` match upstream byte-for-byte (GTO-01, GTO-04) | VERIFIED (automated) + HUMAN (oracle pytest) | mole_construction.rs 9 passed. byte_identity oracle: tests/oracle/test_byte_identity.py (3 fixtures x 5 arrays). Form 5 (Callable) NotYetImplemented{phase:3} — deferred per ROADMAP. |
+| 2 | All built-in basis files resolve; ECP loads and `int1e_ecp` matches upstream under release-oracle; general contractions load correctly (GTO-02, GTO-03, GTO-05) | VERIFIED (automated) + HUMAN (oracle pytest) | general_contraction.rs 9/9 pass (ANO O nctr=8, segmented regression, cc-pVDZ overlap exact, ANO overlap unit-diagonal). ecp_int1e_oracle.rs 2/2 pass. |
+| 3 | `mol.intor(name)` dispatches all in-scope integrals to cintx with correct F-order layout (GTO-06) | VERIFIED (arity-2 automated) + HUMAN (oracle pytest) | intor_smoke.rs 8 passed. test_intor_oracle.py (oracle venv). layout_table.rs 23 entries. |
+| 4 | `eval_gto` for GTOval, GTOval_sph works for l=0 (GTO-07 partial) | VERIFIED (l=0) + DEFERRED (l>=1 Phase 4) | eval_gto_smoke.rs 8 passed. l>=1 xfail-tracked. Phase 4 plan 04-03 closed l>=1. |
+| 5 | >=30 attribute floor; dumps/loads round-trip; copy/set_geom_ (GTO-08, GTO-09, GTO-10) | VERIFIED | attribute_floor.rs, dumps_loads.rs, mole_copy.rs, set_geom.rs — all passed. |
+
+**Score: 5/5 ROADMAP Success Criteria verified (automated checks pass; 3 oracle pytest items require upstream pyscf venv).**
+
+---
+
+## 4. Per-Requirement Mapping (GTO-01..11)
 
 | REQ-ID | Description | Status | Evidence |
 |--------|-------------|--------|----------|
-| GTO-01 | `pyscf.M(...)` + `gto.Mole` accept all 5 atom-input forms | VERIFIED (4 forms shipped; form 5 Callable returns NotYetImplemented{phase:3} per Phase 3 BIND-02 — documented deferral, NOT a gap) | crates/pyscf-gto/src/format_atom.rs handles String/Tuples/TupleVec/FilePath; AtomInput::Callable returns `NotYetImplemented{phase:3}` (format_atom.rs:57). Tests: mole_construction.rs (9 tests covering all 4 shipped forms + the Callable error path). Plan 02-02 SUMMARY. |
-| GTO-02 | `mol.basis = ...` accepts all 11 input forms | VERIFIED | format_basis.rs dispatches Name (ALIAS), PerElement, NwchemText, Cp2kText, Parsed (5 categorical arms collapse the 11 upstream syntactic forms per RESEARCH §"Architecture Patterns" §2). Tests: basis_input_forms.rs (9 tests). Plan 02-03 SUMMARY. |
-| GTO-03 | All 207 (verified count: 184 unique `.dat` files) built-in basis files resolve | VERIFIED | crates/pyscf-gto/src/basis/path.rs PYSCF_BASIS_PATH resolver + alias.rs hand-ported ALIAS table (395 entries). Representative 10-basis sweep green: tests/builtin_basis_sweep.rs::representative_bases_build_h_mol + tests/oracle/test_builtin_basis_sweep.py (5 oracle smokes). Full ≥184 sweep behind #[ignore = "Phase 8 ORACLE-06"] in alias_resolution.rs:103 and builtin_basis_sweep.rs:89 — DEFERRED to Phase 8 ORACLE-06, NOT a gap. |
-| GTO-04 | `_atm`/`_bas`/`_env`/`ao_loc_nr`/`nao_nr` byte-identical to upstream | VERIFIED | crates/pyscf-gto/src/make_env.rs (331 LoC, ports `pyscf/gto/mole.py:1029-1105` `make_env` verbatim). Slot constants imported from `cintx_compat::raw` via `pyscf_core::raw_layout` re-export (no local mirror — T-02-04-01 mitigation). Byte-identity oracle: tests/oracle/test_byte_identity.py::test_atm_bas_env_byte_for_byte + test_ao_loc_nr_byte_for_byte (3 PR-CI fixtures × 5 arrays = 15 assertions). Cargo dump helper: tests/dump_arrays_for_oracle.rs. Plan 02-04 SUMMARY + plan 02-09 oracle harness. |
-| GTO-05 | ECP loading + `int1e_ecp` evaluation match upstream bit-exact under `release-oracle` | LOADING VERIFIED + EVALUATION DEFERRED TO 02-10 (per phase D-06 design — explicit, intentional, tracked) | **Loading (plan 02-07):** crates/pyscf-gto/src/format_ecp.rs (274 LoC, format_ecp + make_ecp_env), crates/pyscf-core/src/traits.rs:86 (EcpEngine trait per D-07), crates/pyscf-gto/src/ecp_engine_stub.rs (EcpEngineNotAvailable returning typed `PyscfRsError::EcpEngineNotAvailable` error), crates/pyscf-gto/src/intor.rs:86 (int1e_ecp* and ECPscalar* names routed through `EcpEngine::ecp_int1e`). Tests: ecp_load.rs (6 tests including real LANL2DZ Cu file), ecp_engine_stub.rs (5 tests including the typed-error round-trip). **Evaluation (deferred to plan 02-10):** plan 02-10 placeholder has `status: PENDING_CINTX_ECP_MERGE`; will swap EcpEngineNotAvailable for CintxEcpEngine when upstream cintx merges cint1e_ecp Type-1 + Type-2 projectors. Documented in 02-CONTEXT.md D-06, 02-VALIDATION.md GTO-05 row, 02-VALIDATION.md Manual-Only Verifications, 02-10-PLAN.md frontmatter, error.rs:42 typed-error documentation. |
-| GTO-06 | `mol.intor(name, ...)` is a thin wrapper over `cintx` | VERIFIED (arity-2 fully green; arity ≥3 deferred per VALIDATION.md xfail row) | crates/pyscf-gto/src/intor.rs (441 LoC) — name → OperatorId via cintx-ops Resolver, F/C-order layout preserved via crates/pyscf-gto/src/layout_table.rs (23 entries). Oracle: tests/oracle/test_intor_oracle.py — 7 arity-2 names green at 1e-10 tolerance; Pitfall 8 F-order test green via test_int1e_ipovlp_sph_layout. Arity ≥3 xfail-tracked. Cargo dump helper: tests/dump_intor_for_oracle.rs. |
-| GTO-07 | `eval_gto` for 6 variants matches upstream on a 1000-point grid | VERIFIED (l=0) + DEFERRED (l ≥ 1 → Phase 4; deriv1/deriv2/ip/ig → Phase 4/7) | crates/pyscf-kernels/src/eval_gto.rs (D-04 home — uses cubecl per algebra wall), crates/pyscf-gto/src/eval_gto.rs (user wrapper). All 6 variant names parsed: GTOval / GTOval_sph / GTOval_cart / deriv1 / deriv2 / ip / ig (eval_gto.rs:122-138). l=0 oracle: test_eval_gto_h_sto3g_s_shell_only. l ≥ 1 xfail test_eval_gto_h2o_ccpvdz_includes_p_shells deferred to Phase 4. Derivative variants return `NotYetImplemented{phase:4|7}` — exercised in eval_gto_smoke.rs. Algebra-wall preserved: pyscf-gto has zero `cubecl` imports; pyscf-kernels has the single cubecl import. |
-| GTO-08 | `Mole` exposes the ≥30 attribute floor | VERIFIED | crates/pyscf-core/src/mole.rs `pub struct Mole` has 30 public fields + 7 attribute-floor methods on the impl block (basis_set, cintx_basis, atom_charges, atom_coords, atom_coord, mass_list, enuc). Reflexive test: tests/attribute_floor.rs::h2o_attribute_floor_present_and_defaults_sane. |
-| GTO-09 | `mol.dumps()`/`Mole::loads()` JSON round-trip | VERIFIED | crates/pyscf-gto/src/dumps_loads.rs (145 LoC, serde-based). Tests: dumps_loads.rs (3 tests: full-Mole array round-trip, scalar fields, malformed-JSON error). Cross-language: tests/oracle/test_json_interop.py::test_pyscfrs_dumps_to_pyscf_loads_roundtrip. Cargo dump helper: dump_mole_dumps_for_oracle.rs. |
-| GTO-10 | `mol.copy()` deep-copy + `mol.set_geom_(new_atom)` in-place | VERIFIED | mol.copy() = `#[derive(Clone)]` on Mole (mole.rs:127). Tests: mole_copy.rs (2 tests, including Arc-identity preservation for basis_set across clone). set_geom_ in crates/pyscf-gto/src/set_geom.rs (94 LoC, Pattern 5 granular invalidation — only `_atm[PTR_COORD]` and `_env` coord slots mutate; `_bas` / basis structure preserved). Tests: set_geom.rs (5 tests). |
-| GTO-11 | Zero-copy re-export of `cintx_core::BasisSet` | VERIFIED | crates/pyscf-core/src/basis_set.rs uses cintx_core::BasisSet (the Arc structure inside cintx_core::BasisSet means re-export is literally zero-copy). Mole stores `Option<Arc<BasisSet>>`; accessor `mol.cintx_basis()` returns a cloned Arc (refcount bump only). Tests: cintx_zerocopy.rs::arc_ptr_eq_after_mole_clone + cintx_basis_returns_clone_with_same_ptr (6 Arc-identity tests all green). |
+| GTO-01 | `pyscf.M(...)` + 5 atom-input forms | VERIFIED (4 shipped; 5th Callable NotYetImplemented{phase:3}) | mole_construction.rs 9 passed. REQUIREMENTS.md [x] confirmed. |
+| GTO-02 | `mol.basis = ...` accepts all 11 input forms; general-contraction correctness fixed in 02-11 | VERIFIED | basis_input_forms.rs 9 passed. general_contraction.rs 9/9 pass. REQUIREMENTS.md annotation updated with 02-11 parser fix reference. |
+| GTO-03 | All 207 built-in basis files resolve; gto.parse() handles Gaussian-94/NWChem; coefficient layout correct | VERIFIED (representative subset + general-contraction correctness) + DEFERRED (full sweep Phase 8 ORACLE-06) | builtin_basis_sweep.rs representative subset green. general_contraction.rs tests cover the generally-contracted path (ANO, cc-pVDZ O). REQUIREMENTS.md annotation updated with row-major layout fix reference. |
+| GTO-04 | `_atm`/`_bas`/`_env`/`ao_loc_nr`/`nao_nr` byte-identical to upstream | VERIFIED (automated structure) + HUMAN (oracle pytest) | make_env.rs ports pyscf/gto/mole.py. test_byte_identity.py (oracle venv). |
+| GTO-05 | ECP loading + `int1e_ecp` evaluation match upstream under release-oracle; ECP nctr>1 now correct | VERIFIED (in-tree gate) + HUMAN (upstream byte-identity) | ecp_int1e_oracle.rs 2/2 passed. DI-02-11-ECP-NCTR RESOLVED via cintx 9af2164 (ECP eval was green against truncated LANL2DZ; now green against correct nctr=2 basis). test_ecp_int1e.py venv-gated. |
+| GTO-06 | `mol.intor(name, ...)` thin wrapper over cintx, all arity-2 in-scope families | VERIFIED (arity-2) + DEFERRED (arity>=3 Phase 3+) | intor.rs 441 LoC. intor_smoke.rs 8 passed. test_intor_oracle.py (oracle venv). |
+| GTO-07 | `eval_gto(mol, eval_name, coords, ...)` for 6 variants | VERIFIED (l=0) + DEFERRED (l>=1 Phase 4; deriv/ip/ig Phase 4/7) | eval_gto.rs + pyscf-kernels cubecl kernel. eval_gto_smoke.rs 8 passed. |
+| GTO-08 | Mole exposes >=30 attribute floor | VERIFIED | pyscf-core/src/mole.rs 30 pub fields + 7 methods. attribute_floor.rs 1 passed. |
+| GTO-09 | `mol.dumps()`/`Mole::loads()` JSON round-trip | VERIFIED | dumps_loads.rs 3 passed. test_json_interop.py (oracle venv). |
+| GTO-10 | `mol.copy()` deep-copy + `mol.set_geom_(new_atom)` in-place | VERIFIED | mole_copy.rs 2 passed (Arc identity preserved). set_geom.rs 5 passed. |
+| GTO-11 | Zero-copy re-export of `cintx_core::BasisSet` | VERIFIED | pyscf-core/src/basis_set.rs: `pub use cintx_core::BasisSet`. cintx_zerocopy.rs 6 passed (Arc::ptr_eq across clone, set_geom_, repeat calls). |
 
-**Score: 11/11 requirements verified or deferred-tracked-with-roadmap-coverage.**
+**Score: 11/11 requirement IDs satisfied or explicitly deferred with roadmap coverage.**
 
-No requirement is in a `gaps_found` state. GTO-05 evaluation is the single deferred item and it is explicitly designed-for in 02-CONTEXT.md D-06 with a tracking plan (02-10).
+Cross-reference check: All 11 IDs (GTO-01..GTO-11) appear in the plans' frontmatter `requirements` fields across plans 02-01..02-11 and are accounted for in REQUIREMENTS.md (each carries [x] and a Phase 2 source annotation). No orphaned requirement IDs found for Phase 2.
 
 ---
 
-## 4. Required Artifacts
+## 5. Required Artifacts (Plan 02-11 additions)
 
 | Artifact | Expected | Status | Details |
-|---------|----------|--------|---------|
-| `crates/pyscf-gto/src/lib.rs` | Top-of-crate public surface for M, build_from, ecp_engine, all sub-modules | VERIFIED | 197 LoC. Re-exports all 11 public surfaces. Lines 29-38 expose load_basis, parse_basis, dumps, loads, EcpEngineNotAvailable, eval_gto, EvalGtoOutput, format_basis, format_ecp, make_ecp_env, intor, IntorOutput, Mole, Unit, set_geom_, AtomInput, BasisInput, EcpInput, MoleBuildArgs. |
-| `crates/pyscf-gto/src/types.rs` | AtomInput (5 variants), BasisInput (5 variants), EcpInput (5 variants), MoleBuildArgs | VERIFIED | 126 LoC; all enums + struct declared with Default. |
-| `crates/pyscf-gto/src/format_atom.rs` | format_atom port from pyscf/gto/mole.py:320 | VERIFIED | 286 LoC. AtomInput::Callable returns NotYetImplemented{phase:3} at line 57. |
-| `crates/pyscf-gto/src/format_basis.rs` | format_basis dispatcher for 5 BasisInput arms | VERIFIED | 129 LoC. Lines 66-95 dispatch all 5 arms. |
-| `crates/pyscf-gto/src/basis/{path,alias,nwchem,nwchem_ecp,cp2k,cp2k_pp,mod}.rs` | PYSCF_BASIS_PATH resolver + ALIAS table + 4 parsers | VERIFIED | All 7 files present. ALIAS table is hand-ported per D-01. |
-| `crates/pyscf-gto/src/make_env.rs` | _atm/_bas/_env/ao_loc_nr/nao_nr projection (D-03) | VERIFIED | 331 LoC. Uses pyscf_core::raw_layout::{ATM_SLOTS, BAS_SLOTS, PTR_ENV_START, …} (the cintx_compat::raw re-export, NOT a local mirror). |
-| `crates/pyscf-gto/src/projection.rs` | build_cintx_basis_set (Arc-based, GTO-11 zero-copy) | VERIFIED | 122 LoC. Builds `cintx_core::BasisSet` once at Mole::build time; cloned via Arc refcount thereafter. |
-| `crates/pyscf-gto/src/intor.rs` | name → OperatorId → cintx_rs::SessionRequest | VERIFIED | 441 LoC. Lines 86-114 ECP route. Lines 117-189 arity-2 cintx dispatch. Arity ≥3 returns NotYetImplemented{phase:2}. F/C-order via layout_table.rs (23 entries). |
-| `crates/pyscf-gto/src/layout_table.rs` | F/C-order per intor name | VERIFIED | 130 LoC. Wave 0 W0-T3 deliverable; 23 entries. |
-| `crates/pyscf-gto/src/eval_gto.rs` | User wrapper, algebra-wall friendly | VERIFIED | 144 LoC. Dispatches to pyscf-kernels for l=0 s-shells; 4 derivative variants return NotYetImplemented{phase:4|7}. |
-| `crates/pyscf-kernels/src/eval_gto.rs` | cubecl AO-on-grid kernel (D-04 home) | VERIFIED | Present. Imports cubecl::prelude::* (only crate on the algebra-wall allowlist that does so). |
-| `crates/pyscf-gto/src/format_ecp.rs` | format_ecp + make_ecp_env (GTO-05 loading) | VERIFIED | 274 LoC. Pitfall 2 (CHARGE_OF "subtract once") mitigated inside make_ecp_env per plan 02-07 SUMMARY. |
-| `crates/pyscf-gto/src/ecp_engine_stub.rs` | EcpEngineNotAvailable stub returning typed error | VERIFIED | 24 LoC; impl EcpEngine for EcpEngineNotAvailable returning `PyscfRsError::EcpEngineNotAvailable`. |
-| `crates/pyscf-core/src/traits.rs` | EcpEngine trait (D-07: separate from IntegralEngine) | VERIFIED | EcpEngine declared at line 86 with `ecp_int1e` + default `ecp_int1e_ipnuc` returning `NotYetImplemented{phase:7}`. |
-| `crates/pyscf-core/src/error.rs` | typed errors: BasisLoad, EcpLoad, EcpEngineNotAvailable, NotYetImplemented{phase,what} | VERIFIED | 97 LoC. EcpEngineNotAvailable variant at line 42; NotYetImplemented{phase,what} at line 20. |
-| `crates/pyscf-gto/src/dumps_loads.rs` | mol.dumps / mol.loads JSON round-trip | VERIFIED | 145 LoC. |
-| `crates/pyscf-gto/src/set_geom.rs` | set_geom_ in-place mutation (Pattern 5 granular invalidation) | VERIFIED | 94 LoC. |
-| `crates/pyscf-core/src/mole.rs` | Mole struct with ≥30 public attribute floor | VERIFIED | 432 LoC. 30 pub fields + 7 attribute-floor methods. |
-| `tests/oracle/test_byte_identity.py` | GTO-04 keystone byte-equal test | VERIFIED | 2 oracle tests: test_atm_bas_env_byte_for_byte (3 fixtures × 3 arrays = 9 assertions) + test_ao_loc_nr_byte_for_byte (Pitfall 17). |
-| `tests/oracle/test_intor_oracle.py` | GTO-06 arity-2 + Pitfall 8 layout | VERIFIED | 3 oracle tests: test_intor_h2o_ccpvdz, test_intor_arity_ge3_deferred (xfail), test_int1e_ipovlp_sph_layout. |
-| `tests/oracle/test_eval_gto.py` | GTO-07 l=0 + xfail for l ≥ 1 | VERIFIED | 2 oracle tests: test_eval_gto_h_sto3g_s_shell_only (green) + test_eval_gto_h2o_ccpvdz_includes_p_shells (xfail). |
-| `tests/oracle/test_json_interop.py` | GTO-09 cross-language round-trip | VERIFIED | 2 oracle tests: test_pyscfrs_dumps_to_pyscf_loads_roundtrip + test_pyscfrs_dumps_snapshot_shape. |
-| `tests/oracle/test_builtin_basis_sweep.py` | GTO-03 5-basis × H smoke | VERIFIED | 1 parameterised oracle test: test_basis_loads_and_matches_upstream_for_h. |
-| `crates/pyscf-gto/tests/dump_*_for_oracle.rs` | Cargo helpers invoked by pytest | VERIFIED | 4 files: dump_arrays_for_oracle, dump_intor_for_oracle, dump_eval_gto_for_oracle, dump_mole_dumps_for_oracle. All behind `#[ignore]` + `release-oracle-tests` feature gate (Cargo.toml:49). |
-| `tests/oracle/conftest.py` | Wave 0 pytest harness with upstream_pyscf + workspace_root fixtures | VERIFIED | Shipped per plan 02-01 Wave 0; consumed by all 5 oracle pytest files. |
-
-**Score: 25/25 artifacts present, substantive, and wired.**
+|----------|----------|--------|---------|
+| `crates/pyscf-gto/src/basis/nwchem.rs` | General-contraction: N coefficient columns → N contractions; ragged rejection | VERIFIED (substantive) | 319 LoC. Lines 183-204 implement the multi-column accumulator. Line 189 rejects ragged blocks. The SharedSP path (lines 207-226) is untouched. Commit e9fa626 changed 46 lines. No stub patterns. |
+| `crates/pyscf-gto/src/projection.rs` | Row-major coefficient flatten for cintx Shell (`coefficients[prim*nctr+ctr]`) | VERIFIED (substantive) | Line 290-294: `coeffs_flat[prim * nctr + ctr] = c` (explicitly comments the kernel's row-major requirement). Commit e9fa626 changed 21 lines in projection.rs. |
+| `crates/pyscf-gto/tests/general_contraction.rs` | ANO general-contraction + segmented regression + cintx evaluation correctness | VERIFIED (substantive, wired) | 292 LoC. 9 `#[test]` functions covering: (a) ANO O nctr=8, ANO H contractions; (b) sto-3g/6-31g/6-31g*/cc-pvdz regression pins, nao_nr pins; (c) cc-pVDZ unit-diagonal overlap (exact) + ANO unit-diagonal/l≤2 symmetry. All assertions are numeric, none are stubs. |
+| `crates/pyscf-scf/tests/init_guess_minao.rs` | H2O minao test renamed + retightened; H2 byte-match retained | VERIFIED (substantive, wired) | 167 LoC. 3 tests: `minao_h2_byte_matches_upstream_docstring` (1e-6 tolerance), `minao_dm_symmetric_and_traces_to_nelec` (H2 sanity), `minao_h2o_heavy_atom_normalizes_after_general_contraction_fix` (H2O: `tr > 9.5` + `(tr - 9.86).abs() < 0.05` + RHF convergence). Commit b6a9898. |
+| `.planning/REQUIREMENTS.md` | GTO-02/GTO-03 general-contraction note; SCF-05 heavy-atom caveat RESOLVED | VERIFIED | GTO-02 line: "GENERAL-CONTRACTION correctness fixed in 02-11: …". GTO-03 line: "02-11 also fixed the cintx Shell coefficient layout…". SCF-05: "HEAVY-ATOM CAVEAT RESOLVED via 02-11". |
+| `.planning/phases/02-gto/deferred-items.md` | DI-02-11-CINTX-NCTR RESOLVED; DI-02-11-CINTX-NCTR-HIGHL RESOLVED; DI-02-11-ECP-NCTR RESOLVED; DI-02-11-CINTX-NUC-HIGHL TRACKED | VERIFIED | All four items present with correct disposition headers. The three RESOLVED items cite the cintx commits. DI-02-11-CINTX-NUC-HIGHL is correctly marked as a cross-repo pre-existing tracked gap (not a v1 Phase 2 blocker). |
 
 ---
 
-## 5. Key Link Verification
+## 6. Key Link Verification (Plan 02-11 additions)
 
 | From | To | Via | Status |
 |------|----|----|--------|
-| `pyscf_gto::M(args)` | `pyscf_gto::build_from(&mut mol, args)` | direct function call | WIRED — lib.rs:73 |
-| `build_from` | `format_atom::format_atom` | direct call | WIRED — lib.rs:109 |
-| `build_from` | `format_basis::format_basis` | direct call | WIRED — lib.rs:134 |
-| `build_from` | `make_env::make_env` | direct call | WIRED — lib.rs:139 |
-| `build_from` | `projection::build_cintx_basis_set` (GTO-11 Arc construction) | direct call | WIRED — lib.rs:151 |
-| `build_from` | `format_ecp::format_ecp` + `make_ecp_env` | direct call | WIRED — lib.rs:163,166 |
-| `intor::intor` (int1e_ecp* / ECPscalar* names) | `EcpEngine::ecp_int1e` via `crate::ecp_engine()` | trait dispatch | WIRED — intor.rs:86-92 (this is the D-07 seam; 02-10 swaps only the impl, the wiring is permanent) |
-| `intor::intor` (arity-2 cintx names) | `cintx_rs::SessionRequest` → `IntegralTensor` | direct call via descriptor | WIRED — intor.rs:152,171 |
-| `eval_gto::eval_gto` (l=0) | `pyscf_kernels::eval_gto_sph` | direct call via algebra-wall | WIRED — eval_gto.rs imports pyscf_kernels |
-| `Mole::cintx_basis` | `Arc<BasisSet>` clone (no deep copy) | refcount bump | WIRED — mole.rs:247 + tests/cintx_zerocopy.rs Arc::ptr_eq assertions |
-| `Mole::clone` (mol.copy) | Arc-preserving deep clone | `#[derive(Clone)]` | WIRED — tested in tests/mole_copy.rs::mole_clone_arc_identity_preserved_for_basis_set |
-| `set_geom_(mol, new_atom)` | mutates `mol._env[PTR_COORD slots]` + `mol._atom`; preserves `mol._bas` | granular cache invalidation (Pattern 5) | WIRED — set_geom.rs + tests/set_geom.rs::set_geom_updates_env_coords_only |
-
-**Score: 12/12 critical wiring links verified.**
+| `nwchem.rs CurrentShell::Single` | `ShellSpec.coeffs` (N contraction vectors) | `coeffs.resize(n_ctr, Vec::new())` + per-column push | WIRED — nwchem.rs:184-204 |
+| `projection.rs build_atoms_and_shells_with_base` | `CintxShell.coefficients` row-major layout | `coeffs_flat[prim * nctr + ctr] = c` | WIRED — projection.rs:290-294 |
+| `general_contraction.rs` tests | `pyscf_gto::basis::load_basis` → `ParsedBasis.shells[i].coeffs.len()` | direct call to production loader | WIRED — uses the same `load_basis` path as production code |
+| `general_contraction.rs` overlap tests | `pyscf_gto::intor` → `cintx` `int1e_ovlp_sph` | `intor(&mol, "int1e_ovlp_sph")` | WIRED — exercises full path: parser → projection → cintx kernel |
+| `init_guess_minao.rs` H2O test | `pyscf_scf::init_guess::default_get_init_guess` → `InitGuessMode::Minao` | direct call | WIRED — calls through the full minao stack including intor_cross + NRSRHF_CONFIGURATION |
+| All pre-existing wiring links from 02-10 verification | (Unchanged) | Spot-checked regression | WIRED — no pre-existing wiring was modified by 02-11 |
 
 ---
 
-## 6. Data-Flow Trace (Level 4)
+## 7. Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Produces Real Data | Status |
 |----------|---------------|--------|--------------------|--------|
-| `Mole._atm`, `_bas`, `_env`, `ao_loc_nr`, `nao_nr` | The five flat arrays | `make_env::make_env(_atom, _basis, cart)` reading real `ParsedAtom` + `ParsedBasis` | YES — directly populated from format_atom + format_basis output | FLOWING |
-| `Mole.basis_set: Option<Arc<BasisSet>>` | The Arc to cintx_core::BasisSet | `projection::build_cintx_basis_set` | YES — constructed from real shell list, not None | FLOWING (test cintx_zerocopy.rs::basis_set_is_some_after_build asserts Some(_) after build) |
-| `IntorOutput.values` for arity-2 names | The integral tensor values | cintx_rs SessionRequest → IntegralTensor.owned_values | YES — real cintx evaluation; oracle test asserts non-trivial Hermitian matrix | FLOWING |
-| `IntorOutput.values` for `int1e_ecp*` | ECP integral matrix | `EcpEngine::ecp_int1e` (currently the `EcpEngineNotAvailable` stub) | NO — returns `Err(EcpEngineNotAvailable)` (deferred to 02-10) | INTENTIONAL STATIC (typed error, not silent zeros) — covered by test ecp_int1e_route_returns_engine_not_available |
-| `EvalGtoOutput.values` for s-shells | AO values on grid | pyscf-kernels eval_gto_sph cubecl kernel | YES — for l=0; xfail for l ≥ 1 | FLOWING (l=0); deferred (l ≥ 1) |
-| `mol.dumps()` output | JSON string | serde_json over Mole fields | YES | FLOWING |
-
-No HOLLOW/DISCONNECTED data paths detected. The single "static" return (`EcpEngineNotAvailable`) is the **typed error variant** the trait deliberately exposes — it does NOT pretend to return zeros silently. Callers see `Err(PyscfRsError::EcpEngineNotAvailable)` with a documented message pointing at plan 02-10.
+| `general_contraction.rs::ccpvdz_general_contraction_overlap_unit_diagonal` | `s` (nao×nao overlap) | `intor(&mol, "int1e_ovlp_sph")` → cintx `one_electron.rs` kernel with row-major nctr=2 coefficients | YES — asserts exact unit diagonal `(d - 1.0).abs() < 1e-9` for all 14 AOs | FLOWING |
+| `general_contraction.rs::ano_general_contraction_overlap_finite_unit_diagonal` | `s` (nao×nao overlap) | `intor(&mol, "int1e_ovlp_sph")` → cintx with ANO O nctr=8 S-block | YES — asserts unit diagonal `(d - 1.0).abs() < 1e-6` for all AOs + l≤2 symmetry | FLOWING |
+| `init_guess_minao.rs::minao_h2o_heavy_atom_normalizes_after_general_contraction_fix` | `dm` (nao×nao density) then `tr` (trace) | `default_get_init_guess` → intor_cross with correct ANO O contractions | YES — `tr ≈ 9.86`, tight bound `(tr - 9.86).abs() < 0.05`; also runs RHF kernel to convergence | FLOWING |
+| All pre-existing data flows from 02-10 | (Unchanged) | (Unchanged) | YES | FLOWING |
 
 ---
 
-## 7. Behavioral Spot-Checks
+## 8. Behavioral Spot-Checks
 
-| Behavior | Command | Result | Status |
-|----------|---------|--------|--------|
-| pyscf-gto tests compile | `cargo test -p pyscf-gto --no-default-features --no-run` | Finished in 39.88s; 21 test executables produced | PASS |
-| Mole attribute floor | `cargo test -p pyscf-gto --no-default-features --test attribute_floor` | 1 passed; 0 failed | PASS |
-| 5 atom-input forms (4 shipped + 1 NotYetImplemented{phase:3}) | `cargo test -p pyscf-gto --no-default-features --test mole_construction` | 9 passed; 0 failed (includes `callable_form_returns_not_yet_implemented_phase_3`) | PASS |
-| 11→5 basis input form dispatch | `cargo test -p pyscf-gto --no-default-features --test basis_input_forms` | 9 passed; 0 failed | PASS |
-| GTO-11 Arc::ptr_eq zero-copy | `cargo test -p pyscf-gto --no-default-features --test cintx_zerocopy` | 6 passed; 0 failed | PASS |
-| ECP loading (LANL2DZ Cu real file) | `cargo test -p pyscf-gto --no-default-features --test ecp_load` | 6 passed; 0 failed | PASS |
-| ECP engine stub dispatch via trait | `cargo test -p pyscf-gto --no-default-features --test ecp_engine_stub` | 5 passed; 0 failed | PASS |
-| `mol.intor("int1e_ovlp_sph")` returns finite, Hermitian | `cargo test -p pyscf-gto --no-default-features --test intor_smoke` | 11 passed; 0 failed (includes `ecp_int1e_route_returns_engine_not_available` and `ecp_ecpscalar_route_returns_engine_not_available`) | PASS |
-| eval_gto for s-shells + deriv/ip/ig NotYetImplemented gating | `cargo test -p pyscf-gto --no-default-features --test eval_gto_smoke` | 8 passed; 0 failed | PASS |
-| mol.set_geom_ Pattern 5 cache invalidation | `cargo test -p pyscf-gto --no-default-features --test set_geom` | 5 passed; 0 failed | PASS |
-| mol.copy() = Clone with Arc identity preserved | `cargo test -p pyscf-gto --no-default-features --test mole_copy` | 2 passed; 0 failed | PASS |
-| mol.dumps()/loads() round-trip | `cargo test -p pyscf-gto --no-default-features --test dumps_loads` | 3 passed; 0 failed | PASS |
-| Representative 10-basis sweep | `cargo test -p pyscf-gto --no-default-features --test builtin_basis_sweep` | 1 passed; 0 failed; 1 ignored (full ALIAS sweep deferred to Phase 8) | PASS |
-| Wave 0 cintx round-trip smoke | `cargo test -p pyscf-gto --no-default-features --test wave0_smoke` | 1 passed; 0 failed | PASS |
-| Oracle layer (pytest harness, byte-identity) | `pytest tests/oracle/ -v --features release-oracle` | NOT RUN locally (requires upstream pyscf install + heavier setup) | SKIP — oracle harness verification deferred per 02-09 SUMMARY "Pytest dependencies unavailable in executor sandbox" deviation. Tests are present and the cargo-side dump helpers compile and run under `release-oracle-tests`; CI is responsible for the python-side byte-identity assertion. |
+Tests were confirmed passing by the orchestrator's gate run (read-only verification per CRITICAL_CONSTRAINTS). The SUMMARY Addendum records the gate result as authoritative.
 
-**Score: 14/14 in-scope spot-checks PASS; 1 SKIPPED (oracle pytest, see VALIDATION row #6 in §10 below).**
+| Behavior | Evidence | Status |
+|----------|----------|--------|
+| general_contraction.rs 9/9 (ANO O S nctr=8; ANO H; segmented regression; cc-pVDZ unit-diagonal; ANO unit-diagonal/l≤2 symmetry) | 02-11 SUMMARY Addendum: "cintx 173 lib + pyscf-rs gto+scf+df+mp2 = 280 tests (0 failures)" | PASS |
+| init_guess_minao.rs 3/3 (H2 byte-match + H2O Tr≈9.86 + RHF convergence) | 02-11 SUMMARY Addendum: 280 tests, 0 failures | PASS |
+| Full pyscf-gto suite (regression — all pre-02-11 tests unchanged) | 02-11 SUMMARY Addendum: 280 tests, 0 failures | PASS |
+| pyscf-dft 47 lib tests | 02-11 SUMMARY Addendum (with one pre-existing RSH stale test noted) | PASS |
+| clippy -D warnings | 02-11 SUMMARY Addendum: PASS | PASS |
+| cargo fmt | 02-11 SUMMARY Addendum: PASS | PASS |
+| check-no-fma | 02-11 SUMMARY Addendum: PASS | PASS |
+| check-dependency-wall | 02-11 SUMMARY Addendum: PASS | PASS |
+| 0 libxc in scope | 02-11 SUMMARY Addendum: PASS | PASS |
+
+**Pre-existing unrelated failure (out-of-scope):** pyscf-dft `cam_b3lyp_h2o_rsh::rsh_get_veff_dispatches_into_range_coulomb_branch` — Phase 04 RSH stale test. Its `two_electron.rs` was untouched by 02-11. Not attributed to Phase 2.
 
 ---
 
-## 8. Anti-Pattern Scan
+## 9. Anti-Pattern Scan (Plan 02-11 modified files)
 
-| File | Line | Pattern | Severity | Impact |
-|------|------|---------|----------|--------|
-| crates/pyscf-gto/src/make_env.rs | 80 | `// Append zeta placeholder (1 double; finite-nucleus model would write here).` | Info | This is a documentation comment on a real placeholder slot reserved per libcint slot layout (finite-nucleus is out of v1 scope). NOT an unimplemented code path — the slot is written correctly for the POINT_NUC case (which is the only Phase 2 case). |
-| crates/pyscf-core/src/mole.rs | 80 | `/// 02-02 (this plan) ships the placeholder shape so Mole._basis has a real type.` | Info | Docstring describing historical evolution; the type body is now substantive (plan 02-03 filled it with real `Vec<ShellSpec>` + parser dispatch). |
+No TBD, FIXME, or XXX markers found in any of the five files modified by plan 02-11 (`nwchem.rs`, `projection.rs`, `general_contraction.rs`, `init_guess_minao.rs`, `REQUIREMENTS.md`).
 
-**No TODO / FIXME / XXX / HACK / `unimplemented!()` / `todo!()` markers in source.** Searched: `grep -rn -E "TODO|FIXME|XXX|HACK|unimplemented!\(\)|todo!\(\)" crates/pyscf-gto/src/ crates/pyscf-core/src/mole.rs` returns only the two documentation hits above.
+The `NotYetImplemented { phase, what }` returns in other pyscf-gto files (cp2k.rs, eval_gto.rs, format_atom.rs) are intentional per-phase deferrals referencing explicit phase numbers — not untracked debt. Unchanged from the 02-10 verification.
 
-**`#[ignore]` markers are all intentional + documented:**
-- 4 dump_*_for_oracle.rs files — oracle helpers gated on `release-oracle-tests` feature
-- alias_resolution.rs:103 + builtin_basis_sweep.rs:89 — full ALIAS sweep deferred to Phase 8 ORACLE-06
+Advisories carried forward from 02-10 (WR-01, WR-02, WR-03) are unchanged:
 
-**No `Pending cintx ECP` source-code markers** other than the explicit D-06 stub documentation in ecp_engine_stub.rs, traits.rs, error.rs, intor.rs, and 02-10-PLAN.md — these are all by design.
+- **WR-01** (WARNING): `int1e_ecp_ipnuc`/`int1e_ecp_iprinv` silently route to the scalar operator — Phase 7 GRAD-07 scope, not Phase 2.
+- **WR-02** (WARNING): `unwrap_or(0)` in `ecp_engine_cintx.rs` on shell offset/count — impossible None path, maintainability concern.
+- **WR-03** (WARNING): Stale comment in `intor_smoke.rs` — documentation inconsistency.
 
----
-
-## 9. Decisions Honored (D-01 .. D-15)
-
-| Decision | Status | Evidence |
-|----------|--------|----------|
-| D-01: No build.rs codegen / no include_bytes! for basis files | HONORED | `find crates/pyscf-gto crates/pyscf-kernels -name build.rs` returns empty. Loader is `OnceLock<HashMap>` in basis/path.rs + lazy load on first reference. |
-| D-02: PYSCF_BASIS_PATH env-var priority chain | HONORED | crates/pyscf-gto/src/basis/path.rs implements env-var-first → walk-up → error chain. |
-| D-03: Mole.build() eagerly projects cintx BasisSet, reuses cintx_compat::raw slot constants | HONORED | crates/pyscf-core/src/raw_layout.rs is a `pub use cintx_compat::raw::*` re-export; no local mirror. Verified via grep. |
-| D-04: eval_gto kernel in pyscf-kernels; pyscf-gto wrapper goes via pyscf-algebra | HONORED | crates/pyscf-kernels/src/eval_gto.rs is the kernel (single `use cubecl::prelude::*`). crates/pyscf-gto/src/* has zero cubecl imports (algebra wall preserved). |
-| D-05: int1e_ecp belongs in cintx, not pyscf-rs | HONORED | pyscf-rs only exposes the EcpEngine trait + the routing dispatcher; the actual cint1e_ecp arithmetic will be provided by cintx (and consumed via 02-10). |
-| D-06: ECP parallel sequencing — Phase 2 ships loading + trait + stub; eval closes via 02-10 | HONORED | format_ecp + make_ecp_env + EcpEngineNotAvailable stub shipped in 02-07. 02-10-PLAN.md exists with `status: PENDING_CINTX_ECP_MERGE`. |
-| D-07: EcpEngine is a separate trait in pyscf-core (NOT extension of IntegralEngine) | HONORED | crates/pyscf-core/src/traits.rs:86 declares `pub trait EcpEngine: Send + Sync` as its own trait. |
-| D-08 .. D-15 (carried from Phase 1) | HONORED | Phase 1 D-* not re-verified here; covered in Phase 1 VERIFICATION + 01-10 milestone audit. |
+None is a blocker for Phase 2's goal.
 
 ---
 
-## 10. Validation Sign-Off (from 02-VALIDATION.md)
+## 10. Requirements Coverage
 
-All 7 sign-off boxes in 02-VALIDATION.md are checked. Approval line reads: `approved 2026-05-10 — plan 02-09 oracle harness shipped + all in-scope REQ-IDs flipped to ✅ or ⚠️ partial-with-explicit-deferral`.
+| Requirement | Source Plan(s) | Description | Status | Evidence |
+|-------------|---------------|-------------|--------|----------|
+| GTO-01 | 02-02, 02-09 | 5 atom-input forms | SATISFIED (4 shipped; 5th NotYetImplemented{phase:3}) | mole_construction.rs |
+| GTO-02 | 02-03, 02-09, 02-11 | 11 basis-input forms; general-contraction correctness | SATISFIED | basis_input_forms.rs; general_contraction.rs |
+| GTO-03 | 02-03, 02-09, 02-11 | All built-in basis files; gto.parse(); coefficient layout correct | SATISFIED (representative subset; Phase 8 full sweep) | builtin_basis_sweep.rs; general_contraction.rs |
+| GTO-04 | 02-04, 02-09 | `_atm`/`_bas`/`_env`/`ao_loc_nr`/`nao_nr` byte-identical | SATISFIED (automated) + HUMAN (oracle venv) | test_byte_identity.py |
+| GTO-05 | 02-07, 02-10 | ECP loading + `int1e_ecp` evaluation; ECP nctr>1 correct | SATISFIED (in-tree gate) + HUMAN (oracle venv) | ecp_int1e_oracle.rs 2/2; DI-02-11-ECP-NCTR RESOLVED |
+| GTO-06 | 02-05, 02-09 | mol.intor() cintx dispatcher (arity-2) | SATISFIED (arity-2) + HUMAN (oracle venv) | test_intor_oracle.py |
+| GTO-07 | 02-06, 02-09 | eval_gto 6 variants | SATISFIED (l=0) + DEFERRED (l>=1 Phase 4) | eval_gto_smoke.rs |
+| GTO-08 | 02-02, 02-09 | >=30 attribute floor | SATISFIED | attribute_floor.rs |
+| GTO-09 | 02-08, 02-09 | dumps/loads round-trip | SATISFIED | dumps_loads.rs |
+| GTO-10 | 02-08, 02-09 | copy/set_geom_ | SATISFIED | mole_copy.rs, set_geom.rs |
+| GTO-11 | 02-04, 02-08 | Zero-copy BasisSet re-export | SATISFIED | cintx_zerocopy.rs |
 
----
-
-## 11. Deferred Items Tracked Elsewhere (NOT gaps)
-
-| Deferred Item | Tracked In | Trigger |
-|---------------|-----------|---------|
-| `mol.intor('int1e_ecp')` byte-equal vs upstream (GTO-05 evaluation half) | `.planning/phases/02-gto/02-10-PLAN.md` (status: PENDING_CINTX_ECP_MERGE) | cintx merges cint1e_ecp Type-1 + Type-2 |
-| Atom-input form 5 (Python callable) | Phase 3 BIND-02 | PyO3 binding work begins |
-| eval_gto for l ≥ 1 shells | Phase 4 DFT plans | DFT phase planning |
-| eval_gto deriv1 / deriv2 variants | Phase 4 DFT plans | DFT phase planning |
-| eval_gto ip / ig variants | Phase 7 GRAD-07 / GRAD-08 | Gradient phase planning |
-| Full ≥184-file builtin basis sweep | Phase 8 ORACLE-06 | Oracle hardening phase |
-| Arity ≥3 intors (int3c2e, etc.) | Phase 3+ when cintx-rs ships arity-≥3 safe-API | cintx safe-API surface |
-| Wheel packaging of pyscf/gto/basis/ | Phase 8 DIST-02 | Distribution phase |
-
-These items are all explicitly out-of-scope for Phase 2 per ROADMAP.md, 02-CONTEXT.md `<deferred>`, 02-RESEARCH.md `Deferred Ideas`, and 02-VALIDATION.md Manual-Only Verifications. No new gap-closure plan is needed for any of them.
+All 11 requirement IDs from the plan frontmatter (`requirements: ["GTO-02", "GTO-03"]` in 02-11; all 11 across plans 02-01..02-11) are accounted for. No orphaned Phase 2 requirement IDs in REQUIREMENTS.md.
 
 ---
 
-## 12. Pitfall Coverage
+## 11. Human Verification Required
 
-| Pitfall | Status | Evidence |
-|---------|--------|----------|
-| Pitfall 1 (mol.intor name dispatch confusion) | MITIGATED | layout_table.rs + cintx-ops Resolver gating; unknown intors return typed error. |
-| Pitfall 2 (CHARGE_OF double-subtraction on repeat build) | MITIGATED | tests/ecp_load.rs::ecp_no_double_subtraction_on_repeat_build |
-| Pitfall 8 (F-order vs C-order layout) | MITIGATED | tests/oracle/test_intor_oracle.py::test_int1e_ipovlp_sph_layout (ComponentLeadingFOrder layout-table entry) |
-| Pitfall 17 (off-by-one basis indexing) | MITIGATED | tests/oracle/test_byte_identity.py::test_ao_loc_nr_byte_for_byte |
-| Pitfall 18 (Boys-function accuracy) | DELEGATED | cintx owns the Boys function and its oracle suite; pyscf-rs consumes verified cintx output. Out of pyscf-rs scope per ROADMAP. |
+### 1. ECP byte-identity vs upstream PySCF (GTO-05)
 
----
+**Test:** Install `tests/oracle/requirements.txt` (numpy + pyscf), then run `pytest tests/oracle/test_ecp_int1e.py::test_cu_lanl2dz_int1e_ecp_byte_equal -v`
+**Expected:** Cu/LANL2DZ `int1e_ecp` matrix matches upstream `mol.intor('int1e_ecp')` to atol=1e-10. Note: 02-11 fixed the LANL2DZ basis loading (Cu S-block nctr=2 was being truncated); the oracle test now runs against the correct basis.
+**Why human:** Oracle venv (numpy + upstream pyscf) unavailable in default sandbox. cintx pins atol=1e-12 vs vendored PySCF nr_ecp in cintx-oracle/tests/safe_api_ecp_parity.rs (indirect assurance).
 
-## 13. Anti-Patterns Found
+### 2. Internal array byte-identity vs upstream PySCF (GTO-04)
 
-**None.** Source files have no TODO / FIXME / XXX / HACK / unimplemented! / todo! markers. The two "placeholder" doc-comments and the four oracle-helper `#[ignore]` markers are all intentional and documented above.
+**Test:** With oracle venv, run `pytest tests/oracle/test_byte_identity.py -v`
+**Expected:** 15 byte-equal assertions (3 fixtures x 5 arrays: H2O/cc-pVDZ, benzene/6-31G*, water-trimer/STO-3G) all pass. Note: cc-pVDZ now loads the correct O S-block (nctr=2); the byte-identity test exercises the corrected basis.
+**Why human:** Requires upstream pyscf venv.
 
----
+### 3. mol.intor() arity-2 parity + F-order layout check (GTO-06)
 
-## 14. Human Verification Required
-
-**None.** Phase 2 deliverables are all backend-only (typed Rust libraries, Mole struct, intor dispatcher, eval_gto kernel) — there is no UI surface, no real-time behavior, no external service integration, and no user-facing UX surface to evaluate. The single semi-external dependency (upstream PySCF as the byte-identity oracle) is consumed by the pytest harness which CI runs — that is verification automation, not human verification.
+**Test:** With oracle venv, run `pytest tests/oracle/test_intor_oracle.py -v`
+**Expected:** 7 arity-2 names green at atol=1e-10; test_int1e_ipovlp_sph_layout confirms (3, nao, nao) shape
+**Why human:** Requires upstream pyscf venv.
 
 ---
 
-## 15. Gaps Summary
+## 12. Gaps Summary
 
-**No actionable gaps.** All 11 GTO-* requirements are either VERIFIED on disk + via tests, or have a tracked, designed-for deferral with an explicit roadmap waiver (the latter being only the GTO-05 evaluation half, which has the entire 02-10-PLAN.md as its tracker).
+No actionable gaps. All 11 GTO-* requirements are VERIFIED (automated checks) or have explicit roadmap-documented deferrals. Plan 02-11 closed the last open correctness gap (general-contraction parsing + cintx coefficient layout). The three WR-* warnings from 02-REVIEW.md are carried forward unchanged for Phase 7 handoff (WR-01) and general maintainability (WR-02, WR-03).
 
-The phase is **passed**. The single deferred item (GTO-05 evaluation half) is a designed property of the phase (D-06 parallel sequencing) — not a gap that requires a new gap-closure plan, because plan 02-10 already exists as the tracking artifact.
+The `Tr(dm·S) == nelec` plan-must-have deviation is correctly classified as a plan-premise correction: the implementation is right; the plan's stated target was wrong. The H2 byte-match + H2O trace recovery are the correct anchors.
+
+The three human_verification items are oracle pytest files requiring the upstream pyscf venv — unchanged from the 02-10 re-verification. They do not represent new gaps.
 
 ---
 
-_Verified: 2026-05-11_
+_Verified: 2026-05-24_
 _Verifier: Claude (gsd-verifier)_
+_Re-verification: Yes — after plan 02-11 gap-closure (general-contraction parser + cintx coefficient layout + minao heavy-atom caveat)_

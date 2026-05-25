@@ -9,7 +9,7 @@
 //! `loads`) extend this assertion as their own fields fill in.
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 #[test]
 fn h2o_attribute_floor_present_and_defaults_sane() {

@@ -19,7 +19,7 @@
 #![cfg(feature = "release-oracle-tests")]
 
 use pyscf_core::Unit;
-use pyscf_gto::{eval_gto, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, eval_gto};
 use std::path::PathBuf;
 
 #[test]
@@ -33,8 +33,8 @@ fn dump_eval_gto_for_oracle() {
         std::env::var("PYSCF_RS_ORACLE_COORDS").expect("PYSCF_RS_ORACLE_COORDS env var");
     let out = std::env::var("PYSCF_RS_ORACLE_OUT").expect("PYSCF_RS_ORACLE_OUT env var");
 
-    let coords: Vec<[f64; 3]> =
-        serde_json::from_str(&coords_json).expect("PYSCF_RS_ORACLE_COORDS must be JSON Vec<[f64;3]>");
+    let coords: Vec<[f64; 3]> = serde_json::from_str(&coords_json)
+        .expect("PYSCF_RS_ORACLE_COORDS must be JSON Vec<[f64;3]>");
 
     let mol = M(MoleBuildArgs {
         atom: AtomInput::String(atom),

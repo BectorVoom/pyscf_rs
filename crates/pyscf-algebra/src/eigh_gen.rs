@@ -105,7 +105,7 @@ pub fn eigh_gen(f: &[f64], s: &[f64], n: usize) -> Result<(Vec<f64>, Vec<f64>), 
     let v = fp_evd.U();
 
     // === Step 5: C = X · V (n × n_lin) ===
-    let c_lin = &x * &v;
+    let c_lin = &x * v;
 
     // Pack outputs. eigenvalues: n entries — first n_lin from fp_evd
     // (sorted nondecreasing by faer), remaining padded with +∞ as

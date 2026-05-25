@@ -19,7 +19,7 @@
 #![cfg(feature = "release-oracle-tests")]
 
 use pyscf_core::Unit;
-use pyscf_gto::{dumps, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, dumps};
 use std::path::PathBuf;
 
 #[test]

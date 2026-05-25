@@ -42,7 +42,9 @@ use pyscf_core::{Mole, PyscfRsError};
 pub struct DfIntegrals {
     /// B-integrals: flattened `[nao, nao, naux]` row-major (`mu`-major).
     pub b_uvq: Vec<f64>,
-    /// Number of auxiliary basis functions.
+    /// Number of auxiliary basis functions. This is the **effective** rank when
+    /// the rank-revealing eigh fallback dropped linearly-dependent auxiliary
+    /// directions (`≤ auxmol.nao_nr`); consumers iterate over this `naux`.
     pub naux: usize,
     /// Number of orbital basis functions (must match `mol.nao_nr`).
     pub nao: usize,
@@ -56,14 +58,20 @@ pub struct DfIntegrals {
 /// ALIAS lookup. The caller can use `default_jkfit(orbital_basis)` to
 /// fetch the appropriate aux name.
 ///
+/// An ill-conditioned / rank-deficient `(P|Q)` metric (common for real auxiliary
+/// bases) is handled via a rank-revealing eigh fallback (05-09); in that case
+/// the returned `DfIntegrals.naux` is the **effective** auxiliary rank
+/// (`≤ auxmol.nao_nr`) after linear-dependence removal.
+///
 /// # Errors
 /// - `PyscfRsError::Core` if `mol` isn't built, or auxmol construction fails.
 /// - `PyscfRsError::BasisLoad` if `auxbasis` doesn't resolve to a known basis.
-/// - `PyscfRsError::Core(InvalidMolecule("(P|Q) singular ..."))` (via
-///   `DfError::SingularAux` → `From<DfError>`) on rank-deficient (P|Q).
+/// - `PyscfRsError::Core(InvalidMolecule(...))` only if BOTH the Cholesky fast
+///   path AND the rank-revealing fit fail (e.g. a metric with no eigenvalue
+///   above `DF_METRIC_LINEAR_DEP` — a genuinely degenerate auxiliary basis).
 pub fn cholesky_eri(mol: &Mole, auxbasis: &str) -> Result<DfIntegrals, PyscfRsError> {
     use pyscf_core::{CoreError, Unit};
-    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
     if !mol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
@@ -101,11 +109,11 @@ pub fn cholesky_eri(mol: &Mole, auxbasis: &str) -> Result<DfIntegrals, PyscfRsEr
     );
 
     // Step 2: (μν|P) — 3-center 2-electron integrals.
-    // NOTE: int3c2e_sph base op is currently a cintx-ops upstream gap;
-    // pyscf_gto::intor_with_auxmol returns a zero-filled buffer of the
-    // correct shape until cintx lands the base symbol. B integrals built
-    // here will be all-zero — sufficient for shape/wiring tests, NOT for
-    // bit-exact DF-HF energy (plan 03-10 gates that).
+    // As of 05-08 (cintx#11 closed) intor_with_auxmol evaluates int3c2e_sph for
+    // real over a combined orbital+aux basis (no longer a zero-filled stub), so
+    // these B integrals are genuine. Bit-exact DF energy vs upstream PySCF is
+    // still the CI-gated/human-verify arm. NOTE: the (P|Q) Cholesky below can
+    // reject an ill-conditioned aux metric — a separate Phase-3 robustness gap.
     let int3c = pyscf_gto::intor_with_auxmol(mol, "int3c2e_sph", &auxmol)?;
     if int3c.values.len() != nao * nao * naux {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
@@ -125,30 +133,76 @@ pub fn cholesky_eri(mol: &Mole, auxbasis: &str) -> Result<DfIntegrals, PyscfRsEr
         ))));
     }
 
-    // Step 4: Cholesky-Banachiewicz of (P|Q) — lower-triangular L with
-    // L · L^T = (P|Q). Inline host implementation (pyscf_algebra::cholesky
-    // is Tensor-API and NotYetImplemented{phase:3}; see module-level doc).
-    // Source: standard textbook Cholesky-Banachiewicz, row-major.
-    let l = cholesky_banachiewicz_lower(&int2c.values, naux)
-        .map_err(<DfError as Into<PyscfRsError>>::into)?;
-
-    // Step 5: forward-substitute L · b_{μν} = int3c[μ, ν, :] for every (μ, ν).
-    // int3c is F-order shape [nao, nao, naux]:
-    //   element (mu, nu, q) lives at int3c.values[mu + nu * nao + q * nao * nao].
-    // b_uvq is row-major [nao, nao, naux]:
-    //   element (mu, nu, q) lives at b_uvq[mu * nao * naux + nu * naux + q].
-    let mut b_uvq = vec![0.0_f64; nao * nao * naux];
-    let mut rhs = vec![0.0_f64; naux];
-    for mu in 0..nao {
-        for nu in 0..nao {
-            for q in 0..naux {
-                rhs[q] = int3c.values[mu + nu * nao + q * nao * nao];
+    // Step 4: factor (P|Q). Fast path = Cholesky-Banachiewicz (PD metric):
+    // L · L^T = (P|Q), then forward-substitute b_{μν} = L⁻¹ · int3c[μν,:]
+    // (matches upstream PySCF's `cholesky(j2c)` / `solve_triangular` route,
+    // bit-for-bit for well-conditioned metrics). Real auxiliary bases
+    // (cc-pvdz-jkfit, weigend) are frequently rank-deficient / numerically
+    // indefinite, so the plain Cholesky returns `SingularAux` — fall back to
+    // the rank-revealing eigh fit (`pyscf_algebra::df_metric_fit`, upstream's
+    // eigh route with LINEAR_DEP_THRESHOLD), which yields an effective
+    // auxiliary dimension `rank ≤ naux` (05-09).
+    //
+    // int3c is F-order [nao, nao, naux]: (mu, nu, q) at `mu + nu*nao + q*nao*nao`.
+    // b_uvq is row-major [nao, nao, naux_eff]: (mu, nu, q) at
+    // `mu*nao*naux_eff + nu*naux_eff + q`.
+    match cholesky_banachiewicz_lower(&int2c.values, naux) {
+        Ok(l) => {
+            // PD fast path — unchanged (forward-substitution, naux unchanged).
+            let mut b_uvq = vec![0.0_f64; nao * nao * naux];
+            let mut rhs = vec![0.0_f64; naux];
+            for mu in 0..nao {
+                for nu in 0..nao {
+                    // `q` drives multi-dim flat-array offsets (int3c F-order).
+                    #[allow(clippy::needless_range_loop)]
+                    for q in 0..naux {
+                        rhs[q] = int3c.values[mu + nu * nao + q * nao * nao];
+                    }
+                    forward_substitute(&l, &rhs, naux, &mut b_uvq, mu * nao * naux + nu * naux);
+                }
             }
-            forward_substitute(&l, &rhs, naux, &mut b_uvq, mu * nao * naux + nu * naux);
+            Ok(DfIntegrals { b_uvq, naux, nao })
         }
-    }
+        Err(DfError::SingularAux) => {
+            // Rank-revealing eigh fallback. `w` is column-major naux×rank with
+            // w·wᵀ = (P|Q)⁻¹_trunc, so B^k_{μν} = Σ_P (μν|P)·w[P,k] gives
+            // Σ_k B B = (μν|·)ᵀ (P|Q)⁻¹_trunc (·|λσ) — the DF identity. Every
+            // reduction is an `oracle_dot` (no bare `+=`; T-05-09-FP).
+            let (w, rank) = pyscf_algebra::df_metric_fit(
+                &int2c.values,
+                naux,
+                pyscf_algebra::DF_METRIC_LINEAR_DEP,
+            )
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cholesky_eri: rank-revealing DF metric fit failed (naux={naux}): {e}"
+                )))
+            })?;
 
-    Ok(DfIntegrals { b_uvq, naux, nao })
+            let mut b_uvq = vec![0.0_f64; nao * nao * rank];
+            let mut munu = vec![0.0_f64; naux]; // gathered (μν|·), contiguous
+            for mu in 0..nao {
+                for nu in 0..nao {
+                    #[allow(clippy::needless_range_loop)]
+                    for p in 0..naux {
+                        munu[p] = int3c.values[mu + nu * nao + p * nao * nao];
+                    }
+                    let out_base = mu * nao * rank + nu * rank;
+                    for k in 0..rank {
+                        // column k of `w` is contiguous: w[k*naux .. k*naux+naux].
+                        let wk = &w[k * naux..k * naux + naux];
+                        b_uvq[out_base + k] = pyscf_algebra::oracle_dot(&munu, wk);
+                    }
+                }
+            }
+            Ok(DfIntegrals {
+                b_uvq,
+                naux: rank,
+                nao,
+            })
+        }
+        Err(other) => Err(other.into()),
+    }
 }
 
 /// Cholesky-Banachiewicz lower-triangular factorisation of an `n × n`

@@ -38,15 +38,14 @@ pub fn default_get_hcore(mol: &Mole) -> Result<Density, PyscfRsError> {
     let v = pyscf_gto::intor(mol, "int1e_nuc")?;
     let nao = mol.nao_nr;
     if t.values.len() != nao * nao || v.values.len() != nao * nao {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-            expected: nao * nao,
-            actual: t.values.len(),
-        }));
+        return Err(PyscfRsError::Core(
+            pyscf_core::CoreError::DimensionMismatch {
+                expected: nao * nao,
+                actual: t.values.len(),
+            },
+        ));
     }
-    let mut data = vec![0.0_f64; nao * nao];
-    for k in 0..(nao * nao) {
-        data[k] = t.values[k] + v.values[k];
-    }
+    let data: Vec<f64> = t.values.iter().zip(&v.values).map(|(a, b)| a + b).collect();
     Ok(Density { nao, data })
 }
 
@@ -55,12 +54,17 @@ pub fn default_get_ovlp(mol: &Mole) -> Result<Density, PyscfRsError> {
     let s = pyscf_gto::intor(mol, "int1e_ovlp")?;
     let nao = mol.nao_nr;
     if s.values.len() != nao * nao {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-            expected: nao * nao,
-            actual: s.values.len(),
-        }));
+        return Err(PyscfRsError::Core(
+            pyscf_core::CoreError::DimensionMismatch {
+                expected: nao * nao,
+                actual: s.values.len(),
+            },
+        ));
     }
-    Ok(Density { nao, data: s.values })
+    Ok(Density {
+        nao,
+        data: s.values,
+    })
 }
 
 /// `(J, K)` build from `int2e_sph` and the density matrix.
@@ -76,16 +80,15 @@ pub fn default_get_ovlp(mol: &Mole) -> Result<Density, PyscfRsError> {
 ///
 /// All λσ-reductions go through `pyscf_algebra::oracle_sum` (Pitfall 9
 /// mitigation) once the ERIs are available.
-pub fn default_get_jk(
-    mol: &Mole,
-    dm: &Density,
-) -> Result<(Density, Density), PyscfRsError> {
+pub fn default_get_jk(mol: &Mole, dm: &Density) -> Result<(Density, Density), PyscfRsError> {
     let nao = mol.nao_nr;
     if dm.nao != nao {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-            expected: nao,
-            actual: dm.nao,
-        }));
+        return Err(PyscfRsError::Core(
+            pyscf_core::CoreError::DimensionMismatch {
+                expected: nao,
+                actual: dm.nao,
+            },
+        ));
     }
     // Fetch (μν|λσ) ERIs. For now this returns NotYetImplemented{phase:2}
     // (plan 02-09 rollup gap); the `?` propagates that to the kernel
@@ -93,10 +96,12 @@ pub fn default_get_jk(
     let eri = pyscf_gto::intor(mol, "int2e")?;
     let expected = nao * nao * nao * nao;
     if eri.values.len() != expected {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-            expected,
-            actual: eri.values.len(),
-        }));
+        return Err(PyscfRsError::Core(
+            pyscf_core::CoreError::DimensionMismatch {
+                expected,
+                actual: eri.values.len(),
+            },
+        ));
     }
     // intor returns F-order `[nao, nao, nao, nao]`. For arity-4 the
     // exact F-order index of (μ, ν, λ, σ) is `μ + ν*nao + λ*nao^2 + σ*nao^3`.
@@ -130,20 +135,19 @@ pub fn default_get_jk(
             k_data[mu * nao + nu] = pyscf_algebra::oracle_sum(&k_terms);
         }
     }
-    Ok((
-        Density { nao, data: j_data },
-        Density { nao, data: k_data },
-    ))
+    Ok((Density { nao, data: j_data }, Density { nao, data: k_data }))
 }
 
 /// `V_HF = J - 0.5 · K` (RHF closed-shell effective potential).
 pub fn default_get_veff(mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError> {
     let (j, k) = default_get_jk(mol, dm)?;
     let nao = j.nao;
-    let mut data = vec![0.0_f64; nao * nao];
-    for i in 0..(nao * nao) {
-        data[i] = j.data[i] - 0.5 * k.data[i];
-    }
+    let data: Vec<f64> = j
+        .data
+        .iter()
+        .zip(&k.data)
+        .map(|(a, b)| a - 0.5 * b)
+        .collect();
     Ok(Density { nao, data })
 }
 
@@ -174,14 +178,13 @@ pub fn default_get_fock(
 ) -> Result<Density, PyscfRsError> {
     let nao = h1e.nao;
     if vhf.nao != nao {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::DimensionMismatch {
-            expected: nao,
-            actual: vhf.nao,
-        }));
+        return Err(PyscfRsError::Core(
+            pyscf_core::CoreError::DimensionMismatch {
+                expected: nao,
+                actual: vhf.nao,
+            },
+        ));
     }
-    let mut data = vec![0.0_f64; nao * nao];
-    for i in 0..(nao * nao) {
-        data[i] = h1e.data[i] + vhf.data[i];
-    }
+    let data: Vec<f64> = h1e.data.iter().zip(&vhf.data).map(|(a, b)| a + b).collect();
     Ok(Density { nao, data })
 }

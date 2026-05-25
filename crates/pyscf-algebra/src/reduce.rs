@@ -8,5 +8,8 @@ pub fn reduce_sum(
     _axis: usize,
     _out: &mut Tensor,
 ) -> Result<(), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented { phase: 2, what: "reduce_sum cubecl-reduce dispatch" })
+    Err(AlgebraError::NotYetImplemented {
+        phase: 2,
+        what: "reduce_sum cubecl-reduce dispatch",
+    })
 }

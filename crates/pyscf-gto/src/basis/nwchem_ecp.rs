@@ -26,11 +26,7 @@ use pyscf_core::{EcpLoadError, EcpShell, ParsedEcp};
 /// Returns `ParsedEcp { n_core, channels }` with `channels[i].l = -1` marking
 /// the local (UL) channel and `channels[i].l in 0..=6` marking projector
 /// channels (S/P/D/F/G/H/I).
-pub fn parse_nwchem_ecp(
-    text: &str,
-    symbol: &str,
-    source: &str,
-) -> Result<ParsedEcp, EcpLoadError> {
+pub fn parse_nwchem_ecp(text: &str, symbol: &str, source: &str) -> Result<ParsedEcp, EcpLoadError> {
     let symbol_upper = symbol.to_ascii_uppercase();
     let mut n_core: u32 = 0;
     let mut channels: Vec<EcpShell> = Vec::new();
@@ -45,9 +41,13 @@ pub fn parse_nwchem_ecp(
     // If the source text contains an `ECP` marker, gate parsing on it;
     // otherwise treat the entire input as the ECP block (matches the
     // `EcpInput::NwchemEcpText` inline-fixture path).
-    let mut in_ecp_section = !text
-        .lines()
-        .any(|l| l.split('#').next().unwrap_or("").trim().eq_ignore_ascii_case("ECP"));
+    let mut in_ecp_section = !text.lines().any(|l| {
+        l.split('#')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .eq_ignore_ascii_case("ECP")
+    });
 
     for (i, raw_line) in text.lines().enumerate() {
         let line = match raw_line.find('#') {
@@ -79,10 +79,7 @@ pub fn parse_nwchem_ecp(
         }
 
         // Header / element line. First token alphabetic.
-        let first_alpha = toks[0]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_alphabetic());
+        let first_alpha = toks[0].chars().next().is_some_and(|c| c.is_alphabetic());
 
         if first_alpha {
             // Element-symbol prefix MUST match `symbol_upper`. Other elements'

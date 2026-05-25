@@ -27,6 +27,9 @@ pub const H2O_TRIPLET_CCPVDZ: &str = "h2o_triplet_ccpvdz";
 /// The `<fixture>_<mode>` variant (used by init_guess arm) strips the
 /// trailing `_<mode>` token so the base fixture's atom resolves.
 pub fn atom(name: &str) -> &'static str {
+    // Strip the grid-level suffix `@levelN` (plan 04-04 grid_weights arm) so
+    // the base fixture's geometry resolves.
+    let name = name.split('@').next().unwrap_or(name);
     match name {
         "h2o_ccpvdz" | "h2o_triplet_ccpvdz" => H2O_GEOMETRY,
         "benzene_631gs" => BENZENE_GEOMETRY,
@@ -40,6 +43,7 @@ pub fn atom(name: &str) -> &'static str {
 
 /// Basis-set name for a fixture.
 pub fn basis(name: &str) -> &'static str {
+    let name = name.split('@').next().unwrap_or(name);
     match name {
         "h2o_ccpvdz" | "h2o_triplet_ccpvdz" => "cc-pvdz",
         "benzene_631gs" => "6-31g*",
@@ -50,11 +54,21 @@ pub fn basis(name: &str) -> &'static str {
 }
 
 /// Spin multiplicity hint (2S = nα − nβ). 0 for closed shell; 2 for triplet.
+/// Strips the `@<suffix>` (grid-level or XC functional) before matching.
 pub fn spin(name: &str) -> i32 {
+    let name = name.split('@').next().unwrap_or(name);
     match name {
         "h2o_triplet_ccpvdz" => 2,
         _ => 0,
     }
+}
+
+/// XC functional token extracted from the fixture-name suffix
+/// (e.g. `"h2o_ccpvdz@b3lyp"` → `"b3lyp"`). Used by the DFT-01
+/// `rks_energy`/`uks_energy` oracle arms (plan 04-06). Defaults to `"svwn"`
+/// when no `@<xc>` suffix is present.
+pub fn xc(name: &str) -> &str {
+    name.split('@').nth(1).unwrap_or("svwn")
 }
 
 /// init_guess mode token extracted from fixture-name suffix

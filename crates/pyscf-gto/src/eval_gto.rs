@@ -16,19 +16,25 @@
 //!
 //! ### Variant catalogue
 //!
-//! Phase 2 ships:
+//! Shipped:
 //!   - `GTOval` — alias; routes to `GTOval_cart` if `mol.cart` else
 //!     `GTOval_sph`.
-//!   - `GTOval_sph` — spherical; the priority MVP.
+//!   - `GTOval_sph` — spherical; the priority MVP. Phase 4 plan 04-03
+//!     landed the `l ≥ 1` (p/d/f) cart→sph evaluation in the kernel.
 //!   - `GTOval_cart` — cartesian. For l = 0 shells (the smoke fixture)
 //!     this returns identical numerics to `GTOval_sph` because the
-//!     l = 0 cart→sph transform is the identity.
+//!     l = 0 cart→sph transform is the identity. (l ≥ 1 cartesian still
+//!     uses the spherical AO count; cartesian-specific output is N/A in
+//!     v1 — the DFT grid loop is spherical.)
+//!   - `GTOval_sph_deriv1` — Phase 4 plan 04-03: value + 3 Cartesian
+//!     gradient components `[value, ∂x, ∂y, ∂z]` (the GGA ∇ρ input).
+//!     Output layout `[4, ngrids, nao]` (component-leading).
 //!
 //! Deferred:
-//!   - `GTOval_sph_deriv1` / `GTOval_cart_deriv1` → `NotYetImplemented
-//!     {phase: 4}` (Phase 4 DFT extends the kernel).
+//!   - `GTOval_cart_deriv1` → `NotYetImplemented{phase: 4}` (needs
+//!     cartesian `ao_loc`; v1 DFT uses the spherical deriv1).
 //!   - `GTOval_sph_deriv2` / `GTOval_cart_deriv2` → `NotYetImplemented
-//!     {phase: 4}`.
+//!     {phase: 4}` (deriv2 not needed for v1 DFT energy).
 //!   - `GTOval_ip*` / `GTOval_ig*` / `GTOval_ip` / `GTOval_ig` →
 //!     `NotYetImplemented{phase: 7}` (Phase 7 grad).
 //!
@@ -45,10 +51,13 @@ use pyscf_core::{CoreError, Mole, PyscfRsError};
 #[derive(Debug, Clone)]
 pub struct EvalGtoOutput {
     /// Flat F-order buffer. For scalar variants (`GTOval`, `GTOval_sph`,
-    /// `GTOval_cart`): index `g + ao * ngrids`. For derivative variants
-    /// (Phase 4 DFT extension): leading axis = component.
+    /// `GTOval_cart`): index `g + ao * ngrids`. For `GTOval_sph_deriv1`:
+    /// component-leading `[4, ngrids, nao]` — component
+    /// `c ∈ {0=value,1=∂x,2=∂y,3=∂z}` occupies `values[c*ngrids*nao..]`
+    /// and within each component the index is `g + ao*ngrids`.
     pub values: Vec<f64>,
-    /// Logical shape — `[ngrids, nao]` for scalar variants.
+    /// Logical shape — `[ngrids, nao]` for scalar variants;
+    /// `[4, ngrids, nao]` for `GTOval_sph_deriv1`.
     pub shape: Vec<usize>,
 }
 
@@ -56,9 +65,9 @@ pub struct EvalGtoOutput {
 ///
 /// `coords` shape: `(ngrids, 3)` C-order — `coords[g][xyz]`.
 ///
-/// Phase 2 supports `GTOval`, `GTOval_sph`, `GTOval_cart`. The four
-/// derivative variants return `NotYetImplemented{phase:4|7}` per the
-/// module-level catalogue.
+/// Supports `GTOval`, `GTOval_sph`, `GTOval_cart`, and (Phase 4 plan
+/// 04-03) `GTOval_sph_deriv1`. The remaining derivative variants return
+/// `NotYetImplemented{phase:4|7}` per the module-level catalogue.
 pub fn eval_gto(
     mol: &Mole,
     eval_name: &str,
@@ -113,15 +122,47 @@ pub fn eval_gto(
                 &mol.ao_loc_nr,
                 mol.nao_nr,
                 spherical,
-            );
+            )?;
             Ok(EvalGtoOutput {
                 values: buffers.values,
                 shape: buffers.shape,
             })
         }
-        "GTOval_sph_deriv1" | "GTOval_cart_deriv1" => Err(PyscfRsError::NotYetImplemented {
+        "GTOval_sph_deriv1" => {
+            let ngrids = coords.len();
+            // F-order flat coords: x[0..N], y[N..2N], z[2N..3N].
+            let mut coords_flat = Vec::with_capacity(ngrids * 3);
+            coords_flat.extend(coords.iter().map(|c| c[0]));
+            coords_flat.extend(coords.iter().map(|c| c[1]));
+            coords_flat.extend(coords.iter().map(|c| c[2]));
+
+            let selection = select_backend().map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_gto: backend selection failed: {e}"
+                )))
+            })?;
+
+            let buffers = pyscf_kernels::eval_gto_sph_deriv1(
+                &selection.client,
+                &coords_flat,
+                ngrids,
+                &mol._atm,
+                &mol._bas,
+                &mol._env,
+                &mol.ao_loc_nr,
+                mol.nao_nr,
+            )?;
+            Ok(EvalGtoOutput {
+                values: buffers.values,
+                shape: buffers.shape,
+            })
+        }
+        // Cartesian deriv1 needs the cartesian `ao_loc`/`nao` (more AOs
+        // than spherical) which the kernel surface does not take; it
+        // stays deferred. v1 DFT uses the spherical path.
+        "GTOval_cart_deriv1" => Err(PyscfRsError::NotYetImplemented {
             phase: 4,
-            what: "GTOval_sph_deriv1 (Phase 4 DFT grid integration extends the kernel)",
+            what: "GTOval_cart_deriv1 (cartesian deriv1 needs cart ao_loc; v1 DFT uses GTOval_sph_deriv1)",
         }),
         "GTOval_sph_deriv2" | "GTOval_cart_deriv2" => Err(PyscfRsError::NotYetImplemented {
             phase: 4,

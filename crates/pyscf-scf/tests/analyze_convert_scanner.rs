@@ -9,9 +9,9 @@
 
 use pyscf_core::MOCoefficients;
 use pyscf_scf::{
+    RHF, UHF,
     analyze::MullikenResult,
     convert::{to_ghf, to_rhf, to_rks_stub, to_uhf, to_uks_stub},
-    RHF, UHF,
 };
 
 #[test]
@@ -61,30 +61,33 @@ fn to_ghf_from_rhf_preserves_scalar_state() {
     assert_eq!(ghf.diis_space, 5);
 }
 
+// DFT-11 / plan 04-06: Phase 4 DFT has landed, so to_uks/to_rks no longer
+// return `NotYetImplemented{phase:4}` — they produce a `KsConversion`
+// descriptor carrying the source RHF's scalar SCF settings.
 #[test]
-fn to_uks_returns_phase_4_not_yet_implemented() {
+fn to_uks_carries_scf_settings() {
     let mol = pyscf_core::Mole::default();
-    let rhf = RHF::new(mol);
-    let r = to_uks_stub(&rhf);
-    assert!(r.is_err(), "to_uks must defer to Phase 4 DFT");
-    let msg = format!("{}", r.unwrap_err());
-    assert!(
-        msg.contains("Phase 4") || msg.contains("phase 4") || msg.contains("UKS"),
-        "error message must mention Phase 4 / UKS: {msg}"
-    );
+    let mut rhf = RHF::new(mol);
+    rhf.conv_tol = 1e-9;
+    rhf.max_cycle = 42;
+    rhf.diis_space = 7;
+    let ks = to_uks_stub(&rhf).expect("to_uks must succeed now that Phase 4 has landed");
+    assert_eq!(ks.conv_tol, 1e-9);
+    assert_eq!(ks.max_cycle, 42);
+    assert_eq!(ks.diis_space, 7);
 }
 
 #[test]
-fn to_rks_returns_phase_4_not_yet_implemented() {
+fn to_rks_carries_scf_settings() {
     let mol = pyscf_core::Mole::default();
-    let rhf = RHF::new(mol);
-    let r = to_rks_stub(&rhf);
-    assert!(r.is_err(), "to_rks must defer to Phase 4 DFT");
-    let msg = format!("{}", r.unwrap_err());
-    assert!(
-        msg.contains("Phase 4") || msg.contains("phase 4") || msg.contains("RKS"),
-        "error message must mention Phase 4 / RKS: {msg}"
-    );
+    let mut rhf = RHF::new(mol);
+    rhf.conv_tol = 1e-9;
+    rhf.max_cycle = 42;
+    rhf.diis_space = 7;
+    let ks = to_rks_stub(&rhf).expect("to_rks must succeed now that Phase 4 has landed");
+    assert_eq!(ks.conv_tol, 1e-9);
+    assert_eq!(ks.max_cycle, 42);
+    assert_eq!(ks.diis_space, 7);
 }
 
 #[test]
@@ -94,7 +97,10 @@ fn mulliken_pop_rejects_uninitialised_rhf() {
     let mol = pyscf_core::Mole::default();
     let rhf = RHF::new(mol);
     let r = pyscf_scf::analyze::mulliken_pop(&rhf);
-    assert!(r.is_err(), "mulliken_pop on un-run RHF must return Err, not panic");
+    assert!(
+        r.is_err(),
+        "mulliken_pop on un-run RHF must return Err, not panic"
+    );
 }
 
 #[test]
@@ -102,7 +108,10 @@ fn dip_moment_rejects_uninitialised_rhf() {
     let mol = pyscf_core::Mole::default();
     let rhf = RHF::new(mol);
     let r = pyscf_scf::analyze::dip_moment(&rhf);
-    assert!(r.is_err(), "dip_moment on un-run RHF must return Err, not panic");
+    assert!(
+        r.is_err(),
+        "dip_moment on un-run RHF must return Err, not panic"
+    );
 }
 
 #[test]
@@ -124,8 +133,12 @@ fn as_scanner_returns_closure() {
     // run which int2e_sph blocks).
     let mol = pyscf_core::Mole::default();
     let rhf = RHF::new(mol);
-    let _scanner: Box<dyn Fn(&pyscf_core::Mole) -> Result<pyscf_core::Energy, pyscf_core::PyscfRsError> + Send + Sync> =
-        pyscf_scf::scanner::as_scanner(&rhf);
+    #[allow(clippy::type_complexity)]
+    let _scanner: Box<
+        dyn Fn(&pyscf_core::Mole) -> Result<pyscf_core::Energy, pyscf_core::PyscfRsError>
+            + Send
+            + Sync,
+    > = pyscf_scf::scanner::as_scanner(&rhf);
 }
 
 #[test]
@@ -147,8 +160,8 @@ fn mulliken_pop_on_synthetic_converged_rhf_returns_natm_charges() {
     // With nao=0, get_ovlp may fail or succeed; the test asserts no panic.
     // If it returns Ok, atom_charges.len() == 0. If Err, the gap is
     // documented by the error message.
-    match r {
-        Ok(m) => assert_eq!(m.atom_charges.len(), 0),
-        Err(_) => {} // gap from int1e_ovlp on empty Mole — acceptable.
+    // An Err here is the documented gap from int1e_ovlp on an empty Mole.
+    if let Ok(m) = r {
+        assert_eq!(m.atom_charges.len(), 0);
     }
 }

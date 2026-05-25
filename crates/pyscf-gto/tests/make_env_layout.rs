@@ -4,12 +4,12 @@
 //! Covers Pitfalls 2 (slot-dim invariants), 4 (per-symbol first-occurrence
 //! grouping), 5 (KAPPA_OF == 0 for sph/cart), and the `_built = true` flag.
 
-use pyscf_core::raw_layout::{
-    ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, CHARGE_OF, KAPPA_OF, NCTR_OF, NPRIM_OF,
-    NUC_MOD_OF, POINT_NUC, PTR_COORD, PTR_ENV_START,
-};
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_core::raw_layout::{
+    ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, CHARGE_OF, KAPPA_OF, NCTR_OF, NPRIM_OF, NUC_MOD_OF,
+    POINT_NUC, PTR_COORD, PTR_ENV_START,
+};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 fn h2_sto3g_mol() -> pyscf_core::Mole {
     M(MoleBuildArgs {
@@ -69,8 +69,7 @@ fn h2_sto3g_atm_charges_and_ptr_coords() {
     // atom starts at env[20+4] = 24.
     assert_eq!(mol._atm[ATM_SLOTS + PTR_COORD], (PTR_ENV_START + 4) as i32);
     assert_eq!(
-        mol._atm[NUC_MOD_OF],
-        POINT_NUC,
+        mol._atm[NUC_MOD_OF], POINT_NUC,
         "v1: NUC_MOD_OF=POINT_NUC for every atom"
     );
 }

@@ -8,7 +8,7 @@
 //! a second time on the output of `default_eig` must be a no-op. That
 //! proves `default_eig` already canonicalized.
 
-use pyscf_core::{canonicalize_signs, Density};
+use pyscf_core::{Density, canonicalize_signs};
 use pyscf_scf::eig::default_eig;
 
 #[test]
@@ -54,7 +54,10 @@ fn eig_returns_sorted_eigenvalues() {
         data: vec![1.0, 0.0, 0.0, 1.0],
     };
     let mo = default_eig(&fock, &s1e).expect("eig");
-    assert!(mo.energies[0] <= mo.energies[1], "eigenvalues must be nondecreasing");
+    assert!(
+        mo.energies[0] <= mo.energies[1],
+        "eigenvalues must be nondecreasing"
+    );
     assert!((mo.energies[0] - 1.0).abs() < 1e-12);
     assert!((mo.energies[1] - 5.0).abs() < 1e-12);
 }

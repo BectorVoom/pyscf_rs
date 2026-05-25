@@ -6,7 +6,7 @@
 //! covers cross-language chkfile interop.
 
 use pyscf_core::Unit;
-use pyscf_gto::{dumps, loads, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, dumps, loads};
 
 fn h2o_args() -> MoleBuildArgs {
     MoleBuildArgs {

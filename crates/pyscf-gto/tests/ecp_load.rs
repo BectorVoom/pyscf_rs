@@ -8,9 +8,9 @@
 //! `Cu nelec 10` with three channels. We assert the actual file values
 //! — see SUMMARY.md "Deviations from Plan" for the explanation.
 
-use pyscf_gto::format_ecp::format_ecp;
-use pyscf_gto::{AtomInput, BasisInput, EcpInput, MoleBuildArgs, M};
 use pyscf_core::Unit;
+use pyscf_gto::format_ecp::format_ecp;
+use pyscf_gto::{AtomInput, BasisInput, EcpInput, M, MoleBuildArgs};
 
 fn cu_atom() -> Vec<(String, [f64; 3])> {
     vec![("Cu".to_string(), [0.0, 0.0, 0.0])]
@@ -29,17 +29,17 @@ fn ecp_lanl2dz_cu_loads_correctly_from_real_file() {
     // UL, S, P).
     let out = format_ecp(&EcpInput::Name("lanl2dz".into()), &cu_atom()).unwrap();
     let cu = out.get("CU").expect("Cu ECP entry expected");
-    assert_eq!(
-        cu.n_core, 10,
-        "LANL2DZ Cu n_core (file: `Cu nelec 10`)",
-    );
+    assert_eq!(cu.n_core, 10, "LANL2DZ Cu n_core (file: `Cu nelec 10`)",);
     assert!(
         cu.channels.len() >= 3,
         "LANL2DZ Cu has 3 channels (UL, S, P) per the upstream file; got {}",
         cu.channels.len(),
     );
     // First channel is UL (l = -1) per parser convention.
-    assert_eq!(cu.channels[0].l, -1, "first channel should be UL/local (l=-1)");
+    assert_eq!(
+        cu.channels[0].l, -1,
+        "first channel should be UL/local (l=-1)"
+    );
 }
 
 #[test]
@@ -50,7 +50,11 @@ fn ecp_inline_text_h_ul_parses() {
         &[("H".into(), [0.0, 0.0, 0.0])],
     )
     .unwrap();
-    assert!(out.contains_key("H"), "got map keys {:?}", out.keys().collect::<Vec<_>>());
+    assert!(
+        out.contains_key("H"),
+        "got map keys {:?}",
+        out.keys().collect::<Vec<_>>()
+    );
     assert_eq!(out["H"].n_core, 0);
     assert_eq!(out["H"].channels.len(), 1);
     assert_eq!(out["H"].channels[0].l, -1, "ul = local channel = l = -1");
@@ -87,11 +91,7 @@ fn full_pipeline_cu_lanl2dz_via_M() {
         ecp: EcpInput::Name("lanl2dz".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     })
     .expect("build Cu/lanl2dz");
@@ -126,11 +126,7 @@ fn ecp_no_double_subtraction_on_repeat_build() {
         ecp: EcpInput::Name("lanl2dz".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     };
     let mol1 = M(args.clone()).expect("build mol1");

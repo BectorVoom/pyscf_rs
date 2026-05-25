@@ -90,8 +90,9 @@ fn resolve_for_symbol(input: &BasisInput, symbol: &str) -> Result<ParsedBasis, P
             resolve_for_symbol(sub, symbol)
         }
         BasisInput::NwchemText(text) => basis::parse(text, symbol).map_err(PyscfRsError::from),
-        BasisInput::Cp2kText(text) => basis::cp2k::parse_cp2k(text, symbol, "<cp2k-text>")
-            .map_err(PyscfRsError::from),
+        BasisInput::Cp2kText(text) => {
+            basis::cp2k::parse_cp2k(text, symbol, "<cp2k-text>").map_err(PyscfRsError::from)
+        }
         BasisInput::Parsed(parsed) => Ok(parsed.clone()),
     }
 }

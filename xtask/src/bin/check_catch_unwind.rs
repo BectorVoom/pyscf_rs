@@ -51,8 +51,8 @@ fn main() -> Result<ExitCode> {
             continue;
         }
         scanned += 1;
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
 
         // Strip line comments so `// extern "C"` in doc text doesn't
         // trigger. Block comments are left as-is — they're rare in the
@@ -60,7 +60,11 @@ fn main() -> Result<ExitCode> {
         let non_comment: String = content
             .lines()
             .map(|l| {
-                if let Some(idx) = l.find("//") { &l[..idx] } else { l }
+                if let Some(idx) = l.find("//") {
+                    &l[..idx]
+                } else {
+                    l
+                }
             })
             .collect::<Vec<_>>()
             .join("\n");

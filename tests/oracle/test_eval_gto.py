@@ -1,10 +1,10 @@
 """GTO-07: ``eval_gto`` element-wise parity vs upstream PySCF.
 
-Phase 2 ships ``GTOval_sph`` for ``l = 0`` shells; ``l ≥ 1`` paths
-return zero in the current Phase 2 kernel — Phase 4 DFT extends. The
-``test_eval_gto_h2o_ccpvdz_includes_p_shells`` test is marked
-``@pytest.mark.xfail`` so CI tracks the deferral without blocking
-Phase 2 closure.
+Phase 2 shipped ``GTOval_sph`` for ``l = 0`` shells. Phase 4 plan 04-03
+landed the ``l ≥ 1`` (p/d/f) cart→sph path in the kernel, so the
+``test_eval_gto_h2o_ccpvdz_includes_p_shells`` test (cc-pVDZ has p+d on
+O) now matches upstream element-wise — the Phase 2 xfail deferral is
+closed.
 
 The ``s``-shell smoke test (`test_eval_gto_h_sto3g_s_shell_only`) on
 H/STO-3G is the keystone Phase-2-success-criterion-#4 partial: l=0
@@ -21,7 +21,6 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 
 def _eval_gto_pyscfrs(
@@ -101,16 +100,10 @@ def test_eval_gto_h_sto3g_s_shell_only(upstream_pyscf, workspace_root):
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "l ≥ 1 path stubs to zero in Phase 2; Phase 4 DFT extends the "
-        "kernel. cc-pVDZ has p shells on O — the upstream values are "
-        "non-zero, so the assertion fails until Phase 4 ships."
-    )
-)
 def test_eval_gto_h2o_ccpvdz_includes_p_shells(upstream_pyscf, workspace_root):
-    """cc-pVDZ has p shells on O (l=1) which Phase 2's kernel writes
-    as zero. Marked xfail to track the Phase 4 DFT deferral."""
+    """cc-pVDZ has p (and d) shells on O (l≥1). Phase 4 plan 04-03
+    landed the cart→sph `l ≥ 1` path in the kernel, so this now matches
+    upstream element-wise (the Phase 2 xfail deferral is closed)."""
     atom = "O 0 0 0; H 0 0.7 0.6; H 0 -0.7 0.6"
     basis = "cc-pvdz"
     mol = upstream_pyscf.M(atom=atom, basis=basis, unit="Bohr", verbose=0)

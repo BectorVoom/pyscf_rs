@@ -13,7 +13,7 @@
 
 use pyscf_core::{Density, Unit};
 use pyscf_df::DfIntegrals;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 use pyscf_scf::df_scf::DfHooks;
 use pyscf_scf::{OverrideHooks, RHF};
 
@@ -30,8 +30,13 @@ fn h2_mol(basis: &str) -> pyscf_core::Mole {
 #[test]
 fn density_fit_with_explicit_auxbasis_populates_with_df() {
     let mol = h2_mol("sto-3g");
-    let rhf = RHF::new(mol).density_fit(Some("sto-3g")).expect("density_fit");
-    assert!(rhf.with_df.is_some(), "with_df must be Some after density_fit");
+    let rhf = RHF::new(mol)
+        .density_fit(Some("sto-3g"))
+        .expect("density_fit");
+    assert!(
+        rhf.with_df.is_some(),
+        "with_df must be Some after density_fit"
+    );
 
     let stored = rhf.with_df.as_ref().expect("with_df Some");
     let df: &DfIntegrals = stored
@@ -131,7 +136,7 @@ fn df_hooks_delegates_non_df_hooks_to_defaults() {
     // numerics here (that's plan 03-08 Arms); we just assert get_occ
     // produces the closed-shell Aufbau pattern.
     let df = DfIntegrals {
-        b_uvq: vec![0.0; 2 * 2 * 1],
+        b_uvq: vec![0.0; 2 * 2],
         naux: 1,
         nao: 2,
     };
@@ -140,6 +145,9 @@ fn df_hooks_delegates_non_df_hooks_to_defaults() {
     let occ = hooks.get_occ(&mo_energy, 2).expect("get_occ");
     // RHF closed-shell with 2 electrons: lowest MO doubly occupied.
     assert_eq!(occ.len(), 2);
-    assert!((occ[0] - 2.0).abs() < 1e-12, "lowest MO must be doubly occupied");
+    assert!(
+        (occ[0] - 2.0).abs() < 1e-12,
+        "lowest MO must be doubly occupied"
+    );
     assert!((occ[1] - 0.0).abs() < 1e-12, "higher MO must be empty");
 }

@@ -1,0 +1,32 @@
+[package]
+name = "pyscf-grids"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+description = "Becke molecular grids (gen_grid/radi/Lebedev port). Phase 4 (D-05)."
+
+[lib]
+path = "src/lib.rs"
+
+# Algebra wall (Pitfall 2 / ALG-06): grids depends ONLY on pyscf-core +
+# pyscf-algebra for compute; no direct cubecl-* dep. All array work routes
+# through pyscf-algebra's public Tensor surface.
+[dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+
+# Dev-only: corpus Mole construction + the PySCF live-oracle harness
+# (ORACLE-01: oracle is dev-deps only — never a normal dep of the wheel).
+# The byte-for-byte grid compare runs under `--features python` (CI only);
+# `pyscf-oracle`'s own `python` feature gates the libpython link.
+[dev-dependencies]
+pyscf-gto    = { path = "../pyscf-gto" }
+pyscf-oracle = { path = "../pyscf-oracle" }
+
+[features]
+# Forward a `python` feature to pyscf-oracle so
+# `cargo test -p pyscf-grids --features python` drives the live oracle.
+python = ["pyscf-oracle/python"]

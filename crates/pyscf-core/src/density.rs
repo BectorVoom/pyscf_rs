@@ -12,3 +12,17 @@ pub struct Density {
     /// `Tensor`).
     pub data: Vec<f64>,
 }
+
+impl Density {
+    /// Wrap a flat `nao × nao` value buffer as a `Density`.
+    ///
+    /// Added by gap-closure plan 02-10 so the cintx-backed `EcpEngine`
+    /// (`pyscf_gto::ecp_engine_cintx::CintxEcpEngine`) can hand the
+    /// stitched `int1e_ecp` matrix back through the `EcpEngine` trait
+    /// without re-deriving `nao` at the call site. `nao` is the AO-axis
+    /// dimension; `data.len()` must equal `nao * nao` for the square
+    /// 1e-ECP matrix the dispatcher expects.
+    pub fn from_flat(nao: usize, data: Vec<f64>) -> Self {
+        Density { nao, data }
+    }
+}

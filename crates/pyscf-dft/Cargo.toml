@@ -9,4 +9,75 @@ description = "Density functional theory (RKS/UKS + Becke grids). Implemented in
 [lib]
 path = "src/lib.rs"
 
+# Off-by-default optional libxc backend — model: pyscf-kernels/Cargo.toml
+# [features] block + xcfun-rs/Cargo.toml. Pitfall 5: the libxc_rs dep MUST be
+# optional or every default build pulls libxc_rs's 266 kernel crates (~6h
+# freeze). Default features carry NO libxc — xcfun-rs is the default XC backend.
+[features]
+default = []
+libxc   = ["dep:libxc_rs"]
+# CI-only: turn on the live PySCF oracle harness for the DFT-01
+# rks_uks_bitexact energy assertions. Forwards to pyscf-oracle's `python`
+# feature (libpython + an importable upstream pyscf). Off by default so the
+# local `cargo test -p pyscf-dft` build stays freestanding — mirrors the
+# 04-04 pyscf-grids `python` passthrough. Does NOT add a runtime dep (the
+# oracle is a dev-dependency only — ORACLE-01 / PyO3 wall intact for the lib).
+python  = ["pyscf-oracle/python"]
+
 [dependencies]
+# Method-crate deps (path). pyscf-runtime (DType::from_env, D-08) and
+# pyscf-algebra (the DeviceScalar matmul element bound, D-08) are the precision
+# seam D-08 reuses — D-08 adds NO new dependency.
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+pyscf-gto     = { path = "../pyscf-gto" }
+pyscf-scf     = { path = "../pyscf-scf" }
+pyscf-df      = { path = "../pyscf-df" }
+pyscf-grids   = { path = "../pyscf-grids" }
+pyscf-chkfile = { path = "../pyscf-chkfile" }
+pyscf-runtime = { path = "../pyscf-runtime" }
+# Plan 04-08 — the KS chkfile F-order mo_coeff view (chkfile.rs builds an
+# ArrayView2 with explicit F-strides for write_dataset_f_order, Pitfall 8).
+# Mirrors pyscf-scf::chkfile's ndarray use; NOT an hdf5 dep (D-05 intact —
+# pyscf-chkfile remains the sole owner of hdf5-metno; ndarray is the array
+# view crate the chkfile primitives already take as input).
+ndarray       = { workspace = true }
+# Default XC backend: native-Rust xcfun (always compiled). Redirected to the
+# sibling path via the workspace [patch.crates-io] xcfun_rs entry.
+xcfun-rs      = "0.1.0"
+# DFT-11 WGPU f64-honesty delegation target. `xcfun-gpu` is ALREADY in the
+# default dep graph transitively (xcfun-rs → xcfun-gpu); this direct entry only
+# makes `auto_backend` / `error_routing::must_fall_back_to_cpu` / `Backend`
+# nameable at the `xc_backend.rs` XC-eval seam so the WGPU shader-f64 probe is
+# DELEGATED, never re-implemented (DFT-11, Pitfall 6). `default-features = false`
+# adds NO cubecl features beyond what xcfun-rs's default `cpu` already pulls;
+# the two functions used (`auto_backend`, `must_fall_back_to_cpu`) are pure /
+# cfg-gated and never compile a GPU runtime in the CPU-only default build. NOT
+# a cubecl-* crate, so the ALG-06 dependency-wall lint (FORBIDDEN_DEPS) permits
+# it; cubecl containment is unchanged (no new direct cubecl-* dep).
+xcfun-gpu     = { path = "../../../xcfun_rs/crates/xcfun-gpu", default-features = false }
+tracing       = { workspace = true }
+thiserror     = { workspace = true }
+# Optional libxc backend (off by default — see [features] above). The
+# [patch.crates-io] libxc_rs entry stays commented until 04-09 wires the
+# libxc CI gate; nothing references libxc_rs in the default dep graph.
+libxc_rs      = { path = "../../../libxc_rs", optional = true }
+
+# NO pyo3 dep here (PyO3 wall) — the Python surface lives in pyscf-py.
+
+[dev-dependencies]
+# Plan 04-06 — DFT-01 RKS/UKS energy oracle. The live-PySCF harness is a
+# DEV dependency only (ORACLE-01: release wheels never link Python); the
+# `rks_energy`/`uks_energy` arms run only under `--features python` on CI
+# with libpython + an importable upstream pyscf. The default `cargo test`
+# build does NOT pull pyo3 (the harness short-circuits to
+# PythonFeatureNotEnabled). pyscf-gto is needed by the structural test layer
+# to build Mole fixtures.
+pyscf-oracle  = { path = "../pyscf-oracle" }
+pyscf-gto     = { path = "../pyscf-gto" }
+tracing-subscriber = { workspace = true }
+# Plan 04-08 — KS chkfile round-trip scratch paths (ks_chkfile_roundtrip.rs +
+# the chkfile.rs inline tests). Mirrors pyscf-scf's `tempfile = "3"` dev-dep
+# for the SCF chkfile tests. NO new runtime dep (D-05: pyscf-chkfile remains
+# the sole owner of hdf5-metno; pyscf-dft does NOT add an hdf5-metno dep).
+tempfile      = "3"

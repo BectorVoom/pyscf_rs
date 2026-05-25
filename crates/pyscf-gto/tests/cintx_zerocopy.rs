@@ -10,7 +10,7 @@
 //! see `Arc<BasisSet>` clones, never raw bytes.
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 use std::sync::Arc;
 
 fn h2_sto3g_args() -> MoleBuildArgs {

@@ -38,10 +38,14 @@ impl BackendKind {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Cpu => "cpu",
-            #[cfg(feature = "cuda")]  Self::Cuda  => "cuda",
-            #[cfg(feature = "wgpu")]  Self::Wgpu  => "wgpu",
-            #[cfg(feature = "rocm")]  Self::Rocm  => "rocm",
-            #[cfg(feature = "metal")] Self::Metal => "metal",
+            #[cfg(feature = "cuda")]
+            Self::Cuda => "cuda",
+            #[cfg(feature = "wgpu")]
+            Self::Wgpu => "wgpu",
+            #[cfg(feature = "rocm")]
+            Self::Rocm => "rocm",
+            #[cfg(feature = "metal")]
+            Self::Metal => "metal",
         }
     }
 

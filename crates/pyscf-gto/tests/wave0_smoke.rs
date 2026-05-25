@@ -32,8 +32,8 @@ mod common;
 
 use cintx_core::Representation;
 use cintx_ops::resolver::Resolver;
-use cintx_runtime::ExecutionOptions;
 use cintx_rs::SessionRequest;
+use cintx_runtime::ExecutionOptions;
 
 #[test]
 fn cintx_h2_sto3g_int1e_ovlp_sph_round_trip() {

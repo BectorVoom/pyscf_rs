@@ -7,7 +7,7 @@
 //! check for the `tot_electrons` signed math.
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 fn h2_args(atom: AtomInput, unit: Unit) -> MoleBuildArgs {
     MoleBuildArgs {
@@ -40,11 +40,7 @@ fn h2_string_form_angstrom_converts_to_bohr() {
         Unit::Ang,
     ))
     .unwrap();
-    approx::assert_abs_diff_eq!(
-        mol._atom[1].1[2],
-        1.4 * 1.8897261339213,
-        epsilon = 1e-9
-    );
+    approx::assert_abs_diff_eq!(mol._atom[1].1[2], 1.4 * 1.8897261339213, epsilon = 1e-9);
 }
 
 #[test]
@@ -73,10 +69,7 @@ fn h2_file_form() {
     let dir = std::env::temp_dir();
     // Use a unique name per test invocation to avoid races with parallel
     // tests / leftover files from interrupted runs.
-    let path = dir.join(format!(
-        "pyscf_rs_h2_test_{}.atoms",
-        std::process::id()
-    ));
+    let path = dir.join(format!("pyscf_rs_h2_test_{}.atoms", std::process::id()));
     std::fs::write(&path, "H 0 0 0\nH 0 0 1.4\n").unwrap();
     let mol = M(h2_args(AtomInput::FilePath(path.clone()), Unit::Bohr)).unwrap();
     assert_eq!(mol.natm, 2);

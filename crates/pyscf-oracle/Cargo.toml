@@ -34,6 +34,8 @@ python = [
     "dep:pyscf-gto",
     "dep:pyscf-scf",
     "dep:pyscf-chkfile",
+    "dep:pyscf-grids",
+    "dep:pyscf-dft",
     "dep:tempfile",
 ]
 
@@ -47,6 +49,12 @@ pyscf-core    = { path = "../pyscf-core",    optional = true }
 pyscf-gto     = { path = "../pyscf-gto",     optional = true }
 pyscf-scf     = { path = "../pyscf-scf",     optional = true }
 pyscf-chkfile = { path = "../pyscf-chkfile", optional = true }
+pyscf-grids   = { path = "../pyscf-grids",   optional = true }
+# Plan 04-06 — DFT-01 RKS/UKS energy oracle (rks_energy/uks_energy arms).
+# Optional + `python`-gated like every other body-side dep so the default
+# build stays freestanding AND libxc is never pulled (pyscf-dft default
+# features carry NO libxc — xcfun_rs only).
+pyscf-dft     = { path = "../pyscf-dft",     optional = true }
 tempfile      = { version = "3",             optional = true }
 
 # pyo3 stays optional + feature-gated. Off by default → `cargo build

@@ -1,9 +1,10 @@
 //! Oracle runner — dispatches methods to per-check helpers, drives Python via
 //! `Python::attach` (pyo3 in dev-deps only — ORACLE-01).
 //!
-//! ALL 8 arms ship with real implementations (checker iteration 1 BLOCKER 1
-//! closure). ROADMAP success criterion 6: every SCF success criterion is
-//! asserted via this macro.
+//! All 8 SCF/DF arms ship with real implementations (checker iteration 1
+//! BLOCKER 1 closure). ROADMAP success criterion 6: every SCF success
+//! criterion is asserted via this macro. Phase 4 plan 04-04 adds a 9th arm,
+//! `grid_weights` (DFT-04/09 byte-for-byte Becke grid compare).
 //!
 //! Build modes:
 //!   - default features (no `python`): only `OracleError` + the dispatch
@@ -39,10 +40,10 @@ pub enum OracleError {
     Io(#[from] std::io::Error),
 }
 
-/// All 8 known method names — recognised by dispatch regardless of whether
+/// All known method names — recognised by dispatch regardless of whether
 /// the `python` feature is enabled. Used to distinguish a genuinely
 /// unknown method (always an error) from a known method that can't run
-/// because Python isn't compiled in.
+/// because Python isn't compiled in. (8 SCF/DF arms + `grid_weights`.)
 const KNOWN_METHODS: &[&str] = &[
     "scf_rhf_energy",
     "scf_uhf_energy",
@@ -52,6 +53,67 @@ const KNOWN_METHODS: &[&str] = &[
     "chkfile_roundtrip",
     "mulliken_pop",
     "dip_moment",
+    // DFT-04 / DFT-09 (plan 04-04): byte-for-byte Becke grid coords + weights
+    // vs upstream `dft.gen_grid.Grids`. The fixture name encodes the level as
+    // `<base>@levelN` (e.g. "h2o_ccpvdz@level3").
+    "grid_weights",
+    // DFT-01 (plan 04-06): RKS / UKS total energy ≤ 1 µHartree vs upstream
+    // `dft.RKS(mol, xc=...).kernel()` / `dft.UKS(...)`. The fixture name
+    // encodes the XC functional as `<base>@<xc>` (e.g. "h2o_ccpvdz@svwn",
+    // "h2o_ccpvdz@b3lyp"). f64 ONLY — these are the bit-exact oracle path
+    // (PYSCF_DTYPE unset); the f32 path is NEVER compared to upstream (D-08).
+    "rks_energy",
+    "uks_energy",
+    // DFT-07 (plan 04-08): DF-DFT total energy ≤ 1 µHartree vs upstream
+    // `dft.RKS(mol, xc=...).density_fit().kernel()`. The Coulomb-J build routes
+    // through the Phase 3 pyscf-df crate (D-10 reuse); the fixture encodes the
+    // XC functional as `<base>@<xc>` (e.g. "h2o_ccpvdz@svwn"). f64 ONLY.
+    "df_dft_energy",
+    // DFT-07 chkfile (plan 04-08): KsResult dump → h5py-readable on the upstream
+    // /scf schema + the xc/grids metadata, round-tripping both directions (the
+    // ORACLE-08 harness extended to the KS result type, D-06).
+    "ks_chkfile_roundtrip",
+    // ── Phase 5 MP2 numeric oracle arms (plan 05-01) ───────────────────────
+    // MP2-01/02/04/05: RMP2 / UMP2 / DF-MP2 (conventional + native) correlation
+    // energies + MP2 RDM, each compared ≤ 1 µHartree vs upstream
+    // `mp.RMP2(mf).kernel()` / `mp.UMP2(uhf_mf).kernel()` /
+    // `mp.DFMP2(mf).kernel()` (and the native RI-MP2 path). The fixture name
+    // encodes the system as `<base>` (e.g. "h2o_ccpvdz"), exactly the
+    // rks_energy precedent. ALL five MP2 numeric arms are CI-gated behind
+    // cintx#11 (the numeric oracle needs both arity-4 `int2e` for the in-core
+    // RMP2/UMP2 path AND arity-3 `int3c2e_sph` for the DF-MP2 path); the
+    // `mp2-oracle-cintx-gated` CI job stays `if: false` until cintx#11 ships
+    // these — mirroring the DF-HF / DFT-01 (rks_energy/uks_energy) gating.
+    "mp2_rmp2_energy",
+    "mp2_ump2_energy",
+    "dfmp2_energy",
+    "dfmp2_native_energy",
+    "mp2_rdm",
+    // ── Phase 6 CCSD numeric oracle arms (plan 06-11) ──────────────────────
+    // CCSD-01/02/05/06/08: RCCSD / UCCSD / DF-CCSD correlation energies + λ
+    // amplitudes + 1-/2-particle RDMs, each compared byte-identity vs upstream
+    // `cc.CCSD(mf).kernel()` / `cc.UCCSD(uhf_mf).kernel()` /
+    // `cc.CCSD(mf.density_fit()).kernel()` (and `.solve_lambda()` /
+    // `.make_rdm1()` / `.make_rdm2()`). The fixture name encodes the system as
+    // `<base>` (e.g. "h2o_ccpvdz", "caffeine_ccpvdz"), exactly the
+    // mp2_rmp2_energy precedent.
+    //
+    // ALL SIX are registered here so the always-on dispatch layer recognises
+    // them (the `unknown method` guard distinguishes a genuinely unknown name
+    // from a known-but-Python-gated arm). The live byte-identity comparison
+    // itself is `workflow_dispatch`/human-verify ONLY (the
+    // `ccsd-oracle-upstream-manual` CI arm — caffeine/cc-pVDZ byte-identity,
+    // DF-CCSD spill, λ/RDM byte-identity) because it needs an installed upstream
+    // PySCF. The always-on, in-tree small-system numeric proofs live in
+    // crates/pyscf-ccsd/tests/ (rccsd_numeric_smoke, uccsd_smoke, lambda, rdm,
+    // dfccsd_spill, direct) — never pulling libxc, never calling live PySCF
+    // (user-memory constraint; the 05-08 mp2-oracle-upstream-manual precedent).
+    "ccsd_rccsd_energy",
+    "ccsd_uccsd_energy",
+    "ccsd_dfccsd_energy",
+    "ccsd_lambda",
+    "ccsd_rdm1",
+    "ccsd_rdm2",
 ];
 
 /// Top-level dispatcher. Resolves the method name to either a known
@@ -88,11 +150,7 @@ mod python_impl {
     use pyo3::prelude::*;
     use pyo3::types::PyAnyMethods;
 
-    pub(super) fn dispatch(
-        method: &str,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    pub(super) fn dispatch(method: &str, fixture: &str, tol: f64) -> Result<(), OracleError> {
         Python::attach(|py| match method {
             "scf_rhf_energy" => check_scf_rhf_energy(py, fixture, tol),
             "scf_uhf_energy" => check_scf_uhf_energy(py, fixture, tol),
@@ -102,6 +160,11 @@ mod python_impl {
             "chkfile_roundtrip" => check_chkfile_roundtrip(py, fixture, tol),
             "mulliken_pop" => check_mulliken_pop(py, fixture, tol),
             "dip_moment" => check_dip_moment(py, fixture, tol),
+            "grid_weights" => check_grid_weights(py, fixture, tol),
+            "rks_energy" => check_rks_energy(py, fixture, tol),
+            "uks_energy" => check_uks_energy(py, fixture, tol),
+            "df_dft_energy" => check_df_dft_energy(py, fixture, tol),
+            "ks_chkfile_roundtrip" => check_ks_chkfile_roundtrip(py, fixture, tol),
             other => Err(OracleError::UnknownMethod(other.to_string())),
         })
     }
@@ -170,11 +233,7 @@ mod python_impl {
 
     // ── Arm 1: RHF energy ────────────────────────────────────────────────
 
-    fn check_scf_rhf_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_scf_rhf_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -207,11 +266,7 @@ mod python_impl {
 
     // ── Arm 2: UHF energy ────────────────────────────────────────────────
 
-    fn check_scf_uhf_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_scf_uhf_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -244,11 +299,7 @@ mod python_impl {
 
     // ── Arm 3: DIIS iteration count (|Δcycles| ≤ tol; integer-ish tol) ───
 
-    fn check_diis_iter_count(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_diis_iter_count(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -288,11 +339,7 @@ mod python_impl {
 
     // ── Arm 4: init_guess first-iteration density ────────────────────────
 
-    fn check_init_guess(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_init_guess(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         // Fixture is "<base>_<mode>" e.g. "h2o_ccpvdz_minao". The base
         // (without the `_<mode>` suffix) is what we hand both sides.
         let mode = fixtures::init_guess_mode(fixture);
@@ -347,11 +394,7 @@ mod python_impl {
 
     // ── Arm 5: DF-HF energy ──────────────────────────────────────────────
 
-    fn check_df_hf_energy(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_df_hf_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -392,11 +435,7 @@ mod python_impl {
 
     // ── Arm 6: ORACLE-08 chkfile round-trip (both directions) ────────────
 
-    fn check_chkfile_roundtrip(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_chkfile_roundtrip(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         // Direction (a): PySCF writes → pyscf-rs reads.
         let tmp_a = tempfile::NamedTempFile::new()?;
         let path_a = tmp_a.path();
@@ -494,11 +533,7 @@ mod python_impl {
 
     // ── Arm 7: Mulliken population (atom-resolved charges) ───────────────
 
-    fn check_mulliken_pop(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_mulliken_pop(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -549,11 +584,7 @@ mod python_impl {
 
     // ── Arm 8: Dipole moment (3-vector) ──────────────────────────────────
 
-    fn check_dip_moment(
-        py: Python<'_>,
-        fixture: &str,
-        tol: f64,
-    ) -> Result<(), OracleError> {
+    fn check_dip_moment(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
         let mol = build_pyscf_mol(py, fixture)?;
         let scf = py
             .import("pyscf.scf")
@@ -597,6 +628,348 @@ mod python_impl {
         }
         Ok(())
     }
+
+    // ── Arm 9: DFT-04/09 Becke grid coords + weights byte-for-byte ──────────
+
+    /// Parse a `<base>@levelN` fixture name into `(base, level)`.
+    fn parse_grid_fixture(fixture: &str) -> (&str, usize) {
+        match fixture.split_once("@level") {
+            Some((base, lvl)) => (base, lvl.parse::<usize>().unwrap_or(3)),
+            None => (fixture, 3),
+        }
+    }
+
+    fn check_grid_weights(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
+        let (base, level) = parse_grid_fixture(fixture);
+
+        // ── Upstream: dft.gen_grid.Grids with class defaults, sort_grids=False ──
+        let mol = build_pyscf_mol(py, base)?;
+        let gen_grid = py
+            .import("pyscf.dft.gen_grid")
+            .map_err(|e| OracleError::Upstream(format!("import gen_grid: {}", e)))?;
+        let grids = gen_grid
+            .call_method1("Grids", (mol,))
+            .map_err(|e| OracleError::Upstream(format!("Grids(): {}", e)))?;
+        grids
+            .setattr("level", level)
+            .map_err(|e| OracleError::Upstream(format!("set level: {}", e)))?;
+        // build(sort_grids=False) — match the pyscf-rs unsorted contract.
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs
+            .set_item("sort_grids", false)
+            .map_err(|e| OracleError::Upstream(format!("kwargs sort_grids: {}", e)))?;
+        grids
+            .call_method("build", (), Some(&kwargs))
+            .map_err(|e| OracleError::Upstream(format!("grids.build: {}", e)))?;
+        let coords_upstream = np_to_vec_f64(
+            &grids
+                .getattr("coords")
+                .map_err(|e| OracleError::Upstream(format!("coords attr: {}", e)))?,
+        )?;
+        let weights_upstream = np_to_vec_f64(
+            &grids
+                .getattr("weights")
+                .map_err(|e| OracleError::Upstream(format!("weights attr: {}", e)))?,
+        )?;
+
+        // ── pyscf-rs: pyscf_grids::Grids with class defaults ──
+        let rust_mol = build_rust_mol(base)?;
+        let mut g = pyscf_grids::Grids::new();
+        g.level = level;
+        let (coords_rs_rows, weights_rs) = g.build(&rust_mol);
+        // Flatten coords row-major to match numpy's (N,3).reshape order.
+        let mut coords_rs = Vec::with_capacity(coords_rs_rows.len() * 3);
+        for row in &coords_rs_rows {
+            coords_rs.extend_from_slice(row);
+        }
+
+        // Shape gate.
+        if coords_rs.len() != coords_upstream.len() {
+            return Err(OracleError::Diff {
+                diff: f64::INFINITY,
+                tol,
+                key: format!(
+                    "grid_weights[{}] coords shape (rs={}, upstream={})",
+                    fixture,
+                    coords_rs.len(),
+                    coords_upstream.len()
+                ),
+            });
+        }
+        if weights_rs.len() != weights_upstream.len() {
+            return Err(OracleError::Diff {
+                diff: f64::INFINITY,
+                tol,
+                key: format!(
+                    "grid_weights[{}] weights shape (rs={}, upstream={})",
+                    fixture,
+                    weights_rs.len(),
+                    weights_upstream.len()
+                ),
+            });
+        }
+
+        let coords_diff = elementwise_max_diff(&coords_rs, &coords_upstream);
+        if coords_diff > tol {
+            return Err(OracleError::Diff {
+                diff: coords_diff,
+                tol,
+                key: format!("grid_weights[{}] coords", fixture),
+            });
+        }
+        let weights_diff = elementwise_max_diff(&weights_rs, &weights_upstream);
+        if weights_diff > tol {
+            return Err(OracleError::Diff {
+                diff: weights_diff,
+                tol,
+                key: format!("grid_weights[{}] weights", fixture),
+            });
+        }
+        Ok(())
+    }
+
+    // ── Arm 10 (DFT-01): RKS total energy ────────────────────────────────
+    //
+    // Upstream `dft.RKS(mol, xc=...).kernel()` vs pyscf-rs `RKS::new(mol,
+    // xc).kernel()`, within `tol` µHartree. The fixture name encodes the XC
+    // functional as `<base>@<xc>` (fixtures::xc). f64 ONLY (PYSCF_DTYPE must
+    // be unset — the bit-exact path; D-08). SVWN/PBE/B3LYP exercise the
+    // LDA / GGA / standard-hybrid (hyb-scaled K) branches respectively.
+    fn check_rks_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
+        let xc = fixtures::xc(fixture);
+        let mol = build_pyscf_mol(py, fixture)?;
+        let dft = py
+            .import("pyscf.dft")
+            .map_err(|e| OracleError::Upstream(format!("import dft: {}", e)))?;
+        let mf = dft
+            .call_method1("RKS", (mol,))
+            .map_err(|e| OracleError::Upstream(format!("RKS(): {}", e)))?;
+        mf.setattr("xc", xc)
+            .map_err(|e| OracleError::Upstream(format!("set xc: {}", e)))?;
+        let e_upstream: f64 = mf
+            .call_method0("kernel")
+            .map_err(|e| OracleError::Upstream(format!("kernel: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract f64: {}", e)))?;
+
+        let rust_mol = build_rust_mol(fixture)?;
+        let mut ks = pyscf_dft::RKS::new(rust_mol, xc);
+        ks.kernel()
+            .map_err(|e| OracleError::PyscfRs(format!("RKS kernel: {}", e)))?;
+        let e_rs = ks.e_tot;
+
+        let diff = (e_rs - e_upstream).abs();
+        if diff > tol {
+            return Err(OracleError::Diff {
+                diff,
+                tol,
+                key: format!("rks_energy[{}/{}]", fixture, xc),
+            });
+        }
+        Ok(())
+    }
+
+    // ── Arm 11 (DFT-01): UKS total energy (open shell) ───────────────────
+    fn check_uks_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
+        let xc = fixtures::xc(fixture);
+        let mol = build_pyscf_mol(py, fixture)?;
+        let dft = py
+            .import("pyscf.dft")
+            .map_err(|e| OracleError::Upstream(format!("import dft: {}", e)))?;
+        let mf = dft
+            .call_method1("UKS", (mol,))
+            .map_err(|e| OracleError::Upstream(format!("UKS(): {}", e)))?;
+        mf.setattr("xc", xc)
+            .map_err(|e| OracleError::Upstream(format!("set xc: {}", e)))?;
+        let e_upstream: f64 = mf
+            .call_method0("kernel")
+            .map_err(|e| OracleError::Upstream(format!("kernel: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract f64: {}", e)))?;
+
+        let rust_mol = build_rust_mol(fixture)?;
+        let mut ks = pyscf_dft::UKS::new(rust_mol, xc);
+        ks.kernel()
+            .map_err(|e| OracleError::PyscfRs(format!("UKS kernel: {}", e)))?;
+        let e_rs = ks.e_tot;
+
+        let diff = (e_rs - e_upstream).abs();
+        if diff > tol {
+            return Err(OracleError::Diff {
+                diff,
+                tol,
+                key: format!("uks_energy[{}/{}]", fixture, xc),
+            });
+        }
+        Ok(())
+    }
+
+    // ── Arm 12 (DFT-07): DF-DFT total energy ─────────────────────────────
+    // `dft.RKS(mol, xc).density_fit().kernel()` — the Coulomb-J build routes
+    // through the Phase 3 pyscf-df crate (D-10 reuse); the Vxc/K stay standard.
+    fn check_df_dft_energy(py: Python<'_>, fixture: &str, tol: f64) -> Result<(), OracleError> {
+        let xc = fixtures::xc(fixture);
+        let mol = build_pyscf_mol(py, fixture)?;
+        let dft = py
+            .import("pyscf.dft")
+            .map_err(|e| OracleError::Upstream(format!("import dft: {}", e)))?;
+        let mf = dft
+            .call_method1("RKS", (mol,))
+            .map_err(|e| OracleError::Upstream(format!("RKS(): {}", e)))?;
+        mf.setattr("xc", xc)
+            .map_err(|e| OracleError::Upstream(format!("set xc: {}", e)))?;
+        // .density_fit() returns the DF-wrapped method object.
+        let mf_df = mf
+            .call_method0("density_fit")
+            .map_err(|e| OracleError::Upstream(format!("density_fit(): {}", e)))?;
+        let e_upstream: f64 = mf_df
+            .call_method0("kernel")
+            .map_err(|e| OracleError::Upstream(format!("kernel: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract f64: {}", e)))?;
+
+        let rust_mol = build_rust_mol(fixture)?;
+        let mut ks = pyscf_dft::RKS::new(rust_mol, xc)
+            .density_fit(None)
+            .map_err(|e| OracleError::PyscfRs(format!("RKS::density_fit: {}", e)))?;
+        ks.kernel_df()
+            .map_err(|e| OracleError::PyscfRs(format!("RKS kernel_df: {}", e)))?;
+        let e_rs = ks.e_tot;
+
+        let diff = (e_rs - e_upstream).abs();
+        if diff > tol {
+            return Err(OracleError::Diff {
+                diff,
+                tol,
+                key: format!("df_dft_energy[{}/{}]", fixture, xc),
+            });
+        }
+        Ok(())
+    }
+
+    // ── Arm 13 (DFT-07 chkfile / ORACLE-08): KS chkfile round-trip ───────
+    // KsResult written by pyscf-rs is h5py-readable on the upstream /scf
+    // schema (+ the xc/grids metadata); a PySCF DFT chkfile is pyscf-rs
+    // -readable. Mirrors `check_chkfile_roundtrip` but for the KS result type.
+    fn check_ks_chkfile_roundtrip(
+        py: Python<'_>,
+        fixture: &str,
+        tol: f64,
+    ) -> Result<(), OracleError> {
+        let xc = fixtures::xc(fixture);
+
+        // Direction (a): PySCF DFT writes → pyscf-rs reads the /scf block.
+        let tmp_a = tempfile::NamedTempFile::new()?;
+        let path_a = tmp_a.path();
+        {
+            let mol = build_pyscf_mol(py, fixture)?;
+            let dft = py
+                .import("pyscf.dft")
+                .map_err(|e| OracleError::Upstream(format!("import dft: {}", e)))?;
+            let mf = dft
+                .call_method1("RKS", (mol,))
+                .map_err(|e| OracleError::Upstream(format!("RKS(): {}", e)))?;
+            mf.setattr("xc", xc)
+                .map_err(|e| OracleError::Upstream(format!("set xc: {}", e)))?;
+            mf.setattr(
+                "chkfile",
+                path_a
+                    .to_str()
+                    .ok_or_else(|| OracleError::Upstream("path_a not utf8".into()))?,
+            )
+            .map_err(|e| OracleError::Upstream(format!("setattr chkfile: {}", e)))?;
+            mf.call_method0("kernel")
+                .map_err(|e| OracleError::Upstream(format!("kernel: {}", e)))?;
+        }
+        // pyscf-rs reads the /scf block PySCF DFT just wrote (the SCF schema is
+        // shared; the KS xc/grids metadata is pyscf-rs's extension and is not
+        // written by upstream, so we read the SCF block here for the e_tot
+        // cross-check).
+        let scf_loaded = pyscf_scf::load_scf_from_file(path_a)
+            .map_err(|e| OracleError::PyscfRs(format!("load_scf_from_file: {}", e)))?;
+        let pyscf_lib = py
+            .import("pyscf.lib.chkfile")
+            .map_err(|e| OracleError::Upstream(format!("import pyscf.lib.chkfile: {}", e)))?;
+        let chk_data = pyscf_lib
+            .call_method1(
+                "load",
+                (
+                    path_a
+                        .to_str()
+                        .ok_or_else(|| OracleError::Upstream("path_a not utf8".into()))?,
+                    "scf",
+                ),
+            )
+            .map_err(|e| OracleError::Upstream(format!("chkfile.load: {}", e)))?;
+        let e_upstream: f64 = chk_data
+            .get_item("e_tot")
+            .map_err(|e| OracleError::Upstream(format!("get e_tot: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract e_tot: {}", e)))?;
+        let diff_a = (scf_loaded.e_tot.0 - e_upstream).abs();
+        if diff_a > tol {
+            return Err(OracleError::Diff {
+                diff: diff_a,
+                tol,
+                key: format!("ks_chkfile_roundtrip[A,{}]", fixture),
+            });
+        }
+
+        // Direction (b): pyscf-rs writes a KsResult → h5py reads /scf/e_tot AND
+        // the KS xc/grids metadata (the h5py-readability seal on the extended
+        // schema). We build a representative KsResult from the loaded SCF block.
+        let tmp_b = tempfile::NamedTempFile::new()?;
+        let path_b = tmp_b.path();
+        let ks_result = pyscf_dft::KsResult::new(scf_loaded, xc, pyscf_dft::GridsMeta::default());
+        pyscf_dft::dump_ks_to_file(path_b, "{}", &ks_result)
+            .map_err(|e| OracleError::PyscfRs(format!("dump_ks_to_file: {}", e)))?;
+
+        // h5py opens the pyscf-rs-written chkfile and reads /scf/e_tot + /scf/xc.
+        let h5py = py
+            .import("h5py")
+            .map_err(|e| OracleError::Upstream(format!("import h5py: {}", e)))?;
+        let f = h5py
+            .call_method1(
+                "File",
+                (
+                    path_b
+                        .to_str()
+                        .ok_or_else(|| OracleError::Upstream("path_b not utf8".into()))?,
+                    "r",
+                ),
+            )
+            .map_err(|e| OracleError::Upstream(format!("h5py.File: {}", e)))?;
+        let scf_grp = f
+            .get_item("scf")
+            .map_err(|e| OracleError::Upstream(format!("h5py['scf']: {}", e)))?;
+        // /scf/e_tot reads back as a scalar (`dataset[()]` — h5py-readable on
+        // the upstream schema). The empty tuple is the scalar index.
+        let empty_idx = pyo3::types::PyTuple::empty(py);
+        let e_dataset = scf_grp
+            .get_item("e_tot")
+            .map_err(|e| OracleError::Upstream(format!("h5py scf/e_tot: {}", e)))?;
+        let e_h5: f64 = e_dataset
+            .call_method1("__getitem__", (empty_idx,))
+            .map_err(|e| OracleError::Upstream(format!("read e_tot scalar: {}", e)))?
+            .extract()
+            .map_err(|e| OracleError::Upstream(format!("extract e_tot h5: {}", e)))?;
+        // /scf/xc reads back as the DFT metadata (the schema extension).
+        let _xc_h5 = scf_grp
+            .get_item("xc")
+            .map_err(|e| OracleError::Upstream(format!("h5py scf/xc missing: {}", e)))?;
+        f.call_method0("close")
+            .map_err(|e| OracleError::Upstream(format!("h5py close: {}", e)))?;
+
+        let diff_b = (ks_result.scf.e_tot.0 - e_h5).abs();
+        if diff_b > tol {
+            return Err(OracleError::Diff {
+                diff: diff_b,
+                tol,
+                key: format!("ks_chkfile_roundtrip[B,{}]", fixture),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -631,8 +1004,14 @@ mod tests {
     }
 
     #[test]
-    fn known_methods_list_has_all_8_arms() {
-        assert_eq!(KNOWN_METHODS.len(), 8);
+    fn known_methods_list_has_all_arms() {
+        // 8 SCF/DF arms (Phase 3) + grid_weights (04-04) + rks_energy +
+        // uks_energy (04-06) + df_dft_energy + ks_chkfile_roundtrip (04-08) = 13,
+        // + 5 Phase-5 MP2 arms (05-01: mp2_rmp2_energy, mp2_ump2_energy,
+        // dfmp2_energy, dfmp2_native_energy, mp2_rdm) = 18,
+        // + 6 Phase-6 CCSD arms (06-11: ccsd_rccsd_energy, ccsd_uccsd_energy,
+        // ccsd_dfccsd_energy, ccsd_lambda, ccsd_rdm1, ccsd_rdm2) = 24.
+        assert_eq!(KNOWN_METHODS.len(), 24);
         assert!(KNOWN_METHODS.contains(&"scf_rhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_uhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_diis_iter_count"));
@@ -641,5 +1020,23 @@ mod tests {
         assert!(KNOWN_METHODS.contains(&"chkfile_roundtrip"));
         assert!(KNOWN_METHODS.contains(&"mulliken_pop"));
         assert!(KNOWN_METHODS.contains(&"dip_moment"));
+        assert!(KNOWN_METHODS.contains(&"grid_weights"));
+        assert!(KNOWN_METHODS.contains(&"rks_energy"));
+        assert!(KNOWN_METHODS.contains(&"uks_energy"));
+        assert!(KNOWN_METHODS.contains(&"df_dft_energy"));
+        assert!(KNOWN_METHODS.contains(&"ks_chkfile_roundtrip"));
+        // Phase 5 MP2 arms (05-01).
+        assert!(KNOWN_METHODS.contains(&"mp2_rmp2_energy"));
+        assert!(KNOWN_METHODS.contains(&"mp2_ump2_energy"));
+        assert!(KNOWN_METHODS.contains(&"dfmp2_energy"));
+        assert!(KNOWN_METHODS.contains(&"dfmp2_native_energy"));
+        assert!(KNOWN_METHODS.contains(&"mp2_rdm"));
+        // Phase 6 CCSD arms (06-11).
+        assert!(KNOWN_METHODS.contains(&"ccsd_rccsd_energy"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_uccsd_energy"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_dfccsd_energy"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_lambda"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_rdm1"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_rdm2"));
     }
 }

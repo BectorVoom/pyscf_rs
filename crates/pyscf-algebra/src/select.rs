@@ -40,7 +40,12 @@ pub fn select_backend() -> Result<BackendSelection, AlgebraError> {
     };
 
     let client = construct_client(kind)?;
-    let sel = BackendSelection { client, kind, raw_env, dtype };
+    let sel = BackendSelection {
+        client,
+        kind,
+        raw_env,
+        dtype,
+    };
     // ALG-08 mandatory log line.
     sel.client.log_resolution(sel.raw_env.as_deref(), dtype);
     Ok(sel)
@@ -97,21 +102,27 @@ fn auto_resolve(dtype: DType) -> BackendKind {
 /// without shader-f64 → hard error. Other explicit-but-unavailable
 /// combinations log a warn and fall back to Cpu (per ALG-04).
 #[allow(unused_variables)] // raw_env unused on cpu-only builds (no GPU arms)
-fn verify_explicit(kind: BackendKind, dtype: DType, raw_env: &Option<String>) -> Result<BackendKind, AlgebraError> {
+fn verify_explicit(
+    kind: BackendKind,
+    dtype: DType,
+    raw_env: &Option<String>,
+) -> Result<BackendKind, AlgebraError> {
     match kind {
         BackendKind::Cpu => Ok(BackendKind::Cpu),
         #[cfg(feature = "cuda")]
         BackendKind::Cuda => {
-            if pyscf_runtime::probe::cuda::cuda_available(dtype) { Ok(kind) }
-            else {
+            if pyscf_runtime::probe::cuda::cuda_available(dtype) {
+                Ok(kind)
+            } else {
                 tracing::warn!("PYSCF_BACKEND=cuda but probe failed; falling back to Cpu");
                 Ok(BackendKind::Cpu)
             }
         }
         #[cfg(feature = "wgpu")]
         BackendKind::Wgpu => {
-            if pyscf_runtime::probe::wgpu::wgpu_available(dtype) { Ok(kind) }
-            else if dtype == DType::F64 {
+            if pyscf_runtime::probe::wgpu::wgpu_available(dtype) {
+                Ok(kind)
+            } else if dtype == DType::F64 {
                 // D-09 hard-error path: explicit wgpu+f64 with no shader-f64.
                 Err(AlgebraError::Backend(BackendError::Unsatisfiable {
                     backend: "wgpu",
@@ -122,24 +133,25 @@ fn verify_explicit(kind: BackendKind, dtype: DType, raw_env: &Option<String>) ->
                         raw_env.as_deref().unwrap_or("wgpu")
                     ),
                 }))
-            }
-            else {
+            } else {
                 tracing::warn!("PYSCF_BACKEND=wgpu but probe failed; falling back to Cpu");
                 Ok(BackendKind::Cpu)
             }
         }
         #[cfg(feature = "rocm")]
         BackendKind::Rocm => {
-            if pyscf_runtime::probe::hip::rocm_available(dtype) { Ok(kind) }
-            else {
+            if pyscf_runtime::probe::hip::rocm_available(dtype) {
+                Ok(kind)
+            } else {
                 tracing::warn!("PYSCF_BACKEND=rocm but probe failed; falling back to Cpu");
                 Ok(BackendKind::Cpu)
             }
         }
         #[cfg(feature = "metal")]
         BackendKind::Metal => {
-            if pyscf_runtime::probe::wgpu::wgpu_available(dtype) { Ok(kind) }
-            else {
+            if pyscf_runtime::probe::wgpu::wgpu_available(dtype) {
+                Ok(kind)
+            } else {
                 tracing::warn!("PYSCF_BACKEND=metal but probe failed; falling back to Cpu");
                 Ok(BackendKind::Cpu)
             }
@@ -151,18 +163,22 @@ fn verify_explicit(kind: BackendKind, dtype: DType, raw_env: &Option<String>) ->
 fn construct_client(kind: BackendKind) -> Result<AlgebraClient, AlgebraError> {
     match kind {
         BackendKind::Cpu => {
-            let device = cubecl_cpu::CpuDevice::default();
+            let device = cubecl_cpu::CpuDevice;
             Ok(AlgebraClient::Cpu(cubecl_cpu::CpuRuntime::client(&device)))
         }
         #[cfg(feature = "cuda")]
         BackendKind::Cuda => {
             let device = cubecl_cuda::CudaDevice::default();
-            Ok(AlgebraClient::Cuda(cubecl_cuda::CudaRuntime::client(&device)))
+            Ok(AlgebraClient::Cuda(cubecl_cuda::CudaRuntime::client(
+                &device,
+            )))
         }
         #[cfg(feature = "wgpu")]
         BackendKind::Wgpu => {
             let device = cubecl_wgpu::WgpuDevice::default();
-            Ok(AlgebraClient::Wgpu(cubecl_wgpu::WgpuRuntime::client(&device)))
+            Ok(AlgebraClient::Wgpu(cubecl_wgpu::WgpuRuntime::client(
+                &device,
+            )))
         }
         #[cfg(feature = "rocm")]
         BackendKind::Rocm => {
@@ -172,7 +188,9 @@ fn construct_client(kind: BackendKind) -> Result<AlgebraClient, AlgebraError> {
         #[cfg(feature = "metal")]
         BackendKind::Metal => {
             let device = cubecl_wgpu::WgpuDevice::default();
-            Ok(AlgebraClient::Wgpu(cubecl_wgpu::WgpuRuntime::client(&device)))
+            Ok(AlgebraClient::Wgpu(cubecl_wgpu::WgpuRuntime::client(
+                &device,
+            )))
         }
     }
 }

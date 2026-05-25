@@ -1,632 +1,263 @@
 ---
 phase: 03-scf-pyo3-bindings
-reviewed: 2026-05-11T00:00:00Z
+reviewed: 2026-05-24T00:00:00Z
 depth: standard
-files_reviewed: 53
+files_reviewed: 7
 files_reviewed_list:
-  - crates/pyscf-algebra/src/eigh_gen.rs
-  - crates/pyscf-algebra/src/error.rs
-  - crates/pyscf-algebra/src/lib.rs
-  - crates/pyscf-algebra/src/solve_linear.rs
-  - crates/pyscf-chkfile/src/checkpointable.rs
-  - crates/pyscf-chkfile/src/error.rs
-  - crates/pyscf-chkfile/src/lib.rs
-  - crates/pyscf-chkfile/src/primitives.rs
-  - crates/pyscf-core/src/canonicalize.rs
-  - crates/pyscf-core/src/lib.rs
-  - crates/pyscf-df/src/auxbasis.rs
-  - crates/pyscf-df/src/cholesky_eri.rs
-  - crates/pyscf-df/src/df_jk.rs
-  - crates/pyscf-df/src/error.rs
-  - crates/pyscf-df/src/lib.rs
-  - crates/pyscf-diis/src/cdiis.rs
-  - crates/pyscf-diis/src/error.rs
-  - crates/pyscf-diis/src/lib.rs
-  - crates/pyscf-diis/src/storable.rs
-  - crates/pyscf-gto/src/intor.rs
-  - crates/pyscf-gto/src/lib.rs
-  - crates/pyscf-oracle/src/fixtures.rs
-  - crates/pyscf-oracle/src/lib.rs
-  - crates/pyscf-oracle/src/runner.rs
-  - crates/pyscf-py/src/bridge.rs
-  - crates/pyscf-py/src/caches.rs
-  - crates/pyscf-py/src/errors.rs
-  - crates/pyscf-py/src/lib.rs
-  - crates/pyscf-py/src/numpy_io.rs
-  - crates/pyscf-py/src/scf.rs
+  - crates/pyscf-scf/src/orth.rs
+  - crates/pyscf-scf/src/atom_hf.rs
   - crates/pyscf-scf/src/analyze.rs
-  - crates/pyscf-scf/src/chkfile.rs
-  - crates/pyscf-scf/src/convert.rs
-  - crates/pyscf-scf/src/df_scf.rs
-  - crates/pyscf-scf/src/diis_adapter.rs
-  - crates/pyscf-scf/src/eig.rs
-  - crates/pyscf-scf/src/energy.rs
-  - crates/pyscf-scf/src/error.rs
-  - crates/pyscf-scf/src/fock.rs
-  - crates/pyscf-scf/src/ghf.rs
-  - crates/pyscf-scf/src/hooks.rs
   - crates/pyscf-scf/src/init_guess.rs
-  - crates/pyscf-scf/src/kernel.rs
-  - crates/pyscf-scf/src/kernel_impl.rs
   - crates/pyscf-scf/src/lib.rs
-  - crates/pyscf-scf/src/occ.rs
-  - crates/pyscf-scf/src/rdm.rs
-  - crates/pyscf-scf/src/rhf.rs
-  - crates/pyscf-scf/src/scanner.rs
-  - crates/pyscf-scf/src/uhf.rs
-  - python/pyscf/__init__.py
-  - python/pyscf/scf/__init__.py
-  - python/pyscf/scf/ghf.py
-  - python/pyscf/scf/hf.py
-  - python/pyscf/scf/uhf.py
+  - crates/pyscf-scf/tests/mulliken_meta.rs
+  - crates/pyscf-scf/tests/init_guess_atom_huckel.rs
 findings:
   critical: 0
-  warning: 7
-  info: 11
-  total: 18
+  warning: 6
+  info: 5
+  total: 11
 status: issues_found
 ---
 
-# Phase 3: Code Review Report
+# Phase 03: Code Review Report
 
-**Reviewed:** 2026-05-11
+**Reviewed:** 2026-05-24
 **Depth:** standard
-**Files Reviewed:** 53
+**Files Reviewed:** 7
 **Status:** issues_found
+
+> Scope note: this review covers the SCF-05 (`atom`/`huckel` init guesses +
+> spherically-averaged atomic-RHF engine) and SCF-09 (`mulliken_meta` +
+> meta-Löwdin `orth_ao`) gap-closure files only, per the `/gsd:code-review`
+> file list (diff_base `aa639ee`). It supersedes the earlier 2026-05-11
+> phase-wide pass that reviewed 53 files.
 
 ## Summary
 
-Phase 3 delivers RHF/UHF/GHF SCF kernels, CDIIS, density-fitting J/K,
-HDF5 chkfile primitives, the PyO3 bridge, and the cross-language oracle
-harness. Overall the code is well-structured: every workspace crate
-honors `#![forbid(unsafe_code)]` (no escape hatches found), error
-propagation goes through typed `thiserror` enums rather than panics, the
-algebra-wall (D-04) is respected (chemistry crates never name a cubecl
-or pyo3 type), and reductions go through `oracle_*` helpers (Pitfall 9).
-No `unimplemented!`, `assert False`, or `panic!("plan XX-YY pending")`
-remnants were found in shipping code paths — the only `panic!` sites are
-in `pyscf-oracle` (oracle_check macro + fixture-lookup), which are
-test-only and intentional.
+Traced the row-major↔F-order index conventions through every matrix product in
+`orth.rs`, `atom_hf.rs`, `analyze.rs`, and `init_guess.rs`. The AO-row /
+MO-column indexing is **internally consistent and correct**: the `S·c` and
+`cᵀSc` block builds in `orth_ao`, the `c_inv = C_orthᵀ·S` and
+`D' = c_inv·D·c_invᵀ` products in `mulliken_meta`, the per-l-block scatter in
+`angular_averaged_eig` (AO rows use native atom AO indices, MO columns use the
+per-l reassembled order consistently with `spherical_occ`), and the
+single-atom-rebuild coordinate handoff (`_atom` stores AU coords, rebuilt with
+`Unit::Bohr` → factor 1.0, position-irrelevant for an isolated atom) all check
+out. AO-range / atom-index overruns return `Err`, and the production paths
+honor the never-panic rule (`?`/explicit `Err`, no `unwrap`/`expect`/`panic!`).
 
-The findings below are concentrated on:
+No BLOCKER-class defects: no injection surface, no data-loss, no guaranteed
+crash, and no demonstrable wrong-number bug on the tested H2/H2O fixtures.
 
-1. **Numerical correctness gaps** that mostly trace back to known cintx
-   limitations (`int3c2e_sph` returns zeroed buffers; arity-4 `int2e`
-   returns `NotYetImplemented`). These are documented in source code and
-   gated by `#[ignore]` oracle tests, but the SCF kernel path will
-   currently fail closed (`?`-propagation) rather than producing wrong
-   numbers — acceptable for v1.
-2. **PyO3 subclass-override fidelity (BIND-07 / Pitfall 7) edge cases**:
-   the `get_init_guess` override path is hard-wired to `NoOverrides`
-   even though every other hook routes through `call_method1`, and
-   `to_mo_coeff` (used to unpack subclass-returned MO coefficients) only
-   accepts F-contiguous input but the C-order `mo_coeff_to_pyarray`
-   bridge sends C-order arrays into the Python override — a Python
-   subclass that returns its input unchanged would fail the F-contiguous
-   check on the return path.
-3. **Resource / error-pathway hygiene**: the DIIS `extrapolate` indexes
-   `bookkeep[0]` unconditionally to discover `flat_len`, which is fine
-   only because `push` runs before that line — but the invariant is
-   load-bearing and undocumented in the code. Several `cycle as usize`
-   / `cycles as i64` casts assume non-negative inputs that are upheld at
-   the call sites but not asserted.
-4. **Style / dead code**: a handful of `#[allow(dead_code)]` markers
-   (`_py_mol_use_marker`, `_no_overrides_use_marker`) papering over
-   warnings that could be addressed more directly; `override_cache` is
-   shipped (BIND-06) but appears to be exercised only by a smoke test —
-   it is not yet wired into the kernel hot path.
+The findings are robustness and convention violations. Two of the disciplines
+that the module headers explicitly promise are violated: the oracle-reduction
+discipline (bare `+=` accumulators in `analyze.rs`) and accurate diagnostics
+(a fabricated `last_diff` in the atom-SCF convergence error). Three latent
+correctness gaps — `eigh_gen` linear-dependency padding consumed unchecked,
+`lowdin` rank-deficiency accepted, and `default_get_occ` silent under-fill in
+the huckel path — are masked today only by the conditioning of the tested
+minimal bases and would produce silently wrong results (NaN/∞ energies, broken
+electron conservation, or under-counted density) outside that envelope.
 
-No `Critical` findings.
+## Structural Findings (fallow)
+
+No `<structural_findings>` block was provided by the workflow; this section is
+intentionally empty. All findings below are narrative.
 
 ## Warnings
 
-### WR-01: `PyOverrideBridge::get_init_guess` bypasses Python override (BIND-07 violation)
+### WR-01: `aggregate_pop_to_charges` accumulates per-shell populations with bare `+=`, violating the oracle-reduction discipline
 
-**File:** `crates/pyscf-py/src/bridge.rs:93-109`
-**Issue:** Every other hook in `PyOverrideBridge` dispatches through
-`slf.call_method1(...)`, but `get_init_guess` short-circuits to
-`pyscf_scf::NoOverrides.get_init_guess(mol, mode)`. The in-line comment
-acknowledges this is intentional ("No Python-side override surface for
-get_init_guess in the pyscf upstream class"). However, BIND-07 / Pitfall 7
-("subclass fidelity") promises that *any* Python subclass override of
-the 10/11 documented hooks is invoked transparently. Upstream pyscf does
-expose `SCF.get_init_guess(mol, key='minao')` (`pyscf/scf/hf.py:485`
-forward), and subclasses commonly override it. Forwarding to
-`NoOverrides` here defeats the override mechanism for that one hook and
-makes the Rust kernel see a different density than a subclass would
-expect.
-
-Worse: because `default_get_init_guess` returns
-`InitGuessNotYetImplemented` for everything except `OneElectron`,
-`Chkfile`, and `UserDM`, a Python subclass that tries to use a custom
-init-guess will hit this stub rather than its own override.
-
-**Fix:** Route through `call_method1` like every other hook:
+**File:** `crates/pyscf-scf/src/analyze.rs:137`
+**Issue:** `atom_pop[atom] += pop_shell;` accumulates per-shell `oracle_sum`
+results onto an atom with a bare floating-point `+=`. For any atom carrying more
+than one shell (O in STO-3G has 1s + 2s + 2p), this sums three `oracle_sum`
+outputs through an un-oracled accumulator. Every reviewed file's header — and
+CONTRIBUTING.md Pitfall 9 / threat T-03-15-NUM — states "all reductions go
+through `oracle_sum`/`oracle_dot`". A per-atom reduction across shells is exactly
+such a reduction; the helper's own doc comment claims "a SINGLE oracle-reduction
+site to audit". The shell loop is sequential so this is bit-stable under thread
+reordering today, but it silently re-introduces the reduction-order coupling the
+oracle wrappers exist to eliminate, and contradicts the documented contract.
+**Fix:** Bucket per-shell sums per atom and reduce once:
 ```rust
-fn get_init_guess(&self, _mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
-    Python::attach(|py| {
-        let mode_str = match mode {
-            InitGuessMode::Minao => "minao",
-            InitGuessMode::Atom => "atom",
-            InitGuessMode::OneElectron => "1e",
-            InitGuessMode::Huckel => "huckel",
-            InitGuessMode::Chkfile(_) => "chkfile",
-            InitGuessMode::UserDM(d) => {
-                // UserDM is already a density; no Python round-trip needed.
-                return Ok(d.clone());
-            }
-        };
-        let args = PyTuple::new(py, [self.py_mol.bind(py).clone(),
-                                     pyo3::types::PyString::new(py, mode_str).into_any()])
-            .map_err(py_to_pyscf)?;
-        call_hook(&self.slf, "get_init_guess", args, |r| {
-            let arr: numpy::PyReadonlyArray2<f64> = r.extract()?;
-            to_density(arr)
-        })
-    })
+let mut per_atom_terms: Vec<Vec<f64>> = vec![Vec::new(); natm];
+for shell in 0..nbas {
+    // ... existing atom / AO-range bounds checks ...
+    per_atom_terms[atom].push(pyscf_algebra::oracle_sum(&ao_pop[lo..hi]));
+}
+let atom_pop: Vec<f64> = per_atom_terms
+    .iter()
+    .map(|t| pyscf_algebra::oracle_sum(t))
+    .collect();
+```
+
+### WR-02: `dip_moment` nuclear sum accumulates over atoms with bare `+=`
+
+**File:** `crates/pyscf-scf/src/analyze.rs:309-311`
+**Issue:** `*item += z * coords[k];` accumulates the nuclear dipole
+`Σ_A Z_A·r_A[k]` across atoms with a bare `+=` rather than `oracle_sum`. Same
+convention violation as WR-01 (this code is pre-existing from plan 03-11 but
+`analyze.rs` is in the review scope). For multi-atom molecules this is an
+un-oracled reduction over the atom axis, while the electronic term `dip[k] = -e`
+on line 293 is correctly oracled — the asymmetry is the tell.
+**Fix:** Build per-component term Vecs across atoms and reduce once:
+```rust
+let mut nuc: [Vec<f64>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+for a in 0..rhf.mol.natm {
+    let z = /* ... */; let coords = /* ... */;
+    for k in 0..3 { nuc[k].push(z * coords[k]); }
+}
+for k in 0..3 { dip[k] += pyscf_algebra::oracle_sum(&nuc[k]); }
+```
+
+### WR-03: `angular_averaged_eig` consumes `eigh_gen` eigenpairs without rejecting the +∞ / zero-column rank-deficiency padding
+
+**File:** `crates/pyscf-scf/src/atom_hf.rs:376-394`
+**Issue:** `eigh_gen` documents (eigh_gen.rs:113-127) that when the input is
+rank-deficient it pads the trailing eigenvalues with `f64::INFINITY` and zeroes
+the corresponding eigenvector columns. This loop runs `for i in 0..nsh` and
+unconditionally pushes `eigvals[i]` into `mo_energy` and scatters
+`eigvecs[p + i*nsh]`. If a per-`l` averaged overlap block is linearly dependent
+(`n_lin < nsh`), `+∞` energies enter `mo_energy` and zero MO columns enter
+`mo_coeff` with no error — the per-atom SCF then feeds `inf` into its
+energy-convergence test (`(e_elec - last_e).abs()` becomes NaN/`inf`) and into
+`init_guess_by_huckel`'s `orb_e`, corrupting the GWH matrix. The tested minimal
+bases are well-conditioned so this never fires, but the function offers no guard.
+**Fix:** Reject non-finite eigenvalues in the kept range right after the solve:
+```rust
+if !eigvals.iter().take(nsh).all(|e| e.is_finite()) {
+    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+        "atom_hf: angular-averaged overlap block (l={_l}) is rank-deficient"
+    ))));
 }
 ```
 
----
+### WR-04: `lowdin` accepts a rank-deficient block (`kept.len() < n`) and silently produces a defective `S^{-1/2}`, breaking the `orth_ao` orthonormality invariant
 
-### WR-02: `to_mo_coeff` rejects C-contiguous arrays that `mo_coeff_to_pyarray` produces
-
-**File:** `crates/pyscf-py/src/numpy_io.rs:53-82` (read path) and `crates/pyscf-py/src/numpy_io.rs:109-124` (write path)
-**Issue:** Layout mismatch on the bridge round-trip:
-
-- `mo_coeff_to_pyarray` (lines 109-124) **builds a C-order array** from
-  the F-order `mc.data`: `c_data` is populated with C-order strides and
-  returned via `Array2::from_shape_vec((nao, nmo), c_data)`. The
-  resulting array is C-contiguous.
-- `to_mo_coeff` (lines 53-82) requires **F-contiguous** input to take
-  the fast path; otherwise it falls back to a transpose-copy via
-  `view[[i, j]]`.
-
-In `bridge::eig` (line 195), a Python subclass override receives an MO
-coefficient array via `mo_coeff_to_pyarray` (C-order) and may pass it
-back. If the subclass returns it unchanged (a common test/passthrough
-pattern), `to_mo_coeff` sees C-order and silently falls back to the
-slower transpose path — *but the slow path assumes the input is in
-upstream pyscf layout (column-major LAPACK)*, so this produces the
-**transpose** of the intended MO matrix.
-
-Worse: the fast-path branch correctly reads F-order, but
-`mo_coeff_to_pyarray` produces C-order; the fallback path therefore
-copies `view[[i, j]]` in C-order semantics — actually that ends up
-storing `data[i + j*nao] = C_python[i, j]`, which is correct *only if*
-the Python side treats the array element-wise. Subclass code that does
-`mo_coeff.copy()` returns C-order; mo_coeff_to_pyarray ALSO is C-order;
-the fallback path stores C-order elements into an F-order Rust buffer,
-producing an effective transpose of the MO matrix relative to the
-caller's intent.
-
-This is BIND-04 / Pitfall 5 territory and the BIND-04 stride-fuzz test
-(plan 03-10) should catch it — but the asymmetric `density_to_pyarray`
-(C-order) / `mo_coeff_to_pyarray` (C-order) / `to_mo_coeff` (F-order
-required) layout policy is fragile.
-
-**Fix:** Either (a) make `mo_coeff_to_pyarray` produce an F-contiguous
-NumPy array (use `PyArray2::from_owned_array` with explicit F-order
-strides), so the round-trip preserves layout; or (b) make `to_mo_coeff`
-accept the array as `(nao, nmo)` and use `view[[i, j]]` (NumPy logical
-indexing) to populate an F-order Rust buffer regardless of underlying
-strides:
+**File:** `crates/pyscf-scf/src/orth.rs:86-110`
+**Issue:** `lowdin` returns `Err(Singular)` only when `kept.is_empty()`. When
+`0 < kept.len() < n` (eigenvalues at/below `LOWDIN_EIG_TOL` dropped), it builds a
+reduced-rank `S^{-1/2}`. In `orth_ao` step (d)/(e) this `x` is applied as
+`c_block = c·x`, producing near-zero columns for the dropped directions; those
+near-zero columns are written into `C_orth` and yield near-zero diagonals, which
+the phase-adjust (line 324-330) leaves untouched. The result violates the
+`C_orthᵀ·S·C_orth ≈ I` invariant that `mulliken_meta`'s electron-conservation
+argument (analyze.rs:174-177) depends on — a zero diagonal is not 1, so
+`Σ pop ≠ nelec`. The orthonormality test only exercises well-conditioned H2, so
+a linearly-dependent channel would silently break conservation rather than error.
+**Fix:** Reject rank deficiency explicitly (matches `lowdin`'s "linear-dependency
+removal returns Err" promise in the header):
 ```rust
-pub fn to_mo_coeff<'py>(arr: PyReadonlyArray2<'py, f64>) -> PyResult<MOCoefficients> {
-    let shape = arr.shape();
-    if shape.len() != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "mo_coeff must be 2D, got shape {:?}", shape)));
-    }
-    let (nao, nmo) = (shape[0], shape[1]);
-    let view = arr.as_array();
-    // Always re-pack into F-order regardless of input stride.
-    let mut data = Vec::with_capacity(nao * nmo);
-    for j in 0..nmo {
-        for i in 0..nao {
-            data.push(view[[i, j]]);
-        }
-    }
-    Ok(MOCoefficients { nao, nmo, data, energies: vec![], occupations: vec![] })
+if kept.len() < n {
+    return Err(ScfError::Algebra(pyscf_algebra::AlgebraError::Singular).into());
 }
 ```
+If reduced-rank channels must be supported, the column count written into
+`C_orth` must shrink and `mulliken_meta`'s conservation derivation be revisited.
 
-Recommend (b): the conversion cost is identical to the existing fallback
-and the contract becomes layout-agnostic.
+### WR-05: `init_guess_by_huckel` can silently under-fill the density when `nocc < nelectron/2`
 
----
-
-### WR-03: `Diis::extrapolate` indexes `bookkeep[0]` after push but the invariant is implicit
-
-**File:** `crates/pyscf-diis/src/cdiis.rs:120-132`
-**Issue:** Lines 120 (`self.bookkeep[0].len()`) and 132
-(`self.bookkeep[0].clone()`) assume `bookkeep` is non-empty. That's
-true at the call site because `push(...)` runs at line 88 immediately
-before, but the invariant lives implicitly in the function ordering. If
-a future refactor moves the `push` to after the solve, or someone calls
-a hypothetical `extrapolate_existing` that doesn't push first, both
-indices will panic with `index out of bounds`.
-
-`flat_len` should be derived from the *just-pushed* iterate — which is
-what `bookkeep[head_after_push]` would give — but the code reaches into
-`[0]` which is the oldest entry.
-
-**Fix:** Use the explicit `current.as_flat().len()` from the input,
-since `current` is moved into the buffer just above:
+**File:** `crates/pyscf-scf/src/init_guess.rs:472-495` (with `crate::occ::default_get_occ`, occ.rs:19-31)
+**Issue:** `nocc` counts occupied atomic orbitals; `mo_e` has length `nocc`.
+`default_get_occ(&mo_e, mol.nelectron)` computes `n_occ = nelectron/2` and fills
+`occ.iter_mut().take(n_occ)`. `default_get_occ` does **not** guard
+`n_occ > mo_energy.len()` — `.take()` silently caps at the slice length. So if
+the summed atomic occupied-orbital count is less than `nelectron/2`, the Hückel
+density holds fewer than `nelectron` electrons with **no error**. The huckel
+test only exercises H2 (nocc=2, n_occ=1) so this never trips, but
+`init_guess_by_huckel` is a general init-guess entry point.
+**Fix:** Add a guard in `default_get_occ` (fixes both call sites):
 ```rust
-// Capture flat_len from `current` BEFORE move-into-push, then push.
-let flat_len_check = current.as_flat().len();
-self.push(current, error);
-// Sanity: every stored iterate must have identical flat length.
-debug_assert_eq!(self.bookkeep[0].len(), flat_len_check);
-```
-Or, even simpler: hold a local `len` from `bookkeep.last()` (or the
-just-pushed slot) after `push` completes:
-```rust
-let flat_len = self.bookkeep.last().map(|x| x.len()).unwrap_or(0);
-if flat_len == 0 {
-    return Err(DiisError::Singular); // or a new EmptyIterate variant
+if n_occ > mo_energy.len() {
+    return Err(ScfError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
+        "Aufbau needs {n_occ} occupied MOs but only {} available", mo_energy.len()
+    ))).into());
 }
 ```
+or assert `nocc >= mol.nelectron / 2` in `init_guess_by_huckel` before the fill.
 
----
+### WR-06: `ConvergenceFailure.last_diff` is fabricated from an `unwrap_or(0.0)` on an unrelated quantity
 
-### WR-04: `kernel_impl::scf_loop` treats `cycle: u32 as i32` and `cycle as usize` as infallible
-
-**File:** `crates/pyscf-scf/src/kernel_impl.rs:88, 102-103`
-**Issue:** The cycle counter is `u32`; the kernel performs:
-- `cycle as i32` at line 88 (passed to `hooks.get_fock(..., cycle as i32, None)`).
-- `cycle as usize` at line 102 (passed to `diis_step`).
-
-Both casts are saturating on overflow in Rust. `max_cycle` defaults to
-50 and is bounded by `cfg.max_cycle: u32`, so this isn't reachable in
-practice today, but a user who sets `max_cycle = u32::MAX` (or, more
-realistically, a future use that loops further) would silently truncate
-to `i32::MIN` for the i32 cast.
-
-The `get_fock` hook signature takes `cycle: i32` (line 30 in
-`hooks.rs`), so this is upstream-pyscf parity (Python's int → i32).
-Upstream pyscf wraps cycles in a `range(max_cycle)` Python-side without
-overflow concerns.
-
-**Fix:** Either widen the hook signature to `cycle: u32` (breaking
-trait change), or assert/clamp:
+**File:** `crates/pyscf-scf/src/atom_hf.rs:193-198`
+**Issue:** On non-convergence the error reports
+`last_diff: (last_e - mo_energy.first().copied().unwrap_or(0.0)).abs()`. This
+subtracts the *first MO energy* from the *last electronic energy* — two unrelated
+quantities — so the reported `last_diff` is meaningless, not the energy delta
+that failed to converge. The real convergence metric `(e_elec - last_e).abs()`
+(line 186) is out of scope by line 196. When a per-atom SCF genuinely fails to
+converge, this prints a misleading number and wastes debugging time. (The
+`unwrap_or` itself is fine for the never-panic rule, but it papers over the wrong
+operand.)
+**Fix:** Hoist the last computed delta into a variable visible at the error site:
 ```rust
-if cycle > i32::MAX as u32 {
-    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
-        "SCF cycle count exceeds i32::MAX".into())));
-}
-let cycle_i32 = cycle as i32;
+let mut last_diff = f64::INFINITY;
+// inside the loop, replacing the bare break test:
+last_diff = (e_elec - last_e).abs();
+if last_diff < ATOM_CONV_TOL { converged = true; break; }
+// at the error site:
+return Err(ScfError::ConvergenceFailure { cycles: ATOM_MAX_CYCLE, last_diff }.into());
 ```
-
-This is low-risk in practice; flagging because the cast is invisible
-and the i32 trait surface invites the truncation.
-
----
-
-### WR-05: `mo_coeff` shape-mismatch on chkfile dump reports wrong `actual` shape
-
-**File:** `crates/pyscf-scf/src/chkfile.rs:34-39, 45-49`
-**Issue:** When `self.mo_coeff.data.len() != nao * nmo`, the error
-returns `actual: vec![self.mo_coeff.data.len()]` — a one-element vector
-containing the flat length. That violates the contract of
-`ChkfileError::ShapeMismatch { expected: Vec<usize>, actual: Vec<usize> }`,
-where both vectors should be shape tuples (e.g. `[nao, nmo]`). Same for
-the second copy at lines 45-49 if `ArrayView2::from_shape` fails.
-
-This is cosmetic — the message survives — but downstream code that
-parses `actual.len() == 2` to extract `(nao_disk, nmo_disk)` will
-fail.
-
-**Fix:** Either report a single integer-flatlen via a dedicated error
-variant, or wrap the flat length as a "could not determine shape"
-sentinel:
-```rust
-return Err(ChkfileError::ShapeMismatch {
-    key: "mo_coeff".into(),
-    expected: vec![nao, nmo],
-    actual: vec![self.mo_coeff.data.len(), 0],  // flat length, no second dim
-});
-```
-
----
-
-### WR-06: `df_jk::get_jk_df` per-Q intermediate `prod_buf` is materialised but discarded
-
-**File:** `crates/pyscf-df/src/df_jk.rs:63-74`
-**Issue:** The triple loop fills `prod_buf[lambda * nao + sigma] =
-b * d`, then calls `oracle_sum(&prod_buf)` to produce `rho_q[q]`. This
-allocates `nao * nao * naux` work over the lifetime of the function.
-That's correct, but the `prod_buf` is re-zeroed implicitly by
-overwriting at each `q` — and the loop body covers every (lambda,
-sigma) pair, so no stale entries persist. **Correctness is fine.**
-However, when `nao = naux = 0` (edge case, e.g. ghost-atom Mole),
-`oracle_sum(&[])` is called. Per `pyscf_algebra::oracle::oracle_sum`
-contract this should return 0.0, but the result is then stored in
-`rho_q` which has length `naux == 0` — the loop body never runs, so
-this is safe but worth verifying.
-
-More substantively: the **K-matrix build** at lines 105-119 allocates
-`naux * nao` `k_buf` per outer `(mu, nu)` and rewrites it; the inner
-`for q ... for lambda` loop fills it fully before each `oracle_sum`,
-so the buffer is correctly reset. This is O(nao⁴ · naux) — fine for
-Phase 3 test corpus (nao ≤ ~140) but it's worth flagging as a
-performance ceiling: a real DF-K build is O(nao³ · naux) via an
-intermediate contraction. Out of v1 scope but documents a known cost.
-
-**Fix:** No correctness change needed. Add a comment documenting that
-the inner-loop ordering trades memory for arithmetic and that the O(n⁵)
-ceiling is acceptable at Phase 3 corpus sizes. Plan 03-10's
-optimization round should revisit.
-
----
-
-### WR-07: `bridge::extract_mole_from_pyany` re-serializes on every hook call
-
-**File:** `crates/pyscf-py/src/bridge.rs:283-295`, called from `scf.rs:290, 302, 315`
-**Issue:** Each hook default in `PyRHF` (`get_hcore`, `get_ovlp`,
-`get_jk`, `get_veff`) calls `extract_mole_from_pyany(py, &mol)` which
-invokes `mol.call_method0("dumps")?` then `pyscf_gto::loads(&json)?`.
-That's a JSON round-trip per hook per SCF cycle. For a 50-cycle SCF
-on H2O/cc-pVDZ that's ~250 round-trips through a JSON serializer.
-
-The PyRHF struct already holds a typed `Mole` inside `self.inner.mol`
-(see `scf.rs:46`). The hook defaults should use the cached `Mole`
-directly instead of re-extracting from the Python handle. The PyO3
-override-detection path (`call_method1`) does pass the Python mol back
-to user code so subclass overrides see the upstream `Mole` instance,
-but the *default-hook path* doesn't need this.
-
-This is a Phase 3 plan 03-10 perf concern (no correctness implication),
-but it materially impacts SCF wall-clock for any real molecule. Flagged
-as warning because it's load-bearing for the BIND-02 user experience.
-
-**Fix:** Use `self.inner.mol` directly in each hook default. For
-example, in `get_hcore`:
-```rust
-fn get_hcore<'py>(&self, py: Python<'py>, _mol: Py<PyAny>) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let h = py.detach(|| default_get_hcore(&self.inner.mol)).map_err(pyscf_to_py)?;
-    density_to_pyarray(py, &h)
-}
-```
-The `_mol` argument is kept on the Python signature for upstream
-compat (`mf.get_hcore(mol)` is the canonical call); we just ignore it
-when the user passes the same mol that was registered at `__init__`.
-
----
 
 ## Info
 
-### IN-01: `chkfile::primitives::open_for_write` race: TOCTOU on existence check
+### IN-01: First-cycle convergence test always compares against `f64::INFINITY`
 
-**File:** `crates/pyscf-chkfile/src/primitives.rs:22-36`
-**Issue:** `p.exists()` then `hdf5::File::append` is a classic
-TOCTOU (time-of-check vs time-of-use) pattern. Between the `exists`
-check and the `append` / `create` call, another process could create or
-delete the file. For a chkfile this is unlikely to cause data
-corruption (HDF5 handles concurrent access through its own locking),
-but the error message will be misleading.
+**File:** `crates/pyscf-scf/src/atom_hf.rs:143,186-190`
+**Issue:** `last_e` seeds to `f64::INFINITY`, so cycle 0's test
+`(e_elec - INFINITY).abs() < ATOM_CONV_TOL` is always false — the loop always
+runs at least two cycles. Harmless (correct, just one guaranteed wasted
+iteration) but easy to misread as a bug.
+**Fix:** Add a one-line comment near line 186 (`// cycle 0 never converges:
+last_e = +inf; first real delta is cycle 1`).
 
-**Fix:** Try `append` first; on `Err(_)`, try `create`. Or use
-`hdf5_metno::File::with_options()` if available.
+### IN-02: Module-wide `#![allow(dead_code)]` on `atom_hf` is now stale
 
-### IN-02: `cholesky_eri::forward_substitute` silently returns 0 on zero diagonal
+**File:** `crates/pyscf-scf/src/atom_hf.rs:31`
+**Issue:** The header says this allow "becomes inert" once Tasks 2 & 3 wire
+`get_atm_nrhf` into the init guesses — which has happened (init_guess.rs:299,378
+call it). A blanket file-level `allow(dead_code)` now suppresses genuine
+dead-code warnings for the whole module going forward (e.g. the unused
+`AtomScfResult.mo_energy`/`mo_occ` fields once `mo_coeff` carries the same data).
+**Fix:** Remove the module-level `#![allow(dead_code)]`; let clippy report any
+genuinely unused items and annotate the specific ones intentionally kept.
 
-**File:** `crates/pyscf-df/src/cholesky_eri.rs:199-208`
-**Issue:** The doc comment says "Silently writes zeros at indices where
-`L[i, i] == 0` (handled by caller's SingularAux check in
-`cholesky_banachiewicz_lower` — if we got here, the diagonal is
-nonzero)". This is a defense-in-depth fallback, but if a caller invokes
-`forward_substitute` directly with a singular L, the result silently
-produces garbage. Worth a `debug_assert!(diag != 0.0)` so test/dev
-builds catch the misuse.
+### IN-03: `solve_one_element` silently maps an unknown element symbol to Z=0 (ghost)
 
-**Fix:**
-```rust
-let diag = l[i * n + i];
-debug_assert!(diag != 0.0 && diag.is_finite(),
-    "forward_substitute: zero/non-finite diagonal at row {i}");
-out[out_offset + i] = if diag != 0.0 { s / diag } else { 0.0 };
-```
+**File:** `crates/pyscf-scf/src/atom_hf.rs:92`
+**Issue:** `charge_for_symbol(&elem).unwrap_or(0).max(0) as usize` treats any
+symbol `charge_for_symbol` does not recognize as Z=0 → a ghost with no electrons
+→ `empty_result`. A malformed/typo'd element symbol thus yields a zero density
+block instead of a diagnostic. Acceptable for the ghost convention but the silent
+fallthrough can mask user-input errors.
+**Fix:** Distinguish a recognized ghost marker from an unrecognized symbol and
+`Err` on the latter, or emit a `tracing::warn!` on the Z=0 fallback.
 
-### IN-03: `_py_mol_use_marker` and `_no_overrides_use_marker` are dead-code workarounds
+### IN-04: `c -= oracle_sum(&dterms)` resembles the WR-01/WR-02 bad pattern but is correct
 
-**File:** `crates/pyscf-py/src/scf.rs:619-637`
-**Issue:** Both functions are tagged `#[allow(dead_code)]` and exist
-solely to silence unused-field/import warnings. The `py_mol` getter
-DOES use `py_mol` (lines 70, 530, 583), so the compiler should see it
-as used; the marker is probably stale. Likewise `NoOverrides` is
-intentionally unused in `scf.rs` since dispatch always goes through
-`PyOverrideBridge`.
+**File:** `crates/pyscf-scf/src/orth.rs:279`
+**Issue:** `c[row + bj*nao] -= pyscf_algebra::oracle_sum(&dterms);` is correct —
+the inner reduction over `k` is oracled, and the outer `-=` is a single
+subtraction, not an accumulation. Flagging only so a future maintainer auditing
+for bare `+=`/`-=` (per WR-01/WR-02) does not mistakenly "fix" it.
+**Fix:** None required. Optionally annotate `// single subtraction of an oracled
+projection — not an accumulation`.
 
-**Fix:** Remove `_py_mol_use_marker` (the getter usage covers it). For
-`NoOverrides`, replace the import-use marker with
-`#[allow(unused_imports)]` directly on the import line:
-```rust
-#[allow(unused_imports)]
-use pyscf_scf::NoOverrides;
-```
+### IN-05: H2O `mulliken_meta` test lacks per-atom charge polarity / symmetry assertions
 
-### IN-04: `caches::override_cache` is shipped but appears unused in kernel path
-
-**File:** `crates/pyscf-py/src/caches.rs` (entire module)
-**Issue:** The doc comment says "Phase 3 use case: cache the type-id
-of Python subclasses that override SCF hooks. The override-detection
-fast path looks up the type-id in this cache instead of calling
-`hasattr()` once per cycle per hook." A grep across `crates/pyscf-py/`
-finds the cache exercised only by `tests/scaffold_surface.rs:41`
-(`use pyscf_py::caches::override_cache as _;`). The actual kernel path
-(`PyOverrideBridge::call_method1`) always invokes through MRO without
-checking the cache.
-
-This isn't a bug — `call_method1` is correct and the cache would only
-be an optimization. But the BIND-06 documentation suggests it's wired,
-which it isn't.
-
-**Fix:** Either wire it (check `slf.get_type().as_ptr() as usize` in
-override_cache before the first `call_method1` in `kernel`, skip the
-bridge entirely if not overridden), or update the doc comment to note
-"shipped for future optimization; not yet wired into hot path".
-
-### IN-05: `eigh_gen` pads dropped eigenvalues with `+∞` but caller may not expect it
-
-**File:** `crates/pyscf-algebra/src/eigh_gen.rs:114-117`
-**Issue:** When linear dependencies are removed (`valid_cols.len() <
-n`), the first `n_lin` eigenvalues are real, the remaining `n - n_lin`
-are `f64::INFINITY`. The C buffer has the corresponding columns zeroed
-(line 122-127). Downstream:
-- `default_get_occ` (occ.rs:19) does `if i < n_occ ... occ[i] = 2.0`
-  — fine, the dropped MOs get occupation 0.
-- `default_make_rdm1` (rdm.rs:38-46) multiplies `occ[i] * C[mu, i] *
-  C[nu, i]`. With `occ[dropped] = 0.0` and `C[:, dropped] = 0.0`, the
-  contribution is 0 — fine.
-- `default_energy_elec` (energy.rs:52-53) just dot-products D and h1e
-  — no per-MO loop, fine.
-
-But: `mulliken_pop` and other post-SCF analyses that take the MO
-spectrum may not expect `+∞` entries in `mo_energy`. If a user prints
-or plots the eigenvalues, the `+∞` flags will be visible.
-
-**Fix:** Document the convention prominently in `eigh_gen`'s doc, and
-also document on `MOCoefficients.energies` and `ScfResult.mo_energy`.
-Optionally, pad with `NaN` instead — many plotting/analysis tools
-skip NaN automatically but show `+inf` as a tall spike. NaN is more
-"missing data"-shaped; `+inf` more "above all real values"-shaped.
-
-### IN-06: `fixtures::atom` panics on unknown fixture (test-only is fine)
-
-**File:** `crates/pyscf-oracle/src/fixtures.rs:37, 48`
-**Issue:** Both `atom()` and `basis()` panic with `panic!("pyscf-oracle:
-unknown fixture '{}'", other)`. This is acceptable for a test-only crate
-where invalid fixtures are a programmer error, but consider returning
-`Option<&'static str>` so the caller can surface a structured error
-through `OracleError::UnknownFixture(String)` for symmetry with
-`OracleError::UnknownMethod`.
-
-**Fix:** Add `OracleError::UnknownFixture(String)` variant and convert
-the panics into early returns from the dispatcher.
-
-### IN-07: `intor::evaluate_int3c2e_with_auxmol` returns zero-filled buffer (documented gap)
-
-**File:** `crates/pyscf-gto/src/intor.rs:459-476`
-**Issue:** The function explicitly returns
-`vec![0.0_f64; nao*nao*naux]` because `int3c2e_sph` is not a base
-symbol in cintx-ops. This is documented in the module-level comment and
-in `cholesky_eri` (lines 105-108). The contract is: "shape-correct
-zero-filled buffer ... sufficient for shape/wiring tests, NOT for
-bit-exact DF-HF energy". The DF-HF oracle (plan 03-10 wave 2) is
-`#[ignore]`'d until cintx lands the real symbol.
-
-This is an Info-level concern rather than a Warning because:
-- The behaviour is documented in code.
-- The path is gated by `#[ignore]` tests.
-- A user calling `RHF::density_fit().kernel()` today will get an
-  energy that converges to the **single-particle (1e-only) energy plus
-  nuclear repulsion** (because J and K both come out zero), not a wrong
-  DF-HF energy. The result is incorrect but recognizably so (off by
-  orders of magnitude from upstream).
-
-**Fix:** Consider raising
-`PyscfRsError::NotYetImplemented{phase:3, what:"int3c2e_sph awaiting cintx-ops base symbol"}`
-instead of silently zero-filling, so users hitting this path get a
-loud failure rather than a wrong answer:
-```rust
-fn evaluate_int3c2e_with_auxmol(_mol: &Mole, _auxmol: &Mole) -> Result<IntorOutput, PyscfRsError> {
-    Err(PyscfRsError::NotYetImplemented {
-        phase: 3,
-        what: "int3c2e_sph: cintx-ops base symbol not yet available — \
-               DF-HF cannot run until cintx ships the operator id",
-    })
-}
-```
-This is more aligned with the rest of pyscf-rs's "fail closed rather
-than produce wrong numbers" philosophy.
-
-### IN-08: `bridge::PyOverrideBridge::get_occ` doesn't pass `nelec` to Python
-
-**File:** `crates/pyscf-py/src/bridge.rs:202-215`
-**Issue:** The Rust `OverrideHooks::get_occ` signature is `(mo_energy:
-&[f64], nelec: usize) -> Vec<f64>`. The bridge dispatches
-`slf.get_occ(mo_energy)` without passing `nelec`. Upstream pyscf's
-signature is `def get_occ(self, mo_energy=None, mo_coeff=None)`, where
-`nelec` is read from `self.mol.nelectron`. The Python `PyRHF.get_occ`
-default (`scf.rs:372`) does exactly that:
-`let nelec = self.inner.mol.nelectron as usize;`. So at the **default**
-hook level, parity is preserved.
-
-But for a **subclass override** that wants to use a custom nelec
-(e.g., to fill MOs differently for FT-HF or fractional occupancy
-schemes), the bridge silently drops the Rust `nelec` arg. The override
-gets only mo_energy.
-
-This is minor because (a) upstream pyscf has the same surface, (b)
-custom occupancy schemes are rare. Flagging for completeness.
-
-**Fix:** Either accept the upstream-parity behaviour (and document
-that overrides must read `self.mol.nelectron`), or pass `nelec` as a
-keyword arg to the Python call to support both pyscf-parity and
-explicit-arg overrides:
-```rust
-let kwargs = pyo3::types::PyDict::new(py);
-kwargs.set_item("nelec", nelec)?;
-slf.bind(py).call_method("get_occ", (e_py,), Some(&kwargs))
-```
-
-### IN-09: `df_scf::DfHooks::get_veff` re-computes get_jk_df instead of using `get_jk`
-
-**File:** `crates/pyscf-scf/src/df_scf.rs:100-120`
-**Issue:** `DfHooks::get_jk` and `DfHooks::get_veff` both call
-`pyscf_df::get_jk_df(dm, self.df)?` — so `get_veff` runs the J/K build
-twice if the kernel calls both. Inspecting the kernel cycle loop
-(`kernel_impl.rs:88, 128`) shows it only invokes `hooks.get_veff(...)`
-within a cycle (not `get_jk`), so there's no double-evaluation in the
-hot path. But a user (or future kernel) that calls both will recompute.
-
-The simple fix: make `get_veff` call `self.get_jk(...)` to centralize
-the DF compute:
-```rust
-fn get_veff(&self, mol: &Mole, dm: &Density) -> Result<Density, PyscfRsError> {
-    let (j, k) = self.get_jk(mol, dm)?;
-    // ... (J - 0.5K loop)
-}
-```
-
-### IN-10: `ChkfileError::ShapeMismatch` `actual` ignored on `ArrayView2::from_shape` failure
-
-**File:** `crates/pyscf-scf/src/chkfile.rs:45-49`
-**Issue:** When `ArrayView2::from_shape` fails (e.g., the shape and
-length disagree), we map it to
-`ChkfileError::ShapeMismatch { actual: vec![self.mo_coeff.data.len()] }`.
-The actual cause is captured by ndarray's error type but discarded in
-favour of a synthetic message. For debugging chkfile interop issues
-this loses context. Add ndarray::ShapeError to the error wrapper or
-preserve via `MalformedMol(format!("ndarray shape: {}", e).into())` (but
-that's the JSON error variant — wrong fit).
-
-**Fix:** Define a new `ChkfileError::Internal(String)` variant for
-unexpected errors, or upgrade `MalformedMol` to a more general
-`InternalParse(String)`. Cheaper alternative: log a `tracing::error!`
-before returning.
-
-### IN-11: `numpy_io::to_density` C-contig fallback loop is exact-correct but redundant
-
-**File:** `crates/pyscf-py/src/numpy_io.rs:31-44`
-**Issue:** The fallback path manually re-walks `view[[i, j]]` to
-populate `buf` in C-order. ndarray already provides
-`view.as_standard_layout().to_owned().into_raw_vec_and_offset().0` which
-handles strided / transposed inputs in one call. The manual loop is
-correct but verbose.
-
-**Fix:** Replace with:
-```rust
-let owned = view.as_standard_layout().to_owned();
-let (data, _) = owned.into_raw_vec_and_offset();
-```
-This is what BIND-04 documentation calls "re-materialise as
-default-order (C-contiguous) owned ndarray" — the helper already exists.
+**File:** `crates/pyscf-scf/tests/mulliken_meta.rs:98-135`
+**Issue:** The H2O test checks conservation (`Σ pop ≈ nelec`, `Σ chg ≈ 0`) and
+finiteness but never asserts the physically expected polarity (O negative, H
+positive) nor the two-H symmetry it does assert for H2. A density that conserves
+electron count but mis-attributes electrons across atoms (e.g. an AO→atom
+aggregation index swap) would still pass — conservation is necessary but not
+sufficient to catch an aggregation bug.
+**Fix:** Add `assert!(res.atom_charges[0] < 0.0)` (O) and
+`assert!((res.atom_charges[1] - res.atom_charges[2]).abs() < 1e-7)` (the two H,
+given the symmetric input geometry) to pin polarity and per-atom symmetry.
 
 ---
 
-_Reviewed: 2026-05-11_
+_Reviewed: 2026-05-24_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_

@@ -39,7 +39,10 @@ pub fn format_ecp(
     // `Cu1` → `CU`).
     let mut seen: Vec<String> = Vec::new();
     for (raw_symbol, _) in atoms {
-        let alpha: String = raw_symbol.chars().take_while(|c| c.is_alphabetic()).collect();
+        let alpha: String = raw_symbol
+            .chars()
+            .take_while(|c| c.is_alphabetic())
+            .collect();
         let upper = alpha.to_ascii_uppercase();
         if !upper.is_empty() && !seen.contains(&upper) {
             seen.push(upper);
@@ -56,10 +59,7 @@ pub fn format_ecp(
 }
 
 /// Inner dispatch: one element-symbol at a time.
-fn resolve_for_symbol(
-    input: &EcpInput,
-    symbol: &str,
-) -> Result<Option<ParsedEcp>, PyscfRsError> {
+fn resolve_for_symbol(input: &EcpInput, symbol: &str) -> Result<Option<ParsedEcp>, PyscfRsError> {
     match input {
         EcpInput::None => Ok(None),
         EcpInput::Name(name) => {
@@ -91,11 +91,7 @@ fn resolve_for_symbol(
             }
             // Parse the ECP block; absence of THIS symbol's block is
             // not an error (e.g. asking for H ECP from lanl2dz.dat).
-            match basis::nwchem_ecp::parse_nwchem_ecp(
-                &text,
-                symbol,
-                &full.display().to_string(),
-            ) {
+            match basis::nwchem_ecp::parse_nwchem_ecp(&text, symbol, &full.display().to_string()) {
                 Ok(p) => Ok(Some(p)),
                 Err(pyscf_core::EcpLoadError::UnknownName(_)) => Ok(None),
                 Err(other) => Err(PyscfRsError::from(other)),
@@ -115,11 +111,7 @@ fn resolve_for_symbol(
             }
         }
         EcpInput::NwchemEcpText(text) => {
-            match basis::nwchem_ecp::parse_nwchem_ecp(
-                text,
-                symbol,
-                "<inline-ecp-text>",
-            ) {
+            match basis::nwchem_ecp::parse_nwchem_ecp(text, symbol, "<inline-ecp-text>") {
                 Ok(p) if p.channels.is_empty() => Ok(None),
                 Ok(p) => Ok(Some(p)),
                 Err(pyscf_core::EcpLoadError::UnknownName(_)) => Ok(None),

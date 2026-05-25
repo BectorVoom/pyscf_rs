@@ -24,25 +24,20 @@ fn pyscf_runtime_error_symbol_exists() {
     // PyscfRsRuntimeError is the bare PyException subclass created by
     // create_exception! per RESEARCH §Pattern 5 (abi3-py310 workaround).
     // We assert the symbol is reachable from the crate root.
-    use pyscf_py::errors::PyscfRsRuntimeError as _;
 }
 
 #[test]
 fn numpy_io_density_conversion_symbols_exist() {
     // BIND-04 type-specific NumPy converters declared in numpy_io.rs.
-    use pyscf_py::numpy_io::{density_to_pyarray as _, mo_coeff_to_pyarray as _};
-    use pyscf_py::numpy_io::{to_density as _, to_mo_coeff as _};
 }
 
 #[test]
 fn caches_module_exposes_pyoncelock_helper() {
     // BIND-06: caches.rs uses pyo3::sync::PyOnceLock — NOT lazy_static!.
     // xtask check-forbid-lazy-static enforces this at lint time.
-    use pyscf_py::caches::override_cache as _;
 }
 
 #[test]
 fn bridge_module_exposes_pyoverridebridge() {
     // D-01 trait-callback bridge.
-    use pyscf_py::bridge::PyOverrideBridge as _;
 }

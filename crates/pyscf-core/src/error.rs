@@ -20,10 +20,7 @@ pub enum PyscfRsError {
     NotYetImplemented { phase: u8, what: &'static str },
 
     #[error("convergence failure after {iterations} iterations: {reason}")]
-    ConvergenceFailure {
-        iterations: u32,
-        reason: String,
-    },
+    ConvergenceFailure { iterations: u32, reason: String },
 
     /// Phase 2 GTO-02/GTO-03 — failure to resolve / parse a basis-set
     /// definition (file not found, ALIAS unknown, parse error, IO error).
@@ -38,8 +35,18 @@ pub enum PyscfRsError {
     /// Phase 2 D-06 — `EcpEngine` trait shipped, but the cintx ECP
     /// workstream hasn't landed `cint1e_ecp` yet. Returned by the stub
     /// `EcpEngine` impl until the gap-closure plan wires the real engine.
-    #[error("ECP engine not available — pending cintx ECP merge (Phase 2 D-06 gap-closure plan 02-10)")]
+    #[error(
+        "ECP engine not available — pending cintx ECP merge (Phase 2 D-06 gap-closure plan 02-10)"
+    )]
     EcpEngineNotAvailable,
+
+    /// Phase 4 D-08 / CR-02 gap-closure — a value in the f32 precision path
+    /// (`PYSCF_DTYPE=f32`) exceeded `f32::MAX` (~3.4e38) during an f64→f32
+    /// conversion. Surfaced instead of silently substituting `0.0`, so the
+    /// "honest f32 path" reports data corruption rather than producing a
+    /// wrong-but-quiet result. `context` names the exact conversion site.
+    #[error("numeric overflow in f32 precision path: {context} (value exceeds f32::MAX ~3.4e38)")]
+    NumericOverflow { context: &'static str },
 }
 
 /// pyscf-core-internal error subset.

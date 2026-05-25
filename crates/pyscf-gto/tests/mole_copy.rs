@@ -5,7 +5,7 @@
 //! is preserved across copies.
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 use std::sync::Arc;
 
 #[test]

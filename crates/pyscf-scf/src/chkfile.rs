@@ -15,7 +15,7 @@
 use crate::ScfResult;
 use ndarray::{Array2, ArrayView2, ShapeBuilder};
 use pyscf_chkfile::hdf5;
-use pyscf_chkfile::{primitives, Checkpointable, ChkfileError};
+use pyscf_chkfile::{Checkpointable, ChkfileError, primitives};
 use pyscf_core::{Energy, MOCoefficients};
 
 impl Checkpointable for ScfResult {
@@ -38,15 +38,14 @@ impl Checkpointable for ScfResult {
             });
         }
         // F-order strides: (1, nao) for shape [nao, nmo].
-        let view: ArrayView2<f64> = ArrayView2::from_shape(
-            (nao, nmo).strides((1, nao)),
-            &self.mo_coeff.data,
-        )
-        .map_err(|_| ChkfileError::ShapeMismatch {
-            key: "mo_coeff".into(),
-            expected: vec![nao, nmo],
-            actual: vec![self.mo_coeff.data.len()],
-        })?;
+        let view: ArrayView2<f64> =
+            ArrayView2::from_shape((nao, nmo).strides((1, nao)), &self.mo_coeff.data).map_err(
+                |_| ChkfileError::ShapeMismatch {
+                    key: "mo_coeff".into(),
+                    expected: vec![nao, nmo],
+                    actual: vec![self.mo_coeff.data.len()],
+                },
+            )?;
         primitives::write_dataset_f_order(scf_group, "mo_coeff", view)?;
         Ok(())
     }

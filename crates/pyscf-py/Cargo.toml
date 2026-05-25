@@ -36,5 +36,23 @@ pyscf-gto     = { path = "../pyscf-gto" }
 pyscf-runtime = { path = "../pyscf-runtime" }
 pyscf-chkfile = { path = "../pyscf-chkfile" }
 pyscf-df      = { path = "../pyscf-df" }
+# Plan 04-09 (DFT-08 / D-08): the DFT PyO3 boundary wraps pyscf-dft's
+# RKS/UKS + KsOverrideHooks + NumInt::dtype(). pyscf-dft stays pyo3-free
+# (the PyO3 wall) — pyscf-py is the sole crate that names pyo3. pyscf-grids
+# is needed for the `Grids` type in the KsOverrideHooks::get_veff_ks seam.
+# NOTE: default features only — `libxc` is NOT enabled (266-kernel ~6h build).
+pyscf-dft     = { path = "../pyscf-dft" }
+pyscf-grids   = { path = "../pyscf-grids" }
+# Plan 05-07 (MP2 / D-07/D-08): the MP2 PyO3 boundary wraps pyscf-mp2's
+# RMP2/UMP2/DFMP2 kernels + Mp2OverrideHooks + the Mp2Reference snapshot.
+# pyscf-mp2 stays pyo3-free + cubecl-free (the PyO3 wall) — pyscf-py is the
+# sole crate that names pyo3. Default features only (no libxc).
+pyscf-mp2     = { path = "../pyscf-mp2" }
+# Plan 06-10 (CCSD / D-09): the CCSD PyO3 boundary wraps pyscf-ccsd's
+# RCCSD/UCCSD/DFCCSD kernels + CcsdOverrideHooks + the CcsdReference snapshot +
+# solve_lambda/make_rdm1/make_rdm2. pyscf-ccsd stays pyo3-free + cubecl-free
+# (the PyO3 wall) — pyscf-py is the sole crate that names pyo3. Default features
+# only (no libxc; pyscf-ccsd does not pull libxc anyway).
+pyscf-ccsd    = { path = "../pyscf-ccsd" }
 ndarray       = { workspace = true }
 thiserror     = { workspace = true }

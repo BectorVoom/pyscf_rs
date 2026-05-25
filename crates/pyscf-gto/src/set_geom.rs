@@ -35,10 +35,7 @@ use pyscf_core::{CoreError, Mole, PyscfRsError};
 ///   - Atom count mismatch ⇒ `CoreError::InvalidMolecule`.
 ///   - Per-position symbol mismatch ⇒ `CoreError::InvalidMolecule`.
 ///   - Underlying `format_atom` parse errors propagate as-is.
-pub fn set_geom_<'m>(
-    mol: &'m mut Mole,
-    new_atom: &str,
-) -> Result<&'m mut Mole, PyscfRsError> {
+pub fn set_geom_<'m>(mol: &'m mut Mole, new_atom: &str) -> Result<&'m mut Mole, PyscfRsError> {
     // Parse the new atoms using the SAME unit (and identity origin/axes);
     // the contract is that `set_geom_` honours `mol.unit` so an Ang user
     // can keep typing Ang strings.
@@ -46,11 +43,7 @@ pub fn set_geom_<'m>(
         &AtomInput::String(new_atom.to_string()),
         mol.unit,
         [0.0_f64; 3],
-        [
-            [1.0_f64, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        [[1.0_f64, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
     )?;
 
     // Validate atom count.

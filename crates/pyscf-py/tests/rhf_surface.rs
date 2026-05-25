@@ -96,7 +96,10 @@ fn rhf_has_kernel_and_run_methods() {
     // BIND-02 idiom: `scf.RHF(mol).run()` and `scf.RHF(mol).kernel()` must both
     // be callable from Python.
     let src = fs::read_to_string("src/scf.rs").expect("scf.rs readable");
-    assert!(src.contains("fn kernel"), "PyRHF must expose `kernel` method");
+    assert!(
+        src.contains("fn kernel"),
+        "PyRHF must expose `kernel` method"
+    );
     assert!(src.contains("fn run"), "PyRHF must expose `run` alias");
 }
 

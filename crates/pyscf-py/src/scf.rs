@@ -10,17 +10,23 @@
 //!   PyUHF  — alpha/beta variant, full surface
 //!   PyGHF  — 2c spinor variant, minimum SCF-03 floor
 //!   PyScfScanner — Send+Sync closure wrapper (SCF-12)
+
+// PyO3 boundary: hook methods return multi-array tuples (e.g. the (J, K)
+// pair as `(Bound<PyArray2>, Bound<PyArray2>)`). These FFI return shapes are
+// inherent to the Python surface, so `type_complexity` is allowed module-wide.
+#![allow(clippy::type_complexity)]
+
 use numpy::{PyArray1, PyArray2, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 use pyscf_core::{Density, Mole};
 use pyscf_scf::{
+    GHF as GhfRust, InitGuessMode, NoOverrides, OverrideHooks, RHF as RhfRust, UHF as UhfRust,
     default_eig, default_energy_elec, default_energy_tot, default_get_fock, default_get_hcore,
     default_get_jk, default_get_ovlp, default_get_veff, default_make_rdm1, kernel as scf_kernel,
-    GHF as GhfRust, InitGuessMode, NoOverrides, OverrideHooks, RHF as RhfRust, UHF as UhfRust,
 };
 
-use crate::bridge::{extract_mole_from_pyany, PyOverrideBridge};
+use crate::bridge::{PyOverrideBridge, extract_mole_from_pyany};
 use crate::errors::pyscf_to_py;
 use crate::numpy_io::{
     density_to_pyarray, mo_coeff_to_pyarray, slice_to_pyarray1, to_density, to_mo_coeff,
@@ -71,10 +77,22 @@ impl PyRHF {
     }
 
     // Scalar SCF state (set by kernel()).
-    #[getter] fn e_tot(&self)     -> f64  { self.inner.e_tot }
-    #[getter] fn e_elec(&self)    -> f64  { self.inner.e_elec }
-    #[getter] fn converged(&self) -> bool { self.inner.converged }
-    #[getter] fn cycles(&self)    -> u32  { self.inner.cycles }
+    #[getter]
+    fn e_tot(&self) -> f64 {
+        self.inner.e_tot
+    }
+    #[getter]
+    fn e_elec(&self) -> f64 {
+        self.inner.e_elec
+    }
+    #[getter]
+    fn converged(&self) -> bool {
+        self.inner.converged
+    }
+    #[getter]
+    fn cycles(&self) -> u32 {
+        self.inner.cycles
+    }
 
     // mo_coeff / mo_energy / mo_occ — None until kernel() runs.
     #[getter]
@@ -86,7 +104,10 @@ impl PyRHF {
     }
     #[getter]
     fn mo_energy<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
-        self.inner.mo_energy.as_ref().map(|v| slice_to_pyarray1(py, v))
+        self.inner
+            .mo_energy
+            .as_ref()
+            .map(|v| slice_to_pyarray1(py, v))
     }
     #[getter]
     fn mo_occ<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyArray1<f64>>> {
@@ -94,8 +115,14 @@ impl PyRHF {
     }
 
     // User-tunable SCF parameters.
-    #[getter] fn verbose(&self) -> u8 { self.inner.verbose }
-    #[setter] fn set_verbose(&mut self, v: u8) { self.inner.verbose = v; }
+    #[getter]
+    fn verbose(&self) -> u8 {
+        self.inner.verbose
+    }
+    #[setter]
+    fn set_verbose(&mut self, v: u8) {
+        self.inner.verbose = v;
+    }
 
     #[getter]
     fn chkfile(&self) -> Option<String> {
@@ -106,63 +133,159 @@ impl PyRHF {
         self.inner.chkfile = v.map(std::path::PathBuf::from);
     }
 
-    #[getter] fn max_memory(&self) -> f64 { self.inner.max_memory }
-    #[setter] fn set_max_memory(&mut self, v: f64) { self.inner.max_memory = v; }
+    #[getter]
+    fn max_memory(&self) -> f64 {
+        self.inner.max_memory
+    }
+    #[setter]
+    fn set_max_memory(&mut self, v: f64) {
+        self.inner.max_memory = v;
+    }
 
-    #[getter] fn direct_scf(&self) -> bool { self.inner.direct_scf }
-    #[setter] fn set_direct_scf(&mut self, v: bool) { self.inner.direct_scf = v; }
+    #[getter]
+    fn direct_scf(&self) -> bool {
+        self.inner.direct_scf
+    }
+    #[setter]
+    fn set_direct_scf(&mut self, v: bool) {
+        self.inner.direct_scf = v;
+    }
 
-    #[getter] fn direct_scf_tol(&self) -> f64 { self.inner.direct_scf_tol }
-    #[setter] fn set_direct_scf_tol(&mut self, v: f64) { self.inner.direct_scf_tol = v; }
+    #[getter]
+    fn direct_scf_tol(&self) -> f64 {
+        self.inner.direct_scf_tol
+    }
+    #[setter]
+    fn set_direct_scf_tol(&mut self, v: f64) {
+        self.inner.direct_scf_tol = v;
+    }
 
-    #[getter] fn init_guess(&self) -> String { self.inner.init_guess.clone() }
-    #[setter] fn set_init_guess(&mut self, v: String) { self.inner.init_guess = v; }
+    #[getter]
+    fn init_guess(&self) -> String {
+        self.inner.init_guess.clone()
+    }
+    #[setter]
+    fn set_init_guess(&mut self, v: String) {
+        self.inner.init_guess = v;
+    }
 
-    #[getter] fn level_shift(&self) -> f64 { self.inner.level_shift }
-    #[setter] fn set_level_shift(&mut self, v: f64) { self.inner.level_shift = v; }
+    #[getter]
+    fn level_shift(&self) -> f64 {
+        self.inner.level_shift
+    }
+    #[setter]
+    fn set_level_shift(&mut self, v: f64) {
+        self.inner.level_shift = v;
+    }
 
-    #[getter] fn damp(&self) -> f64 { self.inner.damp }
-    #[setter] fn set_damp(&mut self, v: f64) { self.inner.damp = v; }
+    #[getter]
+    fn damp(&self) -> f64 {
+        self.inner.damp
+    }
+    #[setter]
+    fn set_damp(&mut self, v: f64) {
+        self.inner.damp = v;
+    }
 
-    #[getter] fn diis(&self) -> bool { self.inner.diis }
-    #[setter] fn set_diis(&mut self, v: bool) { self.inner.diis = v; }
+    #[getter]
+    fn diis(&self) -> bool {
+        self.inner.diis
+    }
+    #[setter]
+    fn set_diis(&mut self, v: bool) {
+        self.inner.diis = v;
+    }
 
-    #[getter] fn diis_space(&self) -> u32 { self.inner.diis_space }
-    #[setter] fn set_diis_space(&mut self, v: u32) { self.inner.diis_space = v; }
+    #[getter]
+    fn diis_space(&self) -> u32 {
+        self.inner.diis_space
+    }
+    #[setter]
+    fn set_diis_space(&mut self, v: u32) {
+        self.inner.diis_space = v;
+    }
 
-    #[getter] fn diis_start_cycle(&self) -> u32 { self.inner.diis_start_cycle }
-    #[setter] fn set_diis_start_cycle(&mut self, v: u32) { self.inner.diis_start_cycle = v; }
+    #[getter]
+    fn diis_start_cycle(&self) -> u32 {
+        self.inner.diis_start_cycle
+    }
+    #[setter]
+    fn set_diis_start_cycle(&mut self, v: u32) {
+        self.inner.diis_start_cycle = v;
+    }
 
-    #[getter] fn diis_damp(&self) -> f64 { self.inner.diis_damp }
-    #[setter] fn set_diis_damp(&mut self, v: f64) { self.inner.diis_damp = v; }
+    #[getter]
+    fn diis_damp(&self) -> f64 {
+        self.inner.diis_damp
+    }
+    #[setter]
+    fn set_diis_damp(&mut self, v: f64) {
+        self.inner.diis_damp = v;
+    }
 
     #[getter]
     fn diis_file(&self) -> Option<String> {
-        self.inner.diis_file.as_ref().map(|p| p.display().to_string())
+        self.inner
+            .diis_file
+            .as_ref()
+            .map(|p| p.display().to_string())
     }
     #[setter]
     fn set_diis_file(&mut self, v: Option<String>) {
         self.inner.diis_file = v.map(std::path::PathBuf::from);
     }
 
-    #[getter] fn max_cycle(&self) -> u32 { self.inner.max_cycle }
-    #[setter] fn set_max_cycle(&mut self, v: u32) { self.inner.max_cycle = v; }
+    #[getter]
+    fn max_cycle(&self) -> u32 {
+        self.inner.max_cycle
+    }
+    #[setter]
+    fn set_max_cycle(&mut self, v: u32) {
+        self.inner.max_cycle = v;
+    }
 
-    #[getter] fn conv_tol(&self) -> f64 { self.inner.conv_tol }
-    #[setter] fn set_conv_tol(&mut self, v: f64) { self.inner.conv_tol = v; }
+    #[getter]
+    fn conv_tol(&self) -> f64 {
+        self.inner.conv_tol
+    }
+    #[setter]
+    fn set_conv_tol(&mut self, v: f64) {
+        self.inner.conv_tol = v;
+    }
 
-    #[getter] fn conv_tol_grad(&self) -> Option<f64> { self.inner.conv_tol_grad }
-    #[setter] fn set_conv_tol_grad(&mut self, v: Option<f64>) { self.inner.conv_tol_grad = v; }
+    #[getter]
+    fn conv_tol_grad(&self) -> Option<f64> {
+        self.inner.conv_tol_grad
+    }
+    #[setter]
+    fn set_conv_tol_grad(&mut self, v: Option<f64>) {
+        self.inner.conv_tol_grad = v;
+    }
 
     // with_df — true if RHF.density_fit() was called. We expose `.with_df`
     // as a bool flag (the inner Box<dyn Any> is opaque to Python).
-    #[getter] fn with_df(&self) -> bool { self.inner.with_df.is_some() }
+    #[getter]
+    fn with_df(&self) -> bool {
+        self.inner.with_df.is_some()
+    }
 
-    #[getter] fn disp(&self) -> Option<String> { self.inner.disp.clone() }
-    #[setter] fn set_disp(&mut self, v: Option<String>) { self.inner.disp = v; }
+    #[getter]
+    fn disp(&self) -> Option<String> {
+        self.inner.disp.clone()
+    }
+    #[setter]
+    fn set_disp(&mut self, v: Option<String>) {
+        self.inner.disp = v;
+    }
 
-    #[getter] fn do_disp(&self) -> bool { self.inner.do_disp }
-    #[setter] fn set_do_disp(&mut self, v: bool) { self.inner.do_disp = v; }
+    #[getter]
+    fn do_disp(&self) -> bool {
+        self.inner.do_disp
+    }
+    #[setter]
+    fn set_do_disp(&mut self, v: bool) {
+        self.inner.do_disp = v;
+    }
 
     #[getter]
     fn irrep_nelec(&self) -> std::collections::HashMap<String, u32> {
@@ -175,7 +298,10 @@ impl PyRHF {
     }
 
     // callback — exposed as bool (Box<dyn Fn> not Python-visible today).
-    #[getter] fn callback(&self) -> bool { self.inner.callback.is_some() }
+    #[getter]
+    fn callback(&self) -> bool {
+        self.inner.callback.is_some()
+    }
 
     #[getter]
     fn scf_summary(&self) -> std::collections::HashMap<String, f64> {
@@ -230,7 +356,11 @@ impl PyRHF {
         // without cloning the MO matrix.
         let chkfile_path: Option<std::path::PathBuf> = {
             let me = slf.borrow();
-            if result.converged { me.inner.chkfile.clone() } else { None }
+            if result.converged {
+                me.inner.chkfile.clone()
+            } else {
+                None
+            }
         };
         if let Some(path) = chkfile_path {
             // Serialize Mole via the Python-side `.dumps()` if available
@@ -292,7 +422,10 @@ impl PyRHF {
         rhf.mo_energy = Some(result.mo_energy);
         rhf.mo_occ = Some(result.mo_occ);
         rhf.chkfile = Some(pathbuf);
-        Ok(PyRHF { inner: rhf, py_mol: mol })
+        Ok(PyRHF {
+            inner: rhf,
+            py_mol: mol,
+        })
     }
 
     // ───────────────────────────────────────────────────────────────────
@@ -422,7 +555,7 @@ impl PyRHF {
         mo_energy: numpy::PyReadonlyArray1<'py, f64>,
     ) -> PyResult<Bound<'py, PyArray1<f64>>> {
         let energies: Vec<f64> = mo_energy.as_slice()?.to_vec();
-        let nelec = self.inner.mol.nelectron as usize;
+        let nelec = self.inner.mol.nelectron;
         let occ = py
             .detach(|| pyscf_scf::default_get_occ(&energies, nelec))
             .map_err(pyscf_to_py)?;
@@ -438,9 +571,7 @@ impl PyRHF {
         let mut mc = to_mo_coeff(mo_coeff)?;
         let occ: Vec<f64> = mo_occ.as_slice()?.to_vec();
         mc.occupations = occ;
-        let d = py
-            .detach(|| default_make_rdm1(&mc))
-            .map_err(pyscf_to_py)?;
+        let d = py.detach(|| default_make_rdm1(&mc)).map_err(pyscf_to_py)?;
         density_to_pyarray(py, &d)
     }
 
@@ -506,12 +637,29 @@ impl PyRHF {
         )
     }
 
-    fn to_uks(slf: PyRef<'_, Self>) -> PyResult<()> {
-        pyscf_scf::to_uks_stub(&slf.inner).map_err(pyscf_to_py)
+    /// `mf.to_uks(xc=...)` — RHF → UKS conversion (DFT-11). Wired to the real
+    /// `pyscf_dft::UKS` target via the `pyscf_scf::to_uks` KsConversion seam
+    /// (the Phase 3 `NotYetImplemented{phase:4}` stub is retired). The carried
+    /// scalar SCF settings are copied; MO coefficients are not (same
+    /// convention as to_uhf).
+    #[pyo3(signature = (xc="LDA,VWN"))]
+    fn to_uks(slf: PyRef<'_, Self>, xc: &str) -> PyResult<Py<crate::dft::PyUKS>> {
+        let conv = pyscf_scf::to_uks(&slf.inner).map_err(pyscf_to_py)?;
+        let py = slf.py();
+        let py_mol = slf.py_mol.clone_ref(py);
+        let inner = crate::dft::uks_from_conversion(conv, xc);
+        Py::new(py, crate::dft::PyUKS { inner, py_mol })
     }
 
-    fn to_rks(slf: PyRef<'_, Self>) -> PyResult<()> {
-        pyscf_scf::to_rks_stub(&slf.inner).map_err(pyscf_to_py)
+    /// `mf.to_rks(xc=...)` — RHF → RKS conversion (DFT-11). Wired to the real
+    /// `pyscf_dft::RKS` target via the `pyscf_scf::to_rks` KsConversion seam.
+    #[pyo3(signature = (xc="LDA,VWN"))]
+    fn to_rks(slf: PyRef<'_, Self>, xc: &str) -> PyResult<Py<crate::dft::PyRKS>> {
+        let conv = pyscf_scf::to_rks(&slf.inner).map_err(pyscf_to_py)?;
+        let py = slf.py();
+        let py_mol = slf.py_mol.clone_ref(py);
+        let inner = crate::dft::rks_from_conversion(conv, xc);
+        Py::new(py, crate::dft::PyRKS { inner, py_mol })
     }
 
     // analyze / mulliken_pop / dip_moment hold a PyRef so they can't take
@@ -577,17 +725,50 @@ impl PyUHF {
         self.py_mol.bind(py).clone()
     }
 
-    #[getter] fn e_tot(&self)     -> f64  { self.inner.e_tot }
-    #[getter] fn converged(&self) -> bool { self.inner.converged }
-    #[getter] fn cycles(&self)    -> u32  { self.inner.cycles }
-    #[getter] fn max_cycle(&self) -> u32  { self.inner.max_cycle }
-    #[setter] fn set_max_cycle(&mut self, v: u32) { self.inner.max_cycle = v; }
-    #[getter] fn conv_tol(&self)  -> f64  { self.inner.conv_tol }
-    #[setter] fn set_conv_tol(&mut self, v: f64) { self.inner.conv_tol = v; }
-    #[getter] fn diis(&self) -> bool { self.inner.diis }
-    #[setter] fn set_diis(&mut self, v: bool) { self.inner.diis = v; }
-    #[getter] fn diis_space(&self) -> u32 { self.inner.diis_space }
-    #[getter] fn init_guess(&self) -> String { self.inner.init_guess.clone() }
+    #[getter]
+    fn e_tot(&self) -> f64 {
+        self.inner.e_tot
+    }
+    #[getter]
+    fn converged(&self) -> bool {
+        self.inner.converged
+    }
+    #[getter]
+    fn cycles(&self) -> u32 {
+        self.inner.cycles
+    }
+    #[getter]
+    fn max_cycle(&self) -> u32 {
+        self.inner.max_cycle
+    }
+    #[setter]
+    fn set_max_cycle(&mut self, v: u32) {
+        self.inner.max_cycle = v;
+    }
+    #[getter]
+    fn conv_tol(&self) -> f64 {
+        self.inner.conv_tol
+    }
+    #[setter]
+    fn set_conv_tol(&mut self, v: f64) {
+        self.inner.conv_tol = v;
+    }
+    #[getter]
+    fn diis(&self) -> bool {
+        self.inner.diis
+    }
+    #[setter]
+    fn set_diis(&mut self, v: bool) {
+        self.inner.diis = v;
+    }
+    #[getter]
+    fn diis_space(&self) -> u32 {
+        self.inner.diis_space
+    }
+    #[getter]
+    fn init_guess(&self) -> String {
+        self.inner.init_guess.clone()
+    }
 
     fn to_rhf(slf: PyRef<'_, Self>) -> PyResult<Py<PyRHF>> {
         let rhf_inner = pyscf_scf::to_rhf(&slf.inner).map_err(pyscf_to_py)?;
@@ -629,12 +810,30 @@ impl PyGHF {
         self.py_mol.bind(py).clone()
     }
 
-    #[getter] fn e_tot(&self)     -> f64  { self.inner.e_tot }
-    #[getter] fn converged(&self) -> bool { self.inner.converged }
-    #[getter] fn max_cycle(&self) -> u32  { self.inner.max_cycle }
-    #[setter] fn set_max_cycle(&mut self, v: u32) { self.inner.max_cycle = v; }
-    #[getter] fn conv_tol(&self)  -> f64  { self.inner.conv_tol }
-    #[setter] fn set_conv_tol(&mut self, v: f64) { self.inner.conv_tol = v; }
+    #[getter]
+    fn e_tot(&self) -> f64 {
+        self.inner.e_tot
+    }
+    #[getter]
+    fn converged(&self) -> bool {
+        self.inner.converged
+    }
+    #[getter]
+    fn max_cycle(&self) -> u32 {
+        self.inner.max_cycle
+    }
+    #[setter]
+    fn set_max_cycle(&mut self, v: u32) {
+        self.inner.max_cycle = v;
+    }
+    #[getter]
+    fn conv_tol(&self) -> f64 {
+        self.inner.conv_tol
+    }
+    #[setter]
+    fn set_conv_tol(&mut self, v: f64) {
+        self.inner.conv_tol = v;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -647,7 +846,9 @@ pub struct PyScfScanner {
     /// `Option` so `__call__` can take by &mut self yet still hand the
     /// closure result back. The closure stays in place across calls — we
     /// don't move it out, just invoke it.
-    inner: Option<Box<dyn Fn(&Mole) -> Result<pyscf_core::Energy, pyscf_core::PyscfRsError> + Send + Sync>>,
+    inner: Option<
+        Box<dyn Fn(&Mole) -> Result<pyscf_core::Energy, pyscf_core::PyscfRsError> + Send + Sync>,
+    >,
 }
 
 #[pymethods]
@@ -671,7 +872,10 @@ fn _py_mol_use_marker(r: &PyRHF, u: &PyUHF, g: &PyGHF) -> usize {
     let _ = &r.py_mol;
     let _ = &u.py_mol;
     let _ = &g.py_mol;
-    let _ = Density { nao: 0, data: vec![] };
+    let _ = Density {
+        nao: 0,
+        data: vec![],
+    };
     0
 }
 

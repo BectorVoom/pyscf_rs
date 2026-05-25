@@ -1,25 +1,19 @@
-//! Plan 03-11 Task 1 RED — smoke that `NoOverrides + kernel` drives an
+//! Plan 03-11 Task 1 — smoke that `NoOverrides + kernel` drives an
 //! end-to-end SCF on a minimal H2 fixture.
 //!
-//! `#[ignore]`'d because `int2e_sph` (the arity-4 ERI dispatcher in
-//! pyscf-gto) is `NotYetImplemented{phase:2}` per the Phase 2 plan
-//! 02-09 verification rollup gap-closure. Plan 03-10 (oracle harness)
-//! unignores this once int2e_sph lands or once DF-HF (plan 03-05)
-//! provides an alternative override path.
-//!
-//! Until then, plan 03-11 ships:
-//!   - The kernel cycle loop body (verbatim port of pyscf/scf/hf.py:48-244).
-//!   - default_get_jk that propagates int2e_sph's NotYetImplemented error.
-//!   - All other defaults (eig, occ, rdm, energy_*, init_guess_by_1e,
-//!     analyze, convert, scanner) are real bodies — see the unit tests in
-//!     kernel_internals_unit.rs.
+//! ALWAYS-ON since 03-12: the `int2e_sph` arity-4 dispatch gap that blocked
+//! this (`NotYetImplemented{phase:2}`) is closed (05-08), so `default_get_jk`
+//! builds a real Fock matrix and the kernel converges. Uses the `1e` init
+//! guess — the default `minao` guess lands in plan 03-13. The kernel cycle
+//! loop is a verbatim port of `pyscf/scf/hf.py:48-244`; eig/occ/rdm/energy_*/
+//! init_guess_by_1e/analyze/convert/scanner are real bodies (unit-tested in
+//! kernel_internals_unit.rs).
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
-use pyscf_scf::{kernel, KernelConfig, NoOverrides};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
+use pyscf_scf::{InitGuessMode, KernelConfig, NoOverrides, kernel};
 
 #[test]
-#[ignore = "needs pyscf-gto int2e_sph arity-4 dispatch — unignore in plan 03-10"]
 fn h2_no_overrides_converges() {
     let mol = M(MoleBuildArgs {
         atom: AtomInput::String("H 0 0 0; H 0 0 1.4".into()),
@@ -28,9 +22,18 @@ fn h2_no_overrides_converges() {
         ..Default::default()
     })
     .expect("build H2");
-    let result = kernel(&mol, &NoOverrides, KernelConfig::default()).expect("converge");
+    // 1e (hcore) init guess — the default `minao` path is exercised separately
+    // by `default_minao_config_converges` (minao landed in 03-13).
+    let cfg = KernelConfig {
+        init_guess: InitGuessMode::OneElectron,
+        ..Default::default()
+    };
+    let result = kernel(&mol, &NoOverrides, cfg).expect("converge");
     assert!(result.converged);
-    assert!(result.cycles <= 30, "H2/STO-3G should converge in ≤30 cycles");
+    assert!(
+        result.cycles <= 30,
+        "H2/STO-3G should converge in ≤30 cycles"
+    );
     assert!(
         result.e_tot.0 > -2.0 && result.e_tot.0 < -1.0,
         "H2/STO-3G total energy should be ~ -1.117 Hartree, got {}",
@@ -38,11 +41,12 @@ fn h2_no_overrides_converges() {
     );
 }
 
+/// FLIPPED in 03-13: the DEFAULT `KernelConfig` (minao init guess) now converges
+/// — both the int2e_sph gap (05-08) AND the minao init guess (03-13) are closed,
+/// so the out-of-the-box `kernel(&mol, &NoOverrides, default())` runs a real SCF.
+/// minao and the 1e guess must converge to the SAME energy (same molecule/basis).
 #[test]
-fn kernel_propagates_jk_not_yet_implemented() {
-    // This test runs unignored — it asserts the gap closes cleanly via
-    // an error rather than panicking. Once int2e_sph lands the test
-    // either updates to assert success or moves under #[ignore].
+fn default_minao_config_converges() {
     let mol = M(MoleBuildArgs {
         atom: AtomInput::String("H 0 0 0; H 0 0 1.4".into()),
         basis: BasisInput::Name("sto-3g".into()),
@@ -50,25 +54,26 @@ fn kernel_propagates_jk_not_yet_implemented() {
         ..Default::default()
     })
     .expect("build H2");
-    let result = kernel(&mol, &NoOverrides, KernelConfig::default());
-    // Must return Err — never panic, never reach convergence (no JK builder).
-    match result {
-        Err(e) => {
-            let msg = format!("{}", e);
-            // Should be either int2e NotYetImplemented or an init_guess
-            // failure (minao mode is also not yet implemented). Both are
-            // acceptable: the kernel is well-formed, the gap is documented.
-            assert!(
-                msg.contains("not yet implemented") || msg.contains("NotYetImplemented")
-                    || msg.contains("int2e") || msg.contains("minao")
-                    || msg.contains("init_guess"),
-                "expected NotYetImplemented-flavoured error, got: {}",
-                msg
-            );
-        }
-        Ok(_) => panic!(
-            "expected NotYetImplemented (int2e_sph or minao); plan 03-11's surface ships an \
-             error, not silent convergence. Unignore the bit-exact H2 test if this changes."
-        ),
-    }
+
+    // Default config = minao init guess (no longer NotYetImplemented).
+    let minao = kernel(&mol, &NoOverrides, KernelConfig::default()).expect("minao converge");
+    assert!(minao.converged, "default (minao) SCF must converge");
+    assert!(
+        minao.e_tot.0 > -2.0 && minao.e_tot.0 < -1.0,
+        "minao H2/STO-3G e_tot ≈ -1.117, got {}",
+        minao.e_tot.0
+    );
+
+    // 1e guess on the same system → same converged energy (within conv_tol).
+    let cfg_1e = KernelConfig {
+        init_guess: InitGuessMode::OneElectron,
+        ..Default::default()
+    };
+    let one_e = kernel(&mol, &NoOverrides, cfg_1e).expect("1e converge");
+    assert!(
+        (minao.e_tot.0 - one_e.e_tot.0).abs() < 1e-7,
+        "minao ({}) and 1e ({}) must converge to the same energy",
+        minao.e_tot.0,
+        one_e.e_tot.0
+    );
 }

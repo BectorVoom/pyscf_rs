@@ -16,15 +16,15 @@ use std::sync::Arc;
 ///
 /// Returns `(basis, shells)` where `shells` is the 2-tuple covering both H 1s
 /// shells (suitable for a 2-center 1e overlap session).
+// Shared test helper; not every test binary including this module uses it.
+#[allow(dead_code)]
 #[allow(clippy::type_complexity)]
 pub fn h2_sto3g_basis() -> (BasisSet, ShellTuple) {
     // STO-3G H 1s (port from cintx oracle test build_h2o_sto3g):
-    let h_1s_exp: Arc<[f64]> = Arc::from(
-        vec![3.42525091_f64, 0.62391373, 0.16885540].into_boxed_slice(),
-    );
-    let h_1s_coeff: Arc<[f64]> = Arc::from(
-        vec![0.15432897_f64, 0.53532814, 0.44463454].into_boxed_slice(),
-    );
+    let h_1s_exp: Arc<[f64]> =
+        Arc::from(vec![3.42525091_f64, 0.62391373, 0.16885540].into_boxed_slice());
+    let h_1s_coeff: Arc<[f64]> =
+        Arc::from(vec![0.15432897_f64, 0.53532814, 0.44463454].into_boxed_slice());
 
     // Two H atoms separated by 1.4 Bohr along z.
     let h1 = Atom::try_new(1, [0.0, 0.0, 0.0], NuclearModel::Point, None, None)

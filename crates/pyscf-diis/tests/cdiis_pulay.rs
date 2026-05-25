@@ -72,12 +72,12 @@ fn three_iterate_pulay_reference() {
         .extrapolate(FlatVec(vec![0.0, 0.0, 1.0, 0.0]), vec![0.0, 0.0, 0.5, 0.0])
         .expect("push 3");
     let expected = [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0, 0.0];
-    for k in 0..4 {
+    for (k, &exp) in expected.iter().enumerate() {
         assert!(
-            (out.0[k] - expected[k]).abs() < 1e-10,
+            (out.0[k] - exp).abs() < 1e-10,
             "k={}: expected {}, got {}",
             k,
-            expected[k],
+            exp,
             out.0[k]
         );
     }
@@ -105,7 +105,11 @@ fn ring_buffer_drops_oldest() {
         .expect("4");
     // After 4 pushes the buffer holds 2 entries (space-bounded). The Diis
     // public API exposes len() / is_empty(); verify the bound.
-    assert_eq!(diis.len(), 2, "ring buffer must remain at `space` after overflow");
+    assert_eq!(
+        diis.len(),
+        2,
+        "ring buffer must remain at `space` after overflow"
+    );
     assert!(!diis.is_empty());
 }
 

@@ -3,11 +3,11 @@
 //! Cross-language ORACLE-08 (h5py reads pyscf-rs-written chkfile, and vice
 //! versa) is plan 03-08 — this test ships the Rust-only seal that proves
 //! the schema + F-order convention round-trip inside pyscf-rs itself.
-use pyscf_chkfile::{primitives, Checkpointable};
+use pyscf_chkfile::{Checkpointable, primitives};
 use pyscf_core::{Energy, MOCoefficients};
 use pyscf_scf::{
-    chkfile::{dump_scf_to_file, load_scf_from_file},
     ScfResult,
+    chkfile::{dump_scf_to_file, load_scf_from_file},
 };
 
 fn sample_result() -> ScfResult {
@@ -41,12 +41,7 @@ fn rust_rust_round_trip() {
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
     let path = tmp.path();
     let original = sample_result();
-    dump_scf_to_file(
-        path,
-        r#"{"atom":"H 0 0 0","basis":"sto-3g"}"#,
-        &original,
-    )
-    .expect("dump");
+    dump_scf_to_file(path, r#"{"atom":"H 0 0 0","basis":"sto-3g"}"#, &original).expect("dump");
     let loaded = load_scf_from_file(path).expect("load");
     // e_tot
     assert!((loaded.e_tot.0 - original.e_tot.0).abs() < 1e-12);

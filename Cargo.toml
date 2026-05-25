@@ -8,6 +8,8 @@ members = [
     "crates/pyscf-gto",
     "crates/pyscf-scf",
     "crates/pyscf-dft",
+    # Phase 5 addition (D-01): AO→MO transformation crate (CCSD-reusable). Workspace grows 19 → 20.
+    "crates/pyscf-ao2mo",
     "crates/pyscf-mp2",
     "crates/pyscf-ccsd",
     "crates/pyscf-grad",
@@ -20,6 +22,8 @@ members = [
     "crates/pyscf-chkfile",
     "crates/pyscf-diis",
     "crates/pyscf-df",
+    # Phase 4 addition (D-05): Becke molecular grids crate. Workspace grows 18 → 19.
+    "crates/pyscf-grids",
     "xtask",
 ]
 exclude = []
@@ -65,9 +69,9 @@ serde           = { version = "=1.0", features = ["derive"] }
 serde_json      = "=1.0.149"
 anyhow          = "=1.0.102"
 # Phase 3 — HDF5 chkfile (D-05/D-06). Static feature → satisfies DIST-05 (no system libhdf5).
-hdf5-metno      = { version = "=0.10.0", features = ["static"] }
+hdf5-metno      = { version = "=0.12.4", features = ["static"] }
 # Phase 3 — needed by pyscf-chkfile and pyscf-df for typed array buffers; pyscf-core stays algebra-free.
-ndarray         = "0.16"
+ndarray         = "0.17"
 # Phase 3 — needed by pyscf-py (Phase 3 plan 07). Declared at workspace level for consistency.
 pyo3            = { version = "=0.28.3" }
 numpy           = { version = "=0.28.0" }
@@ -106,5 +110,16 @@ debug = 1
 # upstream-fix path) and Phase 2/3 needs CI parity.
 [patch.crates-io]
 cintx     = { path = "../cintx" }
-# libxc_rs  = { path = "../libxc_rs" }   # disabled — pulls a ~6h libxc compile; re-enable when Phase 4 (DFT) needs it
+# Re-enabled behind the `libxc` feature (Phase 4 plan 04-10, Pitfall 5). This
+# entry is INERT in the default build: the only consumer is `pyscf-dft`'s
+# `libxc_rs = { ..., optional = true }` dep, gated by the off-by-default
+# `libxc` feature (crates/pyscf-dft/Cargo.toml). Nothing in the default dep
+# graph names libxc_rs, so `cargo build --workspace` (default) compiles ZERO
+# `libxc-kernel-*` crates — PROVEN by `cargo tree -p pyscf-dft` (0 libxc_rs)
+# in CI. The ~6h/266-kernel libxc compile runs ONLY in the dedicated cached
+# `dft-libxc-bitexact` CI job (`--features libxc`), which itself stays DISABLED
+# (workflow_dispatch / if:false) until 04-02's PENDING_LIBXC_RS_FEATURE_GATE
+# lands the per-functional feature gate. NEVER run a default `cargo build` that
+# names libxc_rs locally.
+libxc_rs  = { path = "../libxc_rs" }
 xcfun_rs  = { path = "../xcfun_rs/crates/xcfun-rs", package = "xcfun-rs" }

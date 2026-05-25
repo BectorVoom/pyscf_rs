@@ -3,6 +3,7 @@
 //! Source: `pyscf/scf/hf.py:48-244` — `def kernel(mf, conv_tol, ...)`.
 //! Verbatim port of the cycle loop:
 //!
+//! ```text
 //!   1. S, h_core, init guess D₀
 //!   2. V_HF₀ = get_veff(D₀)
 //!   3. E₀ = energy_elec(D₀, h_core, V_HF₀) + E_nuc
@@ -15,6 +16,7 @@
 //!        E_new = energy_elec(D, h_core, V_HF) + E_nuc
 //!        if |E_new - E_old| < conv_tol: converged
 //!        E_old = E_new
+//! ```
 //!
 //! Plan 03-04 — CDIIS extrapolation now lives inline below: after the
 //! `hooks.get_fock(...)` call we invoke `diis_adapter::diis_step` to
@@ -22,7 +24,7 @@
 //! No DF-HF entry point — plan 03-05 ships DfHooks impl of OverrideHooks
 //! that routes `get_jk` through pyscf-df.
 
-use crate::diis_adapter::{diis_step, FockSubspace};
+use crate::diis_adapter::{FockSubspace, diis_step};
 use crate::error::ScfError;
 use crate::{InitGuessMode, KernelConfig, OverrideHooks, ScfResult};
 use pyscf_core::{Density, Energy, Mole, PyscfRsError};
@@ -106,10 +108,7 @@ pub(crate) fn scf_loop<H: OverrideHooks>(
                 iterations: cycle,
                 reason: format!("DIIS extrapolation failed: {}", e),
             })?;
-            Density {
-                nao,
-                data: extrap,
-            }
+            Density { nao, data: extrap }
         } else {
             fock_base
         };
@@ -154,7 +153,7 @@ pub(crate) fn scf_loop<H: OverrideHooks>(
         }
     }
 
-    let mo = mo_final.ok_or_else(|| {
+    let mo = mo_final.ok_or({
         // cycles == 0 means max_cycle was 0; no MO ever computed.
         ScfError::ConvergenceFailure {
             cycles: 0,

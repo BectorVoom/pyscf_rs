@@ -65,11 +65,7 @@ pub fn read_mol(file: &hdf5::File) -> Result<String, ChkfileError> {
 }
 
 /// Write a scalar f64 (e.g. `e_tot`).
-pub fn write_scalar_f64(
-    group: &hdf5::Group,
-    key: &str,
-    value: f64,
-) -> Result<(), ChkfileError> {
+pub fn write_scalar_f64(group: &hdf5::Group, key: &str, value: f64) -> Result<(), ChkfileError> {
     if group.link_exists(key) {
         group.unlink(key)?;
     }
@@ -86,11 +82,7 @@ pub fn read_scalar_f64(group: &hdf5::Group, key: &str) -> Result<f64, ChkfileErr
 }
 
 /// Write a 1D f64 array (e.g. `mo_energy`, `mo_occ`).
-pub fn write_dataset_1d(
-    group: &hdf5::Group,
-    key: &str,
-    data: &[f64],
-) -> Result<(), ChkfileError> {
+pub fn write_dataset_1d(group: &hdf5::Group, key: &str, data: &[f64]) -> Result<(), ChkfileError> {
     if group.link_exists(key) {
         group.unlink(key)?;
     }

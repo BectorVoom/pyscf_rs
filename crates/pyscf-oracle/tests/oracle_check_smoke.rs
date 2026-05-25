@@ -26,7 +26,7 @@ fn unknown_method_panics() {
 
 #[cfg(feature = "python")]
 mod live_arms {
-    use pyscf_oracle::{oracle_check, H2O_CC_PVDZ, H2O_TRIPLET_CCPVDZ};
+    use pyscf_oracle::{H2O_CC_PVDZ, H2O_TRIPLET_CCPVDZ, oracle_check};
 
     #[test]
     #[ignore = "requires libpython shared-lib at link time + upstream pyscf importable"]

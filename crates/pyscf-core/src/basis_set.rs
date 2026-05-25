@@ -38,8 +38,8 @@ pub use cintx_core::{Atom, BasisMeta, BasisSet, NuclearModel as CintxNuclearMode
 /// layout change in cintx-compat is picked up automatically.
 pub mod raw_layout {
     pub use cintx_compat::raw::{
-        ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, CHARGE_OF, FRAC_CHARGE_NUC, GAUSSIAN_NUC,
-        KAPPA_OF, NCTR_OF, NPRIM_OF, NUC_MOD_OF, POINT_NUC, PTR_COEFF, PTR_COORD,
-        PTR_ENV_START, PTR_EXP, PTR_FRAC_CHARGE, PTR_ZETA,
+        ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, CHARGE_OF, FRAC_CHARGE_NUC, GAUSSIAN_NUC, KAPPA_OF,
+        NCTR_OF, NPRIM_OF, NUC_MOD_OF, POINT_NUC, PTR_COEFF, PTR_COORD, PTR_ENV_START, PTR_EXP,
+        PTR_FRAC_CHARGE, PTR_ZETA,
     };
 }

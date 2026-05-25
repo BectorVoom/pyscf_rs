@@ -6,7 +6,7 @@
 //! the struct (Rust rejects missing-field access at compile time);
 //! the runtime asserts prove their defaults match upstream.
 
-use pyscf_scf::{RHF, GHF, UHF};
+use pyscf_scf::{GHF, RHF, UHF};
 
 #[test]
 fn rhf_has_30_attribute_floor() {
@@ -55,7 +55,7 @@ fn ghf_constructs_with_2c_spinor_slot() {
 
 #[test]
 fn parse_init_guess_mode_round_trip() {
-    use pyscf_scf::{parse_init_guess_mode, InitGuessMode};
+    use pyscf_scf::{InitGuessMode, parse_init_guess_mode};
     assert!(matches!(
         parse_init_guess_mode("minao").expect("ok"),
         InitGuessMode::Minao

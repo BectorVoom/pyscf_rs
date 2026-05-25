@@ -4,37 +4,40 @@
 //!   1. Drives `cintx_rs::SessionRequest` over a real Mole → produces
 //!      a finite, F-order, `nao × nao` output for `int1e_ovlp_sph`.
 //!   2. Honours upstream `_add_suffix` (`pyscf/gto/mole.py:945+`).
-//!   3. Routes ECP names (`int1e_ecp*`, `ECPscalar*`) to
-//!      `PyscfRsError::EcpEngineNotAvailable` (02-07 wires the real engine).
+//!   3. Routes ECP names (`int1e_ecp*`, `ECPscalar*`) through the
+//!      `EcpEngine`. For an ECP-LESS molecule (these smoke tests use
+//!      H/STO-3G) the cintx-backed engine (02-10) returns
+//!      `PyscfRsError::EcpEngineNotAvailable` via its `mol._ecp.is_empty()`
+//!      guard — so the user-facing "ECP on a molecule without one" error
+//!      contract is unchanged from the 02-07 stub. Real ECP evaluation on a
+//!      molecule WITH an ECP (Cu/LANL2DZ) is covered by
+//!      `tests/ecp_int1e_oracle.rs`.
 //!   4. Returns a clear error for unknown names AND for unbuilt Mole.
 //!
-//! NOTE on the H2/STO-3G analytical assertion:
+//! NOTE on the H2/STO-3G overlap assertion (structural-only, by design):
 //!
-//!   The plan's original behaviour table calls for `S_00 ≈ 1.0` /
-//!   `S_01 ≈ 0.6593` to match the analytical H2/STO-3G overlap. The
-//!   current cintx-rs safe-API executor (`CubeClExecutor` in
-//!   `cintx/crates/cintx-rs/src/api.rs`) populates output staging via
-//!   `fill_staging_values` — a synthetic pattern (`((idx + 1) as f64) * 0.5`
-//!   for spheric) used while the safe API is being landed end-to-end.
-//!   Real integral values flow through cintx-compat::raw + linked vendor
-//!   libcint (`cintx/crates/cintx-oracle/src/compare.rs:467+` is the
-//!   reference oracle). The byte-identity assertion is gated by 02-09
-//!   (verification rollup against upstream pyscf), not 02-05.
+//!   The plan's behaviour table calls for `S_00 ≈ 1.0` / `S_01 ≈ 0.6593`
+//!   (the analytical H2/STO-3G overlap). cintx-rs now performs REAL integral
+//!   evaluation — `SessionRequest::evaluate` runs `CubeClExecutor` over the
+//!   linked kernels (`cintx/crates/cintx-rs/src/api.rs`); the old synthetic
+//!   staging placeholder is gone (the `fill_staging_values` symbol no longer
+//!   exists anywhere in the cintx workspace). The sibling
+//!   `tests/ecp_int1e_oracle.rs` (added by 02-10) likewise asserts a real,
+//!   symmetric, non-zero ECP matrix — only meaningful under real evaluation.
 //!
-//!   For 02-05 we assert the structural contract that the cintx safe API
-//!   shape currently delivers: `out.shape == [nao, nao]`, `out.values.len()
-//!   == nao * nao`, all values finite, Hermitian when symmetry expected.
-//!   The same de-risk pattern as 02-01's wave0_smoke.rs (line 28 docstring).
-//!
-//!   When cintx-rs's safe-API executor flips onto real eval, the
-//!   structural assertions still hold AND the analytical 0.6593 / 1.0
-//!   numbers light up automatically. 02-09 promotes those into hard
-//!   assertions against the oracle.
+//!   These in-tree smoke tests deliberately assert only the STRUCTURAL
+//!   contract — `out.shape == [nao, nao]`, `out.values.len() == nao * nao`,
+//!   all values finite, Hermitian when symmetry is expected — as an always-on
+//!   regression gate that needs no upstream venv (same de-risk pattern as
+//!   02-01's wave0_smoke.rs). Numerical byte-identity vs upstream PySCF (the
+//!   0.6593 / 1.0 numbers) is delegated to the venv-gated oracle harness
+//!   (`tests/oracle/test_intor_oracle.py`, 02-09), so a CI run without the
+//!   oracle venv still exercises the layout / naming / routing contract.
 
 mod common;
 
 use pyscf_core::Unit;
-use pyscf_gto::{intor, AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor};
 
 fn h2_args() -> MoleBuildArgs {
     MoleBuildArgs {
@@ -42,11 +45,7 @@ fn h2_args() -> MoleBuildArgs {
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     }
 }
@@ -57,11 +56,7 @@ fn h_args() -> MoleBuildArgs {
         basis: BasisInput::Name("sto-3g".into()),
         unit: Unit::Bohr,
         max_memory: 4000.0,
-        axes: [
-            [1.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
         ..Default::default()
     }
 }
@@ -143,7 +138,10 @@ fn unknown_intor_returns_invalid_molecule_error() {
     let r = intor(&mol, "int1e_totally_fake");
     match r {
         Err(pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(msg))) => {
-            assert!(msg.contains("unknown intor"), "msg should mention 'unknown intor': {msg}");
+            assert!(
+                msg.contains("unknown intor"),
+                "msg should mention 'unknown intor': {msg}"
+            );
             // Post-suffix name in error message — gives the user the
             // actual lookup key the layout_table didn't contain.
             assert!(
@@ -156,22 +154,24 @@ fn unknown_intor_returns_invalid_molecule_error() {
 }
 
 #[test]
-fn ecp_int1e_route_returns_engine_not_available() {
+fn ecp_int1e_route_on_ecpless_mol_returns_engine_not_available() {
+    // H/STO-3G has no ECP; the cintx-backed engine (02-10) guards on
+    // mol._ecp.is_empty() and returns the canonical EcpEngineNotAvailable.
     let mol = M(h_args()).expect("build");
     let r = intor(&mol, "int1e_ecp");
     assert!(
         matches!(r, Err(pyscf_core::PyscfRsError::EcpEngineNotAvailable)),
-        "int1e_ecp must route to EcpEngineNotAvailable; got {r:?}",
+        "int1e_ecp on ECP-less mol must route to EcpEngineNotAvailable; got {r:?}",
     );
 }
 
 #[test]
-fn ecp_ecpscalar_route_returns_engine_not_available() {
+fn ecp_ecpscalar_route_on_ecpless_mol_returns_engine_not_available() {
     let mol = M(h_args()).expect("build");
     let r = intor(&mol, "ECPscalar");
     assert!(
         matches!(r, Err(pyscf_core::PyscfRsError::EcpEngineNotAvailable)),
-        "ECPscalar* names must route to EcpEngineNotAvailable; got {r:?}",
+        "ECPscalar* on ECP-less mol must route to EcpEngineNotAvailable; got {r:?}",
     );
 }
 
@@ -182,8 +182,7 @@ fn unbuilt_mol_errors() {
     match r {
         Err(pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(msg))) => {
             assert!(
-                msg.to_lowercase().contains("not built")
-                    || msg.contains("build()"),
+                msg.to_lowercase().contains("not built") || msg.contains("build()"),
                 "msg should explain unbuilt: {msg}",
             );
         }

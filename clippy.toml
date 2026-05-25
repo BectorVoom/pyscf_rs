@@ -1,0 +1,6 @@
+# FOUND-07: `unwrap`/`expect` are denied in production code (each crate's
+# lib.rs carries `#![warn(clippy::unwrap_used)]`, promoted to an error by the
+# CI `-D warnings` flag). In test code a panic on `unwrap`/`expect` is the
+# intended failure mode, so they are allowed there.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

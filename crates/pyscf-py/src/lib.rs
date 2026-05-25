@@ -3,11 +3,15 @@
 //! Module structure:
 //!   _native (root cdylib)
 //!     ├── PyscfRsRuntimeError (create_exception! per BIND-09 + abi3 workaround)
-//!     └── scf (submodule)
-//!         ├── RHF (PyRHF — #[pyclass(subclass)])
-//!         ├── UHF (PyUHF — #[pyclass(subclass)])
-//!         ├── GHF (PyGHF — #[pyclass(subclass)])
-//!         └── Scanner (PyScfScanner — Send+Sync closure wrapper, SCF-12)
+//!     ├── scf (submodule)
+//!     │   ├── RHF (PyRHF — #[pyclass(subclass)])
+//!     │   ├── UHF (PyUHF — #[pyclass(subclass)])
+//!     │   ├── GHF (PyGHF — #[pyclass(subclass)])
+//!     │   └── Scanner (PyScfScanner — Send+Sync closure wrapper, SCF-12)
+//!     └── dft (submodule, plan 04-09 — DFT-08 / D-08)
+//!         ├── RKS (PyRKS — #[pyclass(subclass)])
+//!         ├── UKS (PyUKS — #[pyclass(subclass)])
+//!         └── NumInt (PyNumIntView — read-only precision view, D-08)
 //!
 //! Algebra wall: pyscf-py is the ONLY workspace crate (besides pyscf-oracle
 //! dev-deps) that depends on pyo3. The chemistry crates (pyscf-scf, -diis,
@@ -23,7 +27,10 @@
 
 pub mod bridge;
 pub mod caches;
+pub mod cc;
+pub mod dft;
 pub mod errors;
+pub mod mp;
 pub mod numpy_io;
 pub mod scf;
 
@@ -52,6 +59,26 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let scf_mod = PyModule::new(py, "scf")?;
     crate::scf::register(py, &scf_mod)?;
     m.add_submodule(&scf_mod)?;
+
+    // Plan 04-09 (DFT-08 / D-08) — `dft` submodule containing PyRKS/PyUKS.
+    let dft_mod = PyModule::new(py, "dft")?;
+    crate::dft::register(py, &dft_mod)?;
+    m.add_submodule(&dft_mod)?;
+
+    // Plan 05-07 (MP2 / D-07/D-08) — `mp` submodule containing
+    // PyRMP2/PyUMP2/PyDFMP2 + the MP2() factory + PyMp2Scanner. The Python
+    // overlay `python/pyscf/mp/__init__.py` re-exports `pyscf._native.mp.*`.
+    let mp_mod = PyModule::new(py, "mp")?;
+    crate::mp::register(py, &mp_mod)?;
+    m.add_submodule(&mp_mod)?;
+
+    // Plan 06-10 (CCSD / D-09) — `cc` submodule containing
+    // PyRCCSD/PyUCCSD/PyDFCCSD + the CCSD() factory + PyCcsdScanner. The Python
+    // overlay `python/pyscf/cc/__init__.py` re-exports `pyscf._native.cc.*` and
+    // grafts the `mf.CCSD()` / `mf.density_fit().CCSD()` cross-module dispatch.
+    let cc_mod = PyModule::new(py, "cc")?;
+    crate::cc::register(py, &cc_mod)?;
+    m.add_submodule(&cc_mod)?;
 
     Ok(())
 }

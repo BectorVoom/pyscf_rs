@@ -8,8 +8,10 @@
 //!
 //! Design — what this module does:
 //!   1. `add_suffix(name, mol.cart)` — verbatim port of upstream `_add_suffix`.
-//!   2. ECP route — `int1e_ecp*` and `ECPscalar*` short-circuit to
-//!      `PyscfRsError::EcpEngineNotAvailable` (02-07 wires the real engine).
+//!   2. ECP route — `int1e_ecp*` / `ECPscalar*` names dispatch through the
+//!      `EcpEngine` trait (02-10 wires the cintx-backed `CintxEcpEngine`;
+//!      ECP-less mols → `EcpEngineNotAvailable`, derivative names → Phase-7
+//!      `NotYetImplemented`).
 //!   3. `layout_table::lookup(name)` — feature gate. Unknown names produce a
 //!      structured error pointing at the layout table.
 //!   4. cintx Resolver — maps the post-suffix symbol → `OperatorId` + arity.
@@ -19,22 +21,22 @@
 //!      F-order `nao×nao(×nao×nao)` output buffer.
 //!   6. Return `IntorOutput { values, shape, layout }`.
 //!
-//! Caveat (cintx-state, 02-05 ship date): `cintx_rs::SessionRequest`'s safe-API
-//! executor populates output via `fill_staging_values` (synthetic pattern).
-//! Real integral evaluation is in cintx-compat::raw + linked vendor libcint
-//! (cintx-oracle test suite). The 02-05 dispatcher's job is the LAYOUT +
-//! NAMING + ECP-ROUTING contract; numerical byte-identity vs upstream pyscf
-//! is gated by 02-09 verification rollup once cintx flips to real eval.
+//! cintx-state (updated 02-10): `cintx_rs::SessionRequest::evaluate` now runs
+//! REAL integral evaluation via `CubeClExecutor` over the linked kernels (the
+//! old synthetic `fill_staging_values` staging placeholder no longer exists in
+//! the cintx workspace). This dispatcher owns the LAYOUT + NAMING +
+//! ECP-ROUTING contract; numerical byte-identity vs upstream pyscf is gated by
+//! the 02-09 verification rollup and the venv-gated oracle harness.
 
 use std::sync::Arc;
 
 use cintx_core::{BasisSet as CintxBasisSet, OperatorId, Representation};
 use cintx_ops::resolver::{OperatorDescriptor, Resolver};
-use cintx_runtime::ExecutionOptions;
 use cintx_rs::SessionRequest;
+use cintx_runtime::ExecutionOptions;
 use pyscf_core::{CoreError, EcpEngine, Mole, PyscfRsError};
 
-use crate::layout_table::{self, IntorLayout, INTOR_LAYOUTS};
+use crate::layout_table::{self, INTOR_LAYOUTS, IntorLayout};
 
 /// Output of a successful `intor(...)` call.
 ///
@@ -85,10 +87,11 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
     // to this dispatcher.
     if full_name.starts_with("int1e_ecp") || full_name.starts_with("ECPscalar") {
         let engine = crate::ecp_engine();
-        // The Phase 2 stub never returns Ok, so the conversion below is
-        // exercise-only until 02-10. When the cintx-backed impl lands, the
-        // returned `Density` carries an F-order `nao × nao` buffer and we
-        // re-pack it into the `IntorOutput` shape used elsewhere.
+        // Since 02-10 `ecp_engine()` returns the cintx-backed `CintxEcpEngine`:
+        // for an ECP-bearing molecule + scalar name it returns Ok with an
+        // F-order `nao × nao` buffer, which we re-pack into `IntorOutput`.
+        // ECP-less molecules still get `EcpEngineNotAvailable`; derivative
+        // names (ipnuc/iprinv) get `NotYetImplemented{phase:7}` (WR-01).
         let density = EcpEngine::ecp_int1e(&engine, mol, &full_name)?;
         // Defensive shape: even when 02-10 wires the real engine, this
         // dispatcher promises the same `(nao, nao)` F-order layout
@@ -178,10 +181,23 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
             layout,
             &full_name,
         ),
-        3 | 4 => Err(PyscfRsError::NotYetImplemented {
-            phase: 2,
-            what: "arity 3/4 intors (int2e/int3c2e dispatch) — gated by 02-09 \
-                   verification rollup; 02-05 ships arity-2 only",
+        4 => evaluate_arity4(
+            descriptor,
+            operator,
+            representation,
+            basis_ref,
+            nbas,
+            nao,
+            layout,
+            &full_name,
+        ),
+        // Plain arity-3 through `intor(mol, name)` is not an MP2/DF path:
+        // `int3c2e_sph` (μν|P) needs the auxiliary basis as its third center
+        // and is dispatched via `intor_with_auxmol` (see `evaluate_int3c2e_with_auxmol`).
+        3 => Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "single-mol arity-3 intors — int3c2e_sph (μν|P) uses \
+                   intor_with_auxmol(mol, name, auxmol) for the orbital×aux 3-center",
         }),
         n => Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
             "unsupported arity {n} for intor '{full_name}' (libcint maxes at 4)",
@@ -225,18 +241,16 @@ fn evaluate_arity2(
     let shell_offsets: Vec<usize> = (0..nbas)
         .map(|s| meta.shell_offset(s).unwrap_or(0))
         .collect();
-    let shell_counts: Vec<usize> = (0..nbas)
-        .map(|s| meta.ao_count(s).unwrap_or(0))
-        .collect();
+    let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
 
     // Iterate (i, j) shell pairs.
     for i in 0..nbas {
         for j in 0..nbas {
-            let shells = basis
-                .shell_tuple_for_indices([i, j])
-                .map_err(|e| PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            let shells = basis.shell_tuple_for_indices([i, j]).map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                     "shell_tuple_for_indices(i={i}, j={j}) failed for '{intor_name}': {e}",
-                ))))?;
+                )))
+            })?;
 
             let request = SessionRequest::new(
                 operator,
@@ -247,13 +261,17 @@ fn evaluate_arity2(
             );
             let outcome = request
                 .query_workspace()
-                .map_err(|e| PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "cintx workspace query failed for '{intor_name}' shell pair ({i},{j}): {e}",
-                ))))?
+                .map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx workspace query failed for '{intor_name}' shell pair ({i},{j}): {e}",
+                    )))
+                })?
                 .evaluate()
-                .map_err(|e| PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "cintx evaluate failed for '{intor_name}' shell pair ({i},{j}): {e}",
-                ))))?;
+                .map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx evaluate failed for '{intor_name}' shell pair ({i},{j}): {e}",
+                    )))
+                })?;
 
             // For arity-2 the per-pair block is `[ni, nj]` (or `[c, ni, nj]`
             // if component-leading). cintx writes the block in F-order with
@@ -384,40 +402,180 @@ fn stitch_arity2_block(
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
             "cintx returned block of {} elements for shell pair ({i_shell},{j_shell}) of '{intor_name}', \
              expected {} (components={}, ni={}, nj={}, extents={:?})",
-            block.len(), expected_total, components, ni, nj, block_extents,
+            block.len(),
+            expected_total,
+            components,
+            ni,
+            nj,
+            block_extents,
         ))));
     }
     Ok(())
 }
 
-/// Compute the named integral over `mol` using `auxmol` as the auxiliary
-/// basis for the third (and fourth, where applicable) index. Equivalent to
-/// upstream `mol.intor('int3c2e_sph', auxmol=auxmol)` or the explicit
-/// shls_slice over a merged Mole. (Plan 03-05 Task 0 — checker iteration 1
-/// WARNING 5 case (b) fix; Phase 2's `intor` dispatcher gates arity-3/4 at
-/// `NotYetImplemented{phase:2}`, so plan 03-05 (DF-HF) consumers need this
-/// thin wrapper before they can compile.)
+/// Arity-4 dispatch: iterate `(i, j, k, l)` shell quadruples over the
+/// molecule basis, evaluate the `(ij|kl)` block per quad via `SessionRequest`,
+/// and stitch each per-quad F-order block into the global F-order
+/// `[nao, nao, nao, nao]` output buffer.
 ///
-/// Supported names (Phase 3 plan 03-05 scope):
+/// F-order layout (matches `pyscf_ao2mo::transform`'s documented `eri_ao`
+/// convention): element `(p, q, r, s)` lives at
+/// `p + q*nao + r*nao^2 + s*nao^3`. cintx returns each shell-quad block in
+/// F-order with the first index fastest (libcint convention, cintx api.rs:531).
+///
+/// Scalar (1-component) only — `int2e_sph`/`int2e_cart`. Component-leading
+/// arity-4 integrals (`int2e_ip1_sph`/`int2e_ip2_sph` gradients) are Phase 7
+/// and return `NotYetImplemented{phase:7}` rather than producing a wrong shape.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_arity4(
+    descriptor: &'static OperatorDescriptor,
+    operator: OperatorId,
+    representation: Representation,
+    basis: &CintxBasisSet,
+    nbas: usize,
+    nao: usize,
+    layout: IntorLayout,
+    intor_name: &str,
+) -> Result<IntorOutput, PyscfRsError> {
+    let _ = descriptor; // descriptor read for arity in the dispatcher; future-proof.
+
+    // int2e is scalar; component-leading arity-4 (gradients) is Phase 7.
+    if matches!(layout, IntorLayout::ComponentLeadingFOrder { .. }) {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 7,
+            what: "component-leading arity-4 integrals (int2e_ip1/ip2 gradients) — Phase 7",
+        });
+    }
+
+    let total_elements = nao
+        .checked_mul(nao)
+        .and_then(|n| n.checked_mul(nao))
+        .and_then(|n| n.checked_mul(nao))
+        .ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "intor '{intor_name}': nao={nao} overflows the arity-4 buffer size (nao^4)",
+            )))
+        })?;
+    let shape = vec![nao, nao, nao, nao];
+    let mut out = vec![0.0f64; total_elements];
+
+    let meta = basis.meta();
+    let shell_offsets: Vec<usize> = (0..nbas)
+        .map(|s| meta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
+
+    let nao2 = nao * nao;
+    let nao3 = nao2 * nao;
+
+    // Iterate (i, j, k, l) shell quadruples.
+    for i in 0..nbas {
+        for j in 0..nbas {
+            for k in 0..nbas {
+                for l in 0..nbas {
+                    let shells = basis.shell_tuple_for_indices([i, j, k, l]).map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "shell_tuple_for_indices(i={i}, j={j}, k={k}, l={l}) failed for \
+                             '{intor_name}': {e}",
+                        )))
+                    })?;
+
+                    let request = SessionRequest::new(
+                        operator,
+                        representation,
+                        basis,
+                        shells,
+                        ExecutionOptions::default(),
+                    );
+                    let outcome = request
+                        .query_workspace()
+                        .map_err(|e| {
+                            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                                "cintx workspace query failed for '{intor_name}' shell quad \
+                                 ({i},{j},{k},{l}): {e}",
+                            )))
+                        })?
+                        .evaluate()
+                        .map_err(|e| {
+                            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                                "cintx evaluate failed for '{intor_name}' shell quad \
+                                 ({i},{j},{k},{l}): {e}",
+                            )))
+                        })?;
+
+                    let ni = shell_counts[i];
+                    let nj = shell_counts[j];
+                    let nk = shell_counts[k];
+                    let nl = shell_counts[l];
+                    let oi = shell_offsets[i];
+                    let oj = shell_offsets[j];
+                    let ok = shell_offsets[k];
+                    let ol = shell_offsets[l];
+
+                    let block = &outcome.tensor.owned_values;
+                    let expected = ni * nj * nk * nl;
+                    // Never panic / never zero-substitute on a shape surprise
+                    // (T-05-08-FFI; the Phase-4 CR-02 lesson) — propagate a
+                    // descriptive error instead.
+                    if block.len() != expected {
+                        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx returned {} elements for shell quad ({i},{j},{k},{l}) of \
+                             '{intor_name}', expected {} (ni={ni}, nj={nj}, nk={nk}, nl={nl}, \
+                             extents={:?})",
+                            block.len(),
+                            expected,
+                            outcome.tensor.extents,
+                        ))));
+                    }
+
+                    // Per-quad block F-order [ni,nj,nk,nl] (i fastest), stitched
+                    // into global F-order [nao,nao,nao,nao] (p fastest).
+                    for ll in 0..nl {
+                        for kk in 0..nk {
+                            for jj in 0..nj {
+                                for ii in 0..ni {
+                                    let b = ii + jj * ni + kk * ni * nj + ll * ni * nj * nk;
+                                    let o = (oi + ii)
+                                        + (oj + jj) * nao
+                                        + (ok + kk) * nao2
+                                        + (ol + ll) * nao3;
+                                    out[o] = block[b];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(IntorOutput {
+        values: out,
+        shape,
+        layout,
+    })
+}
+
+/// Compute the named integral over `mol` using `auxmol` as the auxiliary
+/// basis for the third index. Equivalent to upstream
+/// `mol.intor('int3c2e_sph', auxmol=auxmol)` or the explicit shls_slice over a
+/// merged Mole.
+///
+/// Supported names:
 ///   - `int3c2e_sph` : 3-center (μ ν | P) — shape `[nao, nao, naux]`, F-order
 ///   - `int2c2e_sph` : 2-center (P | Q)   — shape `[naux, naux]`,       F-order
-///                     (mol is unused; operates on auxmol alone)
+///     (mol is unused; operates on auxmol alone)
 ///
 /// For any other name, returns `Err(NotYetImplemented{ phase: 3 })`.
 ///
-/// Numerical correctness note: `int3c2e_sph` is NOT in the current
-/// cintx-ops `api_manifest.rs` base symbol list (only the derivative
-/// `int3c2e_ip1_sph` and the unstable `int3c2e_sph_ssc` ship). The base
-/// `int3c2e_sph` operator id lands in a future cintx release. Until
-/// then, this wrapper returns a **shape-correct zero-filled buffer** for
-/// `int3c2e_sph` — sufficient for `df_integrals_shape` smoke tests but
-/// NOT for numerical assertions. Plan 03-10 (oracle harness wave 2)
-/// unignores the bit-exact DF-HF energy assertion once the cintx-ops
-/// manifest gains `int3c2e_sph` AND cintx-rs flips from synthetic-staging
-/// to real evaluation. For now, `cholesky_eri` consumers should expect
-/// the `int3c2e` block to be all-zeros; the cholesky of the (P|Q) block
-/// itself routes through plain `intor("int2c2e_sph")` and gets cintx's
-/// current synthetic pattern.
+/// Numerical correctness: as of 05-08 (cintx#11 closed) `int3c2e_sph` is a base
+/// cintx operator (api_manifest.rs) and this wrapper evaluates it for real over
+/// a combined orbital+aux basis (PySCF fakemol pattern — see
+/// `evaluate_int3c2e_with_auxmol`), libcint-byte-identical at the cintx source
+/// (`center_3c2e_parity`). The bit-exact DF-HF energy vs upstream PySCF is the
+/// CI-gated/human-verify arm. NOTE: a downstream `cholesky_eri` consumer can
+/// still fail on an ill-conditioned `(P|Q)` metric — a Phase-3 DF-metric
+/// robustness gap independent of `int3c2e_sph` itself.
 ///
 /// Source: `pyscf/df/incore.py:cholesky_eri` — the canonical caller
 /// pattern that motivates this API.
@@ -428,12 +586,14 @@ pub fn intor_with_auxmol(
 ) -> Result<IntorOutput, PyscfRsError> {
     if !mol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
-            "intor_with_auxmol: mol not built — call pyscf_gto::M(args) or mol.build() first".into(),
+            "intor_with_auxmol: mol not built — call pyscf_gto::M(args) or mol.build() first"
+                .into(),
         )));
     }
     if !auxmol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
-            "intor_with_auxmol: auxmol not built — call pyscf_gto::M(args) or mol.build() first".into(),
+            "intor_with_auxmol: auxmol not built — call pyscf_gto::M(args) or mol.build() first"
+                .into(),
         )));
     }
     match name {
@@ -449,13 +609,14 @@ pub fn intor_with_auxmol(
 /// 3-center 2-electron integrals `(μν|P)` over `mol` (orbital) × `auxmol`
 /// (auxiliary). Returns shape `[nao, nao, naux]` in F-order.
 ///
-/// CINTX-OPS GAP: `int3c2e_sph` is not yet a base symbol in cintx-ops
-/// `api_manifest.rs` (only the derivative `int3c2e_ip1_sph` and the unstable
-/// `int3c2e_sph_ssc` ship). Until cintx-ops adds the base operator id,
-/// this function returns an all-zero buffer of the correct shape so
-/// downstream callers (`pyscf_df::cholesky_eri`, `df_integrals_shape`
-/// smoke test) compile and validate layout. The numerical bit-exact
-/// assertion is gated by plan 03-10 (oracle harness wave 2).
+/// cintx ships `int3c2e_sph` as a base arity-3 operator (api_manifest.rs:404),
+/// libcint-byte-identical via cintx's `center_3c2e_parity`/`safe_api_arity3_parity`
+/// suites. Wired in 05-08 (cintx#11 DF half): a combined orbital+aux `BasisSet`
+/// is built (PySCF fakemol/`conc_mol` pattern — `projection::build_combined_basis`),
+/// then `(μ ν | P)` is evaluated over shell triples with μ,ν drawn from the
+/// orbital shell range and P from the auxiliary shell range. The per-triple
+/// F-order block `[ni,nj,nk]` is stitched into the global F-order `[nao,nao,naux]`
+/// buffer. Upstream-PySCF byte-identity stays the CI-gated/human-verify arm.
 fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput, PyscfRsError> {
     let nao = mol.nao_nr;
     let naux = auxmol.nao_nr;
@@ -468,8 +629,115 @@ fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput
                 nao, naux
             )))
         })?;
+
+    // Combined orbital+aux basis (orbital shells lead, aux shells follow).
+    let (combined, n_orb_shells, n_aux_shells) = crate::projection::build_combined_basis(
+        &mol._atom,
+        &mol._basis,
+        mol.cart,
+        &auxmol._atom,
+        &auxmol._basis,
+        auxmol.cart,
+    )?;
+
+    // Resolve the int3c2e_sph operator id through the same cintx resolver the
+    // main dispatcher uses (keeps the symbol→OperatorId mapping single-source).
+    let descriptor = Resolver::descriptor_by_symbol("int3c2e_sph").map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx-ops resolver does not know 'int3c2e_sph': {e}"
+        )))
+    })?;
+    let operator = descriptor.id;
+    let representation = Representation::Spheric;
+
+    let meta = combined.meta();
+    let total_shells = n_orb_shells + n_aux_shells;
+    let shell_offsets: Vec<usize> = (0..total_shells)
+        .map(|s| meta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let shell_counts: Vec<usize> = (0..total_shells)
+        .map(|s| meta.ao_count(s).unwrap_or(0))
+        .collect();
+
+    let mut out = vec![0.0f64; total];
+    let nao2 = nao * nao;
+
+    // (μ ν | P): μ,ν over orbital shells [0, n_orb_shells); P over aux shells.
+    for i in 0..n_orb_shells {
+        for j in 0..n_orb_shells {
+            for k in n_orb_shells..total_shells {
+                let shells = combined.shell_tuple_for_indices([i, j, k]).map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "shell_tuple_for_indices(i={i}, j={j}, k={k}) failed for \
+                         'int3c2e_sph': {e}",
+                    )))
+                })?;
+                let request = SessionRequest::new(
+                    operator,
+                    representation,
+                    &combined,
+                    shells,
+                    ExecutionOptions::default(),
+                );
+                let outcome = request
+                    .query_workspace()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx workspace query failed for 'int3c2e_sph' triple ({i},{j},{k}): {e}",
+                        )))
+                    })?
+                    .evaluate()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx evaluate failed for 'int3c2e_sph' triple ({i},{j},{k}): {e}",
+                        )))
+                    })?;
+
+                let ni = shell_counts[i];
+                let nj = shell_counts[j];
+                let nk = shell_counts[k];
+                let oi = shell_offsets[i];
+                let oj = shell_offsets[j];
+                // Aux AO offset within the [0, naux) aux block: the combined AO
+                // offset of aux shell k minus the leading orbital block (nao).
+                let oa = shell_offsets[k].checked_sub(nao).ok_or_else(|| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "int3c2e_sph: aux shell {k} AO offset {} < nao {nao} (combined basis layout invariant violated)",
+                        shell_offsets[k]
+                    )))
+                })?;
+
+                let block = &outcome.tensor.owned_values;
+                let expected = ni * nj * nk;
+                // Never panic / never zero-substitute on a shape surprise
+                // (T-05-08-FFI; the Phase-4 CR-02 lesson).
+                if block.len() != expected {
+                    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx returned {} elements for int3c2e_sph triple ({i},{j},{k}), \
+                         expected {} (ni={ni}, nj={nj}, nk={nk}, extents={:?})",
+                        block.len(),
+                        expected,
+                        outcome.tensor.extents,
+                    ))));
+                }
+
+                // Per-triple block F-order [ni,nj,nk] (i fastest) → global
+                // F-order [nao,nao,naux]: out[(oi+ii)+(oj+jj)*nao+(oa+kk)*nao^2].
+                for kk in 0..nk {
+                    for jj in 0..nj {
+                        for ii in 0..ni {
+                            let b = ii + jj * ni + kk * ni * nj;
+                            let o = (oi + ii) + (oj + jj) * nao + (oa + kk) * nao2;
+                            out[o] = block[b];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(IntorOutput {
-        values: vec![0.0_f64; total],
+        values: out,
         shape: vec![nao, nao, naux],
         layout: IntorLayout::ScalarFOrder,
     })
@@ -482,6 +750,163 @@ fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput
 /// `int2c2e_sph` only consults auxmol.)
 fn evaluate_int2c2e_aux(auxmol: &Mole) -> Result<IntorOutput, PyscfRsError> {
     intor(auxmol, "int2c2e_sph")
+}
+
+/// Cross-basis arity-2 integral between two DIFFERENT built molecules. Equivalent
+/// to upstream `gto.mole.intor_cross(name, mol_a, mol_b)` — e.g. the cross-overlap
+/// `<A_μ | int1e_ovlp | B_ν>`, shape `[nao_a, nao_b]` in F-order. Built over the
+/// combined two-basis `BasisSet` (`projection::build_combined_basis`), stitching
+/// the off-diagonal A×B block. Scalar (1-component) arity-2 only (overlap etc.);
+/// used by the minao init guess (`S_cross = <working|minao>`, plan 03-13).
+///
+/// `name` may be given with or without the `_sph`/`_cart` suffix (it is added per
+/// `mol_a.cart`, matching `intor`).
+///
+/// # Errors
+/// Unbuilt mol, unknown/non-arity-2/spinor/component-leading name, shape overflow,
+/// or a cintx evaluate failure — all `?`-propagated, never a panic.
+pub fn intor_cross(mol_a: &Mole, mol_b: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
+    if !mol_a._built || !mol_b._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "intor_cross: both molecules must be built — call pyscf_gto::M(args) first".into(),
+        )));
+    }
+
+    let full_name = add_suffix(name, mol_a.cart);
+
+    let layout = layout_table::lookup(&full_name).ok_or_else(|| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_cross: unknown intor '{full_name}' (not in INTOR_LAYOUTS)",
+        )))
+    })?;
+    if !matches!(layout, IntorLayout::ScalarFOrder) {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "component-leading arity-2 intor_cross (only scalar, e.g. int1e_ovlp)",
+        });
+    }
+
+    let representation = if full_name.ends_with("_cart") {
+        Representation::Cart
+    } else if full_name.ends_with("_sph") {
+        Representation::Spheric
+    } else if full_name.ends_with("_spinor") {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "spinor representation (out of v1 scope)",
+        });
+    } else {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_cross name lacks _sph/_cart/_spinor suffix after normalisation: {full_name}",
+        ))));
+    };
+
+    let descriptor = Resolver::descriptor_by_symbol(&full_name).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx-ops resolver does not know symbol '{full_name}': {e}"
+        )))
+    })?;
+    if descriptor.entry.arity != 2 {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_cross supports arity-2 integrals only; '{full_name}' is arity {}",
+            descriptor.entry.arity,
+        ))));
+    }
+    let operator = descriptor.id;
+
+    // Combined basis: A shells lead, B shells follow.
+    let (combined, n_a_shells, n_b_shells) = crate::projection::build_combined_basis(
+        &mol_a._atom,
+        &mol_a._basis,
+        mol_a.cart,
+        &mol_b._atom,
+        &mol_b._basis,
+        mol_b.cart,
+    )?;
+
+    let nao_a = mol_a.nao_nr;
+    let nao_b = mol_b.nao_nr;
+    let total = nao_a.checked_mul(nao_b).ok_or_else(|| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_cross '{full_name}': shape overflow nao_a={nao_a} nao_b={nao_b}",
+        )))
+    })?;
+
+    let meta = combined.meta();
+    let total_shells = n_a_shells + n_b_shells;
+    let shell_offsets: Vec<usize> = (0..total_shells)
+        .map(|s| meta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let shell_counts: Vec<usize> = (0..total_shells)
+        .map(|s| meta.ao_count(s).unwrap_or(0))
+        .collect();
+
+    let mut out = vec![0.0f64; total];
+
+    // A×B off-diagonal block: i ∈ A shells, j ∈ B shells.
+    for i in 0..n_a_shells {
+        for j in n_a_shells..total_shells {
+            let shells = combined.shell_tuple_for_indices([i, j]).map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "shell_tuple_for_indices(i={i}, j={j}) failed for '{full_name}': {e}",
+                )))
+            })?;
+            let outcome = SessionRequest::new(
+                operator,
+                representation,
+                &combined,
+                shells,
+                ExecutionOptions::default(),
+            )
+            .query_workspace()
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx workspace query failed for cross '{full_name}' pair ({i},{j}): {e}",
+                )))
+            })?
+            .evaluate()
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx evaluate failed for cross '{full_name}' pair ({i},{j}): {e}",
+                )))
+            })?;
+
+            let ni = shell_counts[i];
+            let nj = shell_counts[j];
+            let oi = shell_offsets[i];
+            // B AO offset within [0, nao_b): combined offset minus the A block.
+            let ob = shell_offsets[j].checked_sub(nao_a).ok_or_else(|| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "intor_cross: B shell {j} AO offset {} < nao_a {nao_a} (combined layout invariant)",
+                    shell_offsets[j]
+                )))
+            })?;
+
+            let block = &outcome.tensor.owned_values;
+            if block.len() != ni * nj {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx returned {} elements for cross '{full_name}' pair ({i},{j}), \
+                     expected {} (ni={ni}, nj={nj}, extents={:?})",
+                    block.len(),
+                    ni * nj,
+                    outcome.tensor.extents,
+                ))));
+            }
+
+            // Block F-order [ni,nj] → global F-order [nao_a,nao_b].
+            for jj in 0..nj {
+                for ii in 0..ni {
+                    out[(oi + ii) + (ob + jj) * nao_a] = block[ii + jj * ni];
+                }
+            }
+        }
+    }
+
+    Ok(IntorOutput {
+        values: out,
+        shape: vec![nao_a, nao_b],
+        layout: IntorLayout::ScalarFOrder,
+    })
 }
 
 /// Append `_sph` / `_cart` suffix per upstream `_add_suffix`

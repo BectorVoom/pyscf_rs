@@ -74,8 +74,8 @@ fn main() -> Result<ExitCode> {
             continue;
         }
         scanned += 1;
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("read {}", path.display()))?;
+        let content =
+            fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         for (lineno, line) in content.lines().enumerate() {
             for needle in FORBIDDEN_IMPORT_NEEDLES {
                 if line.contains(needle) {

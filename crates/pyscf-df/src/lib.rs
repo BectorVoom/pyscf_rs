@@ -19,7 +19,7 @@ pub mod cholesky_eri;
 pub mod df_jk;
 pub mod error;
 
-pub use auxbasis::{default_jkfit, default_ri, DEFAULT_AUXBASIS};
-pub use cholesky_eri::{cholesky_eri, DfIntegrals};
+pub use auxbasis::{DEFAULT_AUXBASIS, default_jkfit, default_ri};
+pub use cholesky_eri::{DfIntegrals, cholesky_eri};
 pub use df_jk::get_jk_df;
 pub use error::DfError;

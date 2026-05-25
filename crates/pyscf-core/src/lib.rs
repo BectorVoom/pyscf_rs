@@ -29,14 +29,12 @@ pub mod scalar;
 pub mod traits;
 
 pub use amplitudes::Amplitudes;
-pub use basis_set::{raw_layout, Atom, BasisMeta, BasisSet, CintxNuclearModel, Shell};
+pub use basis_set::{Atom, BasisMeta, BasisSet, CintxNuclearModel, Shell, raw_layout};
 pub use canonicalize::canonicalize_signs;
 pub use density::Density;
 pub use energy::Energy;
 pub use error::{BasisLoadError, CoreError, EcpLoadError, PyscfRsError};
 pub use mo::MOCoefficients;
+pub use mole::{EcpShell, Mole, NuclearModel, ParsedAtom, ParsedBasis, ParsedEcp, ShellSpec, Unit};
 pub use scalar::{Scalar, ScalarKind};
-pub use mole::{
-    EcpShell, Mole, NuclearModel, ParsedAtom, ParsedBasis, ParsedEcp, ShellSpec, Unit,
-};
 pub use traits::{EcpEngine, Gradient, IntegralEngine, KohnSham, Method, PostScf, Scf};

@@ -35,6 +35,9 @@ pub fn default_make_rdm1(mo: &MOCoefficients) -> Result<Density, PyscfRsError> {
     // D[mu, nu] = Σ_i occ[i] · C[mu, i] · C[nu, i]
     // Reduction over i goes through oracle_sum for determinism (Pitfall 9).
     let mut terms = vec![0.0_f64; nmo];
+    // Flat-array reduction: indices drive row-major C/D offsets + the
+    // per-MO `terms`/`occupations` buffers.
+    #[allow(clippy::needless_range_loop)]
     for mu in 0..nao {
         for nu in 0..nao {
             for i in 0..nmo {

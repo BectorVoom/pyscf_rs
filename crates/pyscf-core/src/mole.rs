@@ -49,7 +49,7 @@ impl Unit {
 
     /// Parse from upstream string forms (`"Ang"`, `"Angstrom"`, `"ang"`,
     /// `"B"`, `"Bohr"`, `"AU"`, `"au"`). Case-insensitive.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "ang" | "angstrom" | "a" => Some(Self::Ang),
             "b" | "bohr" => Some(Self::Bohr),
@@ -375,25 +375,25 @@ mod tests {
 
     #[test]
     fn unit_from_str_ang_variants() {
-        assert_eq!(Unit::from_str("Ang"), Some(Unit::Ang));
-        assert_eq!(Unit::from_str("ang"), Some(Unit::Ang));
-        assert_eq!(Unit::from_str("Angstrom"), Some(Unit::Ang));
-        assert_eq!(Unit::from_str("A"), Some(Unit::Ang));
+        assert_eq!(Unit::parse("Ang"), Some(Unit::Ang));
+        assert_eq!(Unit::parse("ang"), Some(Unit::Ang));
+        assert_eq!(Unit::parse("Angstrom"), Some(Unit::Ang));
+        assert_eq!(Unit::parse("A"), Some(Unit::Ang));
     }
 
     #[test]
     fn unit_from_str_bohr_variants() {
-        assert_eq!(Unit::from_str("Bohr"), Some(Unit::Bohr));
-        assert_eq!(Unit::from_str("bohr"), Some(Unit::Bohr));
-        assert_eq!(Unit::from_str("B"), Some(Unit::Bohr));
-        assert_eq!(Unit::from_str("AU"), Some(Unit::AU));
-        assert_eq!(Unit::from_str("au"), Some(Unit::AU));
+        assert_eq!(Unit::parse("Bohr"), Some(Unit::Bohr));
+        assert_eq!(Unit::parse("bohr"), Some(Unit::Bohr));
+        assert_eq!(Unit::parse("B"), Some(Unit::Bohr));
+        assert_eq!(Unit::parse("AU"), Some(Unit::AU));
+        assert_eq!(Unit::parse("au"), Some(Unit::AU));
     }
 
     #[test]
     fn unit_from_str_unknown() {
-        assert_eq!(Unit::from_str("nm"), None);
-        assert_eq!(Unit::from_str(""), None);
+        assert_eq!(Unit::parse("nm"), None);
+        assert_eq!(Unit::parse(""), None);
     }
 
     #[test]
@@ -417,15 +417,20 @@ mod tests {
 
     #[test]
     fn enuc_two_atom_classical() {
-        let mut mol = Mole::default();
-        mol.natm = 2;
-        mol._atom = vec![
-            ("H".to_string(), [0.0, 0.0, 0.0]),
-            ("H".to_string(), [0.0, 0.0, 1.4]),
-        ];
+        let mol = Mole {
+            natm: 2,
+            _atom: vec![
+                ("H".to_string(), [0.0, 0.0, 0.0]),
+                ("H".to_string(), [0.0, 0.0, 1.4]),
+            ],
+            ..Default::default()
+        };
         // V_NN = Z_H * Z_H / r = 1 * 1 / 1.4
         let expected = 1.0 / 1.4;
         let got = mol.enuc();
-        assert!((got - expected).abs() < 1e-12, "got {got}, expected {expected}");
+        assert!(
+            (got - expected).abs() < 1e-12,
+            "got {got}, expected {expected}"
+        );
     }
 }

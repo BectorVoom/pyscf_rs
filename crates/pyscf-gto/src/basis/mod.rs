@@ -84,7 +84,7 @@ pub fn load_basis(name: &str, symbol: &str) -> Result<ParsedBasis, BasisLoadErro
 /// to the same ALIAS key. Mirrors upstream `_format_basis_name` at
 /// `pyscf/gto/basis/__init__.py:625`.
 pub fn canonicalise_basis_name(name: &str) -> String {
-    name.to_ascii_lowercase().replace('-', "").replace('_', "")
+    name.to_ascii_lowercase().replace(['-', '_'], "")
 }
 
 /// User entry point — parse Gaussian-94 / NWChem text directly (no file read).

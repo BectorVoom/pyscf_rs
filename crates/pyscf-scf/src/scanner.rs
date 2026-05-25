@@ -15,9 +15,8 @@ use pyscf_core::{Energy, Mole, PyscfRsError};
 /// total energy. Captures `Send + Sync` so it can be moved across
 /// threads (geometry-optimization drivers may run scanner evaluations
 /// in parallel).
-pub fn as_scanner(
-    rhf: &RHF,
-) -> Box<dyn Fn(&Mole) -> Result<Energy, PyscfRsError> + Send + Sync> {
+#[allow(clippy::type_complexity)]
+pub fn as_scanner(rhf: &RHF) -> Box<dyn Fn(&Mole) -> Result<Energy, PyscfRsError> + Send + Sync> {
     // Capture scalar SCF settings by value.
     let conv_tol = rhf.conv_tol;
     let conv_tol_grad = rhf.conv_tol_grad;
