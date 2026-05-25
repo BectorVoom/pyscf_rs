@@ -15,7 +15,9 @@
 
 pub mod error;
 pub mod incore;
+pub mod outcore;
 pub mod transform;
 
 pub use error::Ao2moError;
 pub use incore::{full, general};
+pub use outcore::{OutcoreScratch, full_outcore, general_outcore};

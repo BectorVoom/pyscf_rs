@@ -13,5 +13,12 @@ path = "src/lib.rs"
 pyscf-core    = { path = "../pyscf-core" }
 pyscf-algebra = { path = "../pyscf-algebra" }
 pyscf-gto     = { path = "../pyscf-gto" }
+# Outcore/semi-incore HDF5-spilling AO→MO surface (Phase-5 D-04 deferral,
+# landing in 06-09). The spill scratch goes through pyscf-chkfile's re-exported
+# `hdf5` alias (D-07 — NO new hdf5-metno dep; pyscf-chkfile is the sole owner).
+# ndarray is pyscf-chkfile's dataset I/O array type (the same dep the
+# pyscf-runtime Spilled backend uses). NEITHER pulls cubecl/libxc.
+pyscf-chkfile = { path = "../pyscf-chkfile" }
+ndarray       = { workspace = true }
 thiserror     = { workspace = true }
 tracing       = { workspace = true }

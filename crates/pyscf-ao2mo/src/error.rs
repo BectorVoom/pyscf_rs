@@ -18,6 +18,13 @@ pub enum Ao2moError {
     #[error("shape mismatch: expected {expected}, got {got}")]
     ShapeMismatch { expected: usize, got: usize },
 
+    /// Outcore/semi-incore HDF5 scratch failure (06-09, D-07): the spilling
+    /// AO→MO transform could not create/read/write its temp scratch dataset.
+    /// Never panics — the spill seam `?`-propagates this so a scratch I/O
+    /// problem surfaces as an error, not an abort (T-06-09-LEAK boundary).
+    #[error("outcore scratch: {reason}")]
+    Outcore { reason: String },
+
     #[error("ao2mo: not yet implemented (body lands in plan 05-02)")]
     NotYetImplemented,
 }
