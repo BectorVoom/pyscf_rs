@@ -342,7 +342,7 @@ pub fn extract_mole_from_pyany(py: Python<'_>, mol: &Py<PyAny>) -> PyResult<Mole
         match pyscf_gto::loads(&json) {
             Ok(mol) => return Ok(mol),
             Err(_) => {
-                if let Some(mol) = mole_from_upstream_attrs(&bound)? {
+                if let Some(mol) = mole_from_upstream_attrs(bound)? {
                     return Ok(mol);
                 }
             }
