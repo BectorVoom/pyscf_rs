@@ -99,8 +99,8 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **CCSD-06**: `mycc.make_rdm1()`, `mycc.make_rdm2()` match upstream (06-06: make_rdm1 (nmo×nmo MO 1-RDM, Tr(γ)==nelec, C·γ·Cᵀ ao_repr) + make_rdm2 (nmo⁴ MO 2-RDM) from t1/t2/l1/l2 via gamma1_intermediates; D-03 make_rdm2(ao_repr=true) SHIPS the nmo⁴→nao⁴ AO back-transform NUMERICALLY via pyscf_ao2mo::general over the heaviest arena tenant — NOT NotYetImplemented; host-loop oracle_sum, RAYON 1==8. Live-PySCF byte-identity is the 06-08 arm; open-shell urdm is a documented Phase-7-response deferral.)
 - [ ] **CCSD-07**: AO-direct CCSD (`mycc.direct = True`) works
 - [ ] **CCSD-08**: DF-CCSD (`mycc = mf.density_fit().CCSD()` or `cc.dfccsd.RCCSD(mf)`) works with bounded memory; spills to HDF5 when `PYSCF_MAX_MEMORY` is exceeded
-- [ ] **CCSD-09**: T1/D1/D2 diagnostics expose `mycc.t1diagnostic()`, `mycc.d1diagnostic()`
-- [ ] **CCSD-10**: Frozen-core options match MP2 (`frozen=int`, `frozen=list`, `frozen='auto'`)
+- [x] **CCSD-09**: T1/D1/D2 diagnostics expose `mycc.t1diagnostic()`, `mycc.d1diagnostic()` (06-07 ships get_t1_diagnostic/get_d1_diagnostic/get_d2_diagnostic in pyscf-ccsd/src/diagnostics.rs — port ccsd.py:748-776: T1=||t1||_F/sqrt(nelec) via oracle_sum, D1/D2=max sqrt(|eig|) over the ij/ab Gram blocks via eigh_gen against identity S; tests/diagnostics.rs pins the values vs hand-computed Frobenius/eigh references; the PyO3 `mycc.t1diagnostic()`/`d1diagnostic()` surface + upstream byte-identity is the 06-08 bridge/workflow_dispatch arm)
+- [x] **CCSD-10**: Frozen-core options match MP2 (`frozen=int`, `frozen=list`, `frozen='auto'`) (06-07 tests/frozen.rs validates CCSD's frozen-aware active space == the MP2-08 helpers verbatim for Count/List/Auto on a real LiH/STO-3G CCSD run — no new frozen logic; frozen-core e_corr rises toward zero vs all-electron; Frozen::Auto through the CCSD helper path is element-blind == None per the verbatim cc/ccsd.py:35 reuse)
 - [x] **CCSD-11**: Tensor-arena/scratchpad pattern in `pyscf-runtime` is in place from the start of CCSD work — not retrofitted; `Wabef` and other large intermediates do not allocate-and-drop per iteration (06-01 ships the scaffold contract — `CcsdError::Backend(#[from] BackendError)` D-01 pre-flight bridge; 06-02 ships the `WorkspacePool` arena BODY — reserve/release free-list reuse + InMemory|Spilled backends + opaque `Amplitudes` handles (D-01/D-08) + the `heap_alloc_count` allocate-once-reuse proof and the `refusal` no-downgrade `MemoryLimitExceeded` proof; **06-03 wires the kernel integration under REAL math** — `ccsd_kernel` runs the HARD `try_reserve(nv⁴·8)` pre-flight before building eris, `pool.reserve`s the `cc_Wvvvv` tenant ONCE before the loop and reuses it every cycle via `with_mut_slice` (`cc_Wvvvv_into`/`default_update_amps_with_wvvvv`), and `convergence.rs::over_budget_in_core_run_refuses` proves the no-downgrade `MemoryLimitExceeded`)
 
 ### Gradients (GRAD)
@@ -322,8 +322,8 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | CCSD-06 | Phase 6 | Complete (06-06) |
 | CCSD-07 | Phase 6 | Pending |
 | CCSD-08 | Phase 6 | Pending |
-| CCSD-09 | Phase 6 | Pending |
-| CCSD-10 | Phase 6 | Pending |
+| CCSD-09 | Phase 6 | Complete |
+| CCSD-10 | Phase 6 | Complete |
 | CCSD-11 | Phase 6 | Complete |
 | GRAD-01 | Phase 7 | Pending |
 | GRAD-02 | Phase 7 | Pending |
