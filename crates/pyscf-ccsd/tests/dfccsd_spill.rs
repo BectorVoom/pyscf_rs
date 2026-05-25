@@ -25,6 +25,20 @@ use pyscf_df::DfIntegrals;
 use pyscf_mp2::Frozen;
 use pyscf_runtime::WorkspacePool;
 
+// Serialize the spill-sensitive tests. `spill_snapshot()` matches every
+// `pyscf_ccsd_spill_<PID>_*` file in the shared temp dir, so a sibling test's
+// in-flight spill would otherwise pollute another test's before/after diff
+// under the default parallel test runner (the failure CI sees). This lock keeps
+// their snapshot windows from overlapping while leaving the rest of the suite
+// parallel — no `--test-threads=1` required (T-06-09-LEAK).
+static SPILL_SNAPSHOT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn lock_spill_snapshot() -> std::sync::MutexGuard<'static, ()> {
+    SPILL_SNAPSHOT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Build a deterministic synthetic DF B-tensor `b_uvq` (ROW-MAJOR
 /// `[nao,nao,naux]`): element `(μ,ν,Q)` at `μ*nao*naux + ν*naux + Q`.
 fn synthetic_b(nao: usize, naux: usize) -> DfIntegrals {
@@ -229,6 +243,7 @@ fn dfccsd_converges_and_driver_matches_free_fn() {
 /// because 160 > 128. The window condition is `nvir^2 (4) <= naux (5)`.
 #[test]
 fn dfccsd_vvl_spills_to_hdf5_and_no_leftover_scratch() {
+    let _spill_guard = lock_spill_snapshot();
     let (nocc, nvir, naux) = (1usize, 2usize, 5usize);
     let nao = nocc + nvir;
     let df = synthetic_b(nao, naux);
@@ -291,6 +306,7 @@ fn dfccsd_vvl_spills_to_hdf5_and_no_leftover_scratch() {
 /// allow_spill=true)` seam `df_ao2mo` uses at the SAME vvL dimensions).
 #[test]
 fn vvl_spill_file_observed_created_then_deleted() {
+    let _spill_guard = lock_spill_snapshot();
     let (nvir, naux) = (2usize, 5usize);
     let vvl_bytes = nvir * nvir * naux * 8; // 160
     let budget = vvl_bytes - 8; // 152: forces the vvL reservation to spill.
@@ -330,6 +346,7 @@ fn vvl_spill_file_observed_created_then_deleted() {
 /// file is created at all (the spill is opt-in / budget-driven, not always-on).
 #[test]
 fn dfccsd_incore_vvl_creates_no_scratch() {
+    let _spill_guard = lock_spill_snapshot();
     let (nocc, nvir, naux) = (1usize, 2usize, 5usize);
     let nao = nocc + nvir;
     let df = synthetic_b(nao, naux);
