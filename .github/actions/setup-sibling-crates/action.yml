@@ -28,7 +28,11 @@ runs:
               ;;
             *)
               git clone --depth 1 --filter=blob:none --sparse "https://github.com/BectorVoom/libxc_rs.git" "$dest"
-              git -C "$dest" sparse-checkout set src crates/kernels/math
+              git -C "$dest" sparse-checkout set --no-cone \
+                /Cargo.toml \
+                /src/** \
+                /crates/kernels/math/** \
+                /crates/kernels/*/*/Cargo.toml
               ;;
           esac
         }
