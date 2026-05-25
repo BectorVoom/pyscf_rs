@@ -98,6 +98,17 @@ def upstream_rhf_energy():
 
 
 @pytest.fixture
+def h2o_sto3g_mol():
+    """H2O / STO-3G in the pyscf-rs overlay for fast native SCF smoke gates."""
+    from pyscf import gto
+
+    return gto.M(
+        atom="O 0.0 0.0 0.0; H 0.757 0.587 0.0; H -0.757 0.587 0.0",
+        basis="sto-3g",
+    )
+
+
+@pytest.fixture
 def h2o_mol():
     """H2O / cc-pVDZ in the pyscf-rs overlay.
 

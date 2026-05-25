@@ -10,6 +10,7 @@ import pkgutil as _pkgutil
 
 from pyscf._native import scf  # type: ignore[attr-defined]
 from pyscf._native import dft  # type: ignore[attr-defined]
+from pyscf._native import gto  # type: ignore[attr-defined]
 from pyscf._native import PyscfRsRuntimeError as _PyscfRsBase  # type: ignore[attr-defined]
 
 __path__ = _pkgutil.extend_path(__path__, __name__)
@@ -37,4 +38,4 @@ class PyscfRsError(_PyscfRsBase):  # type: ignore[misc, valid-type]
         return self.args[2] if len(self.args) > 2 else []
 
 
-__all__ = ["scf", "dft", "PyscfRsError"]
+__all__ = ["scf", "dft", "gto", "PyscfRsError"]

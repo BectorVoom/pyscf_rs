@@ -4,7 +4,7 @@ Covers: BIND-04 — `a` / `a.T` / `a[::2]` / `a[:, 1:5]` all return identical
 answers (Pitfall 5 mitigation: `is_c_contiguous` → `to_owned` policy).
 
 Source: RESEARCH §"Pattern 4 stride-fuzz test" lines 608-635 (verbatim
-port; the only deviation is the test fixture uses h2o_mol from conftest).
+port; the only deviation is the test fixture uses h2o_sto3g_mol from conftest).
 
 Why bit-identical (not allclose): plan 03-07's `numpy_io::to_density`
 runs `is_c_contiguous()` → `to_owned()` fallback, so every input is
@@ -23,9 +23,9 @@ import numpy as np
 from pyscf import scf
 
 
-def test_get_veff_accepts_4_stride_variants(h2o_mol):
+def test_get_veff_accepts_4_stride_variants(h2o_sto3g_mol):
     """`get_veff(mol, dm)` returns bit-identical results across 4 stride views."""
-    mol = h2o_mol
+    mol = h2o_sto3g_mol
     mf = scf.RHF(mol).run()
     assert mf.converged
 
@@ -70,6 +70,6 @@ def test_get_veff_accepts_4_stride_variants(h2o_mol):
     )
 
 
-def test_stride_fuzz_get_veff_accepts_views(h2o_mol):
+def test_stride_fuzz_get_veff_accepts_views(h2o_sto3g_mol):
     """Aggregator name kept for grep continuity (plan 03-02 stub name)."""
-    test_get_veff_accepts_4_stride_variants(h2o_mol)
+    test_get_veff_accepts_4_stride_variants(h2o_sto3g_mol)

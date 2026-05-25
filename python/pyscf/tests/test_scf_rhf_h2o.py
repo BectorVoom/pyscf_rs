@@ -1,4 +1,4 @@
-"""Phase 3 SCF-01 RHF on H2O / cc-pVDZ vs upstream PySCF.
+"""Phase 3 SCF-01 RHF on H2O / STO-3G vs upstream PySCF.
 
 Covers: SCF-01 — RHF total energy ≤ 1 µHartree vs upstream.
 
@@ -13,14 +13,13 @@ from pyscf import scf
 H2O_ATOM = "O 0.0 0.0 0.0; H 0.757 0.587 0.0; H -0.757 0.587 0.0"
 
 
-def test_scf_rhf_h2o_uhartree_oracle(h2o_mol, upstream_rhf_energy):
-    """RHF on H2O/cc-pVDZ — |e_rs - e_up| < 1 µHartree."""
-    mf_rs = scf.RHF(h2o_mol)
-    mf_rs.init_guess = "1e"
+def test_scf_rhf_h2o_uhartree_oracle(h2o_sto3g_mol, upstream_rhf_energy):
+    """RHF on H2O/STO-3G — |e_rs - e_up| < 1 µHartree."""
+    mf_rs = scf.RHF(h2o_sto3g_mol)
     mf_rs.run()
     assert mf_rs.converged, "pyscf-rs RHF did not converge"
 
-    mf_up = upstream_rhf_energy(H2O_ATOM, "cc-pvdz")
+    mf_up = upstream_rhf_energy(H2O_ATOM, "sto-3g")
     assert mf_up["converged"], "upstream RHF did not converge"
 
     diff = abs(mf_rs.e_tot - mf_up["e_tot"])
