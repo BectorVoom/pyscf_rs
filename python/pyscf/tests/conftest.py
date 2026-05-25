@@ -69,9 +69,14 @@ def upstream_rhf_energy():
                 from pyscf import gto, scf
 
                 request = json.load(sys.stdin)
-                mol = gto.M(atom=request["atom"], basis=request["basis"])
+                # verbose=0 silences PySCF's "converged SCF energy = ..." banner,
+                # which otherwise pollutes stdout ahead of the JSON result. The
+                # sentinel prefix makes extraction robust against any residual
+                # C-level stdout (libcint/libxc) regardless of verbosity.
+                mol = gto.M(atom=request["atom"], basis=request["basis"], verbose=0)
                 mf = scf.RHF(mol).run()
-                print(json.dumps({"converged": bool(mf.converged), "e_tot": float(mf.e_tot)}))
+                payload = {"converged": bool(mf.converged), "e_tot": float(mf.e_tot)}
+                print("__PYSCF_RS_ORACLE__" + json.dumps(payload))
                 """
             )
             proc = subprocess.run(
@@ -87,10 +92,21 @@ def upstream_rhf_energy():
                     f"stdout:\n{proc.stdout}\n"
                     f"stderr:\n{proc.stderr}"
                 )
-            return json.loads(proc.stdout)
+            marker = "__PYSCF_RS_ORACLE__"
+            line = next(
+                (ln for ln in proc.stdout.splitlines() if ln.startswith(marker)),
+                None,
+            )
+            if line is None:
+                pytest.fail(
+                    "upstream PySCF subprocess emitted no oracle result\n"
+                    f"stdout:\n{proc.stdout}\n"
+                    f"stderr:\n{proc.stderr}"
+                )
+            return json.loads(line[len(marker):])
 
         upstream = _load_upstream()
-        mol = upstream.gto.M(atom=atom, basis=basis)
+        mol = upstream.gto.M(atom=atom, basis=basis, verbose=0)
         mf = upstream.scf.RHF(mol).run()
         return {"converged": bool(mf.converged), "e_tot": float(mf.e_tot)}
 
