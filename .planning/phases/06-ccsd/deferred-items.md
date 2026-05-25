@@ -14,3 +14,17 @@ fall outside the current plan's file set).
   semantics (raise `DIIS_START_CYCLE` → DIIS starts later) under a documented
   `#[allow(clippy::absurd_extreme_comparisons)]` with rationale. Confirmed gone
   via `cargo clippy -p pyscf-ccsd --tests | grep -i absurd` (no match).
+
+## 06-09 execution (2026-05-25)
+
+- **Pre-existing clippy `type_complexity` in `crates/pyscf-ccsd/tests/rdm.rs:39`**
+  — `fn converged_lambda_state() -> (CcsdReference, ChemistsEris, Vec<f64>×4,
+  WorkspacePool)` trips clippy's "very complex type used" under `-D warnings`.
+  Verified verbatim on HEAD (a prior Wave-3 RDM test commit), NOT introduced by
+  06-09 — my plan touched only `dfccsd.rs` + `dfccsd_spill.rs` + the ao2mo
+  outcore surface. Out of scope per the SCOPE BOUNDARY rule (do not fix
+  pre-existing failures in unrelated files). The 06-09 plan-touched targets
+  (`pyscf-ccsd --lib`, `--test dfccsd_spill`, `pyscf-ao2mo --lib`) are
+  clippy-clean under `-D warnings`. **Action for a future cleanup plan or the
+  CI gate:** factor the tuple into a `struct LambdaState { .. }` or a
+  `type LambdaState = (..)` alias to satisfy `type_complexity`.

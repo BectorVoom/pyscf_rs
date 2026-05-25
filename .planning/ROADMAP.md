@@ -294,7 +294,7 @@ Plans:
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [x] 06-08-PLAN.md — AO-direct CCSD: the _contract_vvvv_t2 AO-direct branch + direct:bool flag; AO-direct == in-core e_corr equivalence, lower peak reservation (CCSD-07) (completed 2026-05-25 — contract_vvvv_t2_aodirect ports ccsd.py:473-570: Open Q4 resolved path-b, full AO int2e tiled per leading-virtual index, peak nv^3, never the full nv^4 MO vvvv; ccsd_kernel_direct routes the vvvv step + uses the lower nv^3 pre-flight; AO-direct e_corr == in-core e_corr bit-identical on LiH/STO-3G (-0.020449057574, 8 iters, ≤1e-9) + a budget the in-core path HARD-refuses but direct accepts; incidental clippy absurd_extreme_comparisons fixed)
-- [ ] 06-09-PLAN.md — DF-CCSD + HDF5 spill: DFRCCSD/DFUCCSD ERI swap (vvL B-tensor via the ao2mo hook) + dmax/vvblk sizing + Spilled backend (D-07, no new hdf5 dep) + the ao2mo outcore surface (CCSD-08)
+- [x] 06-09-PLAN.md — DF-CCSD + HDF5 spill: DFRCCSD/DFUCCSD ERI swap (vvL B-tensor via the ao2mo hook) + dmax/vvblk sizing + Spilled backend (D-07, no new hdf5 dep) + the ao2mo outcore surface (CCSD-08) (completed 2026-05-25 — DfCcsdHooks::ao2mo builds the full ChemistsEris from the DF B-tensor ((pq|rs)=Σ_Q B^Q·B^Q via oracle_dot, the DFRMP2(RMP2) swap pattern) reusing the in-core ccsd_kernel verbatim; vvL spills to HDF5 via the 06-02 WorkspacePool Spilled backend (D-07) in a dedicated budget-matched pool so it's never wrongly reused for the in-core Wvvvv, RAII drop-deleted/no leftover scratch; block_sizing ports dfccsd.py:93-96 dmax/vvblk; pyscf-ao2mo gains the outcore/semi-incore HDF5-spilling AO→MO surface (D-04 deferral, bit-exact==in-core); 5 dfccsd_spill + 6 outcore always-on arms green; libxc stays 0)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
@@ -345,7 +345,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. SCF + PyO3 bindings | 15/15 | Complete    | 2026-05-24 |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
-| 6. CCSD | 2/11 | In Progress|  |
+| 6. CCSD | 9/11 | In Progress|  |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
