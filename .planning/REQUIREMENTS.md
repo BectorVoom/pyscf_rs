@@ -94,7 +94,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **CCSD-01**: `cc.RCCSD(mf).kernel()` returns CCSD correlation energy matching upstream to chemical accuracy (≤1 µHartree); convergence criteria match (06-03: in-core RCCSD converges to H2/STO-3G e_corr=-0.0205245 Ha, ~0.5µH vs the published FCI/CCSD reference; rintermediates+update_amps host-loop oracle_sum, no gemm)
 - [x] **CCSD-02**: `cc.UCCSD(uhf_mf).kernel()` matches upstream (06-04: in-core spin-orbital UCCSD — uccsd_kernel + UccsdAmplitudes{t2aa,t2ab,t2bb} + UccsdReference{alpha,beta}; e_corr=e_aa+e_bb+e_ab; each channel reads its OWN α/β energies; UCCSD(α==β) H2/STO-3G e_corr=-0.0205245 Ha bit-identical to the 06-03 RCCSD headline, RAYON 1==8 bit-identical. The live `cc.UCCSD(uhf_mf)` PyO3 path + genuine UHF α/β reference land in 06-10; the live-PySCF byte-identity is the 06-08 workflow_dispatch arm.)
 - [x] **CCSD-03**: T1 and T2 amplitudes converge to the same minimum as upstream (energy is the convergence target, amplitude paths may differ within tolerance) (06-03: dual-criterion convergence |dE|<1e-7 AND normt<1e-5 within max_cycle=50, verified RAYON 1==8 bit-identical e_corr)
-- [ ] **CCSD-04**: Amplitude-DIIS (default `mycc.diis = True`, `mycc.diis_space = 6`) converges within the same iteration count as upstream on the test corpus
+- [x] **CCSD-04**: Amplitude-DIIS (default `mycc.diis = True`, `mycc.diis_space = 6`) converges within the same iteration count as upstream on the test corpus
 - [ ] **CCSD-05**: `mycc.solve_lambda()` produces λ amplitudes for response densities
 - [ ] **CCSD-06**: `mycc.make_rdm1()`, `mycc.make_rdm2()` match upstream
 - [ ] **CCSD-07**: AO-direct CCSD (`mycc.direct = True`) works
@@ -317,7 +317,7 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | CCSD-01 | Phase 6 | Complete |
 | CCSD-02 | Phase 6 | In-core landed (06-04); live PyO3/UHF arm 06-08/06-10 |
 | CCSD-03 | Phase 6 | Complete |
-| CCSD-04 | Phase 6 | Pending |
+| CCSD-04 | Phase 6 | Complete (06-05) |
 | CCSD-05 | Phase 6 | Pending |
 | CCSD-06 | Phase 6 | Pending |
 | CCSD-07 | Phase 6 | Pending |
