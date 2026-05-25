@@ -298,7 +298,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 06-10-PLAN.md — PyO3 bridge (D-09): pyscf-py::cc PyRCCSD/PyUCCSD/PyDFCCSD + CcsdPyBridge (call_method1 / py.detach) + factory + scanner + solve_lambda/make_rdm + python/pyscf/cc overlay (CCSD-01/02/05/06/08)
+- [x] 06-10-PLAN.md — PyO3 bridge (D-09): pyscf-py::cc PyRCCSD/PyUCCSD/PyDFCCSD + CcsdPyBridge (call_method1 / py.detach) + factory + scanner + solve_lambda/make_rdm + python/pyscf/cc overlay (CCSD-01/02/05/06/08) (completed 2026-05-25 — pyscf-py::cc copies pyscf-py::mp section-for-section: eager-snapshot CcsdReference, is_overridden __qualname__ MRO dispatch of the 5-hook set (ao2mo/update_amps/make_rdm1/make_rdm2/energy) via call_method1, each default under py.detach (BIND-05); the kernel does NOT py.detach at the top (hooks re-enter Python, mp.rs:359 — the update_amps default is the biggest py.detach region in the project); solve_lambda/make_rdm1/make_rdm2/as_scanner exposed; PyCcsdScanner Mole->energy callable (CCSD-07) + self-less ScannerDfBridge for the DF re-run; ccsd_factory UHF->UCCSD/with_df->DFCCSD/else RCCSD; python/pyscf/cc/__init__.py re-exports _native.cc + grafts mf.CCSD()/mf.density_fit().CCSD() onto the Rust SCF base classes; pyscf-ccsd stays pyo3-free; 6 always-on cc_bridge arms green; cargo check -p pyscf-py + -p pyscf-ccsd pass; libxc NEVER compiled; live numeric + python3.13t GIL smoke deferred to 06-11)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
@@ -345,7 +345,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. SCF + PyO3 bindings | 15/15 | Complete    | 2026-05-24 |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
-| 6. CCSD | 9/11 | In Progress|  |
+| 6. CCSD | 10/11 | In Progress|  |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
