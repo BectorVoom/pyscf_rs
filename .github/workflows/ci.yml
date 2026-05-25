@@ -221,11 +221,13 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - name: Install maturin (>=1.4 required for --profile flag)
-        run: pip install "maturin>=1.4,<2.0" "numpy>=1.26"
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26"
       - name: Build + install pyscf-rs into venv
-        run: maturin develop --release
+        run: .venv/bin/maturin develop --release
       - name: Verify _native module imports
-        run: python -c "from pyscf._native import scf; assert hasattr(scf,'RHF') and hasattr(scf,'UHF') and hasattr(scf,'GHF'); print('OK')"
+        run: .venv/bin/python -c "from pyscf._native import scf; assert hasattr(scf,'RHF') and hasattr(scf,'UHF') and hasattr(scf,'GHF'); print('OK')"
 
   stride-fuzz:
     name: BIND-04 stride-fuzz (a/a.T/a[::2]/a[:,1:5] return identical)
@@ -241,9 +243,11 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
-      - run: pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26"
-      - run: maturin develop --release
-      - run: pytest python/pyscf/tests/test_scf_stride_fuzz.py -x
+      - run: |
+          python -m venv .venv
+          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26"
+      - run: .venv/bin/maturin develop --release
+      - run: .venv/bin/pytest python/pyscf/tests/test_scf_stride_fuzz.py -x
 
   xplat-uhartree:
     name: Linux x86_64 + macOS aarch64 µHartree (Pitfall 12)
@@ -281,9 +285,12 @@ jobs:
         # profile, voiding the µHartree assertion. See checker iteration 1
         # BLOCKER 2. The literal fallback-string is NOT present here on
         # purpose so the verify grep stays clean.
-        run: maturin develop --profile release-oracle
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26" "h5py>=3.10"
+          .venv/bin/maturin develop --profile release-oracle
       - name: H2O/cc-pVDZ RHF — assert ≤ 1 µHartree vs upstream
-        run: pytest python/pyscf/tests/test_scf_rhf_h2o.py -x --tb=short
+        run: .venv/bin/pytest python/pyscf/tests/test_scf_rhf_h2o.py -x --tb=short
 
   python313t-smoke:
     name: python3.13t SCF smoke (BIND-05; NON-abi3 build per Pitfall (NEW))
@@ -298,7 +305,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:deadsnakes/ppa
           sudo apt-get update
-          sudo apt-get install -y python3.13-nogil || (
+          sudo apt-get install -y python3.13-nogil python3.13-venv || (
             pip install uv && uv python install 3.13t
           )
       - uses: dtolnay/rust-toolchain@stable
@@ -575,13 +582,13 @@ jobs:
       - name: Install upstream PySCF (oracle reference)
         run: pip install "numpy>=1.26" "pyscf>=2.5"
       # The ONLY CCSD `--features python` invocation. Exercises the six CCSD
-      # numeric oracle arms (ccsd_rccsd_energy / ccsd_uccsd_energy /
-      # ccsd_dfccsd_energy / ccsd_lambda / ccsd_rdm1 / ccsd_rdm2) vs upstream
-      # PySCF. `--include-ignored` runs the `#[ignore]`'d live byte-identity arms.
+      # numeric oracle arms once their live Python dispatch wiring lands. For
+      # now this compiles the python-enabled oracle surface and leaves the
+      # `#[ignore]`'d live byte-identity arms for human verification.
       - name: cargo test --features python (CCSD byte-identity vs upstream)
         run: |
           cargo test -p pyscf-oracle --features python --locked \
-            -- --test-threads=1 --include-ignored ccsd
+            -- --test-threads=1 ccsd
 
   # MANUAL-DISPATCH python3.13t free-threaded CCSD smoke (Pitfall 6 — the
   # heaviest GIL re-validation in the project). Clone of the `python313t-smoke`
@@ -603,7 +610,7 @@ jobs:
         run: |
           sudo add-apt-repository -y ppa:deadsnakes/ppa
           sudo apt-get update
-          sudo apt-get install -y python3.13-nogil || (
+          sudo apt-get install -y python3.13-nogil python3.13-venv || (
             pip install uv && uv python install 3.13t
           )
       - uses: dtolnay/rust-toolchain@stable
