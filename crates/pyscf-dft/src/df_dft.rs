@@ -257,9 +257,7 @@ impl OverrideHooks for DfKsHooks<'_> {
                 // CR-04: exact `u64` equality on the injective content hash
                 // (same scheme as `hooks::KsHooks::energy_elec`) — NOT a float
                 // approximation, so a changed density never returns a stale Exc.
-                Some(c) if c.dm_fingerprint == dm_fingerprint(dm) => {
-                    (c.exc, c.half_tr_d_vxc)
-                }
+                Some(c) if c.dm_fingerprint == dm_fingerprint(dm) => (c.exc, c.half_tr_d_vxc),
                 _ => {
                     drop(cache);
                     let bundle = self.ks_veff(self.mol, dm)?;

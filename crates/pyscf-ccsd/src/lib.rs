@@ -20,9 +20,9 @@
 #![warn(clippy::unwrap_used)]
 
 pub mod ccsd;
+pub mod dfccsd;
 pub mod diagnostics;
 pub mod diis_amps;
-pub mod dfccsd;
 pub mod direct;
 pub mod eris;
 pub mod error;
@@ -44,8 +44,8 @@ pub use ccsd::{
 };
 pub use dfccsd::{DFRCCSD, DFUCCSD, block_sizing, df_ao2mo, dfrccsd_kernel};
 pub use diagnostics::{get_d1_diagnostic, get_d2_diagnostic, get_t1_diagnostic};
-pub use direct::{contract_vvvv_t2_aodirect, contract_vvvv_t2_from_eris};
 pub use diis_amps::{AmplitudeSubspace, amplitudes_to_vector, packed_len, vector_to_amplitudes};
+pub use direct::{contract_vvvv_t2_aodirect, contract_vvvv_t2_from_eris};
 pub use eris::ChemistsEris;
 pub use error::CcsdError;
 pub use hooks::{CcsdOverrideHooks, NoCcsdOverrides};

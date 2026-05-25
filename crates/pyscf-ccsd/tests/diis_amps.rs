@@ -114,16 +114,17 @@ fn diis_energy_is_bit_deterministic() {
     let refr = rhf_reference("H 0 0 0; H 0 0 0.74", "sto-3g");
     let pool_a = WorkspacePool::new(WorkspacePool::DEFAULT_BUDGET_BYTES);
     let pool_b = WorkspacePool::new(WorkspacePool::DEFAULT_BUDGET_BYTES);
-    let a = ccsd_kernel_diis(&refr, &Frozen::None, &NoCcsdOverrides, &pool_a, true)
-        .expect("run a");
-    let b = ccsd_kernel_diis(&refr, &Frozen::None, &NoCcsdOverrides, &pool_b, true)
-        .expect("run b");
+    let a = ccsd_kernel_diis(&refr, &Frozen::None, &NoCcsdOverrides, &pool_a, true).expect("run a");
+    let b = ccsd_kernel_diis(&refr, &Frozen::None, &NoCcsdOverrides, &pool_b, true).expect("run b");
     assert_eq!(
         a.e_corr.to_bits(),
         b.e_corr.to_bits(),
         "DIIS e_corr must be bit-identical across runs (oracle_dot B-matrix)"
     );
-    assert_eq!(a.niter, b.niter, "DIIS iteration count must be deterministic");
+    assert_eq!(
+        a.niter, b.niter,
+        "DIIS iteration count must be deterministic"
+    );
 }
 
 /// Public packing surface byte-matches the upstream layout end-to-end through

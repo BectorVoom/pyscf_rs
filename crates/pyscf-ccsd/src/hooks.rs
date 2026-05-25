@@ -30,11 +30,7 @@ pub trait CcsdOverrideHooks {
     /// Build the full `ChemistsEris` block set. The main ERI override point —
     /// DF-CCSD swaps the integral source here. The default (via
     /// `NoCcsdOverrides`) routes through [`crate::ccsd::default_ao2mo`].
-    fn ao2mo(
-        &self,
-        refr: &CcsdReference,
-        frozen: &Frozen,
-    ) -> Result<ChemistsEris, PyscfRsError>;
+    fn ao2mo(&self, refr: &CcsdReference, frozen: &Frozen) -> Result<ChemistsEris, PyscfRsError>;
 
     /// The amplitude-equation core: one `(t1, t2) → (t1new, t2new)` update.
     ///
@@ -66,11 +62,7 @@ pub trait CcsdOverrideHooks {
     /// The RDM math ships in Wave 3 as [`crate::rdm::make_rdm1`] (consuming the
     /// converged amplitudes + the λ multipliers). This trait-default seam
     /// returns `NotYetImplemented { wave: 3 }`.
-    fn make_rdm1(
-        &self,
-        _refr: &CcsdReference,
-        _frozen: &Frozen,
-    ) -> Result<Density, PyscfRsError> {
+    fn make_rdm1(&self, _refr: &CcsdReference, _frozen: &Frozen) -> Result<Density, PyscfRsError> {
         Err(crate::error::CcsdError::NotYetImplemented { wave: 3 }.into())
     }
 
@@ -79,11 +71,7 @@ pub trait CcsdOverrideHooks {
     /// a `NotYetImplemented { wave: 3 }` stub.
     ///
     /// [`make_rdm1`]: CcsdOverrideHooks::make_rdm1
-    fn make_rdm2(
-        &self,
-        _refr: &CcsdReference,
-        _frozen: &Frozen,
-    ) -> Result<Density, PyscfRsError> {
+    fn make_rdm2(&self, _refr: &CcsdReference, _frozen: &Frozen) -> Result<Density, PyscfRsError> {
         Err(crate::error::CcsdError::NotYetImplemented { wave: 3 }.into())
     }
 }
@@ -94,11 +82,7 @@ pub trait CcsdOverrideHooks {
 pub struct NoCcsdOverrides;
 
 impl CcsdOverrideHooks for NoCcsdOverrides {
-    fn ao2mo(
-        &self,
-        refr: &CcsdReference,
-        frozen: &Frozen,
-    ) -> Result<ChemistsEris, PyscfRsError> {
+    fn ao2mo(&self, refr: &CcsdReference, frozen: &Frozen) -> Result<ChemistsEris, PyscfRsError> {
         crate::ccsd::default_ao2mo(refr, frozen)
     }
 

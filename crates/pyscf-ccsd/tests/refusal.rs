@@ -22,7 +22,10 @@ fn try_reserve_over_budget_refuses_with_named_bytes() {
         .try_reserve(requested)
         .expect_err("over-budget try_reserve must refuse");
     match err {
-        BackendError::MemoryLimitExceeded { requested: r, limit: l } => {
+        BackendError::MemoryLimitExceeded {
+            requested: r,
+            limit: l,
+        } => {
             assert_eq!(r, requested, "error must name the requested bytes");
             assert_eq!(l, budget, "error must name the budget limit");
         }
@@ -49,7 +52,13 @@ fn reserve_in_core_over_budget_refuses_no_downgrade() {
         .reserve(&shape, false)
         .expect_err("over-budget in-core reserve must refuse");
     assert!(
-        matches!(err, BackendError::MemoryLimitExceeded { requested: 800, limit: 256 }),
+        matches!(
+            err,
+            BackendError::MemoryLimitExceeded {
+                requested: 800,
+                limit: 256
+            }
+        ),
         "expected MemoryLimitExceeded {{ requested: 800, limit: 256 }}, got {err:?}"
     );
 

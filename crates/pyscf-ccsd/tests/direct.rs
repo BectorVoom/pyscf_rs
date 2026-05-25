@@ -63,7 +63,12 @@ fn aodirect_matches_incore_e_corr_lih_sto3g() {
     eprintln!(
         "LiH/STO-3G: in-core e_corr = {:.12} (conv={}, niter={})  \
          AO-direct e_corr = {:.12} (conv={}, niter={})",
-        incore.e_corr, incore.converged, incore.niter, direct.e_corr, direct.converged, direct.niter
+        incore.e_corr,
+        incore.converged,
+        incore.niter,
+        direct.e_corr,
+        direct.converged,
+        direct.niter
     );
 
     assert!(incore.converged, "in-core RCCSD must converge");

@@ -99,7 +99,12 @@ fn uccsd_closed_shell_consistency_matches_rccsd() {
     eprintln!(
         "UCCSD(α==β) H2/STO-3G: e_corr = {:.12} (e_aa={:.12}, e_bb={:.12}, e_ab={:.12}) \
          converged={} niter={}  |  RCCSD e_corr = {:.12}",
-        uccsd.e_corr, uccsd.e_aa, uccsd.e_bb, uccsd.e_ab, uccsd.converged, uccsd.niter,
+        uccsd.e_corr,
+        uccsd.e_aa,
+        uccsd.e_bb,
+        uccsd.e_ab,
+        uccsd.converged,
+        uccsd.niter,
         rccsd.e_corr
     );
 
@@ -199,8 +204,8 @@ fn uccsd_open_shell_converges_and_decomposes() {
     }
 
     let uref = UccsdReference { alpha, beta };
-    let res = uccsd_kernel(&uref, &Frozen::None, &pool)
-        .expect("open-shell UCCSD must run end-to-end");
+    let res =
+        uccsd_kernel(&uref, &Frozen::None, &pool).expect("open-shell UCCSD must run end-to-end");
 
     eprintln!(
         "UCCSD(asym) LiH/STO-3G: e_corr = {:.12} (e_aa={:.12}, e_bb={:.12}, e_ab={:.12}) \
@@ -210,7 +215,10 @@ fn uccsd_open_shell_converges_and_decomposes() {
 
     assert!(res.converged, "open-shell UCCSD must converge");
     assert!(res.e_corr.is_finite(), "e_corr must be finite");
-    assert!(res.e_corr < 0.0, "a real correlation energy must be negative");
+    assert!(
+        res.e_corr < 0.0,
+        "a real correlation energy must be negative"
+    );
     assert!(
         (res.e_corr - (res.e_aa + res.e_bb + res.e_ab)).abs() < 1e-12,
         "e_corr must equal e_aa + e_bb + e_ab"
@@ -225,9 +233,21 @@ fn uccsd_open_shell_converges_and_decomposes() {
     );
     // The spin-resolved amplitude shapes match the per-channel occ/vir counts.
     let amp = &res.amplitudes;
-    assert_eq!(amp.t2aa.len(), amp.nocc_a * amp.nocc_a * amp.nvir_a * amp.nvir_a);
-    assert_eq!(amp.t2ab.len(), amp.nocc_a * amp.nocc_b * amp.nvir_a * amp.nvir_b);
-    assert_eq!(amp.t2bb.len(), amp.nocc_b * amp.nocc_b * amp.nvir_b * amp.nvir_b);
+    assert_eq!(
+        amp.t2aa.len(),
+        amp.nocc_a * amp.nocc_a * amp.nvir_a * amp.nvir_a
+    );
+    assert_eq!(
+        amp.t2ab.len(),
+        amp.nocc_a * amp.nocc_b * amp.nvir_a * amp.nvir_b
+    );
+    assert_eq!(
+        amp.t2bb.len(),
+        amp.nocc_b * amp.nocc_b * amp.nvir_b * amp.nvir_b
+    );
     // The same-spin amplitude blocks also differ between α and β.
-    assert_ne!(amp.t2aa, amp.t2bb, "asymmetric channels must give t2aa != t2bb");
+    assert_ne!(
+        amp.t2aa, amp.t2bb,
+        "asymmetric channels must give t2aa != t2bb"
+    );
 }

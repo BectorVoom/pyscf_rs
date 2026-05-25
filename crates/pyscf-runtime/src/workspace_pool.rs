@@ -107,7 +107,11 @@ impl SpillHandle {
         // Unique name: pid + pool-assigned uid avoids collisions across
         // processes/threads. Not security-sensitive content; the RAII drop is
         // the leak mitigation (T-06-02-LEAK).
-        path.push(format!("pyscf_ccsd_spill_{}_{}.h5", std::process::id(), uid));
+        path.push(format!(
+            "pyscf_ccsd_spill_{}_{}.h5",
+            std::process::id(),
+            uid
+        ));
 
         let file = hdf5::File::create(&path).map_err(|e| BackendError::ProbeFailed {
             backend: "hdf5-spill",
@@ -133,10 +137,13 @@ impl SpillHandle {
 
     /// Read the full spill buffer into an owned `Vec<f64>`.
     fn read(&self) -> Result<Vec<f64>, BackendError> {
-        let file = self.file.as_ref().ok_or_else(|| BackendError::ProbeFailed {
-            backend: "hdf5-spill",
-            reason: "spill file already closed".to_string(),
-        })?;
+        let file = self
+            .file
+            .as_ref()
+            .ok_or_else(|| BackendError::ProbeFailed {
+                backend: "hdf5-spill",
+                reason: "spill file already closed".to_string(),
+            })?;
         let arr: ndarray::Array1<f64> = file
             .dataset(Self::DATASET)
             .and_then(|ds| ds.read_1d())
@@ -159,10 +166,13 @@ impl SpillHandle {
                 ),
             });
         }
-        let file = self.file.as_ref().ok_or_else(|| BackendError::ProbeFailed {
-            backend: "hdf5-spill",
-            reason: "spill file already closed".to_string(),
-        })?;
+        let file = self
+            .file
+            .as_ref()
+            .ok_or_else(|| BackendError::ProbeFailed {
+                backend: "hdf5-spill",
+                reason: "spill file already closed".to_string(),
+            })?;
         let arr = ndarray::Array1::from_vec(data.to_vec());
         file.dataset(Self::DATASET)
             .and_then(|ds| ds.write(&arr))

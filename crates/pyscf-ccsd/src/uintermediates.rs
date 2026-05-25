@@ -180,8 +180,7 @@ pub fn make_tau(t1: &[f64], t2: &[f64], eris: &SpinOrbitalEris) -> Result<Vec<f6
             for a in 0..nv {
                 for b in 0..nv {
                     let p = t2_idx(no, nv, i, j, a, b);
-                    tau[p] = t2[p]
-                        + t1[t1_idx(nv, i, a)] * t1[t1_idx(nv, j, b)]
+                    tau[p] = t2[p] + t1[t1_idx(nv, i, a)] * t1[t1_idx(nv, j, b)]
                         - t1[t1_idx(nv, i, b)] * t1[t1_idx(nv, j, a)];
                 }
             }
@@ -361,12 +360,8 @@ pub fn w_oooo(t1: &[f64], t2: &[f64], eris: &SpinOrbitalEris) -> Result<Vec<f64>
                     // Σ_e P(ij) t1[j,e]·<mn||ie>:
                     //   + t1[j,e]·ooov[m,n,i,e] − t1[i,e]·ooov[m,n,j,e]
                     for e in 0..nv {
-                        terms.push(
-                            t1[t1_idx(nv, j, e)] * eris.ooov[ooov_idx(no, nv, m, n, i, e)],
-                        );
-                        terms.push(
-                            -t1[t1_idx(nv, i, e)] * eris.ooov[ooov_idx(no, nv, m, n, j, e)],
-                        );
+                        terms.push(t1[t1_idx(nv, j, e)] * eris.ooov[ooov_idx(no, nv, m, n, i, e)]);
+                        terms.push(-t1[t1_idx(nv, i, e)] * eris.ooov[ooov_idx(no, nv, m, n, j, e)]);
                     }
                     // 0.25·Σ_ef tau[i,j,e,f]·<mn||ef> = oovv[m,n,e,f]
                     for e in 0..nv {
@@ -464,15 +459,11 @@ pub fn w_ovvo(t1: &[f64], t2: &[f64], eris: &SpinOrbitalEris) -> Result<Vec<f64>
                     terms.push(eris.ovvo[ovvo_idx(no, nv, m, b, e, j)]);
                     // + Σ_f t1[j,f]·<mb||ef> = ovvv[m,b,e,f]
                     for f in 0..nv {
-                        terms.push(
-                            t1[t1_idx(nv, j, f)] * eris.ovvv[ovvv_idx(nv, m, b, e, f)],
-                        );
+                        terms.push(t1[t1_idx(nv, j, f)] * eris.ovvv[ovvv_idx(nv, m, b, e, f)]);
                     }
                     // − Σ_n t1[n,b]·<mn||ej> ;  <mn||ej> = −ooov[m,n,j,e]
                     for n in 0..no {
-                        terms.push(
-                            t1[t1_idx(nv, n, b)] * eris.ooov[ooov_idx(no, nv, m, n, j, e)],
-                        );
+                        terms.push(t1[t1_idx(nv, n, b)] * eris.ooov[ooov_idx(no, nv, m, n, j, e)]);
                     }
                     // − Σ_n,f ( 0.5·t2[j,n,f,b] + t1[j,f]·t1[n,b] )·<mn||ef>
                     //   <mn||ef> = oovv[m,n,e,f]
@@ -480,9 +471,7 @@ pub fn w_ovvo(t1: &[f64], t2: &[f64], eris: &SpinOrbitalEris) -> Result<Vec<f64>
                         for f in 0..nv {
                             let g = eris.oovv[oovv_idx(no, nv, m, n, e, f)];
                             terms.push(-0.5 * t2[t2_idx(no, nv, j, n, f, b)] * g);
-                            terms.push(
-                                -t1[t1_idx(nv, j, f)] * t1[t1_idx(nv, n, b)] * g,
-                            );
+                            terms.push(-t1[t1_idx(nv, j, f)] * t1[t1_idx(nv, n, b)] * g);
                         }
                     }
                     w[ovvo_idx(no, nv, m, b, e, j)] = oracle_sum(&terms);
@@ -599,7 +588,9 @@ mod tests {
     }
 
     fn synthetic_amps(no: usize, nv: usize) -> (Vec<f64>, Vec<f64>) {
-        let t1: Vec<f64> = (0..no * nv).map(|i| 0.01 + ((i % 5) as f64) * 0.007).collect();
+        let t1: Vec<f64> = (0..no * nv)
+            .map(|i| 0.01 + ((i % 5) as f64) * 0.007)
+            .collect();
         // t2 must be antisymmetric in i<->j and a<->b (spin-orbital amplitudes).
         let mut t2 = vec![0.0_f64; no * no * nv * nv];
         let raw = |i: usize, j: usize, a: usize, b: usize| -> f64 {
@@ -633,8 +624,7 @@ mod tests {
                     for a in 0..nv {
                         for b in 0..nv {
                             let p = t2_idx(no, nv, i, j, a, b);
-                            let want = t2[p]
-                                + t1[i * nv + a] * t1[j * nv + b]
+                            let want = t2[p] + t1[i * nv + a] * t1[j * nv + b]
                                 - t1[i * nv + b] * t1[j * nv + a];
                             assert!((tau[p] - want).abs() < 1e-14, "tau[{i}{j}{a}{b}]");
                         }

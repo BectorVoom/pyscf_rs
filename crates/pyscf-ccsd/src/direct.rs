@@ -97,14 +97,8 @@ fn tau_closure<'a>(
 /// `Ht2[i,j,a,b] = sum_{c,d} vvvv_mo[a,c,b,d] * tau[i,j,c,d]`
 /// for ALL `(i,j,b)` into the output buffer `ht2` (flat C-order
 /// `[no,no,nv,nv]`). Host-loop materialize-then-`oracle_sum`.
-fn contract_a_slice<F>(
-    a: usize,
-    nv: usize,
-    no: usize,
-    vvvv_a: &[f64],
-    tau: &F,
-    ht2: &mut [f64],
-) where
+fn contract_a_slice<F>(a: usize, nv: usize, no: usize, vvvv_a: &[f64], tau: &F, ht2: &mut [f64])
+where
     F: Fn(usize, usize, usize, usize) -> f64,
 {
     // vvvv_a element (c,b,d) at (c*nv + b)*nv + d.
@@ -199,8 +193,8 @@ pub fn contract_vvvv_t2_aodirect(
         };
         // general(...) returns F-order [1, nv, nv, nv]: element (0,c,b,d) at
         // 0 + c*1 + b*1*nv + d*1*nv*nv = c + b*nv + d*nv*nv.
-        let slice_f = pyscf_ao2mo::general(eri_ao, nao, [&cv_a, cv, cv, cv])
-            .map_err(CcsdError::from)?;
+        let slice_f =
+            pyscf_ao2mo::general(eri_ao, nao, [&cv_a, cv, cv, cv]).map_err(CcsdError::from)?;
         // Reorder F-order (c,b,d) -> the C-order [nv,nv,nv] contract_a_slice
         // expects (element (c,b,d) at (c*nv + b)*nv + d).
         let mut vvvv_a = vec![0.0_f64; nv * nv * nv];
@@ -288,11 +282,7 @@ pub fn contract_vvvv_t2_from_eris(
 /// computed with the FULL `nv^4` MO tensor in one pass — the oracle the
 /// AO-direct path must match bit-close. Used by the tests only.
 #[cfg(test)]
-fn contract_vvvv_t2_incore_full(
-    t1: &[f64],
-    t2: &[f64],
-    eris: &ChemistsEris,
-) -> Vec<f64> {
+fn contract_vvvv_t2_incore_full(t1: &[f64], t2: &[f64], eris: &ChemistsEris) -> Vec<f64> {
     let no = eris.nocc;
     let nv = eris.nvir;
     let tau = tau_closure(t1, t2, no, nv);
@@ -350,7 +340,9 @@ mod tests {
     }
 
     fn synthetic_amps(no: usize, nv: usize) -> (Vec<f64>, Vec<f64>) {
-        let t1: Vec<f64> = (0..no * nv).map(|i| 0.015 + ((i % 5) as f64) * 0.008).collect();
+        let t1: Vec<f64> = (0..no * nv)
+            .map(|i| 0.015 + ((i % 5) as f64) * 0.008)
+            .collect();
         let t2: Vec<f64> = (0..no * no * nv * nv)
             .map(|i| 0.004 + ((i % 9) as f64) * 0.0021 - ((i % 4) as f64) * 0.0017)
             .collect();

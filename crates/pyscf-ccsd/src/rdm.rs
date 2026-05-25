@@ -552,11 +552,12 @@ mod tests {
         let nmo = no + nv;
         let eris = synthetic_eris(no, nv);
         let t1 = vec![0.0_f64; no * nv];
-        let t2: Vec<f64> = (0..no * no * nv * nv).map(|i| 0.01 * (i + 1) as f64).collect();
+        let t2: Vec<f64> = (0..no * no * nv * nv)
+            .map(|i| 0.01 * (i + 1) as f64)
+            .collect();
         let mo = identity_mo(nmo);
         let pool = WorkspacePool::new(WorkspacePool::DEFAULT_BUDGET_BYTES);
-        let dm2 =
-            make_rdm2(&t1, &t2, &t1, &t2, &eris, false, &mo, &pool).expect("rdm2");
+        let dm2 = make_rdm2(&t1, &t2, &t1, &t2, &eris, false, &mo, &pool).expect("rdm2");
         assert_eq!(dm2.len(), nmo * nmo * nmo * nmo);
     }
 
@@ -572,8 +573,7 @@ mod tests {
         let mo = identity_mo(nmo); // C = I → ao_repr == mo_repr.
         let pool = WorkspacePool::new(WorkspacePool::DEFAULT_BUDGET_BYTES);
 
-        let dm2_mo =
-            make_rdm2(&t1, &t2, &t1, &t2, &eris, false, &mo, &pool).expect("rdm2 mo");
+        let dm2_mo = make_rdm2(&t1, &t2, &t1, &t2, &eris, false, &mo, &pool).expect("rdm2 mo");
         let dm2_ao = make_rdm2(&t1, &t2, &t1, &t2, &eris, true, &mo, &pool)
             .expect("rdm2 ao_repr must SHIP (D-03), not NotYetImplemented");
 
@@ -610,8 +610,8 @@ mod tests {
         let t1 = vec![0.0_f64; no * nv];
         let l1 = t1.clone();
         let l2 = vec![0.01_f64; no * no * nv * nv];
-        let err = gamma1_intermediates(&t1, &t2, &l1, &l2, no, nv)
-            .expect_err("bad shape must error");
+        let err =
+            gamma1_intermediates(&t1, &t2, &l1, &l2, no, nv).expect_err("bad shape must error");
         assert!(matches!(err, CcsdError::ShapeMismatch { .. }));
     }
 }

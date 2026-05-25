@@ -894,10 +894,7 @@ mod tests {
         // l = 5 (h-shell) is not in the v1 c2s table → Err, no panic.
         let r = c2s_coeff(5, 0, 0);
         assert!(
-            matches!(
-                r,
-                Err(PyscfRsError::NotYetImplemented { phase: 4, .. })
-            ),
+            matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 4, .. })),
             "c2s_coeff(5,..) must return Err(NotYetImplemented{{phase:4}}), got {r:?}"
         );
 

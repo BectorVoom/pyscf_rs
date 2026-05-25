@@ -35,17 +35,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - run: git ls-files '*.rs' | xargs rustfmt --edition 2024 --check
 
   clippy:
     name: cargo clippy -D warnings (FOUND-07 unwrap deny)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -58,6 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -69,6 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -84,6 +88,7 @@ jobs:
     needs: [build-default]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -108,6 +113,7 @@ jobs:
       RAYON_NUM_THREADS: ${{ matrix.rayon }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -122,6 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -134,6 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -146,6 +154,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -158,6 +167,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -170,6 +180,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -182,6 +193,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -200,6 +212,7 @@ jobs:
     needs: [build-default]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -220,6 +233,7 @@ jobs:
     needs: [maturin-smoke]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -241,6 +255,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -276,6 +291,7 @@ jobs:
     needs: [build-default]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - name: Install Python 3.13t (free-threaded)
         # deadsnakes PPA path. Alternative: `uv python install 3.13t`.
         # If deadsnakes lacks 3.13-nogil on the runner image, switch to uv.
@@ -348,6 +364,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -384,6 +401,7 @@ jobs:
     needs: [build-default]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -419,6 +437,7 @@ jobs:
     needs: [build-default]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -450,6 +469,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -486,6 +506,7 @@ jobs:
     needs: [build-default]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -508,6 +529,7 @@ jobs:
     needs: [build-default]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -543,6 +565,7 @@ jobs:
       PYSCF_MAX_MEMORY: "500"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -574,6 +597,7 @@ jobs:
     needs: [build-default]
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
       - name: Install Python 3.13t (free-threaded)
         # deadsnakes PPA path. Alternative: `uv python install 3.13t`.
         run: |
