@@ -30,6 +30,7 @@ pub mod caches;
 pub mod cc;
 pub mod dft;
 pub mod errors;
+pub mod gto;
 pub mod mp;
 pub mod numpy_io;
 pub mod scf;
@@ -59,6 +60,11 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let scf_mod = PyModule::new(py, "scf")?;
     crate::scf::register(py, &scf_mod)?;
     m.add_submodule(&scf_mod)?;
+
+    // GTO overlay - minimal native Mole/M surface used by the Python SCF tests.
+    let gto_mod = PyModule::new(py, "gto")?;
+    crate::gto::register(py, &gto_mod)?;
+    m.add_submodule(&gto_mod)?;
 
     // Plan 04-09 (DFT-08 / D-08) — `dft` submodule containing PyRKS/PyUKS.
     let dft_mod = PyModule::new(py, "dft")?;
