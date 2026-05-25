@@ -26,7 +26,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 - [x] **Phase 3: SCF + PyO3 bindings** — RHF/UHF/GHF + DIIS + chkfile + sign canonicalization + first end-to-end energy AND lock the entire PyO3 contract (subclass-override dispatch, NumPy contiguity, GIL release seam, abi3-py310 wheel skeleton, oracle harness bootstrap) (completed 2026-05-24)
 - [x] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT (all 10 plans executed 2026-05-22; verification = gaps_found 3/5 — 4 BLOCKERs in 04-VERIFICATION.md: UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key → gap closure required before complete) (completed 2026-05-23)
 - [x] **Phase 5: MP2** — RMP2/UMP2/DF-MP2 + frozen-core + AO→MO transformation kernel + helpers CCSD imports (completed 2026-05-23)
-- [ ] **Phase 6: CCSD** — RCCSD/UCCSD + amplitude DIIS + Lambda + RDMs + AO-direct + DF-CCSD with HDF5 spill + tensor-arena from day one + T1/D1/D2 diagnostics
+- [x] **Phase 6: CCSD** — RCCSD/UCCSD + amplitude DIIS + Lambda + RDMs + AO-direct + DF-CCSD with HDF5 spill + tensor-arena from day one + T1/D1/D2 diagnostics (completed 2026-05-25)
 - [ ] **Phase 7: Gradients + Geomopt** — Analytical gradients for HF/DFT/MP2/CCSD + ECP + CPHF/CPKS + native Rust BFGS+RFO in redundant internals + geomeTRIC/berny drop-in shims
 - [ ] **Phase 8: GPU enable + Oracle hardening + Distribution** — Per-backend regression suite (CPU/CUDA/WGPU/ROCm), 2–5× benchmark proof, abi3-py310 wheel for Linux/macOS/Windows × x86_64+aarch64, per-backend extras, drop-in audit (≥80% upstream tests pass against pyscf-rs as import target), full top-20-idiom shakedown
 
@@ -302,7 +302,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 06-11-PLAN.md — Oracle/CI close-out: pyscf-oracle CCSD fixtures (small always-on; caffeine/DF-spill/λ-RDM byte-identity gated) + ccsd-structural + heap-alloc-count + ccsd-oracle-upstream-manual + python3.13t CCSD smoke arms (D-04) (CCSD-01/02/05/06/08/11)
+- [x] 06-11-PLAN.md — Oracle/CI close-out: pyscf-oracle CCSD fixtures (small always-on; caffeine/DF-spill/λ-RDM byte-identity gated) + ccsd-structural + heap-alloc-count + ccsd-oracle-upstream-manual + python3.13t CCSD smoke arms (D-04) (CCSD-01/02/05/06/08/11) (completed 2026-05-25 — 6 CCSD oracle method names registered in KNOWN_METHODS (24 total) + ccsd_oracle.rs with always-on dispatch-layer arms + #[cfg(feature=python)]/#[ignore]'d byte-identity arms (mirrors the MP2 register-but-defer-dispatch precedent); 4 CI arms: ccsd-structural + ccsd-heap-alloc-count ALWAYS-ON (scoped -p pyscf-ccsd/-p pyscf-oracle, no python/libxc), ccsd-oracle-upstream-manual + python313t-ccsd-smoke workflow_dispatch ONLY (caffeine/DF-spill on constrained PYSCF_MAX_MEMORY=500/λ/RDM byte-identity + mf.CCSD().run() GIL probe); YAML_OK; default cargo test -p pyscf-oracle pulls NO libxc (ORACLE_NO_LIBXC); 06-VALIDATION nyquist_compliant: true — phase Nyquist contract closed; live byte-identity + 3.13t GIL = the documented phase-gate human-verify run)
 
 ### Phase 7: Gradients + Geomopt
 
@@ -345,7 +345,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 3. SCF + PyO3 bindings | 15/15 | Complete    | 2026-05-24 |
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
-| 6. CCSD | 10/11 | In Progress|  |
+| 6. CCSD | 11/11 | Complete   | 2026-05-25 |
 | 7. Gradients + Geomopt | 0/TBD | Not started | - |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 

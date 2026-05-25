@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 06-10-PLAN.md (PyO3 CCSD bridge — D-09 / CCSD-01/02/05/06/08)
-last_updated: "2026-05-25T05:00:00.000Z"
-last_activity: 2026-05-25 -- Completed 06-10 (PyO3 cc bridge: pyscf-py::cc PyRCCSD/PyUCCSD/PyDFCCSD + CcsdPyBridge impl CcsdOverrideHooks copies pyscf-py::mp section-for-section — eager-snapshot CcsdReference, is_overridden __qualname__ MRO dispatch of the 5-hook set (ao2mo/update_amps/make_rdm1/make_rdm2/energy) via call_method1, each default under py.detach (BIND-05), the kernel does NOT py.detach at the top (hooks re-enter Python, mp.rs:359 — the update_amps default is the biggest py.detach region in the project); solve_lambda/make_rdm1/make_rdm2/as_scanner exposed; PyCcsdScanner Mole->energy callable (CCSD-07, geomopt seam) with a self-less ScannerDfBridge for the DF re-run; ccsd_factory UHF->UCCSD/with_df->DFCCSD/else RCCSD (cc/__init__.py:83-139); python/pyscf/cc/__init__.py re-exports _native.cc + grafts mf.CCSD()/mf.density_fit().CCSD() onto the Rust SCF base classes (scf.hf.SCF.CCSD = CCSD); pyscf-ccsd stays pyo3-free (D-09); 6 always-on cc_bridge arms green; cargo check -p pyscf-py + -p pyscf-ccsd pass; libxc NEVER compiled; live numeric + python3.13t GIL smoke deferred to 06-11 workflow_dispatch)
+status: verifying
+stopped_at: Completed 06-08-PLAN.md (AO-direct CCSD — CCSD-07)
+last_updated: "2026-05-25T03:53:25.295Z"
+last_activity: 2026-05-25 -- Completed 06-11 (CCSD oracle fixtures + 4 CI arms; Phase 6 Nyquist contract closed)
 progress:
   total_phases: 8
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 69
-  completed_plans: 68
-  percent: 99
+  completed_plans: 69
+  percent: 75
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 
 ## Current Position
 
-Phase: 06 (ccsd) — EXECUTING
-Plan: 11 of 11
-Status: Ready to execute
-Last activity: 2026-05-25 -- Completed 06-10 (PyO3 CCSD bridge — D-09)
+Phase: 06 (ccsd) — COMPLETE
+Plan: 11 of 11 (all complete)
+Status: Phase complete — ready for verification
+Last activity: 2026-05-25 -- Completed 06-11 (CCSD oracle fixtures + 4 CI arms; Phase 6 Nyquist contract closed)
 
-Progress: [█████████░] ~99% (68/69 plans; Phase 6 in progress — Wave 7 PyO3 bridge done, 1 plan remains: 06-11 oracle/CI close-out + python3.13t CCSD smoke)
+Progress: [██████████] 100% (69/69 plans; Phase 6 CCSD COMPLETE — all 11 plans landed; the live byte-identity + python3.13t GIL re-validation are the documented workflow_dispatch phase-gate human-verify arms)
 
 ## Performance Metrics
 
@@ -87,6 +87,7 @@ Progress: [█████████░] ~99% (68/69 plans; Phase 6 in progres
 | Phase 06 P06-08 | 8min | 2 tasks (1 TDD) | 5 files |
 | Phase 06 P06-09 | 35min | 2 tasks | 7 files |
 | Phase 06 P06-10 | 30min | 2 tasks | 5 files |
+| Phase 06 P11 | 4min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -184,6 +185,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-25T03:06:34.000Z
+Last session: 2026-05-25T03:53:25.291Z
 Stopped at: Completed 06-08-PLAN.md (AO-direct CCSD — CCSD-07)
 Resume file: None
