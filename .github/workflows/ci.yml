@@ -223,7 +223,7 @@ jobs:
       - name: Install maturin (>=1.4 required for --profile flag)
         run: |
           python -m venv .venv
-          .venv/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26"
+          .venv/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
       - name: Build + install pyscf-rs into venv
         run: .venv/bin/maturin develop --release
       - name: Verify _native module imports
@@ -245,7 +245,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           python -m venv .venv
-          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26"
+          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
       - run: .venv/bin/maturin develop --release
       - run: .venv/bin/pytest python/pyscf/tests/test_scf_stride_fuzz.py -x
 
@@ -287,7 +287,7 @@ jobs:
         # purpose so the verify grep stays clean.
         run: |
           python -m venv .venv
-          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26" "h5py>=3.10"
+          .venv/bin/pip install "maturin>=1.4,<2.0" "pytest>=7.0" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
           .venv/bin/maturin develop --profile release-oracle
       - name: H2O/cc-pVDZ RHF — assert ≤ 1 µHartree vs upstream
         run: .venv/bin/pytest python/pyscf/tests/test_scf_rhf_h2o.py -x --tb=short
@@ -316,12 +316,13 @@ jobs:
         run: |
           PY=$(which python3.13t || which python3.13)
           "$PY" -m venv /tmp/venv313t
-          /tmp/venv313t/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26"
+          /tmp/venv313t/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26" "scipy>=1.15" "h5py>=3.12"
       - name: Build pyscf-py (non-abi3 free-threading)
         run: |
           # CRITICAL per RESEARCH §"Pitfall (NEW)": abi3 wheels are incompatible
           # with 3.13t. We use --no-default-features --features free-threading
           # (drops abi3-py310 from the feature set) for this job ONLY.
+          export VIRTUAL_ENV=/tmp/venv313t
           /tmp/venv313t/bin/maturin develop \
             --no-default-features --features free-threading
       # ── Checker iteration 1 NIT 6 ──────────────────────────────────
@@ -372,6 +373,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sibling-crates
+        env:
+          SETUP_LIBXC_RS: "1"
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -621,11 +624,12 @@ jobs:
         run: |
           PY=$(which python3.13t || which python3.13)
           "$PY" -m venv /tmp/venv313t
-          /tmp/venv313t/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26"
+          /tmp/venv313t/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26" "scipy>=1.15" "h5py>=3.12"
       - name: Build pyscf-py (non-abi3 free-threading)
         run: |
           # abi3 wheels are incompatible with 3.13t — use
           # --no-default-features --features free-threading (drops abi3-py310).
+          export VIRTUAL_ENV=/tmp/venv313t
           /tmp/venv313t/bin/maturin develop \
             --no-default-features --features free-threading
       - name: Assert pyscf._native imports cleanly under 3.13t

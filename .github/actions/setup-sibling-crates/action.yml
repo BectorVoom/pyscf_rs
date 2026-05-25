@@ -19,5 +19,10 @@ runs:
         }
 
         clone_sibling cintx
-        clone_sibling libxc_rs
         clone_sibling xcfun_rs
+
+        case "${SETUP_LIBXC_RS:-}" in
+          1|true|TRUE|yes|YES)
+            clone_sibling libxc_rs
+            ;;
+        esac
