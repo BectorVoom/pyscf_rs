@@ -89,6 +89,31 @@ const KNOWN_METHODS: &[&str] = &[
     "dfmp2_energy",
     "dfmp2_native_energy",
     "mp2_rdm",
+    // ── Phase 6 CCSD numeric oracle arms (plan 06-11) ──────────────────────
+    // CCSD-01/02/05/06/08: RCCSD / UCCSD / DF-CCSD correlation energies + λ
+    // amplitudes + 1-/2-particle RDMs, each compared byte-identity vs upstream
+    // `cc.CCSD(mf).kernel()` / `cc.UCCSD(uhf_mf).kernel()` /
+    // `cc.CCSD(mf.density_fit()).kernel()` (and `.solve_lambda()` /
+    // `.make_rdm1()` / `.make_rdm2()`). The fixture name encodes the system as
+    // `<base>` (e.g. "h2o_ccpvdz", "caffeine_ccpvdz"), exactly the
+    // mp2_rmp2_energy precedent.
+    //
+    // ALL SIX are registered here so the always-on dispatch layer recognises
+    // them (the `unknown method` guard distinguishes a genuinely unknown name
+    // from a known-but-Python-gated arm). The live byte-identity comparison
+    // itself is `workflow_dispatch`/human-verify ONLY (the
+    // `ccsd-oracle-upstream-manual` CI arm — caffeine/cc-pVDZ byte-identity,
+    // DF-CCSD spill, λ/RDM byte-identity) because it needs an installed upstream
+    // PySCF. The always-on, in-tree small-system numeric proofs live in
+    // crates/pyscf-ccsd/tests/ (rccsd_numeric_smoke, uccsd_smoke, lambda, rdm,
+    // dfccsd_spill, direct) — never pulling libxc, never calling live PySCF
+    // (user-memory constraint; the 05-08 mp2-oracle-upstream-manual precedent).
+    "ccsd_rccsd_energy",
+    "ccsd_uccsd_energy",
+    "ccsd_dfccsd_energy",
+    "ccsd_lambda",
+    "ccsd_rdm1",
+    "ccsd_rdm2",
 ];
 
 /// Top-level dispatcher. Resolves the method name to either a known
@@ -983,8 +1008,10 @@ mod tests {
         // 8 SCF/DF arms (Phase 3) + grid_weights (04-04) + rks_energy +
         // uks_energy (04-06) + df_dft_energy + ks_chkfile_roundtrip (04-08) = 13,
         // + 5 Phase-5 MP2 arms (05-01: mp2_rmp2_energy, mp2_ump2_energy,
-        // dfmp2_energy, dfmp2_native_energy, mp2_rdm) = 18.
-        assert_eq!(KNOWN_METHODS.len(), 18);
+        // dfmp2_energy, dfmp2_native_energy, mp2_rdm) = 18,
+        // + 6 Phase-6 CCSD arms (06-11: ccsd_rccsd_energy, ccsd_uccsd_energy,
+        // ccsd_dfccsd_energy, ccsd_lambda, ccsd_rdm1, ccsd_rdm2) = 24.
+        assert_eq!(KNOWN_METHODS.len(), 24);
         assert!(KNOWN_METHODS.contains(&"scf_rhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_uhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_diis_iter_count"));
@@ -1004,5 +1031,12 @@ mod tests {
         assert!(KNOWN_METHODS.contains(&"dfmp2_energy"));
         assert!(KNOWN_METHODS.contains(&"dfmp2_native_energy"));
         assert!(KNOWN_METHODS.contains(&"mp2_rdm"));
+        // Phase 6 CCSD arms (06-11).
+        assert!(KNOWN_METHODS.contains(&"ccsd_rccsd_energy"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_uccsd_energy"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_dfccsd_energy"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_lambda"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_rdm1"));
+        assert!(KNOWN_METHODS.contains(&"ccsd_rdm2"));
     }
 }
