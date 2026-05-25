@@ -332,12 +332,13 @@ impl PyRHF {
             let d = to_density(arr)?;
             cfg.init_guess = InitGuessMode::UserDM(d);
         }
-        let class_name: String = slf.get_type().name()?.extract()?;
-        let result = if class_name == "RHF" {
+        let exact_base_rhf = slf.as_any().is_exact_instance_of::<PyRHF>();
+        let result = if exact_base_rhf {
             // Exact base-class RHF has no Python hook overrides. Drive the
-            // kernel through NoOverrides so CI parity runs do not repeatedly
-            // bounce through upstream-PySCF Mole objects while holding the GIL.
-            scf_kernel(&mol, &NoOverrides, cfg).map_err(pyscf_to_py)?
+            // kernel through NoOverrides and release the GIL for the full
+            // compute. Subclasses still take the bridge path below.
+            py.detach(|| scf_kernel(&mol, &NoOverrides, cfg))
+                .map_err(pyscf_to_py)?
         } else {
             // The bridge needs a Py<PyAny> handle pointing at the same Python
             // object (so call_method1 resolves the MRO including subclass
