@@ -15,7 +15,9 @@ H2O_ATOM = "O 0.0 0.0 0.0; H 0.757 0.587 0.0; H -0.757 0.587 0.0"
 
 def test_scf_rhf_h2o_uhartree_oracle(h2o_mol, upstream_rhf_energy):
     """RHF on H2O/cc-pVDZ — |e_rs - e_up| < 1 µHartree."""
-    mf_rs = scf.RHF(h2o_mol).run()
+    mf_rs = scf.RHF(h2o_mol)
+    mf_rs.init_guess = "1e"
+    mf_rs.run()
     assert mf_rs.converged, "pyscf-rs RHF did not converge"
 
     mf_up = upstream_rhf_energy(H2O_ATOM, "cc-pvdz")
