@@ -90,8 +90,12 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
         // Since 02-10 `ecp_engine()` returns the cintx-backed `CintxEcpEngine`:
         // for an ECP-bearing molecule + scalar name it returns Ok with an
         // F-order `nao × nao` buffer, which we re-pack into `IntorOutput`.
-        // ECP-less molecules still get `EcpEngineNotAvailable`; derivative
-        // names (ipnuc/iprinv) get `NotYetImplemented{phase:7}` (WR-01).
+        // ECP-less molecules still get `EcpEngineNotAvailable`. Derivative
+        // names (ipnuc/iprinv) routed through this SCALAR path are rejected
+        // with a clean cintx-availability error (GRAD-07 closed the prior
+        // `NotYetImplemented{phase:7}` disposition); the real ECP gradient
+        // lands through `EcpEngine::ecp_int1e_ipnuc` (consumed by pyscf-grad),
+        // never via this scalar `intor()` entry-point (WR-01).
         let density = EcpEngine::ecp_int1e(&engine, mol, &full_name)?;
         // Defensive shape: even when 02-10 wires the real engine, this
         // dispatcher promises the same `(nao, nao)` F-order layout
@@ -423,9 +427,23 @@ fn stitch_arity2_block(
 /// `p + q*nao + r*nao^2 + s*nao^3`. cintx returns each shell-quad block in
 /// F-order with the first index fastest (libcint convention, cintx api.rs:531).
 ///
-/// Scalar (1-component) only — `int2e_sph`/`int2e_cart`. Component-leading
-/// arity-4 integrals (`int2e_ip1_sph`/`int2e_ip2_sph` gradients) are Phase 7
-/// and return `NotYetImplemented{phase:7}` rather than producing a wrong shape.
+/// Scalar (1-component) `int2e_sph`/`int2e_cart` → `[nao, nao, nao, nao]`.
+///
+/// Component-leading arity-4 integrals (`int2e_ip1_sph`/`int2e_ip2_sph`
+/// gradients, GRAD-07 / Phase 7) repack into a `[c, nao, nao, nao, nao]`
+/// component-leading F-order buffer via the same stitch machinery, with the
+/// component axis leading (axis 0 = x/y/z derivative component) — never a
+/// `[nao, nao, nao, nao, c]` component-trailing permutation (T-07-01 /
+/// Pitfall 8 re-validation).
+///
+/// D-02 cintx-gating: the structural component-leading wiring lands here
+/// regardless of cintx availability. `int2e_ip1` is MISSING from every cintx
+/// branch today (07-RESEARCH §Gradient-Integral Availability Matrix), so a
+/// call resolves to a CLEAN cintx-availability error at the
+/// `Resolver::descriptor_by_symbol` step in the dispatcher (`intor`) — NOT a
+/// `NotYetImplemented{phase:7}`. When a future cintx workstream ships
+/// `int2e_ip1`, this path produces the real `[3, nao, nao, nao, nao]` buffer
+/// with no further pyscf-gto change.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_arity4(
     descriptor: &'static OperatorDescriptor,
@@ -439,24 +457,27 @@ fn evaluate_arity4(
 ) -> Result<IntorOutput, PyscfRsError> {
     let _ = descriptor; // descriptor read for arity in the dispatcher; future-proof.
 
-    // int2e is scalar; component-leading arity-4 (gradients) is Phase 7.
-    if matches!(layout, IntorLayout::ComponentLeadingFOrder { .. }) {
-        return Err(PyscfRsError::NotYetImplemented {
-            phase: 7,
-            what: "component-leading arity-4 integrals (int2e_ip1/ip2 gradients) — Phase 7",
-        });
-    }
+    // Component count + logical shape per layout. Scalar int2e is 1-component
+    // (`[nao;4]`); component-leading gradient int2e_ip1/ip2 is c-component with
+    // the component axis leading (`[c, nao, nao, nao, nao]`). The structural
+    // wiring lands regardless of cintx availability (D-02): a missing family
+    // surfaces a clean cintx-availability error at the resolver step in the
+    // dispatcher, never `NotYetImplemented{phase:7}`.
+    let (components, shape) = match layout {
+        IntorLayout::ScalarFOrder => (1usize, vec![nao, nao, nao, nao]),
+        IntorLayout::ComponentLeadingFOrder { components: c } => {
+            (c as usize, vec![c as usize, nao, nao, nao, nao])
+        }
+    };
 
-    let total_elements = nao
-        .checked_mul(nao)
-        .and_then(|n| n.checked_mul(nao))
-        .and_then(|n| n.checked_mul(nao))
+    let total_elements = (0..4)
+        .try_fold(components, |acc, _| acc.checked_mul(nao))
         .ok_or_else(|| {
             PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                "intor '{intor_name}': nao={nao} overflows the arity-4 buffer size (nao^4)",
+                "intor '{intor_name}': nao={nao} (components={components}) overflows the \
+                 arity-4 buffer size (components * nao^4)",
             )))
         })?;
-    let shape = vec![nao, nao, nao, nao];
     let mut out = vec![0.0f64; total_elements];
 
     let meta = basis.meta();
@@ -465,8 +486,14 @@ fn evaluate_arity4(
         .collect();
     let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
 
-    let nao2 = nao * nao;
-    let nao3 = nao2 * nao;
+    // Global F-order strides. For the scalar layout the AO axes are
+    // `[nao, nao, nao, nao]` (p fastest). For the component-leading layout the
+    // component axis leads (`[c, nao, nao, nao, nao]`, component fastest within
+    // the inner AO block — `out[comp + p*c + q*c*nao + r*c*nao^2 + s*c*nao^3]`),
+    // mirroring `stitch_arity2_block`'s component-leading branch.
+    let nao_c = nao * components;
+    let nao2_c = nao_c * nao;
+    let nao3_c = nao2_c * nao;
 
     // Iterate (i, j, k, l) shell quadruples.
     for i in 0..nbas {
@@ -513,33 +540,90 @@ fn evaluate_arity4(
                     let ol = shell_offsets[l];
 
                     let block = &outcome.tensor.owned_values;
-                    let expected = ni * nj * nk * nl;
+                    let block_component_leading = outcome.tensor.component_axis_leading;
+                    let expected_inner = ni * nj * nk * nl;
+                    let expected_total = expected_inner * components;
                     // Never panic / never zero-substitute on a shape surprise
                     // (T-05-08-FFI; the Phase-4 CR-02 lesson) — propagate a
                     // descriptive error instead.
-                    if block.len() != expected {
+                    if block.len() != expected_total {
                         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                             "cintx returned {} elements for shell quad ({i},{j},{k},{l}) of \
-                             '{intor_name}', expected {} (ni={ni}, nj={nj}, nk={nk}, nl={nl}, \
-                             extents={:?})",
+                             '{intor_name}', expected {} (components={components}, ni={ni}, \
+                             nj={nj}, nk={nk}, nl={nl}, extents={:?})",
                             block.len(),
-                            expected,
+                            expected_total,
                             outcome.tensor.extents,
                         ))));
                     }
 
-                    // Per-quad block F-order [ni,nj,nk,nl] (i fastest), stitched
-                    // into global F-order [nao,nao,nao,nao] (p fastest).
-                    for ll in 0..nl {
-                        for kk in 0..nk {
-                            for jj in 0..nj {
-                                for ii in 0..ni {
-                                    let b = ii + jj * ni + kk * ni * nj + ll * ni * nj * nk;
-                                    let o = (oi + ii)
-                                        + (oj + jj) * nao
-                                        + (ok + kk) * nao2
-                                        + (ol + ll) * nao3;
-                                    out[o] = block[b];
+                    if components == 1 {
+                        // Scalar: per-quad block F-order [ni,nj,nk,nl] (i fastest),
+                        // stitched into global F-order [nao,nao,nao,nao] (p fastest).
+                        for ll in 0..nl {
+                            for kk in 0..nk {
+                                for jj in 0..nj {
+                                    for ii in 0..ni {
+                                        let b =
+                                            ii + jj * ni + kk * ni * nj + ll * ni * nj * nk;
+                                        let o = (oi + ii)
+                                            + (oj + jj) * nao_c
+                                            + (ok + kk) * nao2_c
+                                            + (ol + ll) * nao3_c;
+                                        out[o] = block[b];
+                                    }
+                                }
+                            }
+                        }
+                    } else if block_component_leading {
+                        // Component-leading: per-quad block F-order
+                        // [c, ni, nj, nk, nl] (component fastest within the inner
+                        // AO block) → global [c, nao, nao, nao, nao]. Block index
+                        // for (comp, ii, jj, kk, ll):
+                        //   comp + ii*c + jj*c*ni + kk*c*ni*nj + ll*c*ni*nj*nk.
+                        for ll in 0..nl {
+                            for kk in 0..nk {
+                                for jj in 0..nj {
+                                    for ii in 0..ni {
+                                        for comp in 0..components {
+                                            let b = comp
+                                                + ii * components
+                                                + jj * components * ni
+                                                + kk * components * ni * nj
+                                                + ll * components * ni * nj * nk;
+                                            let o = comp
+                                                + (oi + ii) * components
+                                                + (oj + jj) * nao_c
+                                                + (ok + kk) * nao2_c
+                                                + (ol + ll) * nao3_c;
+                                            out[o] = block[b];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Component-trailing block — copy with the component axis
+                        // moved to the leading global position (no [..,c] permute
+                        // ever reaches the caller; T-07-01).
+                        for comp in 0..components {
+                            for ll in 0..nl {
+                                for kk in 0..nk {
+                                    for jj in 0..nj {
+                                        for ii in 0..ni {
+                                            let b = ii
+                                                + jj * ni
+                                                + kk * ni * nj
+                                                + ll * ni * nj * nk
+                                                + comp * expected_inner;
+                                            let o = comp
+                                                + (oi + ii) * components
+                                                + (oj + jj) * nao_c
+                                                + (ok + kk) * nao2_c
+                                                + (ol + ll) * nao3_c;
+                                            out[o] = block[b];
+                                        }
+                                    }
                                 }
                             }
                         }

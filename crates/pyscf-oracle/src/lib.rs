@@ -26,6 +26,11 @@
 #![warn(clippy::unwrap_used)]
 
 pub mod fixtures;
+/// Phase 7 gradient + geomopt oracle fixtures (plan 07-10): the dispatch-layer
+/// registration tests (always-on) + the `#[cfg(feature = "python")]`/`#[ignore]`'d
+/// byte-identity arms (`workflow_dispatch` / human-verify only). See the module
+/// doc for the register-but-defer-dispatch + cintx-gating contract.
+pub mod grad_oracle;
 pub mod runner;
 
 pub use fixtures::{BENZENE_6_31GS, H2O_CC_PVDZ, H2O_TRIPLET_CCPVDZ, WATER_TRIMER_CC_PVDZ};

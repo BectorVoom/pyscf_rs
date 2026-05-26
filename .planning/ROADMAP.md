@@ -27,7 +27,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 - [x] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT (all 10 plans executed 2026-05-22; verification = gaps_found 3/5 — 4 BLOCKERs in 04-VERIFICATION.md: UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key → gap closure required before complete) (completed 2026-05-23)
 - [x] **Phase 5: MP2** — RMP2/UMP2/DF-MP2 + frozen-core + AO→MO transformation kernel + helpers CCSD imports (completed 2026-05-23)
 - [x] **Phase 6: CCSD** — RCCSD/UCCSD + amplitude DIIS + Lambda + RDMs + AO-direct + DF-CCSD with HDF5 spill + tensor-arena from day one + T1/D1/D2 diagnostics (completed 2026-05-25)
-- [ ] **Phase 7: Gradients + Geomopt** — Analytical gradients for HF/DFT/MP2/CCSD + ECP + CPHF/CPKS + native Rust BFGS+RFO in redundant internals + geomeTRIC/berny drop-in shims
+- [x] **Phase 7: Gradients + Geomopt** — Analytical gradients for HF/DFT/MP2/CCSD + ECP + CPHF/CPKS + native Rust BFGS+RFO in redundant internals + geomeTRIC/berny drop-in shims (completed 2026-05-26)
 - [ ] **Phase 8: GPU enable + Oracle hardening + Distribution** — Per-backend regression suite (CPU/CUDA/WGPU/ROCm), 2–5× benchmark proof, abi3-py310 wheel for Linux/macOS/Windows × x86_64+aarch64, per-backend extras, drop-in audit (≥80% upstream tests pass against pyscf-rs as import target), full top-20-idiom shakedown
 
 ## Phase Details
@@ -317,7 +317,42 @@ Plans:
   4. `pyscf.geomopt.optimize(mf)` runs a native Rust BFGS+RFO optimizer in redundant internal coordinates with **no** Python `geomeTRIC` or `pyberny` runtime dependency (verified by `pip uninstall geomeTRIC pyberny && python -c "import pyscf.geomopt; pyscf.geomopt.optimize(mf)"` succeeding) (GEOMOPT-01); `pyscf.geomopt.geometric_solver.optimize(mf)` and `pyscf.geomopt.berny_solver.optimize(mf)` are drop-in shims that delegate to the native optimizer, preserving the canonical PySCF import paths (GEOMOPT-02, GEOMOPT-03).
   5. Default convergence thresholds match geomeTRIC defaults (`gradient`, `displacement`, `energy`, `gradient_max`, `displacement_max`); Wilson B-matrix construction for redundant internals and RFO step with negative-eigenvalue tracking are ported from upstream/geomeTRIC; HDF5 checkpoint of optimizer state allows resuming a partially-converged optimization; optimization trajectories on the test corpus converge to the same stationary point as upstream within chemical accuracy (GEOMOPT-04..07).
 
-**Plans**: TBD
+**Plans**: 10 plans
+
+Plans:
+**Wave 1**
+
+- [x] 07-01-PLAN.md — Wave-0 cintx grad-intor buy-down + gto guard removal / ECP-grad wiring (D-02) — GRAD-07 (2/8 cintx-ready families un-gated; 6/8 gated)
+- [x] 07-02-PLAN.md — pyscf-grad skeleton + base Gradients trait + atmlst + verify_fd FD harness (D-01/D-09) — GRAD-08, GRAD-09
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 07-03-PLAN.md — RHF analytical gradient (headline, FD-gated) (GRAD-01)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 07-04-PLAN.md — native BFGS+RFO redundant-internal optimizer on the RHF scanner loop, early (D-08; GEOMOPT-04/06/07)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 07-05-PLAN.md — UHF + RKS(+grid_response) + UKS gradients, no CPHF (GRAD-02/03/04, D-04)
+- [x] 07-06-PLAN.md — geomopt HDF5 checkpoint + geometric_solver/berny_solver shims + constraints error (GEOMOPT-02/03/05, D-07)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 07-07-PLAN.md — single matrix-free Krylov CPHF (D-03) + MP2-grad Z-vector (GRAD-05/10)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 07-08-PLAN.md — CCSD-grad (consumes Phase-6 λ + RDMs) + ECP-grad (GRAD-06/07, D-04)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 07-09-PLAN.md — PyO3 bridge: mf.nuc_grad_method + geomopt submodule + python overlays (GEOMOPT-01/02/03)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 07-10-PLAN.md — pyscf-oracle grad fixtures + CI close-out (FD always-on + pip-uninstall proof + workflow_dispatch arms)
 
 ### Phase 8: GPU enable + Oracle hardening + Distribution
 
@@ -346,7 +381,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 11/11 | Complete    | 2026-05-25 |
-| 7. Gradients + Geomopt | 0/TBD | Not started | - |
+| 7. Gradients + Geomopt | 10/10 | Complete   | 2026-05-26 |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
 ## Coverage Summary
