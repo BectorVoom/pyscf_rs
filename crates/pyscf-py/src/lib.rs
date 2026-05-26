@@ -30,6 +30,7 @@ pub mod caches;
 pub mod cc;
 pub mod dft;
 pub mod errors;
+pub mod grad;
 pub mod gto;
 pub mod mp;
 pub mod numpy_io;
@@ -85,6 +86,16 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let cc_mod = PyModule::new(py, "cc")?;
     crate::cc::register(py, &cc_mod)?;
     m.add_submodule(&cc_mod)?;
+
+    // Plan 07-09 (gradients / D-07/D-09) — `grad` submodule containing
+    // PyRhfGradients/PyUhfGradients/PyRksGradients/PyUksGradients/
+    // PyMp2Gradients/PyCcsdGradients + the Gradients() factory + PyGradScanner
+    // (the Mole -> (e_tot, de) geomopt seam). The Python overlay
+    // `python/pyscf/grad/__init__.py` re-exports `pyscf._native.grad.*` and
+    // grafts `mf.nuc_grad_method()` onto the Rust SCF classes (scf/hf.py:2484).
+    let grad_mod = PyModule::new(py, "grad")?;
+    crate::grad::register(py, &grad_mod)?;
+    m.add_submodule(&grad_mod)?;
 
     Ok(())
 }

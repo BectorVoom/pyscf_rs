@@ -6462,6 +6462,8 @@ dependencies = [
  "pyscf-core",
  "pyscf-df",
  "pyscf-dft",
+ "pyscf-geomopt",
+ "pyscf-grad",
  "pyscf-grids",
  "pyscf-gto",
  "pyscf-mp2",

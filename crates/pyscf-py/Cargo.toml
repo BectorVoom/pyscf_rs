@@ -54,5 +54,13 @@ pyscf-mp2     = { path = "../pyscf-mp2" }
 # (the PyO3 wall) — pyscf-py is the sole crate that names pyo3. Default features
 # only (no libxc; pyscf-ccsd does not pull libxc anyway).
 pyscf-ccsd    = { path = "../pyscf-ccsd" }
+# Plan 07-09 (gradients + geomopt / D-07): the grad + geomopt PyO3 boundary wraps
+# pyscf-grad's per-method gradient drivers + the GradScanner seam, and
+# pyscf-geomopt's native optimize() + geometric_solver/berny_solver shims.
+# Both crates stay strictly pyo3-free + cubecl-free (the PyO3 wall) — pyscf-py is
+# the sole crate that names pyo3. Default features only (no libxc; neither crate
+# pulls libxc — xcfun is the default XC backend for pyscf-grad's KS terms).
+pyscf-grad    = { path = "../pyscf-grad" }
+pyscf-geomopt = { path = "../pyscf-geomopt" }
 ndarray       = { workspace = true }
 thiserror     = { workspace = true }
