@@ -1,11 +1,19 @@
 //! The 5-criterion GAU convergence check + the LOCKED optimizer defaults
 //! (GEOMOPT-04).
 //!
-//! Bodies land in Task 2 of plan 07-04; this Task-1 skeleton ships the locked
-//! constants + the [`ConvParams`] type so `lib.rs` compiles. Task 2 fills the
-//! [`check_converged`] criteria and the `conv_defaults` unit test.
-//!
 //! **geomeTRIC GAU preset (LOCKED, GEOMOPT-04):** all 5 criteria must hold.
+//!
+//! ## Displacement unit (Pitfall 6 / RESEARCH A2 — confirmed at port time)
+//!
+//! The displacement thresholds `convergence_drms = 1.2e-3` and
+//! `convergence_dmax = 1.8e-3` are operatively in **Bohr** (atomic units).
+//! geomeTRIC's readthedocs documents the displacement criteria in Bohr, while
+//! the PySCF `geometric_solver.py` docstring labels the same numeric values
+//! Angstrom; the geomeTRIC engine internally overrides `ang2bohr`/`bohr2ang`
+//! so the operative numeric thresholds are as tabled and compared in Bohr.
+//! This optimizer operates internally in Bohr (the `Mole` invariant —
+//! coordinates are stored in Bohr), so the displacement RMS/max are computed
+//! in Bohr and compared directly to these constants. **Confirmed unit: Bohr.**
 
 /// Energy-change convergence threshold (Hartree). GAU preset.
 pub const CONVERGENCE_ENERGY: f64 = 1.0e-6;
@@ -84,23 +92,56 @@ pub struct ConvReport {
     pub dmax_ok: bool,
 }
 
-/// Check the 5-criterion GAU convergence (Task-1 skeleton: returns a report
-/// with all flags `false`; Task 2 fills the real comparisons).
+/// Check the 5-criterion GAU convergence (GEOMOPT-04). ALL five must hold:
+/// `|ΔE| < energy`, `grad_rms < grms`, `grad_max < gmax`,
+/// `disp_rms < drms`, `disp_max < dmax`. Energy in Hartree; gradients in
+/// Hartree/Bohr; displacements in Bohr (Pitfall 6 — confirmed Bohr).
 pub fn check_converged(
-    _params: &ConvParams,
-    _e_change: f64,
-    _grad_rms: f64,
-    _grad_max: f64,
-    _disp_rms: f64,
-    _disp_max: f64,
+    params: &ConvParams,
+    e_change: f64,
+    grad_rms: f64,
+    grad_max: f64,
+    disp_rms: f64,
+    disp_max: f64,
 ) -> ConvReport {
-    // Task-1 skeleton stub: real criteria land in Task 2.
+    let energy_ok = e_change.abs() < params.energy;
+    let grms_ok = grad_rms < params.grms;
+    let gmax_ok = grad_max < params.gmax;
+    let drms_ok = disp_rms < params.drms;
+    let dmax_ok = disp_max < params.dmax;
     ConvReport {
-        converged: false,
-        energy_ok: false,
-        grms_ok: false,
-        gmax_ok: false,
-        drms_ok: false,
-        dmax_ok: false,
+        converged: energy_ok && grms_ok && gmax_ok && drms_ok && dmax_ok,
+        energy_ok,
+        grms_ok,
+        gmax_ok,
+        drms_ok,
+        dmax_ok,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gau_constants_are_the_locked_preset() {
+        assert_eq!(CONVERGENCE_ENERGY, 1.0e-6);
+        assert_eq!(CONVERGENCE_GRMS, 3.0e-4);
+        assert_eq!(CONVERGENCE_GMAX, 4.5e-4);
+        assert_eq!(CONVERGENCE_DRMS, 1.2e-3);
+        assert_eq!(CONVERGENCE_DMAX, 1.8e-3);
+    }
+
+    #[test]
+    fn all_five_criteria_must_hold() {
+        let p = ConvParams::gau();
+        // All comfortably inside thresholds → converged.
+        let r = check_converged(&p, 1e-8, 1e-5, 1e-5, 1e-5, 1e-5);
+        assert!(r.converged);
+        // One criterion (gmax) violated → NOT converged.
+        let r2 = check_converged(&p, 1e-8, 1e-5, 1e-3, 1e-5, 1e-5);
+        assert!(!r2.converged);
+        assert!(!r2.gmax_ok);
+        assert!(r2.energy_ok && r2.grms_ok && r2.drms_ok && r2.dmax_ok);
     }
 }
