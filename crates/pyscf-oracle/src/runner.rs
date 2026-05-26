@@ -114,6 +114,42 @@ const KNOWN_METHODS: &[&str] = &[
     "ccsd_lambda",
     "ccsd_rdm1",
     "ccsd_rdm2",
+    // ── Phase 7 gradient + geomopt oracle arms (plan 07-10) ────────────────
+    // GRAD-01..07 + GEOMOPT-07: per-method analytical nuclear gradients
+    // (`nuc_grad_*`) + the H2O geometry-optimizer trajectory fixture
+    // (`geomopt_h2o`), registered here so the always-on dispatch layer
+    // RECOGNISES them (the `unknown method` guard distinguishes a genuinely
+    // unknown name from a known-but-Python-gated arm), mirroring the MP2/CCSD
+    // register-but-defer-dispatch precedent.
+    //
+    // REGISTER-BUT-DEFER-DISPATCH: the names are registered now; the live
+    // byte-identity comparison (≤ 1e-7 Ha/Bohr vs `pyscf/grad/*`) + the
+    // geomopt trajectory/stationary-point parity vs `geometric_solver` are
+    // `workflow_dispatch` / human-verify ONLY (the `grad-oracle-upstream-manual`
+    // CI arm), because they need an installed upstream PySCF + geomeTRIC AND
+    // they ride the cintx grad-intor gate: SIX of the eight gradient-integral
+    // families (`int2e_ip1`, `int1e_ip{ovlp,kin,nuc,rinv}`, `ECPscalar_iprinv`
+    // + the `with_rinv_at_nucleus` origin shift) are MISSING from cintx today
+    // (07-01-SUMMARY), with no scheduled cintx workstream — so the numeric arms
+    // stay gated until that workstream lands. Only `int3c2e_ip1` (DF-grad) and
+    // `int1e_ecp_ipnuc` (= `ECPscalar_ipnuc`, the ECP `get_hcore` term) are
+    // cintx-ready.
+    //
+    // The ALWAYS-ON numeric proofs are the in-tree FD self-verification
+    // (`verify_fd`, D-01, ≤ 1e-6 Ha/Bohr — NO upstream PySCF) + the structural
+    // arms (`single_cphf_impl`, `atmlst`, optimizer convergence) living in
+    // crates/pyscf-grad/tests + crates/pyscf-geomopt/tests (run by the
+    // always-on `grad-structural` CI arm). The DEFAULT `pyscf-oracle` build
+    // pulls NO libxc and makes NO live PySCF call (ORACLE_NO_LIBXC discipline,
+    // 06-11).
+    "nuc_grad_rhf",
+    "nuc_grad_uhf",
+    "nuc_grad_rks",
+    "nuc_grad_uks",
+    "nuc_grad_mp2",
+    "nuc_grad_ccsd",
+    "nuc_grad_ecp",
+    "geomopt_h2o",
 ];
 
 /// Top-level dispatcher. Resolves the method name to either a known
@@ -1010,8 +1046,11 @@ mod tests {
         // + 5 Phase-5 MP2 arms (05-01: mp2_rmp2_energy, mp2_ump2_energy,
         // dfmp2_energy, dfmp2_native_energy, mp2_rdm) = 18,
         // + 6 Phase-6 CCSD arms (06-11: ccsd_rccsd_energy, ccsd_uccsd_energy,
-        // ccsd_dfccsd_energy, ccsd_lambda, ccsd_rdm1, ccsd_rdm2) = 24.
-        assert_eq!(KNOWN_METHODS.len(), 24);
+        // ccsd_dfccsd_energy, ccsd_lambda, ccsd_rdm1, ccsd_rdm2) = 24,
+        // + 8 Phase-7 grad/geomopt arms (07-10: nuc_grad_rhf, nuc_grad_uhf,
+        // nuc_grad_rks, nuc_grad_uks, nuc_grad_mp2, nuc_grad_ccsd, nuc_grad_ecp,
+        // geomopt_h2o) = 32.
+        assert_eq!(KNOWN_METHODS.len(), 32);
         assert!(KNOWN_METHODS.contains(&"scf_rhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_uhf_energy"));
         assert!(KNOWN_METHODS.contains(&"scf_diis_iter_count"));
@@ -1038,5 +1077,14 @@ mod tests {
         assert!(KNOWN_METHODS.contains(&"ccsd_lambda"));
         assert!(KNOWN_METHODS.contains(&"ccsd_rdm1"));
         assert!(KNOWN_METHODS.contains(&"ccsd_rdm2"));
+        // Phase 7 grad/geomopt arms (07-10).
+        assert!(KNOWN_METHODS.contains(&"nuc_grad_rhf"));
+        assert!(KNOWN_METHODS.contains(&"nuc_grad_uhf"));
+        assert!(KNOWN_METHODS.contains(&"nuc_grad_rks"));
+        assert!(KNOWN_METHODS.contains(&"nuc_grad_uks"));
+        assert!(KNOWN_METHODS.contains(&"nuc_grad_mp2"));
+        assert!(KNOWN_METHODS.contains(&"nuc_grad_ccsd"));
+        assert!(KNOWN_METHODS.contains(&"nuc_grad_ecp"));
+        assert!(KNOWN_METHODS.contains(&"geomopt_h2o"));
     }
 }
