@@ -20,6 +20,30 @@ pub struct PyMole {
     unit_text: String,
 }
 
+impl PyMole {
+    /// Build a `PyMole` from a native `Mole` (used by the geomopt bridge to
+    /// return the optimized molecule to Python). The text accessors derive from
+    /// the `Mole`'s own `atom`/`basis`/`unit` fields. The internal geometry is
+    /// stored in Bohr; the `atom` text mirrors whatever the `Mole` was built
+    /// with (the geomopt bridge re-seeds the `_atom` geometry via `set_geom_`).
+    pub(crate) fn from_mole(inner: Mole) -> Self {
+        let atom_text = inner.atom.clone();
+        let basis_text = inner.basis.clone();
+        let unit_text = match inner.unit {
+            Unit::Ang => "Ang",
+            Unit::Bohr => "Bohr",
+            Unit::AU => "AU",
+        }
+        .to_string();
+        PyMole {
+            inner,
+            atom_text,
+            basis_text,
+            unit_text,
+        }
+    }
+}
+
 #[pymethods]
 impl PyMole {
     #[getter]

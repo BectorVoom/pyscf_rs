@@ -30,6 +30,7 @@ pub mod caches;
 pub mod cc;
 pub mod dft;
 pub mod errors;
+pub mod geomopt;
 pub mod grad;
 pub mod gto;
 pub mod mp;
@@ -96,6 +97,15 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let grad_mod = PyModule::new(py, "grad")?;
     crate::grad::register(py, &grad_mod)?;
     m.add_submodule(&grad_mod)?;
+
+    // Plan 07-09 (geomopt / GEOMOPT-01/02/03 / D-06/D-07) — `geomopt` submodule
+    // containing `optimize` + the `geometric_solver`/`berny_solver` nested shim
+    // submodules, all delegating to the ONE native pyscf_geomopt engine (NO
+    // geometric/pyberny runtime dep, GEOMOPT-01). The Python overlay
+    // `python/pyscf/geomopt/__init__.py` re-exports `pyscf._native.geomopt.*`.
+    let geomopt_mod = PyModule::new(py, "geomopt")?;
+    crate::geomopt::register(py, &geomopt_mod)?;
+    m.add_submodule(&geomopt_mod)?;
 
     Ok(())
 }
