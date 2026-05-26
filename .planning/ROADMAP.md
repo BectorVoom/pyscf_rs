@@ -320,15 +320,38 @@ Plans:
 **Plans**: 10 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 07-01-PLAN.md — Wave-0 cintx grad-intor buy-down + gto guard removal / ECP-grad wiring (D-02)
 - [ ] 07-02-PLAN.md — pyscf-grad skeleton + base Gradients trait + atmlst + verify_fd FD harness (D-01/D-09)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 07-03-PLAN.md — RHF analytical gradient (headline, FD-gated) (GRAD-01)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 07-04-PLAN.md — native BFGS+RFO redundant-internal optimizer on the RHF scanner loop, early (D-08; GEOMOPT-04/06/07)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 07-05-PLAN.md — UHF + RKS(+grid_response) + UKS gradients, no CPHF (GRAD-02/03/04, D-04)
 - [ ] 07-06-PLAN.md — geomopt HDF5 checkpoint + geometric_solver/berny_solver shims + constraints error (GEOMOPT-02/03/05, D-07)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 07-07-PLAN.md — single matrix-free Krylov CPHF (D-03) + MP2-grad Z-vector (GRAD-05/10)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 07-08-PLAN.md — CCSD-grad (consumes Phase-6 λ + RDMs) + ECP-grad (GRAD-06/07, D-04)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 07-09-PLAN.md — PyO3 bridge: mf.nuc_grad_method + geomopt submodule + python overlays (GEOMOPT-01/02/03)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 07-10-PLAN.md — pyscf-oracle grad fixtures + CI close-out (FD always-on + pip-uninstall proof + workflow_dispatch arms)
 
 ### Phase 8: GPU enable + Oracle hardening + Distribution
