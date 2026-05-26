@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 07-08-PLAN.md (CCSD gradient GRAD-06 — consumes Phase-6 solve_lambda + make_rdm1 directly, NO Λ re-derivation D-04/T-07-25, re-enters the ONE cphf::solve for the orbital-relaxation Z-vector at max_cycle=50; ECP gradient GRAD-07 — get_hcore ECPscalar_ipnuc term cintx-READY/numeric un-gated, hcore_deriv ECPscalar_iprinv per-atom term cintx-gated/clean error T-07-27; both FD-gated, closing the GTO-05 arc)
-last_updated: "2026-05-26T04:36:45.514Z"
+stopped_at: Completed 07-09-PLAN.md (PyO3 bridge — grad.rs: six PyGradients classes (eager SCF snapshot D-09) + Gradients() factory + PyGradScanner returning the (e_tot, de) TUPLE; geomopt.rs: optimize + geometric_solver/berny_solver over the ONE native engine D-06/T-07-20; python/pyscf/{grad,geomopt} overlays — mf.nuc_grad_method() graft over scf+dft pyclasses, NO geometric/pyberny import GEOMOPT-01; method crates stay pyo3-free; numeric stays cintx-gated, structural bridge always-on; completes the GEOMOPT-02/03 Python optimize(mf) entry point 07-06 left Partial)
+last_updated: "2026-05-26T04:57:02Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 79
-  completed_plans: 78
-  percent: 78
+  completed_plans: 79
+  percent: 79
 ---
 
 # Project State
@@ -26,17 +26,19 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 07 (gradients-geomopt) — EXECUTING
-Plan: 07-01 + 07-02 + 07-03 + 07-04 + 07-05 + 07-06 + 07-07 + 07-08 of 10 complete (07-08 CCSD+ECP grad done; next: 07-09 PyO3 bridge, then 07-10 oracle close-out)
+Plan: 07-01 + 07-02 + 07-03 + 07-04 + 07-05 + 07-06 + 07-07 + 07-08 + 07-09 of 10 complete (07-09 PyO3 bridge done; next: 07-10 oracle/CI close-out)
 Status: Ready to execute
 Last activity: 2026-05-26
 
-Progress: [████████░░] 78% (6/8 phases; Phase 7 Waves 1-3 + Wave 5-6 done. RHF analytical gradient headline (GRAD-01); the native BFGS+RFO geometry optimizer (GEOMOPT-04/06/07); 07-05 UHF/RKS+grid_response/UKS variational grads (GRAD-02/03/04, no CPHF — D-04). 07-07 lands the ONE matrix-free Krylov CPHF/CPKS solver (cphf::solve, D-03/GRAD-10) — a faithful port of pyscf/scf/cphf.py:solve_nos1 + lib.krylov (Pople 1979) with exact upstream defaults (max_cycle=50/tol=1e-9/level_shift=0), a caller-supplied Fvind response operator, NO dense A-matrix, reductions via oracle_dot/oracle_sum + the projected system via solve_linear; the single_cphf_impl structural gate asserts exactly ONE CPHF impl. MP2-grad (GRAD-05, the first non-variational Z-vector method, D-04) consumes that solver at max_cycle=30 (Pitfall 5): relaxed-density Lagrangian from the Phase-5 gamma1_intermediates → Xvo RHS → response_dm1. 07-08 completes the gradient method surface (D-09 order, CCSD then ECP last): CCSD-grad (GRAD-06, the SECOND non-variational grad) CONSUMES the Phase-6 solve_lambda + make_rdm1 DIRECTLY (NO Λ re-derivation, D-04/T-07-25 — the single_lambda_solver_in_grad source-scan forbids a second lambda solver) and re-enters the SAME cphf::solve for the orbital-relaxation Z-vector with its own fvind (the ENERGY int2e get_veff, cintx-ready) at max_cycle=50 (NOT MP2's 30). ECP-grad (GRAD-07) wires get_hcore '+ ECPscalar_ipnuc' (cintx-READY/07-01 — numeric UN-GATED, real [3,nao,nao] on Cu/LANL2DZ, all-zero on a non-ECP molecule, normalised to the RHF component-leading F-order) through the Phase-2 CintxEcpEngine, folded into get_hcore; the hcore_deriv '+ ECPscalar_iprinv' per-atom term (MISSING from cintx) routes to a CLEAN cintx-availability error (T-07-27, never a panic/silent-zero/NotYetImplemented{phase:7}), closing the GTO-05 arc. The CPHF solver + the MP2/CCSD Z-vector solves are pure linear algebra ALWAYS-ON; only the MP2/CCSD numeric de-assembly + the ECP end-to-end numeric are #[ignore]'d on the 6 missing cintx grad-intor families (int2e_ip1 + int1e_ip*). The variational-base NUMERIC arms (rhf/uhf/rks/uks) stay #[ignore]'d on the same families. Always-on FD verify_fd gate (D-01) proceeds regardless. Full pyscf-grad suite: 51 passed / 6 ignored / 0 failed; clippy clean; dependency-wall PASS. 07-06 rounds out the geomopt API on the 07-04 engine: an HDF5 optimizer-state checkpoint (checkpoint.rs — OptimizerState dump/load via the pyscf_chkfile::hdf5 sole-owner alias, NO own hdf5-metno dep per D-05/D-07) that resumes a partially-converged run to the same stationary point (optimize_resume, GEOMOPT-05; fail-clean schema/shape guard T-07-19), plus the geometric_solver/berny_solver shims (shims.rs — both thin aliases over the ONE native optimize via a shared run_shim core, D-06/T-07-20). Full pyscf-geomopt suite: 45 passed / 1 ignored / 0 failed; dependency-wall PASS. The GEOMOPT-01 no-runtime-dep proof + the Python entry points are 07-09 (PyO3 bridge).)
+Progress: [█████████░] 90% (6/8 phases; Phase 7 Waves 1-3 + Wave 5-7 done. 07-09 lands the PyO3 BRIDGE: grad.rs — six PyGradients classes (PyRhf/PyUhf/PyRks/PyUks/PyMp2/PyCcsd) eager-snapshot the SCF reference (D-09), dispatch grad_elec subclass overrides via the cc.rs is_overridden __qualname__ MRO check + call_method1 (Pitfall 7), run the pyo3-free pyscf-grad drivers under py.detach (BIND-05; kernel does NOT detach at top), return a C-contiguous (natm,3) NumPy gradient (BIND-04), and expose as_scanner returning the Mole->(e_tot,de) TUPLE seam (rhf.py:248-262); the Gradients() factory dispatches MP2->/CCSD->/KS->/UHF->/RHF. geomopt.rs — pyscf.geomopt.optimize(method) + geometric_solver/berny_solver.{kernel,optimize} all route through ONE shared run_geomopt core driving pyscf_geomopt::geometric_solver::kernel (D-06/T-07-20 — berny is a thin alias, NO second optimizer), resolving a Python method into a native GradScanner whose closures re-enter Python under Python::attach with a per-step memoization cache; constraints->clear error (T-07-33), maxsteps default 100 (T-07-32), GeomError->Python exception (T-07-29/BIND-09). python/pyscf/grad+geomopt overlays — _graft_nuc_grad_onto_scf over scf+dft pyclasses (subclass-override-wins guard), NO geometric/pyberny import (GEOMOPT-01). Completes the GEOMOPT-02/03 Python optimize(mf) entry point 07-06 left Partial. pyscf-py scoped: 31 always-on structural tests pass (grad_bridge 4 + geomopt_bridge 4 new); clippy clean; check-dependency-wall PASS; pyscf-grad/pyscf-geomopt stay pyo3-free. The analytical-grad + the Python end-to-end NUMERIC stay cintx-gated (the 6 MISSING grad-intor families) per the 07-03 precedent; the structural bridge is always-on. The GEOMOPT-01 no-runtime-dep proof + the upstream byte-identity arms are 07-10.
+
+Earlier Phase-7 waves: RHF analytical gradient headline (GRAD-01); the native BFGS+RFO geometry optimizer (GEOMOPT-04/06/07); 07-05 UHF/RKS+grid_response/UKS variational grads (GRAD-02/03/04, no CPHF — D-04). 07-07 lands the ONE matrix-free Krylov CPHF/CPKS solver (cphf::solve, D-03/GRAD-10) — a faithful port of pyscf/scf/cphf.py:solve_nos1 + lib.krylov (Pople 1979) with exact upstream defaults (max_cycle=50/tol=1e-9/level_shift=0), a caller-supplied Fvind response operator, NO dense A-matrix, reductions via oracle_dot/oracle_sum + the projected system via solve_linear; the single_cphf_impl structural gate asserts exactly ONE CPHF impl. MP2-grad (GRAD-05, the first non-variational Z-vector method, D-04) consumes that solver at max_cycle=30 (Pitfall 5): relaxed-density Lagrangian from the Phase-5 gamma1_intermediates → Xvo RHS → response_dm1. 07-08 completes the gradient method surface (D-09 order, CCSD then ECP last): CCSD-grad (GRAD-06, the SECOND non-variational grad) CONSUMES the Phase-6 solve_lambda + make_rdm1 DIRECTLY (NO Λ re-derivation, D-04/T-07-25 — the single_lambda_solver_in_grad source-scan forbids a second lambda solver) and re-enters the SAME cphf::solve for the orbital-relaxation Z-vector with its own fvind (the ENERGY int2e get_veff, cintx-ready) at max_cycle=50 (NOT MP2's 30). ECP-grad (GRAD-07) wires get_hcore '+ ECPscalar_ipnuc' (cintx-READY/07-01 — numeric UN-GATED, real [3,nao,nao] on Cu/LANL2DZ, all-zero on a non-ECP molecule, normalised to the RHF component-leading F-order) through the Phase-2 CintxEcpEngine, folded into get_hcore; the hcore_deriv '+ ECPscalar_iprinv' per-atom term (MISSING from cintx) routes to a CLEAN cintx-availability error (T-07-27, never a panic/silent-zero/NotYetImplemented{phase:7}), closing the GTO-05 arc. The CPHF solver + the MP2/CCSD Z-vector solves are pure linear algebra ALWAYS-ON; only the MP2/CCSD numeric de-assembly + the ECP end-to-end numeric are #[ignore]'d on the 6 missing cintx grad-intor families (int2e_ip1 + int1e_ip*). The variational-base NUMERIC arms (rhf/uhf/rks/uks) stay #[ignore]'d on the same families. Always-on FD verify_fd gate (D-01) proceeds regardless. Full pyscf-grad suite: 51 passed / 6 ignored / 0 failed; clippy clean; dependency-wall PASS. 07-06 rounds out the geomopt API on the 07-04 engine: an HDF5 optimizer-state checkpoint (checkpoint.rs — OptimizerState dump/load via the pyscf_chkfile::hdf5 sole-owner alias, NO own hdf5-metno dep per D-05/D-07) that resumes a partially-converged run to the same stationary point (optimize_resume, GEOMOPT-05; fail-clean schema/shape guard T-07-19), plus the geometric_solver/berny_solver shims (shims.rs — both thin aliases over the ONE native optimize via a shared run_shim core, D-06/T-07-20). Full pyscf-geomopt suite: 45 passed / 1 ignored / 0 failed; dependency-wall PASS. The GEOMOPT-01 no-runtime-dep proof + the Python entry points are 07-09 (PyO3 bridge).)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 78
+- Total plans completed: 79
 - Average duration: — (no plans run yet)
 - Total execution time: 0 hours
 
@@ -96,6 +98,8 @@ Progress: [████████░░] 78% (6/8 phases; Phase 7 Waves 1-3 + 
 | Phase 07 P07-01 | 39min | 2 tasks | 6 files |
 | Phase 07 P07-07 | 9min | 2 tasks (2 TDD) | 5 files |
 | Phase 07 P07-08 | 8min | 2 tasks (2 TDD) | 5 files |
+| Phase 07 P07-06 | 7min | 2 tasks (2 TDD) | 6 files |
+| Phase 07 P07-09 | 15min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -206,6 +210,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-26T04:36:45.511Z
-Stopped at: Completed 07-06-PLAN.md (geomopt HDF5 checkpoint/resume GEOMOPT-05 + geometric_solver/berny_solver shims GEOMOPT-02/03 over the ONE native engine + constraints clear-error D-07)
+Last session: 2026-05-26T04:57:02Z
+Stopped at: Completed 07-09-PLAN.md (PyO3 bridge — grad.rs: six PyGradients classes (eager SCF snapshot D-09) + Gradients() factory + PyGradScanner returning the (e_tot, de) TUPLE; geomopt.rs: optimize + geometric_solver/berny_solver over the ONE native engine D-06/T-07-20; python/pyscf/{grad,geomopt} overlays — mf.nuc_grad_method() graft over scf+dft pyclasses, NO geometric/pyberny import GEOMOPT-01; method crates stay pyo3-free; numeric stays cintx-gated, structural bridge always-on; completes the GEOMOPT-02/03 Python optimize(mf) entry point 07-06 left Partial)
 Resume file: None

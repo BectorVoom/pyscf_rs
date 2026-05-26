@@ -348,7 +348,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 07-09-PLAN.md — PyO3 bridge: mf.nuc_grad_method + geomopt submodule + python overlays (GEOMOPT-01/02/03)
+- [x] 07-09-PLAN.md — PyO3 bridge: mf.nuc_grad_method + geomopt submodule + python overlays (GEOMOPT-01/02/03)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
@@ -381,7 +381,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 11/11 | Complete    | 2026-05-25 |
-| 7. Gradients + Geomopt | 8/10 | In Progress|  |
+| 7. Gradients + Geomopt | 9/10 | In Progress|  |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
 ## Coverage Summary
