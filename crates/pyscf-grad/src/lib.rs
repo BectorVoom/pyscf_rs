@@ -85,6 +85,13 @@ pub use mp2::{MP2_CPHF_MAX_CYCLE, Mp2Gradients, Mp2Reference};
 // that SAME ONE `cphf::solve` (`max_cycle=50`, the upstream default). GRAD-06.
 pub use ccsd::{CCSD_CPHF_MAX_CYCLE, CcsdGradReference, CcsdGradients};
 
+// The ECP gradient hcore term (GRAD-07) — closing the GTO-05 arc. The
+// `get_hcore` `+ ECPscalar_ipnuc` contribution is cintx-READY (numeric un-gated
+// in 07-01); the `hcore_deriv` `+ ECPscalar_iprinv` per-atom term is MISSING
+// from cintx (routes to a clean cintx-availability error). Both dispatch through
+// the Phase-2 ECP engine.
+pub use ecp::{get_hcore_ecp, hcore_deriv_ecp};
+
 use pyscf_core::{Mole, PyscfRsError, Unit};
 
 /// The base gradient contract — the in-tree analog of
