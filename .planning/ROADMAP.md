@@ -335,7 +335,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 07-05-PLAN.md — UHF + RKS(+grid_response) + UKS gradients, no CPHF (GRAD-02/03/04, D-04)
+- [x] 07-05-PLAN.md — UHF + RKS(+grid_response) + UKS gradients, no CPHF (GRAD-02/03/04, D-04)
 - [ ] 07-06-PLAN.md — geomopt HDF5 checkpoint + geometric_solver/berny_solver shims + constraints error (GEOMOPT-02/03/05, D-07)
 
 **Wave 5** *(blocked on Wave 4 completion)*
@@ -381,7 +381,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 11/11 | Complete    | 2026-05-25 |
-| 7. Gradients + Geomopt | 4/10 | In Progress|  |
+| 7. Gradients + Geomopt | 5/10 | In Progress|  |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
 ## Coverage Summary
