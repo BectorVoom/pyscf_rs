@@ -106,12 +106,12 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 ### Gradients (GRAD)
 
 - [~] **GRAD-01**: `mf.nuc_grad_method().kernel()` for RHF returns analytical gradients matching upstream (plan 07-03 — the headline RHF analytical-gradient BODY shipped: `RhfGradients` implements the base `Gradients` trait with `grad_elec` (Hellmann-Feynman + 2e Pulay + overlap Pulay), `make_rdm1e` (energy-weighted RDM), `hcore_deriv`/`get_hcore`/`get_veff`/`get_ovlp` (component-leading `[3,nao,nao]` intor wiring), `aoslice_by_atom`; every einsum reduction oracle-ordered (no bare `+=`); no CPHF (D-04). The `rhf_verify_fd` STRUCTURAL gate is always-on (5 tests: make_rdm1e/grad_nuc/aoslice shapes + `kernel()`-returns-(natm,3)-or-clean-cintx-error + grad_elec clean-error routing). PARTIAL because the upstream-match NUMERIC arm (`verify_fd` FD-vs-analytical at ≤1e-6 Ha/Bohr) is `#[ignore]`'d: the six grad-intor families it contracts — `int2e_ip1`, `int1e_ip{ovlp,kin,nuc,rinv}`, `with_rinv_at_nucleus` — are MISSING from cintx (07-01-SUMMARY, no scheduled workstream), so `RhfGradients::kernel()` `?`-routes a clean `Core(InvalidMolecule)` cintx-availability error (never `NotYetImplemented{phase:7}`). Un-gates by dropping the `#[ignore]` when the cintx grad-integral workstream lands the families; `crates/pyscf-grad/tests/rhf_verify_fd.rs`)
-- [x] **GRAD-02**: UHF gradients match upstream
-- [x] **GRAD-03**: RKS gradients (with `grid_response = True`) match upstream
-- [x] **GRAD-04**: UKS gradients match upstream
+- [~] **GRAD-02**: UHF gradients match upstream (plan 07-05 — `UhfGradients` body + always-on FD-structural gate; the upstream-match NUMERIC arm is `#[ignore]`'d on the six MISSING cintx grad-intor families (07-01, no scheduled workstream); registered in the 07-10 oracle `nuc_grad_uhf` + the `grad-oracle-upstream-manual` workflow_dispatch arm; un-gates with the cintx grad-integral workstream)
+- [~] **GRAD-03**: RKS gradients (with `grid_response = True`) match upstream (plan 07-05 — `RksGradients` body + grid-weight-derivative term + always-on FD-structural gate; upstream-match NUMERIC arm `#[ignore]`'d on the MISSING cintx grad-intor families (07-01); registered in the 07-10 oracle `nuc_grad_rks`; un-gates with the cintx grad-integral workstream)
+- [~] **GRAD-04**: UKS gradients match upstream (plan 07-05 — `UksGradients` body + always-on FD-structural gate; upstream-match NUMERIC arm `#[ignore]`'d on the MISSING cintx grad-intor families (07-01); registered in the 07-10 oracle `nuc_grad_uks`; un-gates with the cintx grad-integral workstream)
 - [~] **GRAD-05**: MP2 gradients via Z-vector / CPHF match upstream (plan 07-07 — `Mp2Gradients` ships the relaxed-density Lagrangian + the Z-vector through the ONE `cphf::solve` at `max_cycle=30` (Pitfall 5); `grad_elec` builds `dm1mo` from the Phase-5 `gamma1_intermediates`, forms the `Xvo` RHS, solves the orbital response via `response_dm1`, and assembles `de` on the RHF base decomposition. The Z-vector solve runs end-to-end un-gated against the cintx-ready ENERGY `int2e` `get_veff` (the `mp2_response_dm1_shapes_or_clean_error` structural test confirms a real solve). PARTIAL because the upstream-match NUMERIC arm (`verify_fd` FD-vs-analytical) is `#[ignore]`'d: the `de` assembly contracts `int2e_ip1` + `int1e_ip{ovlp,kin,nuc,rinv}` (MISSING from cintx, 07-01), so `kernel()` `?`-routes a clean `Core(InvalidMolecule)` cintx-availability error. Un-gates with the cintx grad-integral workstream; `crates/pyscf-grad/tests/mp2_verify_fd.rs`)
-- [x] **GRAD-06**: CCSD gradients via Λ-equations match upstream
-- [x] **GRAD-07**: ECP gradients match upstream
+- [~] **GRAD-06**: CCSD gradients via Λ-equations match upstream (plan 07-08 — `CcsdGradients` consumes the Phase-6 `solve_lambda` + `make_rdm1`/`make_rdm2` (D-04, no re-derivation) + always-on FD-structural gate; upstream-match NUMERIC arm `#[ignore]`'d on the MISSING cintx grad-intor families (07-01); registered in the 07-10 oracle `nuc_grad_ccsd`; un-gates with the cintx grad-integral workstream)
+- [~] **GRAD-07**: ECP gradients match upstream (plan 07-04 — ECP-gradient body; the `ECPscalar_ipnuc` `get_hcore` term is cintx-READY (07-01) but the `ECPscalar_iprinv` `hcore_deriv` per-atom term is MISSING from cintx, so the full upstream-match NUMERIC arm is `#[ignore]`'d; always-on FD-structural gate green; registered in the 07-10 oracle `nuc_grad_ecp`; un-gates with the cintx grad-integral workstream)
 - [x] **GRAD-08**: Atom-list subsetting (`grad.kernel(atmlst=[1,2,3])`) works
 - [x] **GRAD-09**: A finite-difference verification mode (`grad.verify_fd(disp=1e-4)`) is available and gates unit tests
 - [x] **GRAD-10**: CPHF/CPKS solver lives in `pyscf-grad` (or a shared module) and is reused by all method gradients (plan 07-07 — the SINGLE matrix-free Krylov `cphf::solve` (D-03) ports `pyscf/scf/cphf.py:solve→solve_nos1` + `lib.krylov` (Pople 1979) with the exact upstream defaults `max_cycle=50/tol=1e-9/level_shift=0`; the dense A is NEVER materialized; reductions via `oracle_dot`/`oracle_sum` + the projected system via `solve_linear`. The `single_cphf_impl` structural test asserts exactly ONE `pub fn solve(` CPHF in the crate. MP2 (this plan) is the first consumer at `max_cycle=30`; CCSD (07-08) reuses it. Pure linear algebra — fully tested ALWAYS-ON; `crates/pyscf-grad/tests/cphf.rs`)
@@ -124,7 +124,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **GEOMOPT-04**: Default convergence thresholds match geomeTRIC defaults (`gradient`, `displacement`, `energy`, `gradient_max`, `displacement_max`)
 - [x] **GEOMOPT-05**: HDF5 checkpoint of optimizer state allows resuming a partially-converged optimization
 - [x] **GEOMOPT-06**: Wilson B-matrix construction for redundant internals, RFO step with negative-eigenvalue tracking, both ported from upstream/geomeTRIC
-- [x] **GEOMOPT-07**: Optimization trajectories on the test corpus converge to the same stationary point as upstream within chemical accuracy
+- [~] **GEOMOPT-07**: Optimization trajectories on the test corpus converge to the same stationary point as upstream within chemical accuracy (plan 07-04/07-10 — the self-contained always-on H2O→equilibrium convergence gate (`h2o_equilibrium`) is GREEN; the upstream-parity arm (vs `geometric_solver`, registered as the 07-10 oracle `geomopt_h2o`) is `workflow_dispatch`-only because geomeTRIC is not importable in the sandbox AND the optimizer drives the analytical gradient which rides the cintx grad-intor gate (07-01); un-gates with the cintx grad-integral workstream + an upstream geomeTRIC install)
 
 ### PyO3 bindings & drop-in API contract (BIND)
 
@@ -326,12 +326,12 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | CCSD-10 | Phase 6 | Complete |
 | CCSD-11 | Phase 6 | Complete |
 | GRAD-01 | Phase 7 | In progress (07-03: RHF analytical-gradient body shipped — grad_elec/make_rdm1e/hcore_deriv/get_veff + always-on FD-structural gate; upstream-match numeric arm #[ignore]'d on the 6 missing cintx grad-intor families, no scheduled workstream) |
-| GRAD-02 | Phase 7 | Complete |
-| GRAD-03 | Phase 7 | Complete |
-| GRAD-04 | Phase 7 | Complete |
+| GRAD-02 | Phase 7 | Structural complete (07-05: UhfGradients body + always-on FD-structural gate; upstream-match numeric arm #[ignore]'d on the 6 missing cintx grad-intors; 07-10 oracle nuc_grad_uhf + grad-oracle-upstream-manual workflow_dispatch arm) |
+| GRAD-03 | Phase 7 | Structural complete (07-05: RksGradients body + grid-weight-derivative term + always-on FD-structural gate; upstream-match numeric arm #[ignore]'d on the missing cintx grad-intors; 07-10 oracle nuc_grad_rks) |
+| GRAD-04 | Phase 7 | Structural complete (07-05: UksGradients body + always-on FD-structural gate; upstream-match numeric arm #[ignore]'d on the missing cintx grad-intors; 07-10 oracle nuc_grad_uks) |
 | GRAD-05 | Phase 7 | Structural complete (07-07: relaxed-density Lagrangian + Z-vector through cphf::solve max_cycle=30; numeric FD arm #[ignore]'d on the missing cintx grad-intors int2e_ip1 + int1e_ip*) |
-| GRAD-06 | Phase 7 | Complete |
-| GRAD-07 | Phase 7 | Complete (07-08: get_hcore_ecp wires the ECPscalar_ipnuc term cintx-READY/numeric un-gated [3,nao,nao] real on Cu/LANL2DZ, normalised to the RHF component-leading F-order, folded into get_hcore; hcore_deriv_ecp routes the ECPscalar_iprinv per-atom term to a clean cintx-availability error T-07-27; FD-gated; closes the GTO-05 arc) |
+| GRAD-06 | Phase 7 | Structural complete (07-08: CcsdGradients consumes the Phase-6 solve_lambda + make_rdm1/rdm2 D-04 + always-on FD-structural gate; upstream-match numeric arm #[ignore]'d on the missing cintx grad-intors; 07-10 oracle nuc_grad_ccsd) |
+| GRAD-07 | Phase 7 | Structural complete (07-08: get_hcore_ecp wires the ECPscalar_ipnuc term cintx-READY/numeric un-gated [3,nao,nao] real on Cu/LANL2DZ, normalised to the RHF component-leading F-order, folded into get_hcore; hcore_deriv_ecp routes the ECPscalar_iprinv per-atom term to a clean cintx-availability error T-07-27 (iprinv MISSING from cintx); upstream-match numeric FD-gated; 07-10 oracle nuc_grad_ecp; closes the GTO-05 arc) |
 | GRAD-08 | Phase 7 | Complete |
 | GRAD-09 | Phase 7 | Complete |
 | GRAD-10 | Phase 7 | Complete (07-07: the SINGLE matrix-free Krylov cphf::solve, D-03; single_cphf_impl structural gate asserts exactly one impl; MP2 first consumer, CCSD 07-08 reuses it; pure linear algebra, tested always-on) |
@@ -341,7 +341,7 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | GEOMOPT-04 | Phase 7 | Complete |
 | GEOMOPT-05 | Phase 7 | Complete (07-06: HDF5 OptimizerState dump/load via the pyscf_chkfile::hdf5 sole-owner alias — no own hdf5-metno dep; optimize_resume reaches the same stationary point; fail-clean schema/shape guard T-07-19; always-on test) |
 | GEOMOPT-06 | Phase 7 | Complete |
-| GEOMOPT-07 | Phase 7 | Complete |
+| GEOMOPT-07 | Phase 7 | Structural complete (07-04/07-10: the self-contained always-on H2O→equilibrium convergence gate is green; the upstream-parity arm vs geometric_solver is workflow_dispatch-only — geomeTRIC not importable in the sandbox + the optimizer rides the cintx grad-intor gate; 07-10 oracle geomopt_h2o) |
 | BIND-01 | Phase 3 | Complete |
 | BIND-02 | Phase 3 | Complete |
 | BIND-03 | Phase 8 | Pending |

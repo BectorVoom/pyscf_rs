@@ -27,7 +27,7 @@ Five SHOWSTOPPER pitfalls and three MAJORs are addressed in Phase 1 and Phase 3 
 - [x] **Phase 4: DFT** — RKS/UKS + Becke grids ported byte-for-byte + libxc/xcfun XC parser + range-separated hybrids + VV10 NLC + DF-DFT (all 10 plans executed 2026-05-22; verification = gaps_found 3/5 — 4 BLOCKERs in 04-VERIFICATION.md: UKS dead/closed-shell, f32 0.0-substitution, l>4 panic, non-injective XC-cache key → gap closure required before complete) (completed 2026-05-23)
 - [x] **Phase 5: MP2** — RMP2/UMP2/DF-MP2 + frozen-core + AO→MO transformation kernel + helpers CCSD imports (completed 2026-05-23)
 - [x] **Phase 6: CCSD** — RCCSD/UCCSD + amplitude DIIS + Lambda + RDMs + AO-direct + DF-CCSD with HDF5 spill + tensor-arena from day one + T1/D1/D2 diagnostics (completed 2026-05-25)
-- [ ] **Phase 7: Gradients + Geomopt** — Analytical gradients for HF/DFT/MP2/CCSD + ECP + CPHF/CPKS + native Rust BFGS+RFO in redundant internals + geomeTRIC/berny drop-in shims
+- [x] **Phase 7: Gradients + Geomopt** — Analytical gradients for HF/DFT/MP2/CCSD + ECP + CPHF/CPKS + native Rust BFGS+RFO in redundant internals + geomeTRIC/berny drop-in shims (completed 2026-05-26)
 - [ ] **Phase 8: GPU enable + Oracle hardening + Distribution** — Per-backend regression suite (CPU/CUDA/WGPU/ROCm), 2–5× benchmark proof, abi3-py310 wheel for Linux/macOS/Windows × x86_64+aarch64, per-backend extras, drop-in audit (≥80% upstream tests pass against pyscf-rs as import target), full top-20-idiom shakedown
 
 ## Phase Details
@@ -352,7 +352,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 07-10-PLAN.md — pyscf-oracle grad fixtures + CI close-out (FD always-on + pip-uninstall proof + workflow_dispatch arms)
+- [x] 07-10-PLAN.md — pyscf-oracle grad fixtures + CI close-out (FD always-on + pip-uninstall proof + workflow_dispatch arms)
 
 ### Phase 8: GPU enable + Oracle hardening + Distribution
 
@@ -381,7 +381,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 11/11 | Complete    | 2026-05-25 |
-| 7. Gradients + Geomopt | 9/10 | In Progress|  |
+| 7. Gradients + Geomopt | 10/10 | Complete   | 2026-05-26 |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
 ## Coverage Summary
