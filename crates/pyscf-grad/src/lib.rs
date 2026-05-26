@@ -30,10 +30,13 @@
 //! first Z-vector method gradient (`mp2`, GRAD-05) have landed (07-07): `cphf`
 //! is pure linear algebra (always-on, tested against a synthetic response
 //! operator); `mp2` consumes that ONE solver (`max_cycle=30`) and its numeric
-//! arm is cintx-gated per the 07-03 precedent. The remaining method modules
-//! (`ccsd`/`ecp`) are stubs whose bodies return
-//! `GradError::NotYetImplemented { wave }` (`wave` = the Phase-7 wave that fills
-//! it); they land in 07-08.
+//! arm is cintx-gated per the 07-03 precedent. The CCSD gradient (`ccsd`,
+//! GRAD-06) + the ECP gradient term (`ecp`, GRAD-07) have landed (07-08): `ccsd`
+//! CONSUMES the Phase-6 `solve_lambda` + `make_rdm1`/`make_rdm2` directly (NO Λ
+//! re-derivation, D-04) and re-enters the SAME `cphf::solve` for the
+//! orbital-relaxation Z-vector (`max_cycle=50`); `ecp` wires `ECPscalar_ipnuc`
+//! (cintx-ready, numeric un-gated) + `ECPscalar_iprinv` (cintx-gated) through the
+//! Phase-2 ECP engine, folded into the RHF hcore path.
 #![forbid(unsafe_code)]
 #![warn(clippy::unwrap_used)]
 
@@ -75,6 +78,12 @@ pub use cphf::{DEFAULT_LEVEL_SHIFT, DEFAULT_MAX_CYCLE, DEFAULT_TOL};
 // density Lagrangian + the Z-vector through that ONE `cphf::solve`
 // (`max_cycle=30`, Pitfall 5). GRAD-05.
 pub use mp2::{MP2_CPHF_MAX_CYCLE, Mp2Gradients, Mp2Reference};
+
+// The second non-variational (Z-vector) method gradient: CCSD via the Phase-6
+// Λ + relaxed-density RDMs (`solve_lambda` + `make_rdm1`/`make_rdm2` — CONSUMED
+// directly, NO re-derivation, D-04) + the orbital-relaxation Z-vector through
+// that SAME ONE `cphf::solve` (`max_cycle=50`, the upstream default). GRAD-06.
+pub use ccsd::{CCSD_CPHF_MAX_CYCLE, CcsdGradReference, CcsdGradients};
 
 use pyscf_core::{Mole, PyscfRsError, Unit};
 
