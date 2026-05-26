@@ -322,7 +322,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 07-01-PLAN.md — Wave-0 cintx grad-intor buy-down + gto guard removal / ECP-grad wiring (D-02)
+- [x] 07-01-PLAN.md — Wave-0 cintx grad-intor buy-down + gto guard removal / ECP-grad wiring (D-02) — GRAD-07 (2/8 cintx-ready families un-gated; 6/8 gated)
 - [x] 07-02-PLAN.md — pyscf-grad skeleton + base Gradients trait + atmlst + verify_fd FD harness (D-01/D-09) — GRAD-08, GRAD-09
 
 **Wave 2** *(blocked on Wave 1 completion)*

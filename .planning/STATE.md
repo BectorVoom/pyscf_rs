@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 07-02-PLAN.md (pyscf-grad skeleton + verify_fd + atmlst)
-last_updated: "2026-05-26T02:13:46Z"
-last_activity: 2026-05-26 -- Completed Phase 07 Plan 02 (GRAD-08, GRAD-09)
+stopped_at: Completed 07-01-PLAN.md (cintx grad-intor buy-down + gto guard removal / ECP-grad wiring; GRAD-07)
+last_updated: "2026-05-26T03:00:00Z"
+last_activity: 2026-05-26 -- Completed Phase 07 Plan 01 (GRAD-07; 2/8 cintx-ready grad families un-gated, 6/8 gated)
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 79
-  completed_plans: 70
-  percent: 76
+  completed_plans: 71
+  percent: 77
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 07 (gradients-geomopt) — EXECUTING
-Plan: 07-02 of 10 complete (next: 07-03 RHF grad; 07-01 cintx grad-intor buy-down is a parallel Wave-1 workstream)
+Plan: 07-01 + 07-02 of 10 complete (Wave 1 done; next: 07-03 RHF grad)
 Status: Executing Phase 07
-Last activity: 2026-05-26 -- Completed Phase 07 Plan 02 (pyscf-grad skeleton + base Gradients trait + verify_fd FD gate + atmlst subsetting; GRAD-08, GRAD-09)
+Last activity: 2026-05-26 -- Completed Phase 07 Plan 01 (cintx grad-intor buy-down + gto guard removal / ECP-grad wiring; GRAD-07). int2e_ip1 arity-4 component-leading dispatch + ECP-grad ipnuc [3,nao,nao] structurally wired; NotYetImplemented{phase:7} guards removed → clean cintx-availability errors. cintx ships 2/8 grad-integral families (int3c2e_ip1 + int1e_ecp_ipnuc un-gated); 6/8 MISSING (int2e_ip1, int1e_ip{ovlp,kin,nuc,rinv}, ECPscalar_iprinv) — no scheduled cintx workstream, downstream numeric arms stay gated until they land.
 
-Progress: [███████░░░] 75% (6/8 phases; Phase 6 CCSD COMPLETE — 11/11 plans landed. Caffeine/cc-pVDZ upstream byte-identity + python3.13t GIL = workflow_dispatch human-verify arms; one-electron Rys d-function blocker fixed in cintx 13fe9d3, d-function SCF convergence is a separate tracked workstream item)
+Progress: [███████░░░] 77% (6/8 phases; Phase 7 Wave 1 (07-01 + 07-02) done. cintx grad-intor split: 2/8 families ready → 07-08 DF-grad + 07-04 ECP ipnuc numeric un-gate now; 07-03/05/06/07 + ECP iprinv numeric stay workflow_dispatch-gated on the 6 missing cintx families. Always-on FD verify_fd gate (D-01) proceeds regardless.)
 
 ## Performance Metrics
 
@@ -90,6 +90,7 @@ Progress: [███████░░░] 75% (6/8 phases; Phase 6 CCSD COMPLET
 | Phase 06 P06-10 | 30min | 2 tasks | 5 files |
 | Phase 06 P11 | 4min | 2 tasks | 4 files |
 | Phase 07 P07-02 | 8min | 2 tasks (1 TDD) | 16 files |
+| Phase 07 P07-01 | 39min | 2 tasks | 6 files |
 
 ## Accumulated Context
 

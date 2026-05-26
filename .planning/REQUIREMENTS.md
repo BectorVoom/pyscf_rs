@@ -331,7 +331,7 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | GRAD-04 | Phase 7 | Pending |
 | GRAD-05 | Phase 7 | Pending |
 | GRAD-06 | Phase 7 | Pending |
-| GRAD-07 | Phase 7 | Pending |
+| GRAD-07 | Phase 7 | In progress (07-01: dispatch seam wired — int2e_ip1 arity-4 + ECP-grad ipnuc [3,nao,nao] structural; numeric un-gated for cintx-ready int1e_ecp_ipnuc, gated for missing ECPscalar_iprinv; full ECP-grad numeric lands in 07-04) |
 | GRAD-08 | Phase 7 | Complete |
 | GRAD-09 | Phase 7 | Complete |
 | GRAD-10 | Phase 7 | Pending |
