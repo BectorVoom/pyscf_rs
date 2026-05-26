@@ -340,7 +340,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 07-07-PLAN.md — single matrix-free Krylov CPHF (D-03) + MP2-grad Z-vector (GRAD-05/10)
+- [x] 07-07-PLAN.md — single matrix-free Krylov CPHF (D-03) + MP2-grad Z-vector (GRAD-05/10)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

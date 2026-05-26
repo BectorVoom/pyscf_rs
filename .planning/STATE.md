@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 07-05-PLAN.md (UHF + RKS(+grid_response) + UKS analytical gradients; GRAD-02/03/04, no CPHF — D-04)
-last_updated: "2026-05-26T03:55:24.102Z"
+stopped_at: Completed 07-07-PLAN.md (single matrix-free Krylov CPHF/CPKS solver D-03/GRAD-10 + MP2 relaxed-density Lagrangian + Z-vector GRAD-05; cphf always-on, MP2 numeric cintx-gated)
+last_updated: "2026-05-26T04:08:00.000Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 79
-  completed_plans: 75
+  completed_plans: 76
   percent: 77
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 07 (gradients-geomopt) — EXECUTING
-Plan: 07-01 + 07-02 + 07-03 + 07-04 + 07-05 of 10 complete (Wave 4 variational gradients done; next: 07-06 geomopt shims/checkpoint)
+Plan: 07-01 + 07-02 + 07-03 + 07-04 + 07-05 + 07-07 of 10 complete (Wave 5 CPHF + MP2-grad done; next: 07-06 geomopt shims/checkpoint, then 07-08 CCSD+ECP grad)
 Status: Ready to execute
 Last activity: 2026-05-26
 
-Progress: [███████░░░] 77% (6/8 phases; Phase 7 Waves 1-4 (07-01 + 07-02 + 07-03 + 07-04 + 07-05) done. RHF analytical gradient headline (GRAD-01) shipped structurally; the native BFGS+RFO redundant-internal geometry optimizer (GEOMOPT-04/06/07, ported from geomeTRIC) lands always-on; and 07-05 broadens the variational surface — UHF (GRAD-02), RKS+grid_response (GRAD-03), UKS (GRAD-04) gradients reuse the RHF grad_elec decomposition, with the KS XC-potential derivative through the NATIVE xcfun grid path (numint + pyscf-grids Becke weights, NEVER libxc) + the grid_response Becke-weight-derivative seam (default OFF). None call CPHF (D-04 — stationary). The variational-base NUMERIC arms (all four) stay #[ignore]'d on the 6 missing cintx grad-intor families; the KS XC-grid term + grid_response run cintx-INDEPENDENTLY always-on. 07-08 DF-grad + 07-04 ECP ipnuc numeric un-gate now. Always-on FD verify_fd gate (D-01) proceeds regardless.)
+Progress: [███████░░░] 77% (6/8 phases; Phase 7 Waves 1-3 + Wave 5 done. RHF analytical gradient headline (GRAD-01); the native BFGS+RFO geometry optimizer (GEOMOPT-04/06/07); 07-05 UHF/RKS+grid_response/UKS variational grads (GRAD-02/03/04, no CPHF — D-04). 07-07 lands the ONE matrix-free Krylov CPHF/CPKS solver (cphf::solve, D-03/GRAD-10) — a faithful port of pyscf/scf/cphf.py:solve_nos1 + lib.krylov (Pople 1979) with exact upstream defaults (max_cycle=50/tol=1e-9/level_shift=0), a caller-supplied Fvind response operator, NO dense A-matrix, reductions via oracle_dot/oracle_sum + the projected system via solve_linear; the single_cphf_impl structural gate asserts exactly ONE CPHF impl. MP2-grad (GRAD-05, the first non-variational Z-vector method, D-04) consumes that solver at max_cycle=30 (Pitfall 5): relaxed-density Lagrangian from the Phase-5 gamma1_intermediates → Xvo RHS → response_dm1. The CPHF solver is pure linear algebra and is tested ALWAYS-ON; the MP2 Z-vector + response_dm1 run un-gated against the cintx-ready ENERGY int2e get_veff; only the MP2 numeric de-assembly is #[ignore]'d on the 6 missing cintx grad-intor families (int2e_ip1 + int1e_ip*). The variational-base NUMERIC arms (rhf/uhf/rks/uks) stay #[ignore]'d on the same families. 07-08 CCSD-grad reuses the SAME cphf::solve with its own fvind/RHS. Always-on FD verify_fd gate (D-01) proceeds regardless. Full pyscf-grad suite: 42 passed / 5 ignored / 0 failed.)
 
 ## Performance Metrics
 
