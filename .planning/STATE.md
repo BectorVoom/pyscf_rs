@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 07-01-PLAN.md (cintx grad-intor buy-down + gto guard removal / ECP-grad wiring; GRAD-07)
-last_updated: "2026-05-26T03:00:00Z"
-last_activity: 2026-05-26 -- Completed Phase 07 Plan 01 (GRAD-07; 2/8 cintx-ready grad families un-gated, 6/8 gated)
+stopped_at: Completed 07-03-PLAN.md (RHF analytical gradient body; GRAD-01)
+last_updated: "2026-05-26T03:10:03.871Z"
+last_activity: 2026-05-26 -- Completed Phase 07 Plan 03 (GRAD-01; RhfGradients grad_elec/make_rdm1e body, rhf_verify_fd structural always-on + numeric #[ignore]'d on cintx)
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 79
-  completed_plans: 71
+  completed_plans: 72
   percent: 77
 ---
 
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 ## Current Position
 
 Phase: 07 (gradients-geomopt) — EXECUTING
-Plan: 07-01 + 07-02 of 10 complete (Wave 1 done; next: 07-03 RHF grad)
+Plan: 07-01 + 07-02 + 07-03 of 10 complete (Wave 2 RHF headline done; next: 07-04 geomopt scanner)
 Status: Executing Phase 07
-Last activity: 2026-05-26 -- Completed Phase 07 Plan 01 (cintx grad-intor buy-down + gto guard removal / ECP-grad wiring; GRAD-07). int2e_ip1 arity-4 component-leading dispatch + ECP-grad ipnuc [3,nao,nao] structurally wired; NotYetImplemented{phase:7} guards removed → clean cintx-availability errors. cintx ships 2/8 grad-integral families (int3c2e_ip1 + int1e_ecp_ipnuc un-gated); 6/8 MISSING (int2e_ip1, int1e_ip{ovlp,kin,nuc,rinv}, ECPscalar_iprinv) — no scheduled cintx workstream, downstream numeric arms stay gated until they land.
+Last activity: 2026-05-26 -- Completed Phase 07 Plan 03 (GRAD-01; the headline RHF analytical gradient). RhfGradients implements the base Gradients trait — grad_elec (Hellmann-Feynman + 2e Pulay + overlap Pulay), make_rdm1e (energy-weighted RDM), hcore_deriv/get_hcore/get_veff/get_ovlp (component-leading [3,nao,nao] intor wiring), aoslice_by_atom. Every einsum reduction oracle-ordered (no bare +=); no CPHF (D-04). rhf_verify_fd: 5 always-on STRUCTURAL tests + the NUMERIC verify_fd(disp=1e-4,tol=1e-6) arm #[ignore]'d (int2e_ip1 + int1e_ip{ovlp,kin,nuc,rinv} + with_rinv_at_nucleus MISSING from cintx per 07-01-SUMMARY, no scheduled workstream); the missing families ?-route to clean cintx-availability errors (never NotYetImplemented{phase:7}).
 
-Progress: [███████░░░] 77% (6/8 phases; Phase 7 Wave 1 (07-01 + 07-02) done. cintx grad-intor split: 2/8 families ready → 07-08 DF-grad + 07-04 ECP ipnuc numeric un-gate now; 07-03/05/06/07 + ECP iprinv numeric stay workflow_dispatch-gated on the 6 missing cintx families. Always-on FD verify_fd gate (D-01) proceeds regardless.)
+Progress: [███████░░░] 77% (6/8 phases; Phase 7 Waves 1-2 (07-01 + 07-02 + 07-03) done. RHF analytical gradient headline (GRAD-01) shipped structurally; its numeric arm + 07-05/06/07 stay #[ignore]'d on the 6 missing cintx grad-intor families. 07-08 DF-grad + 07-04 ECP ipnuc numeric un-gate now. Always-on FD verify_fd gate (D-01) proceeds regardless.)
 
 ## Performance Metrics
 
@@ -89,6 +89,7 @@ Progress: [███████░░░] 77% (6/8 phases; Phase 7 Wave 1 (07-0
 | Phase 06 P06-09 | 35min | 2 tasks | 7 files |
 | Phase 06 P06-10 | 30min | 2 tasks | 5 files |
 | Phase 06 P11 | 4min | 2 tasks | 4 files |
+| Phase 07 P07-03 | 24min | 2 tasks (1 TDD) | 2 files |
 | Phase 07 P07-02 | 8min | 2 tasks (1 TDD) | 16 files |
 | Phase 07 P07-01 | 39min | 2 tasks | 6 files |
 
@@ -99,6 +100,8 @@ Progress: [███████░░░] 77% (6/8 phases; Phase 7 Wave 1 (07-0
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+- [Phase 07 P07-03]: RhfGradients { reference: RhfReference (mo_coeff/mo_energy/mo_occ/mol), atmlst, de } implements the base Gradients trait — grad_elec (Hellmann-Feynman + 2e Pulay + overlap Pulay), make_rdm1e, get_ovlp per-method; grad_nuc/kernel inherited. Free-fn forms (make_rdm1e/grad_elec/get_ovlp/aoslice_by_atom) are PyO3-bridge reusable (07-09). RhfReference is the converged-SCF snapshot shape every variational grad (07-05) + the geomopt scanner (07-04) reuse.
+- [Phase 07 P07-03]: rhf_verify_fd NUMERIC arm is #[ignore]'d (cintx workstream pending) — int2e_ip1 + int1e_ip{ovlp,kin,nuc,rinv} + with_rinv_at_nucleus MISSING from cintx (07-01-SUMMARY, no scheduled workstream) so RhfGradients::kernel() ?-routes a clean Core(InvalidMolecule) cintx-availability error (NEVER NotYetImplemented{phase:7}); the STRUCTURAL arm (5 tests) + the verify_fd wiring are complete and un-gate by dropping the #[ignore]. lib.rs LEFT UNCHANGED (the 07-02 trait already carried grad_elec/make_rdm1e/get_ovlp). Reductions through oracle_sum/oracle_dot NOT pyscf_algebra::gemm (still a Phase-2 stub). D-04: no CPHF.
 - [Phase 07 P07-02]: verify_fd operates over per-atom coords (Fn(&[[f64;3]])->Result<f64>) NOT a Mole — method-agnostic; per-method wave (07-03) adapts its Mole as_scanner into this coord closure. disp default 1e-4 Bohr, tol 1e-6 Ha/Bohr, all reductions through oracle_sum (no bare +=).
 - [Phase 07 P07-02]: GradScanner is two boxed Send+Sync closures (EnergyClosure + GradClosure) returning (Energy, de) — fixes the geomopt seam (07-04 consumer) before any method body; mirrors pyscf-scf::as_scanner capture-by-value discipline.
 - [Phase 07 P07-02]: atmlst (GRAD-08) + verify_fd (GRAD-09) are base-API-from-day-one (D-09) — built into the Gradients trait / resolve_atmlst helper so every GRAD-01..07 inherits them. grad_nuc is a real shared Coulomb-force port; get_ovlp/hcore_generator are NotYetImplemented seams (need cintx int1e_ipovlp/iprinv + with_rinv_at_nucleus, MISSING per 07-RESEARCH D-02 — RHF wave un-gates once cintx workstream lands).
@@ -193,6 +196,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-05-26T00:07:30.803Z
-Stopped at: Phase 7 context gathered
-Resume file: .planning/phases/07-gradients-geomopt/07-CONTEXT.md
+Last session: 2026-05-26T03:08:28Z
+Stopped at: Completed 07-03-PLAN.md (RHF analytical gradient body; GRAD-01)
+Resume file: .planning/phases/07-gradients-geomopt/07-04-PLAN.md

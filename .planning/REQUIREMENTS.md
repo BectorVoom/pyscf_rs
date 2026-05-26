@@ -105,7 +105,7 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 
 ### Gradients (GRAD)
 
-- [ ] **GRAD-01**: `mf.nuc_grad_method().kernel()` for RHF returns analytical gradients matching upstream
+- [~] **GRAD-01**: `mf.nuc_grad_method().kernel()` for RHF returns analytical gradients matching upstream (plan 07-03 — the headline RHF analytical-gradient BODY shipped: `RhfGradients` implements the base `Gradients` trait with `grad_elec` (Hellmann-Feynman + 2e Pulay + overlap Pulay), `make_rdm1e` (energy-weighted RDM), `hcore_deriv`/`get_hcore`/`get_veff`/`get_ovlp` (component-leading `[3,nao,nao]` intor wiring), `aoslice_by_atom`; every einsum reduction oracle-ordered (no bare `+=`); no CPHF (D-04). The `rhf_verify_fd` STRUCTURAL gate is always-on (5 tests: make_rdm1e/grad_nuc/aoslice shapes + `kernel()`-returns-(natm,3)-or-clean-cintx-error + grad_elec clean-error routing). PARTIAL because the upstream-match NUMERIC arm (`verify_fd` FD-vs-analytical at ≤1e-6 Ha/Bohr) is `#[ignore]`'d: the six grad-intor families it contracts — `int2e_ip1`, `int1e_ip{ovlp,kin,nuc,rinv}`, `with_rinv_at_nucleus` — are MISSING from cintx (07-01-SUMMARY, no scheduled workstream), so `RhfGradients::kernel()` `?`-routes a clean `Core(InvalidMolecule)` cintx-availability error (never `NotYetImplemented{phase:7}`). Un-gates by dropping the `#[ignore]` when the cintx grad-integral workstream lands the families; `crates/pyscf-grad/tests/rhf_verify_fd.rs`)
 - [ ] **GRAD-02**: UHF gradients match upstream
 - [ ] **GRAD-03**: RKS gradients (with `grid_response = True`) match upstream
 - [ ] **GRAD-04**: UKS gradients match upstream
@@ -325,7 +325,7 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | CCSD-09 | Phase 6 | Complete |
 | CCSD-10 | Phase 6 | Complete |
 | CCSD-11 | Phase 6 | Complete |
-| GRAD-01 | Phase 7 | Pending |
+| GRAD-01 | Phase 7 | In progress (07-03: RHF analytical-gradient body shipped — grad_elec/make_rdm1e/hcore_deriv/get_veff + always-on FD-structural gate; upstream-match numeric arm #[ignore]'d on the 6 missing cintx grad-intor families, no scheduled workstream) |
 | GRAD-02 | Phase 7 | Pending |
 | GRAD-03 | Phase 7 | Pending |
 | GRAD-04 | Phase 7 | Pending |

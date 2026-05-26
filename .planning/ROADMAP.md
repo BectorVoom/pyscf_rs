@@ -327,7 +327,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 07-03-PLAN.md — RHF analytical gradient (headline, FD-gated) (GRAD-01)
+- [x] 07-03-PLAN.md — RHF analytical gradient (headline, FD-gated) (GRAD-01)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
