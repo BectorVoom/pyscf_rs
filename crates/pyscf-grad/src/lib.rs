@@ -71,6 +71,11 @@ pub use uks::{UksGradients, UksReference};
 // CCSD in 07-08) routes its own `fvind` + RHS through.
 pub use cphf::{DEFAULT_LEVEL_SHIFT, DEFAULT_MAX_CYCLE, DEFAULT_TOL};
 
+// The first non-variational (Z-vector) method gradient: MP2 via the relaxed-
+// density Lagrangian + the Z-vector through that ONE `cphf::solve`
+// (`max_cycle=30`, Pitfall 5). GRAD-05.
+pub use mp2::{MP2_CPHF_MAX_CYCLE, Mp2Gradients, Mp2Reference};
+
 use pyscf_core::{Mole, PyscfRsError, Unit};
 
 /// The base gradient contract — the in-tree analog of
