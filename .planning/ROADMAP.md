@@ -344,7 +344,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 07-08-PLAN.md — CCSD-grad (consumes Phase-6 λ + RDMs) + ECP-grad (GRAD-06/07, D-04)
+- [x] 07-08-PLAN.md — CCSD-grad (consumes Phase-6 λ + RDMs) + ECP-grad (GRAD-06/07, D-04)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
@@ -381,7 +381,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 11/11 | Complete    | 2026-05-25 |
-| 7. Gradients + Geomopt | 5/10 | In Progress|  |
+| 7. Gradients + Geomopt | 8/10 | In Progress|  |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
 ## Coverage Summary

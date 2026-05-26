@@ -110,8 +110,8 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [x] **GRAD-03**: RKS gradients (with `grid_response = True`) match upstream
 - [x] **GRAD-04**: UKS gradients match upstream
 - [~] **GRAD-05**: MP2 gradients via Z-vector / CPHF match upstream (plan 07-07 — `Mp2Gradients` ships the relaxed-density Lagrangian + the Z-vector through the ONE `cphf::solve` at `max_cycle=30` (Pitfall 5); `grad_elec` builds `dm1mo` from the Phase-5 `gamma1_intermediates`, forms the `Xvo` RHS, solves the orbital response via `response_dm1`, and assembles `de` on the RHF base decomposition. The Z-vector solve runs end-to-end un-gated against the cintx-ready ENERGY `int2e` `get_veff` (the `mp2_response_dm1_shapes_or_clean_error` structural test confirms a real solve). PARTIAL because the upstream-match NUMERIC arm (`verify_fd` FD-vs-analytical) is `#[ignore]`'d: the `de` assembly contracts `int2e_ip1` + `int1e_ip{ovlp,kin,nuc,rinv}` (MISSING from cintx, 07-01), so `kernel()` `?`-routes a clean `Core(InvalidMolecule)` cintx-availability error. Un-gates with the cintx grad-integral workstream; `crates/pyscf-grad/tests/mp2_verify_fd.rs`)
-- [ ] **GRAD-06**: CCSD gradients via Λ-equations match upstream
-- [ ] **GRAD-07**: ECP gradients match upstream
+- [x] **GRAD-06**: CCSD gradients via Λ-equations match upstream
+- [x] **GRAD-07**: ECP gradients match upstream
 - [x] **GRAD-08**: Atom-list subsetting (`grad.kernel(atmlst=[1,2,3])`) works
 - [x] **GRAD-09**: A finite-difference verification mode (`grad.verify_fd(disp=1e-4)`) is available and gates unit tests
 - [x] **GRAD-10**: CPHF/CPKS solver lives in `pyscf-grad` (or a shared module) and is reused by all method gradients (plan 07-07 — the SINGLE matrix-free Krylov `cphf::solve` (D-03) ports `pyscf/scf/cphf.py:solve→solve_nos1` + `lib.krylov` (Pople 1979) with the exact upstream defaults `max_cycle=50/tol=1e-9/level_shift=0`; the dense A is NEVER materialized; reductions via `oracle_dot`/`oracle_sum` + the projected system via `solve_linear`. The `single_cphf_impl` structural test asserts exactly ONE `pub fn solve(` CPHF in the crate. MP2 (this plan) is the first consumer at `max_cycle=30`; CCSD (07-08) reuses it. Pure linear algebra — fully tested ALWAYS-ON; `crates/pyscf-grad/tests/cphf.rs`)
@@ -330,8 +330,8 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | GRAD-03 | Phase 7 | Complete |
 | GRAD-04 | Phase 7 | Complete |
 | GRAD-05 | Phase 7 | Structural complete (07-07: relaxed-density Lagrangian + Z-vector through cphf::solve max_cycle=30; numeric FD arm #[ignore]'d on the missing cintx grad-intors int2e_ip1 + int1e_ip*) |
-| GRAD-06 | Phase 7 | Pending |
-| GRAD-07 | Phase 7 | In progress (07-01: dispatch seam wired — int2e_ip1 arity-4 + ECP-grad ipnuc [3,nao,nao] structural; numeric un-gated for cintx-ready int1e_ecp_ipnuc, gated for missing ECPscalar_iprinv; full ECP-grad numeric lands in 07-04) |
+| GRAD-06 | Phase 7 | Complete |
+| GRAD-07 | Phase 7 | Complete (07-08: get_hcore_ecp wires the ECPscalar_ipnuc term cintx-READY/numeric un-gated [3,nao,nao] real on Cu/LANL2DZ, normalised to the RHF component-leading F-order, folded into get_hcore; hcore_deriv_ecp routes the ECPscalar_iprinv per-atom term to a clean cintx-availability error T-07-27; FD-gated; closes the GTO-05 arc) |
 | GRAD-08 | Phase 7 | Complete |
 | GRAD-09 | Phase 7 | Complete |
 | GRAD-10 | Phase 7 | Complete (07-07: the SINGLE matrix-free Krylov cphf::solve, D-03; single_cphf_impl structural gate asserts exactly one impl; MP2 first consumer, CCSD 07-08 reuses it; pure linear algebra, tested always-on) |
