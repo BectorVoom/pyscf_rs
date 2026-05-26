@@ -93,19 +93,34 @@ fn cu_lanl2dz_int1e_ecp_is_symmetric() {
 }
 
 #[test]
-fn cu_lanl2dz_int1e_ecp_ipnuc_is_rejected_not_silently_scalar() {
-    // WR-01 (02-10 code review): on an ECP-BEARING molecule, the gradient
-    // name `int1e_ecp_ipnuc` must NOT silently resolve to the scalar operator
+fn cu_lanl2dz_int1e_ecp_ipnuc_is_not_silently_scalar() {
+    // WR-01 (02-10 code review) + GRAD-07 (plan 07-01): on an ECP-BEARING
+    // molecule, the gradient name `int1e_ecp_ipnuc` routed through the SCALAR
+    // `intor()` entry-point must NOT silently resolve to the scalar operator
     // and return a wrong-shaped nao×nao matrix mislabeled as a 3-component
-    // gradient. ECP derivative integrals are Phase 7 GRAD-07, so the engine
-    // rejects the name with NotYetImplemented{phase:7}. This is the live-ECP
-    // counterpart to the ECP-less guard test in ecp_engine_stub.rs.
+    // gradient. Plan 07-01 wires the real ECP gradient through the dedicated
+    // `ecp_int1e_ipnuc` trait method (asserted in grad_intor_smoke.rs); the
+    // scalar `intor()` path therefore rejects the derivative name with a clean
+    // cintx-availability error — NEVER `NotYetImplemented{phase:7}` (that
+    // disposition is closed) and never a scalar nao×nao result.
     let mol = cu_lanl2dz();
     let r = intor(&mol, "int1e_ecp_ipnuc");
     assert!(
-        matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 7, .. })),
-        "int1e_ecp_ipnuc on an ECP molecule must be NotYetImplemented{{phase:7}}, \
-         not a silently-wrong scalar result; got {:?}",
+        !matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 7, .. })),
+        "int1e_ecp_ipnuc must NOT be NotYetImplemented{{phase:7}} after GRAD-07 wiring; got {:?}",
         r
     );
+    match r {
+        Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(msg))) => {
+            assert!(
+                msg.contains("ecp_int1e_ipnuc") || msg.contains("not a scalar"),
+                "scalar intor() must reject the ipnuc derivative name with a clean \
+                 cintx-availability/routing error; got: {msg}"
+            );
+        }
+        other => panic!(
+            "int1e_ecp_ipnuc via scalar intor() must be a clean InvalidMolecule routing error, \
+             not a scalar result or phase:7; got {other:?}"
+        ),
+    }
 }

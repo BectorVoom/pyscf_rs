@@ -90,8 +90,12 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
         // Since 02-10 `ecp_engine()` returns the cintx-backed `CintxEcpEngine`:
         // for an ECP-bearing molecule + scalar name it returns Ok with an
         // F-order `nao × nao` buffer, which we re-pack into `IntorOutput`.
-        // ECP-less molecules still get `EcpEngineNotAvailable`; derivative
-        // names (ipnuc/iprinv) get `NotYetImplemented{phase:7}` (WR-01).
+        // ECP-less molecules still get `EcpEngineNotAvailable`. Derivative
+        // names (ipnuc/iprinv) routed through this SCALAR path are rejected
+        // with a clean cintx-availability error (GRAD-07 closed the prior
+        // `NotYetImplemented{phase:7}` disposition); the real ECP gradient
+        // lands through `EcpEngine::ecp_int1e_ipnuc` (consumed by pyscf-grad),
+        // never via this scalar `intor()` entry-point (WR-01).
         let density = EcpEngine::ecp_int1e(&engine, mol, &full_name)?;
         // Defensive shape: even when 02-10 wires the real engine, this
         // dispatcher promises the same `(nao, nao)` F-order layout

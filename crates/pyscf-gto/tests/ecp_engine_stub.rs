@@ -11,8 +11,14 @@
 //! reaches the cintx engine, which returns the canonical
 //! `PyscfRsError::EcpEngineNotAvailable` for a molecule with no ECP entries
 //! (`mol._ecp.is_empty()`). Derivative ECP names (`int1e_ecp_iprinv`,
-//! `int1e_ecp_ipnuc`) instead return `NotYetImplemented{phase:7}` up front —
-//! independent of ECP presence — per 02-10 code-review WR-01.
+//! `int1e_ecp_ipnuc`) routed through the SCALAR `intor()` entry-point are
+//! rejected up front — independent of ECP presence — per 02-10 code-review
+//! WR-01. As of GRAD-07 (plan 07-01) that rejection is a clean
+//! cintx-availability error (NOT `NotYetImplemented{phase:7}`, which is
+//! closed); the real ECP gradient lands through the dedicated
+//! `ecp_int1e_ipnuc` trait method. The stub's DEFAULT `ecp_int1e_ipnuc`
+//! (called directly, not via the cintx engine) still returns the trait
+//! default `NotYetImplemented{phase:7}`.
 
 use pyscf_core::{EcpEngine, PyscfRsError, Unit};
 use pyscf_gto::{AtomInput, BasisInput, EcpEngineNotAvailable, M, MoleBuildArgs, intor};
@@ -44,18 +50,30 @@ fn int1e_ecp_on_ecpless_mol_returns_engine_not_available() {
 }
 
 #[test]
-fn int1e_ecp_iprinv_returns_phase_7_not_yet_implemented() {
-    // WR-01 (02-10 code review): `int1e_ecp_iprinv` is an ECP *gradient*
-    // (derivative) name. The cintx engine rejects derivative ECP names up
-    // front with NotYetImplemented{phase:7}, INDEPENDENT of whether the
-    // molecule carries an ECP — so it can never silently resolve to the
-    // scalar operator. (Previously this passed only because the ECP-less
-    // guard happened to fire first.) Phase 7 GRAD-07 wires the real gradient.
+fn int1e_ecp_iprinv_via_scalar_intor_is_clean_cintx_availability_error() {
+    // WR-01 (02-10 code review) + GRAD-07 (plan 07-01): `int1e_ecp_iprinv` is
+    // an ECP *gradient* (derivative) name. The scalar `intor()`/`ecp_int1e`
+    // path rejects derivative ECP names up front — INDEPENDENT of whether the
+    // molecule carries an ECP — so it can never silently resolve to the scalar
+    // operator. As of GRAD-07 that rejection is a clean cintx-availability
+    // `InvalidMolecule` error (NOT `NotYetImplemented{phase:7}`, which is
+    // closed). `int1e_ecp_iprinv`/`ECPscalar_iprinv` is MISSING from every
+    // cintx branch today; numeric un-gates when a future cintx workstream
+    // ships the family.
     let mol = h_mol();
     let r = intor(&mol, "int1e_ecp_iprinv");
     assert!(
-        matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 7, .. })),
-        "expected NotYetImplemented{{phase:7}} for derivative ECP name, got {:?}",
+        !matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 7, .. })),
+        "int1e_ecp_iprinv must NOT be NotYetImplemented{{phase:7}} after GRAD-07; got {:?}",
+        r
+    );
+    assert!(
+        matches!(
+            r,
+            Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(_)))
+        ),
+        "expected a clean cintx-availability InvalidMolecule error for the missing iprinv \
+         family, got {:?}",
         r
     );
 }
