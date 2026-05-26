@@ -6,19 +6,14 @@ This test is the user-facing Python assertion path for the chkfile
 round-trip; the Rust-side cargo-test analogue lives in
 `crates/pyscf-oracle/tests/chkfile_roundtrip.rs` (plan 03-08).
 
-Current status (plan 03-10): The Rust-side chkfile writer
+Current status: The Rust-side chkfile writer
 `pyscf_scf::chkfile::dump_scf_to_file` and reader
-`load_scf_from_file` are shipped (plan 03-06), AND the PyO3 surface
-exposes `mf.chkfile = path` as a setter. But the user-facing
-auto-write-on-converged-SCF inside `PyRHF::kernel` and the
-`mf.from_chk(path)` reader are NOT YET exposed (plan 03-07 §"Known Stubs"
-row 1 and §"Decisions Made" call this out — auto-chkfile-write is
-deferred to a follow-up). The test below uses h5py directly to write
-into the canonical SCF chkfile schema from `mf.mo_coeff`/`mo_energy`/
-`mo_occ`, reads it back, and asserts element-wise round-trip on the
-Python side; the rs-write and rs-read arms are xfail-deferred to the
-follow-up plan that wires `mf.kernel(chkfile=...)` auto-write and
-`mf.from_chk(path)`.
+`load_scf_from_file` are shipped (plan 03-06), the PyO3 surface
+exposes `mf.chkfile = path` as a setter, AND the user-facing
+auto-write-on-converged-SCF inside `PyRHF::kernel` (scf.rs:363-388)
+and the `mf.from_chk(mol, path)` reader (scf.rs:420) are now exposed.
+All three arms run live: the h5py-mediated schema round-trip, the
+rs-write→h5py-read arm, and the upstream-write→rs-read arm.
 """
 import os
 import tempfile
@@ -98,15 +93,10 @@ def test_chkfile_h5py_write_read_schema_compat(h2o_mol):
 def test_chkfile_pyscf_rs_writes_h5py_reads(h2o_mol):
     """Direction (A): pyscf-rs `mf.kernel()` auto-writes chkfile → h5py reads.
 
-    Deferred — `mf.kernel()` does not yet auto-write the chkfile when
-    `mf.chkfile = path` is set. Plan 03-07 §"Known Stubs" row 1
-    documents this gap; a follow-up plan wires the Mole.dumps()-
-    parameterized write into `PyRHF::kernel`.
+    Live — `PyRHF::kernel` auto-writes the chkfile on convergence when
+    `mf.chkfile = path` is set (scf.rs:363-388, via
+    `pyscf_scf::dump_scf_to_file`).
     """
-    pytest.xfail(
-        "pyscf-rs mf.kernel() auto-chkfile-write deferred (plan 03-07 §Known Stubs row 1); "
-        "follow-up gap-closure plan wires Mole.dumps() → pyscf_scf::chkfile::dump_scf_to_file"
-    )
     h5py = pytest.importorskip("h5py")
     with tempfile.NamedTemporaryFile(suffix=".chk", delete=False) as tf:
         path = tf.name
@@ -127,15 +117,10 @@ def test_chkfile_pyscf_rs_writes_h5py_reads(h2o_mol):
 def test_chkfile_upstream_writes_pyscf_rs_reads(h2o_mol, upstream):
     """Direction (B): upstream writes → pyscf-rs `mf.from_chk` reads.
 
-    Deferred — `mf.from_chk(path)` is not yet on the PyRHF surface
-    (plan 03-07 ships `mf.chkfile = path` as a setter but no reader
-    binding). A follow-up plan wires `pyscf_scf::chkfile::load_scf_from_file`
-    through to a `#[pymethods] fn from_chk` on PyRHF.
+    Live — `mf.from_chk(mol, path)` is exposed on the PyRHF surface
+    (scf.rs:420, via `pyscf_scf::chkfile::load_scf_from_file`); the
+    `init_guess = "chkfile"` path reconstructs MO state from disk.
     """
-    pytest.xfail(
-        "pyscf-rs `mf.from_chk(path)` reader binding deferred (plan 03-07 §Known Stubs); "
-        "follow-up gap-closure plan exposes pyscf_scf::chkfile::load_scf_from_file"
-    )
     with tempfile.NamedTemporaryFile(suffix=".chk", delete=False) as tf:
         path = tf.name
     try:
@@ -158,7 +143,7 @@ def test_chkfile_upstream_writes_pyscf_rs_reads(h2o_mol, upstream):
 def test_scf_chkfile_round_trip_both_directions(h2o_mol):
     """Aggregator name kept for grep continuity (plan 03-02 stub name).
 
-    Runs the shipped (h5py-mediated schema) round-trip; the two
-    rs-driven arms are xfail-deferred to the gap-closure follow-up.
+    Runs the h5py-mediated schema round-trip; the two rs-driven arms
+    (auto-write and from_chk) now run as standalone live tests above.
     """
     test_chkfile_h5py_write_read_schema_compat(h2o_mol)
