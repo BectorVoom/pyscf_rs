@@ -51,6 +51,7 @@ pub mod converge;
 pub mod error;
 pub mod internals;
 pub mod rfo;
+pub mod shims;
 
 pub use backtransform::to_cartesian;
 pub use bmatrix::{build as build_bmatrix, g_inverse, g_matrix, wilson_b};
@@ -59,6 +60,13 @@ pub use converge::{ConvParams, ConvReport, check_converged};
 pub use error::GeomError;
 pub use internals::{Primitive, generate as generate_internals};
 pub use rfo::{BfgsHessian, rfo_step};
+pub use shims::{ShimParams, berny_solver, geometric_solver};
+
+/// The name of the single native geometry-optimization engine (the
+/// geomeTRIC-algorithm port from 07-04). Both the `geometric_solver` and
+/// `berny_solver` shims delegate to THIS one engine (D-06) — the single-engine
+/// marker that forbids a second berny optimizer (T-07-20).
+pub const NATIVE_ENGINE_NAME: &str = "pyscf-geomopt-native-bfgs-rfo";
 
 use converge::{DEFAULT_MAXSTEPS, MAX_ALLOWED_MAXSTEPS};
 use pyscf_algebra::{oracle_dot, oracle_sum};
