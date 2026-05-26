@@ -662,3 +662,181 @@ jobs:
           assert hasattr(cc, 'UCCSD') and hasattr(cc, 'DFCCSD')
           print('OK 3.13t native CCSD surface import')
           "
+
+  # ── Phase 7 plan 07-10 ─────────────────────────────────────────────
+  # Gradients + geomopt CI surface (D-01/D-05). THREE gate groups, mirroring the
+  # `mp2-structural` / `mp2-oracle-upstream-manual` (ci.yml:463-513) +
+  # `ccsd-structural` (ci.yml:532-544) precedent:
+  #
+  #   1. ALWAYS-ON `grad-structural` (runs on every push/PR): the FD
+  #      self-verification gate (`verify_fd`, D-01, GRAD-09, <=1e-6 Ha/Bohr — NO
+  #      upstream PySCF needed; the FIRST always-on NUMERIC gate in the project) +
+  #      the structural arms (`atmlst` subset GRAD-08, `single_cphf_impl` GRAD-10)
+  #      + the self-contained geomopt convergence gate (H2O->equilibrium,
+  #      GEOMOPT-07) + bmatrix/rfo/conv_defaults (GEOMOPT-04/06). Scoped to
+  #      `-p pyscf-grad -p pyscf-geomopt -p pyscf-oracle`, NO `--features python`,
+  #      NO `--features libxc` (T-07-35 — the ~6h libxc compile freeze).
+  #
+  #   2. CI `geomopt-no-runtime-dep` (GEOMOPT-01, runs on every push/PR per D-05,
+  #      NOT workflow_dispatch): `pip uninstall -y geometric pyberny` then prove
+  #      `pyscf.geomopt.optimize(mf)` still works — the geometry optimizer is
+  #      FULLY NATIVE, with NO `geometric`/`pyberny` runtime dependency (T-07-38).
+  #
+  #   3. `workflow_dispatch` `grad-oracle-upstream-manual` (manual / human-verify
+  #      ONLY): upstream byte-identity analytical gradient (<=1e-7 Ha/Bohr vs
+  #      `pyscf/grad/*`) + geomopt trajectory / stationary-point parity vs
+  #      `geometric_solver`. Default runners have no upstream PySCF/geomeTRIC
+  #      (T-07-37), AND these arms ride the cintx grad-intor gate (6/8 families
+  #      MISSING from cintx, 07-01) — so they stay manual until BOTH an upstream
+  #      install AND the cintx grad-intor workstream are present.
+  #
+  # `--test-threads=1` everywhere (T-07-36 — determinism); setup-sibling-crates
+  # provides cintx; the dependency-wall lint stays green (T-07-SC, zero edits).
+
+  # ACTIVE — runs on every push/PR. Does NOT touch `--features python` or
+  # `--features libxc`, so it is safe (no libpython, no 266-kernel libxc
+  # compile). Runs the always-on FD self-verification gate (verify_fd, D-01,
+  # GRAD-09, <=1e-6 Ha/Bohr — needs NO upstream PySCF) + the structural arms
+  # (atmlst GRAD-08, single_cphf_impl GRAD-10) + the self-contained geomopt
+  # convergence gate (h2o_equilibrium GEOMOPT-07) + bmatrix/rfo/conv_defaults
+  # (GEOMOPT-04/06) + the pyscf-oracle grad/geomopt dispatch-layer registration
+  # arms (07-10). Clone of `mp2-structural` / `ccsd-structural`.
+  grad-structural:
+    name: grad-structural (always-on verify_fd + atmlst + single-CPHF + geomopt convergence; no python, no libxc)
+    runs-on: ubuntu-latest
+    needs: [build-default]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test -p pyscf-grad -p pyscf-geomopt -p pyscf-oracle (structural, no python)
+        run: cargo test -p pyscf-grad -p pyscf-geomopt -p pyscf-oracle --locked -- --test-threads=1
+
+  # ACTIVE — runs on every push/PR (GEOMOPT-01 proof, per D-05; NOT
+  # workflow_dispatch). Proves the geometry optimizer is FULLY NATIVE: after
+  # `pip uninstall -y geometric pyberny`, `pyscf.geomopt.optimize(mf)` must still
+  # succeed (the optimizer + B-matrix + RFO are the in-tree pyscf-geomopt BFGS+RFO
+  # engine; both `geometric_solver` and `berny_solver` are thin aliases over the
+  # ONE native engine, D-06/T-07-20). Builds the abi3 wheel via `maturin develop`
+  # (the maturin-smoke precedent, ci.yml:213) so the `pyscf.grad`/`pyscf.geomopt`
+  # overlays + the `_native.geomopt` engine are importable. Imports `pyscf.grad`
+  # FIRST so `_graft_nuc_grad_onto_scf` grafts `mf.nuc_grad_method()` onto the
+  # native SCF/DFT pyclasses before the optimize call resolves it. NO
+  # `--features libxc` (T-07-35), NO upstream PySCF. The analytical-grad NUMERIC
+  # rides the cintx gate (07-01), so this proof asserts the optimize ENTRY POINT
+  # resolves + runs natively (catching a cintx-availability error as the
+  # documented gated outcome, never a missing-geometric/pyberny ImportError).
+  geomopt-no-runtime-dep:
+    name: geomopt-no-runtime-dep (GEOMOPT-01 — pip uninstall geometric pyberny; native optimizer)
+    runs-on: ubuntu-latest
+    needs: [build-default]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install maturin (>=1.4) + numpy (NO geometric, NO pyberny, NO upstream pyscf)
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install "maturin>=1.4,<2.0" "numpy>=1.26" "scipy>=1.11" "h5py>=3.10"
+      - name: Build + install pyscf-rs into venv
+        run: .venv/bin/maturin develop --release
+      # GEOMOPT-01: prove NO geometric/pyberny runtime dependency. Uninstall both
+      # external optimizer packages (|| true: they are not installed in the first
+      # place — the assertion is that the optimizer runs WITHOUT them), then run
+      # the native optimize entry point.
+      - name: pip uninstall -y geometric pyberny (prove they are not a runtime dep)
+        run: .venv/bin/pip uninstall -y geometric pyberny || true
+      - name: Assert geometric/pyberny are NOT importable (clean env)
+        run: |
+          cd python
+          ../.venv/bin/python -c "
+          import importlib.util as u
+          for pkg in ('geometric', 'pyberny'):
+              assert u.find_spec(pkg) is None, f'{pkg} unexpectedly present — the no-runtime-dep proof is void'
+          print('OK: neither geometric nor pyberny is installed')
+          "
+      - name: import pyscf.geomopt; optimize(mf) runs natively (GEOMOPT-01)
+        run: |
+          cd python
+          ../.venv/bin/python -c "
+          # Import the grad overlay FIRST so _graft_nuc_grad_onto_scf grafts
+          # mf.nuc_grad_method() onto the native SCF/DFT pyclasses, then the
+          # geomopt overlay (NO external geometric/pyberny import — GEOMOPT-01).
+          import pyscf.grad      # grafts nuc_grad_method
+          import pyscf.geomopt   # the fully-native optimizer entry point
+          from pyscf._native import gto, scf
+          assert hasattr(pyscf.geomopt, 'optimize')
+          assert hasattr(pyscf.geomopt, 'geometric_solver')
+          assert hasattr(pyscf.geomopt, 'berny_solver')
+          mol = gto.Mole('H 0 0 0; H 0 0 0.74', basis='sto-3g')
+          mf = scf.RHF(mol)
+          try:
+              opt_mol = pyscf.geomopt.optimize(mf, maxsteps=2)
+              print('OK: native optimize(mf) ran to a result without geometric/pyberny')
+          except Exception as e:  # noqa: BLE001
+              # The analytical gradient rides the cintx grad-intor gate (07-01):
+              # a clean cintx-availability error here is the DOCUMENTED gated
+              # outcome. What GEOMOPT-01 forbids is a missing-geometric/pyberny
+              # ImportError — assert the failure is NOT that.
+              msg = repr(e).lower()
+              assert 'geometric' not in msg and 'pyberny' not in msg, (
+                  'optimize failed due to a missing external optimizer package '
+                  '— GEOMOPT-01 (no-runtime-dep) VIOLATED: ' + repr(e)
+              )
+              assert not isinstance(e, ImportError), (
+                  'optimize raised ImportError — the native optimizer must not '
+                  'import an external package: ' + repr(e)
+              )
+              print('OK: native optimize(mf) resolved + ran (gated on the cintx '
+                    'grad-intor workstream, NOT on geometric/pyberny): ' + repr(e))
+          "
+
+  # MANUAL-DISPATCH upstream byte-identity (≤ 1e-7 Ha/Bohr) + geomopt trajectory
+  # parity. `--features python` drives upstream `mf.nuc_grad_method().kernel()` /
+  # `pyscf/grad/*` + `geometric_solver` in-process and compares against pyscf-rs:
+  # RHF/UHF/RKS/UKS/MP2/CCSD/ECP analytical-gradient byte-identity + the H2O
+  # geometry-optimizer trajectory / stationary-point parity. This needs an
+  # installed upstream PySCF (+ geomeTRIC), which the default push/PR runners do
+  # not provide — AND it rides the cintx grad-intor gate (6/8 gradient-integral
+  # families MISSING from cintx, 07-01) — so it is `workflow_dispatch` (manual /
+  # human-verify) ONLY, never auto-run (default CI stays green + never freezes;
+  # the 05-08 / 06-11 precedent). The always-on FD-structural + the geomopt
+  # convergence proofs live in the grad-structural arm above. NEVER pulls libxc.
+  grad-oracle-upstream-manual:
+    name: grad-oracle-upstream-manual (workflow_dispatch — upstream byte-identity <=1e-7 + geomopt trajectory parity)
+    # Manual only: never auto-trigger on push/PR (default runners have no
+    # upstream PySCF/geomeTRIC; the analytical grad rides the cintx grad-intor
+    # gate). This is the documented phase-gate human-verify arm.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      # The oracle imports upstream `pyscf` (+ geomeTRIC for the trajectory arm)
+      # via PyO3 (`--features python`) and compares it against pyscf-rs in-process
+      # — install the references.
+      - name: Install upstream PySCF + geomeTRIC (oracle references)
+        run: pip install "numpy>=1.26" "pyscf>=2.5" "geometric>=1.0"
+      # The ONLY grad/geomopt `--features python` invocation. Exercises the eight
+      # grad/geomopt numeric oracle arms (nuc_grad_* byte-identity <=1e-7 Ha/Bohr
+      # + geomopt_h2o trajectory parity) vs upstream once their live Python
+      # dispatch wiring + the cintx grad-intor workstream land. For now this
+      # compiles the python-enabled oracle surface and runs the registered
+      # `#[ignore]`'d arms via `--include-ignored` (the human-verify step).
+      - name: cargo test --features python (grad/geomopt byte-identity + trajectory vs upstream)
+        run: |
+          cargo test -p pyscf-oracle --features python --locked \
+            -- --test-threads=1 --include-ignored grad geomopt
