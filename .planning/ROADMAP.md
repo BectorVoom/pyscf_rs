@@ -317,7 +317,19 @@ Plans:
   4. `pyscf.geomopt.optimize(mf)` runs a native Rust BFGS+RFO optimizer in redundant internal coordinates with **no** Python `geomeTRIC` or `pyberny` runtime dependency (verified by `pip uninstall geomeTRIC pyberny && python -c "import pyscf.geomopt; pyscf.geomopt.optimize(mf)"` succeeding) (GEOMOPT-01); `pyscf.geomopt.geometric_solver.optimize(mf)` and `pyscf.geomopt.berny_solver.optimize(mf)` are drop-in shims that delegate to the native optimizer, preserving the canonical PySCF import paths (GEOMOPT-02, GEOMOPT-03).
   5. Default convergence thresholds match geomeTRIC defaults (`gradient`, `displacement`, `energy`, `gradient_max`, `displacement_max`); Wilson B-matrix construction for redundant internals and RFO step with negative-eigenvalue tracking are ported from upstream/geomeTRIC; HDF5 checkpoint of optimizer state allows resuming a partially-converged optimization; optimization trajectories on the test corpus converge to the same stationary point as upstream within chemical accuracy (GEOMOPT-04..07).
 
-**Plans**: TBD
+**Plans**: 10 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Wave-0 cintx grad-intor buy-down + gto guard removal / ECP-grad wiring (D-02)
+- [ ] 07-02-PLAN.md — pyscf-grad skeleton + base Gradients trait + atmlst + verify_fd FD harness (D-01/D-09)
+- [ ] 07-03-PLAN.md — RHF analytical gradient (headline, FD-gated) (GRAD-01)
+- [ ] 07-04-PLAN.md — native BFGS+RFO redundant-internal optimizer on the RHF scanner loop, early (D-08; GEOMOPT-04/06/07)
+- [ ] 07-05-PLAN.md — UHF + RKS(+grid_response) + UKS gradients, no CPHF (GRAD-02/03/04, D-04)
+- [ ] 07-06-PLAN.md — geomopt HDF5 checkpoint + geometric_solver/berny_solver shims + constraints error (GEOMOPT-02/03/05, D-07)
+- [ ] 07-07-PLAN.md — single matrix-free Krylov CPHF (D-03) + MP2-grad Z-vector (GRAD-05/10)
+- [ ] 07-08-PLAN.md — CCSD-grad (consumes Phase-6 λ + RDMs) + ECP-grad (GRAD-06/07, D-04)
+- [ ] 07-09-PLAN.md — PyO3 bridge: mf.nuc_grad_method + geomopt submodule + python overlays (GEOMOPT-01/02/03)
+- [ ] 07-10-PLAN.md — pyscf-oracle grad fixtures + CI close-out (FD always-on + pip-uninstall proof + workflow_dispatch arms)
 
 ### Phase 8: GPU enable + Oracle hardening + Distribution
 
