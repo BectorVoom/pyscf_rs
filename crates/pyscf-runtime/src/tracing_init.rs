@@ -34,3 +34,42 @@ pub fn init_tracing(verbose: u8) -> bool {
         .try_init()
         .is_ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing_subscriber::filter::LevelFilter;
+
+    /// `verbose_to_filter` maps every boundary value in PySCF's 0..=9 scale
+    /// (plus an above-range sentinel) to the correct `LevelFilter` (FOUND-09).
+    ///
+    /// Boundary table:
+    ///   0       -> OFF
+    ///   1, 2    -> ERROR
+    ///   3, 4    -> WARN
+    ///   5, 6    -> INFO
+    ///   7       -> DEBUG
+    ///   8, 9    -> TRACE   (the 8..=9 arm)
+    ///   255     -> TRACE   (the `_ =>` catch-all arm)
+    #[test]
+    fn verbose_to_filter_covers_full_boundary_table() {
+        assert_eq!(verbose_to_filter(0), LevelFilter::OFF);
+
+        assert_eq!(verbose_to_filter(1), LevelFilter::ERROR);
+        assert_eq!(verbose_to_filter(2), LevelFilter::ERROR);
+
+        assert_eq!(verbose_to_filter(3), LevelFilter::WARN);
+        assert_eq!(verbose_to_filter(4), LevelFilter::WARN);
+
+        assert_eq!(verbose_to_filter(5), LevelFilter::INFO);
+        assert_eq!(verbose_to_filter(6), LevelFilter::INFO);
+
+        assert_eq!(verbose_to_filter(7), LevelFilter::DEBUG);
+
+        assert_eq!(verbose_to_filter(8), LevelFilter::TRACE);
+        assert_eq!(verbose_to_filter(9), LevelFilter::TRACE);
+
+        // Above-range sentinel exercises the `_ => TRACE` wildcard arm.
+        assert_eq!(verbose_to_filter(255), LevelFilter::TRACE);
+    }
+}
