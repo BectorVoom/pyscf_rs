@@ -23,9 +23,12 @@
 //!   - [`GradScanner`] (the `Mole -> (e_tot, de)` geomopt seam, 07-04) +
 //!     [`verify_fd`] (the D-01 always-on numeric gate, GRAD-09).
 //!
-//! Each method module (`rhf`/`uhf`/`rks`/`uks`/`mp2`/`ccsd`/`ecp`/`cphf`) is a
-//! stub whose body returns `GradError::NotYetImplemented { wave }` (`wave` = the
-//! Phase-7 wave that fills it); the bodies land in 07-03..07-08.
+//! The variational-method modules have landed: `rhf` (07-03), `uhf`/`rks`/`uks`
+//! (07-05) carry full `grad_elec` bodies routed through the base [`Gradients`]
+//! trait, all gated on the cintx grad-integral availability split (D-02). The
+//! remaining method modules (`mp2`/`ccsd`/`ecp`/`cphf`) are stubs whose bodies
+//! return `GradError::NotYetImplemented { wave }` (`wave` = the Phase-7 wave that
+//! fills it); they land in 07-06..07-08.
 #![forbid(unsafe_code)]
 #![warn(clippy::unwrap_used)]
 
@@ -46,6 +49,15 @@ pub use error::GradError;
 pub use hooks::{GradOverrideHooks, NoGradOverrides};
 pub use scanner::GradScanner;
 pub use verify_fd::{DEFAULT_DISP, FD_TOL, verify_fd};
+
+// The variational-method gradient drivers + their converged-SCF reference
+// snapshots — re-exported flat so the PyO3 bridge (07-09) and the downstream
+// CPHF/MP2 waves (07-06/07-07, which wire on top of this surface) import them
+// shallow. RHF (07-03) is the base decomposition; UHF (07-05) is its spin-
+// resolved sibling; RKS/UKS (07-05) add the KS XC-potential + grid_response
+// term. None call CPHF (D-04).
+pub use rhf::{RhfGradients, RhfReference};
+pub use uhf::{UhfGradients, UhfReference};
 
 use pyscf_core::{Mole, PyscfRsError, Unit};
 
