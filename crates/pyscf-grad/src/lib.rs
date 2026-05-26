@@ -57,7 +57,9 @@ pub use verify_fd::{DEFAULT_DISP, FD_TOL, verify_fd};
 // resolved sibling; RKS/UKS (07-05) add the KS XC-potential + grid_response
 // term. None call CPHF (D-04).
 pub use rhf::{RhfGradients, RhfReference};
+pub use rks::{RksGradients, RksReference};
 pub use uhf::{UhfGradients, UhfReference};
+pub use uks::{UksGradients, UksReference};
 
 use pyscf_core::{Mole, PyscfRsError, Unit};
 
