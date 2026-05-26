@@ -176,6 +176,57 @@ fn ecp_ecpscalar_route_on_ecpless_mol_returns_engine_not_available() {
 }
 
 #[test]
+fn int2e_ip1_dispatch_is_never_phase_7_not_yet_implemented() {
+    // GRAD-07 / Task 2 (plan 07-01): the live arity-4
+    // `NotYetImplemented{phase:7}` guard in `evaluate_arity4`'s
+    // ComponentLeadingFOrder arm is REMOVED — the component-leading arity-4
+    // dispatch is structurally wired. `int2e_ip1` is MISSING from every cintx
+    // branch today (07-RESEARCH §Gradient-Integral Availability Matrix), so a
+    // call must resolve to a CLEAN cintx-availability error at the
+    // `Resolver::descriptor_by_symbol` step (the layout_table lists the entry
+    // but cintx has not shipped the symbol), and MUST NEVER surface
+    // `PyscfRsError::NotYetImplemented{phase:7}`.
+    //
+    // When a future cintx workstream lands `int2e_ip1`, this same path
+    // produces a real `[3, nao, nao, nao, nao]` component-leading buffer with
+    // no further pyscf-gto change.
+    let mol = M(h2_args()).expect("H2/STO-3G should build");
+    let r = intor(&mol, "int2e_ip1");
+    assert!(
+        !matches!(r, Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 7, .. })),
+        "int2e_ip1 must NOT be NotYetImplemented{{phase:7}} after the Phase 7 \
+         structural guard removal; got {r:?}",
+    );
+    match r {
+        // Expected today: cintx has not shipped int2e_ip1 → clean
+        // resolver-level cintx-availability error.
+        Err(pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(msg))) => {
+            assert!(
+                msg.contains("cintx") || msg.contains("resolver") || msg.contains("hasn't"),
+                "expected a cintx-availability error for the missing int2e_ip1 family, got: {msg}",
+            );
+        }
+        // Tolerated: if a future cintx ships int2e_ip1, the dispatch returns a
+        // component-leading buffer with the component axis leading.
+        Ok(out) => {
+            let nao = mol.nao_nr;
+            assert_eq!(
+                out.shape,
+                vec![3, nao, nao, nao, nao],
+                "int2e_ip1 must be component-leading [3, nao, nao, nao, nao], never \
+                 a component-trailing permutation (T-07-01)",
+            );
+            assert_eq!(out.values.len(), 3 * nao * nao * nao * nao);
+            assert!(out.values.iter().all(|v| v.is_finite()));
+        }
+        other => panic!(
+            "int2e_ip1 must be Ok([3,nao;4]) or a cintx-availability InvalidMolecule error; \
+             got {other:?}"
+        ),
+    }
+}
+
+#[test]
 fn unbuilt_mol_errors() {
     let mol = pyscf_core::Mole::default();
     let r = intor(&mol, "int1e_ovlp_sph");
