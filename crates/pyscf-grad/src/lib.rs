@@ -26,9 +26,14 @@
 //! The variational-method modules have landed: `rhf` (07-03), `uhf`/`rks`/`uks`
 //! (07-05) carry full `grad_elec` bodies routed through the base [`Gradients`]
 //! trait, all gated on the cintx grad-integral availability split (D-02). The
-//! remaining method modules (`mp2`/`ccsd`/`ecp`/`cphf`) are stubs whose bodies
-//! return `GradError::NotYetImplemented { wave }` (`wave` = the Phase-7 wave that
-//! fills it); they land in 07-06..07-08.
+//! single matrix-free Krylov CPHF/CPKS solver (`cphf`, D-03/GRAD-10) and the
+//! first Z-vector method gradient (`mp2`, GRAD-05) have landed (07-07): `cphf`
+//! is pure linear algebra (always-on, tested against a synthetic response
+//! operator); `mp2` consumes that ONE solver (`max_cycle=30`) and its numeric
+//! arm is cintx-gated per the 07-03 precedent. The remaining method modules
+//! (`ccsd`/`ecp`) are stubs whose bodies return
+//! `GradError::NotYetImplemented { wave }` (`wave` = the Phase-7 wave that fills
+//! it); they land in 07-08.
 #![forbid(unsafe_code)]
 #![warn(clippy::unwrap_used)]
 
@@ -60,6 +65,11 @@ pub use rhf::{RhfGradients, RhfReference};
 pub use rks::{RksGradients, RksReference};
 pub use uhf::{UhfGradients, UhfReference};
 pub use uks::{UksGradients, UksReference};
+
+// The single matrix-free Krylov CPHF/CPKS solver (D-03, GRAD-10). `cphf::solve`
+// is the ONE response-equation solver every non-variational method (MP2 here,
+// CCSD in 07-08) routes its own `fvind` + RHS through.
+pub use cphf::{DEFAULT_LEVEL_SHIFT, DEFAULT_MAX_CYCLE, DEFAULT_TOL};
 
 use pyscf_core::{Mole, PyscfRsError, Unit};
 
