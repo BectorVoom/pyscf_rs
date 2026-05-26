@@ -4,9 +4,37 @@ version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
-description = "Geometry optimisation (BFGS+RFO redundant internals). Implemented in Phase 7."
+description = "Geometry optimisation (native BFGS+RFO redundant internals). Implemented in Phase 7."
 
 [lib]
 path = "src/lib.rs"
 
+# Full workspace-internal dep set (07-RESEARCH.md §"Cargo.toml deps"). Internal
+# crates are referenced via `{ path = "../..." }` (the proven sibling idiom,
+# mirroring pyscf-ccsd/Cargo.toml) — they are NOT registered as
+# `[workspace.dependencies]`, so a `{ workspace = true }` form would not resolve.
+#
+# NO pyo3 (D-08 — the PyO3 bridge lives exclusively in pyscf-py; lands 07-09).
+# NO cubecl-* (algebra wall — denylist auto-enforced; only pyscf-algebra/
+#   pyscf-runtime may name cubecl). eigh/solve_linear route through pyscf-algebra.
+# NO hdf5-metno (D-07 — the optimizer-checkpoint HDF5 spill goes through
+#   pyscf-chkfile's re-exported `hdf5` alias; pyscf-chkfile is the sole owner;
+#   checkpoint body lands 07-06, not this plan).
 [dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+pyscf-scf     = { path = "../pyscf-scf" }
+pyscf-grad    = { path = "../pyscf-grad" }
+# pyscf-gto supplies `set_geom_` (GTO-10) — the canonical cache-safe in-place
+# geometry mutation the outer optimizer loop drives each step (Rule 3 blocking:
+# the engine cannot advance the geometry without it; hand-rolling the
+# `_atom`/`_env` mutation would risk the granular-invalidation correctness the
+# optimizer relies on across steps). NOT a cubecl/pyo3/hdf5 owner — wall-clean.
+pyscf-gto     = { path = "../pyscf-gto" }
+pyscf-chkfile = { path = "../pyscf-chkfile" }
+pyscf-runtime = { path = "../pyscf-runtime" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+
+[dev-dependencies]
+approx = "0.5"
