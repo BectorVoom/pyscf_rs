@@ -201,6 +201,43 @@ mod python_impl {
             "uks_energy" => check_uks_energy(py, fixture, tol),
             "df_dft_energy" => check_df_dft_energy(py, fixture, tol),
             "ks_chkfile_roundtrip" => check_ks_chkfile_roundtrip(py, fixture, tol),
+            // ── Phase 7 grad/geomopt arms (07-10): REGISTER-BUT-DEFER-DISPATCH ──
+            // The eight Phase-7 names are registered in `KNOWN_METHODS` and MUST
+            // be RECOGNISED by dispatch (the always-on
+            // `registered_grad_geomopt_methods_are_never_unknown` invariant —
+            // grad_oracle.rs — requires they NEVER surface `UnknownMethod`, in
+            // EVERY build mode including `--features python`). Their live numeric
+            // byte-identity check (≤ 1e-7 Ha/Bohr vs `pyscf/grad/*` + the geomopt
+            // trajectory parity vs `geometric_solver`) is NOT yet implemented:
+            // it rides the cintx grad-intor workstream — SIX of the eight
+            // gradient-integral families (`int2e_ip1`, `int1e_ip{ovlp,kin,nuc,
+            // rinv}`, `ECPscalar_iprinv` + the `with_rinv_at_nucleus` origin
+            // shift) are MISSING from cintx today (07-01-SUMMARY), with no
+            // scheduled cintx workstream. Until that lands, route the eight names
+            // to a CLEAR gated error that is distinctly NOT `UnknownMethod` (the
+            // name IS known) and NOT `PythonFeatureNotEnabled` (which would be a
+            // lie here — the `python` feature IS compiled in). `Upstream` carries
+            // the honest, actionable reason. The live `arm_nuc_grad_*` /
+            // `arm_geomopt_h2o` tests in grad_oracle.rs are `#[ignore]`'d on the
+            // `workflow_dispatch` arm, so this gated error is never hit on push.
+            "nuc_grad_rhf"
+            | "nuc_grad_uhf"
+            | "nuc_grad_rks"
+            | "nuc_grad_uks"
+            | "nuc_grad_mp2"
+            | "nuc_grad_ccsd"
+            | "nuc_grad_ecp"
+            | "geomopt_h2o" => {
+                let _ = (py, fixture, tol);
+                Err(OracleError::Upstream(format!(
+                    "grad/geomopt oracle arm '{method}' is registered but its live \
+                     numeric byte-identity check is pending the cintx grad-intor \
+                     workstream (int2e_ip1 + int1e_ip{{ovlp,kin,nuc,rinv}} + \
+                     ECPscalar_iprinv MISSING from cintx, 07-01-SUMMARY); \
+                     run the #[ignore]'d grad_oracle.rs arm on the \
+                     grad-oracle-upstream-manual CI job once cintx ships them"
+                )))
+            }
             other => Err(OracleError::UnknownMethod(other.to_string())),
         })
     }
