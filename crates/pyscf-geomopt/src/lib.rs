@@ -46,6 +46,7 @@
 
 pub mod backtransform;
 pub mod bmatrix;
+pub mod checkpoint;
 pub mod converge;
 pub mod error;
 pub mod internals;
@@ -53,6 +54,7 @@ pub mod rfo;
 
 pub use backtransform::to_cartesian;
 pub use bmatrix::{build as build_bmatrix, g_inverse, g_matrix, wilson_b};
+pub use checkpoint::OptimizerState;
 pub use converge::{ConvParams, ConvReport, check_converged};
 pub use error::GeomError;
 pub use internals::{Primitive, generate as generate_internals};
@@ -75,6 +77,10 @@ pub struct OptimizeResult {
     pub nsteps: usize,
     /// The final total energy (Hartree).
     pub e_tot: f64,
+    /// The live optimizer state at the point the run stopped — enough to
+    /// checkpoint to HDF5 and `optimize_resume` a partially-converged run
+    /// (GEOMOPT-05). Present whether the run converged or hit `maxsteps`.
+    pub state: Option<OptimizerState>,
 }
 
 /// The native BFGS+RFO redundant-internal geometry optimizer (the geomeTRIC
@@ -175,6 +181,46 @@ pub fn optimize(
     scanner: &GradScanner,
     mol: &Mole,
 ) -> Result<OptimizeResult, GeomError> {
+    run_loop(opt, scanner, mol, None)
+}
+
+/// Resume a partially-converged optimization from a checkpointed
+/// [`OptimizerState`] (GEOMOPT-05).
+///
+/// `mol` supplies the per-atom symbols + nuclear charges (the connectivity for
+/// the redundant-internal set); the *geometry*, trust radius, BFGS Hessian,
+/// step counter, and previous-step history all come from `state` (the loaded
+/// HDF5 checkpoint). Continues the SAME geomeTRIC outer loop from the resumed
+/// state and drives to the same stationary point an uninterrupted run reaches.
+///
+/// The resumed state is validated against `mol`'s connectivity on entry: the
+/// rebuilt internal-coordinate count must match the checkpoint's `nint`
+/// (otherwise the Hessian basis is incompatible — a clear
+/// [`GeomError::CheckpointCorrupt`] rather than a silent mis-resume, T-07-19).
+///
+/// # Errors
+/// Same as [`optimize`], plus [`GeomError::CheckpointCorrupt`] if the resumed
+/// state is incompatible with `mol`'s connectivity.
+pub fn optimize_resume(
+    opt: &GeometryOptimizer,
+    scanner: &GradScanner,
+    mol: &Mole,
+    state: OptimizerState,
+) -> Result<OptimizeResult, GeomError> {
+    run_loop(opt, scanner, mol, Some(state))
+}
+
+/// The shared geomeTRIC outer loop, driven from either a fresh start (`init =
+/// None`) or a resumed checkpoint (`init = Some(state)`).
+///
+/// Every reduction materialises then `oracle_sum`/`oracle_dot`; the RFO
+/// eigen-step + `G⁻` route through `pyscf_algebra::eigh_gen` (the algebra wall).
+fn run_loop(
+    opt: &GeometryOptimizer,
+    scanner: &GradScanner,
+    mol: &Mole,
+    init: Option<OptimizerState>,
+) -> Result<OptimizeResult, GeomError> {
     if opt.has_constraints {
         return Err(GeomError::ConstraintsUnsupported);
     }
@@ -182,24 +228,69 @@ pub fn optimize(
 
     let charges = mol.atom_charges();
     let symbols: Vec<String> = mol._atom.iter().map(|(s, _)| s.clone()).collect();
-    let mut coords = mol.atom_coords();
+
+    // Resume vs fresh: the geometry + optimizer state either come from the
+    // checkpoint or are initialised fresh from `mol`.
+    let mut coords = match &init {
+        Some(s) => s.coords.clone(),
+        None => mol.atom_coords(),
+    };
     let natm = coords.len();
 
-    // Build the redundant-internal set ONCE from the starting connectivity
-    // (geomeTRIC rebuilds only on a topology change; for a single
-    // minimization the bonding graph is stable).
+    // Build the redundant-internal set ONCE from the (resumed) connectivity
+    // (geomeTRIC rebuilds only on a topology change; for a single minimization
+    // the bonding graph is stable — and a resume keeps the same topology).
     let prims = internals::generate(&coords, &charges);
     let nint = prims.len();
 
-    let mut hessian = rfo::BfgsHessian::identity(nint);
-    let mut trust = opt.conv_params.trust;
-    let mut prev: Option<(f64, Vec<f64>, Vec<f64>)> = None; // (E, q, g_int)
+    let mut hessian;
+    let mut trust;
+    let mut prev: Option<(f64, Vec<f64>, Vec<f64>)>; // (E, q, g_int)
+    let start_step;
+    let mut e_tot;
 
-    // Working Mole we mutate via set_geom_.
+    match init {
+        Some(s) => {
+            // T-07-19: the resumed Hessian basis must match this molecule's
+            // internal-coordinate count, else the checkpoint is incompatible.
+            if s.nint != nint {
+                return Err(GeomError::CheckpointCorrupt {
+                    what: format!(
+                        "resumed nint {} ≠ this molecule's internal-coordinate count {nint} (incompatible checkpoint)",
+                        s.nint
+                    ),
+                });
+            }
+            hessian = rfo::BfgsHessian {
+                h: s.hessian,
+                nint: s.nint,
+                n_updates: s.n_updates,
+            };
+            trust = s.trust;
+            prev = match (s.prev_e, s.prev_q, s.prev_g_int) {
+                (Some(e), Some(q), Some(g)) => Some((e, q, g)),
+                _ => None,
+            };
+            start_step = s.step;
+            e_tot = s.e_tot;
+        }
+        None => {
+            hessian = rfo::BfgsHessian::identity(nint);
+            trust = opt.conv_params.trust;
+            prev = None;
+            start_step = 0;
+            e_tot = 0.0_f64;
+        }
+    }
+
+    // Working Mole we mutate via set_geom_ — seed it at the (resumed) geometry.
     let mut work = mol.clone();
-    let mut e_tot = 0.0_f64;
+    {
+        let atom_str = coords_to_atom_string(&symbols, &coords);
+        pyscf_gto_set_geom(&mut work, &atom_str)?;
+    }
 
-    for step in 0..maxsteps {
+    for step in start_step..maxsteps {
         // 1-2. internals + B-matrix + G⁻ at the current geometry.
         let (b, _g, ginv) = bmatrix::build(&prims, &coords)?;
 
@@ -211,7 +302,8 @@ pub fn optimize(
         let g_int = gradient_to_internal(&b, &ginv, &de, nint);
         let q = internals::values(&prims, &coords);
 
-        // BFGS Hessian update from the previous step (skip on step 0).
+        // BFGS Hessian update from the previous step (skip on the first step
+        // of a fresh run; on a resume the previous-step history is restored).
         if let Some((_e_prev, q_prev, g_prev)) = &prev {
             let dq: Vec<f64> = (0..nint).map(|i| q[i] - q_prev[i]).collect();
             let dg: Vec<f64> = (0..nint).map(|i| g_int[i] - g_prev[i]).collect();
@@ -263,11 +355,24 @@ pub fn optimize(
         }
 
         if report.converged {
+            let state = OptimizerState {
+                coords: coords.clone(),
+                trust,
+                hessian: hessian.h.clone(),
+                nint,
+                n_updates: hessian.n_updates,
+                step: step + 1,
+                prev_q: prev.as_ref().map(|(_, q, _)| q.clone()),
+                prev_g_int: prev.as_ref().map(|(_, _, g)| g.clone()),
+                prev_e: prev.as_ref().map(|(e, _, _)| *e),
+                e_tot,
+            };
             return Ok(OptimizeResult {
                 coords,
                 converged: true,
                 nsteps: step + 1,
                 e_tot,
+                state: Some(state),
             });
         }
 
@@ -280,13 +385,27 @@ pub fn optimize(
         let _ = predicted_de; // retained for trust bookkeeping inside rfo_step
     }
 
-    // maxsteps exhausted without convergence — return the last geometry with
-    // converged=false (the caller decides whether to error).
+    // maxsteps exhausted without convergence — return the last geometry +
+    // the live optimizer state so the caller can checkpoint and resume later
+    // (GEOMOPT-05). `converged=false`; the caller decides whether to error.
+    let state = OptimizerState {
+        coords: coords.clone(),
+        trust,
+        hessian: hessian.h.clone(),
+        nint,
+        n_updates: hessian.n_updates,
+        step: maxsteps,
+        prev_q: prev.as_ref().map(|(_, q, _)| q.clone()),
+        prev_g_int: prev.as_ref().map(|(_, _, g)| g.clone()),
+        prev_e: prev.as_ref().map(|(e, _, _)| *e),
+        e_tot,
+    };
     Ok(OptimizeResult {
         coords,
         converged: false,
         nsteps: maxsteps,
         e_tot,
+        state: Some(state),
     })
 }
 

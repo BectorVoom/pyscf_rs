@@ -39,6 +39,18 @@ pub enum GeomError {
     /// (a pathological / singular B-matrix, T-07-13).
     #[error("internal→Cartesian back-transform failed to converge in {iters} iterations")]
     BacktransformDiverged { iters: usize },
+
+    /// An HDF5 checkpoint read/write through the `pyscf-chkfile` alias failed
+    /// (GEOMOPT-05). The optimizer-state spill reuses the sole-owner chkfile
+    /// surface — it never declares its own `hdf5-metno` dep (D-07).
+    #[error("checkpoint hdf5: {0}")]
+    Chkfile(#[from] pyscf_chkfile::ChkfileError),
+
+    /// A loaded optimizer-state checkpoint is corrupt / internally
+    /// inconsistent (shape mismatch or an unknown schema version). Raised as a
+    /// CLEAR error rather than resuming from garbage (T-07-19).
+    #[error("corrupt optimizer-state checkpoint: {what}")]
+    CheckpointCorrupt { what: String },
 }
 
 impl From<GeomError> for pyscf_core::PyscfRsError {

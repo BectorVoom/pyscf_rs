@@ -155,7 +155,13 @@ fn checkpoint_state_round_trips_byte_for_byte() {
     assert_eq!(loaded.step, state.step);
     assert_eq!(loaded.coords.len(), state.coords.len());
     for (a, b) in loaded.coords.iter().zip(state.coords.iter()) {
-        assert_eq!(a.to_bits(), b.to_bits(), "coords must round-trip bit-exactly");
+        for k in 0..3 {
+            assert_eq!(
+                a[k].to_bits(),
+                b[k].to_bits(),
+                "coords must round-trip bit-exactly"
+            );
+        }
     }
     assert_eq!(loaded.trust.to_bits(), state.trust.to_bits());
     assert_eq!(loaded.e_tot.to_bits(), state.e_tot.to_bits());
