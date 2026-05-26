@@ -121,10 +121,10 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [ ] **GEOMOPT-01**: `pyscf.geomopt.optimize(mf)` runs a native Rust BFGS+RFO optimizer in redundant internals; no Python `geomeTRIC` or `pyberny` runtime dependency
 - [ ] **GEOMOPT-02**: `pyscf.geomopt.geometric_solver.optimize(mf)` is a drop-in shim that delegates to the native optimizer (preserves the canonical PySCF import path)
 - [ ] **GEOMOPT-03**: `pyscf.geomopt.berny_solver.optimize(mf)` is also a drop-in shim
-- [ ] **GEOMOPT-04**: Default convergence thresholds match geomeTRIC defaults (`gradient`, `displacement`, `energy`, `gradient_max`, `displacement_max`)
+- [x] **GEOMOPT-04**: Default convergence thresholds match geomeTRIC defaults (`gradient`, `displacement`, `energy`, `gradient_max`, `displacement_max`)
 - [ ] **GEOMOPT-05**: HDF5 checkpoint of optimizer state allows resuming a partially-converged optimization
-- [ ] **GEOMOPT-06**: Wilson B-matrix construction for redundant internals, RFO step with negative-eigenvalue tracking, both ported from upstream/geomeTRIC
-- [ ] **GEOMOPT-07**: Optimization trajectories on the test corpus converge to the same stationary point as upstream within chemical accuracy
+- [x] **GEOMOPT-06**: Wilson B-matrix construction for redundant internals, RFO step with negative-eigenvalue tracking, both ported from upstream/geomeTRIC
+- [x] **GEOMOPT-07**: Optimization trajectories on the test corpus converge to the same stationary point as upstream within chemical accuracy
 
 ### PyO3 bindings & drop-in API contract (BIND)
 
@@ -338,10 +338,10 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | GEOMOPT-01 | Phase 7 | Pending |
 | GEOMOPT-02 | Phase 7 | Pending |
 | GEOMOPT-03 | Phase 7 | Pending |
-| GEOMOPT-04 | Phase 7 | Pending |
+| GEOMOPT-04 | Phase 7 | Complete |
 | GEOMOPT-05 | Phase 7 | Pending |
-| GEOMOPT-06 | Phase 7 | Pending |
-| GEOMOPT-07 | Phase 7 | Pending |
+| GEOMOPT-06 | Phase 7 | Complete |
+| GEOMOPT-07 | Phase 7 | Complete |
 | BIND-01 | Phase 3 | Complete |
 | BIND-02 | Phase 3 | Complete |
 | BIND-03 | Phase 8 | Pending |

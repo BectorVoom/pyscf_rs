@@ -331,7 +331,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 07-04-PLAN.md — native BFGS+RFO redundant-internal optimizer on the RHF scanner loop, early (D-08; GEOMOPT-04/06/07)
+- [x] 07-04-PLAN.md — native BFGS+RFO redundant-internal optimizer on the RHF scanner loop, early (D-08; GEOMOPT-04/06/07)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -381,7 +381,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8
 | 4. DFT | 14/14 | Complete    | 2026-05-23 |
 | 5. MP2 | 7/7 | Complete    | 2026-05-23 |
 | 6. CCSD | 11/11 | Complete    | 2026-05-25 |
-| 7. Gradients + Geomopt | 0/TBD | Not started | - |
+| 7. Gradients + Geomopt | 4/10 | In Progress|  |
 | 8. GPU enable + Oracle hardening + Distribution | 0/TBD | Not started | - |
 
 ## Coverage Summary
