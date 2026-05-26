@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 7 planned (10 plans, 8 waves)
-last_updated: "2026-05-26T00:59:00.409Z"
-last_activity: 2026-05-26 -- Phase 7 planning complete
+stopped_at: Completed 07-02-PLAN.md (pyscf-grad skeleton + verify_fd + atmlst)
+last_updated: "2026-05-26T02:13:46Z"
+last_activity: 2026-05-26 -- Completed Phase 07 Plan 02 (GRAD-08, GRAD-09)
 progress:
   total_phases: 8
   completed_phases: 6
   total_plans: 79
-  completed_plans: 69
-  percent: 75
+  completed_plans: 70
+  percent: 76
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 07 — gradients + geomopt (Phase 6 CCSD complete)
+**Current focus:** Phase 07 — gradients-geomopt
 
 ## Current Position
 
-Phase: 7
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-05-26 -- Phase 7 planning complete
+Phase: 07 (gradients-geomopt) — EXECUTING
+Plan: 07-02 of 10 complete (next: 07-03 RHF grad; 07-01 cintx grad-intor buy-down is a parallel Wave-1 workstream)
+Status: Executing Phase 07
+Last activity: 2026-05-26 -- Completed Phase 07 Plan 02 (pyscf-grad skeleton + base Gradients trait + verify_fd FD gate + atmlst subsetting; GRAD-08, GRAD-09)
 
 Progress: [███████░░░] 75% (6/8 phases; Phase 6 CCSD COMPLETE — 11/11 plans landed. Caffeine/cc-pVDZ upstream byte-identity + python3.13t GIL = workflow_dispatch human-verify arms; one-electron Rys d-function blocker fixed in cintx 13fe9d3, d-function SCF convergence is a separate tracked workstream item)
 
@@ -89,6 +89,7 @@ Progress: [███████░░░] 75% (6/8 phases; Phase 6 CCSD COMPLET
 | Phase 06 P06-09 | 35min | 2 tasks | 7 files |
 | Phase 06 P06-10 | 30min | 2 tasks | 5 files |
 | Phase 06 P11 | 4min | 2 tasks | 4 files |
+| Phase 07 P07-02 | 8min | 2 tasks (1 TDD) | 16 files |
 
 ## Accumulated Context
 
@@ -96,6 +97,11 @@ Progress: [███████░░░] 75% (6/8 phases; Phase 6 CCSD COMPLET
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+- [Phase 07 P07-02]: verify_fd operates over per-atom coords (Fn(&[[f64;3]])->Result<f64>) NOT a Mole — method-agnostic; per-method wave (07-03) adapts its Mole as_scanner into this coord closure. disp default 1e-4 Bohr, tol 1e-6 Ha/Bohr, all reductions through oracle_sum (no bare +=).
+- [Phase 07 P07-02]: GradScanner is two boxed Send+Sync closures (EnergyClosure + GradClosure) returning (Energy, de) — fixes the geomopt seam (07-04 consumer) before any method body; mirrors pyscf-scf::as_scanner capture-by-value discipline.
+- [Phase 07 P07-02]: atmlst (GRAD-08) + verify_fd (GRAD-09) are base-API-from-day-one (D-09) — built into the Gradients trait / resolve_atmlst helper so every GRAD-01..07 inherits them. grad_nuc is a real shared Coulomb-force port; get_ovlp/hcore_generator are NotYetImplemented seams (need cintx int1e_ipovlp/iprinv + with_rinv_at_nucleus, MISSING per 07-RESEARCH D-02 — RHF wave un-gates once cintx workstream lands).
+- [Phase 07 P07-02]: new trait named Gradients (plural) to avoid colliding with the pre-existing pyscf_core::Gradient (singular). GradError carries Mp2Error + CcsdError #[from] bridges (grad consumes both post-SCF crates) + InvalidDisplacement (T-07-05).
 
 - Roadmapping (2026-05-10): Compressed research's 12-phase suggestion to 8 phases (standard granularity). Merged `bindings` into `scf` (Phase 3) to lock PyO3 contract on RHF before DFT; merged `geomopt` into `grad` (Phase 7); merged `GPU enable + oracle hardening + distribution` into closing Phase 8.
 - Roadmapping (2026-05-10): Phase 1 (Foundation) is the SHOWSTOPPER convergence point — 7 of 21 catalogued pitfalls have their primary mitigation here (FMA, reduction order, cubecl pin, panic policy, sibling-crate ABI, cross-platform libm, scope creep).

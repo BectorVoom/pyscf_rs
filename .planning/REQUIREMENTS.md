@@ -112,8 +112,8 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 - [ ] **GRAD-05**: MP2 gradients via Z-vector / CPHF match upstream
 - [ ] **GRAD-06**: CCSD gradients via Λ-equations match upstream
 - [ ] **GRAD-07**: ECP gradients match upstream
-- [ ] **GRAD-08**: Atom-list subsetting (`grad.kernel(atmlst=[1,2,3])`) works
-- [ ] **GRAD-09**: A finite-difference verification mode (`grad.verify_fd(disp=1e-4)`) is available and gates unit tests
+- [x] **GRAD-08**: Atom-list subsetting (`grad.kernel(atmlst=[1,2,3])`) works
+- [x] **GRAD-09**: A finite-difference verification mode (`grad.verify_fd(disp=1e-4)`) is available and gates unit tests
 - [ ] **GRAD-10**: CPHF/CPKS solver lives in `pyscf-grad` (or a shared module) and is reused by all method gradients
 
 ### Geometry optimization (GEOMOPT)
@@ -332,8 +332,8 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | GRAD-05 | Phase 7 | Pending |
 | GRAD-06 | Phase 7 | Pending |
 | GRAD-07 | Phase 7 | Pending |
-| GRAD-08 | Phase 7 | Pending |
-| GRAD-09 | Phase 7 | Pending |
+| GRAD-08 | Phase 7 | Complete |
+| GRAD-09 | Phase 7 | Complete |
 | GRAD-10 | Phase 7 | Pending |
 | GEOMOPT-01 | Phase 7 | Pending |
 | GEOMOPT-02 | Phase 7 | Pending |
