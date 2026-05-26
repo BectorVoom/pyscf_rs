@@ -254,6 +254,14 @@ pub fn optimize(
             disp_max,
         );
 
+        if std::env::var("GEOMOPT_DEBUG").is_ok() {
+            eprintln!(
+                "step {step} E={e_tot:.8} dE={e_change:.2e}({}) grms={grad_rms:.2e}({}) gmax={grad_max:.2e}({}) drms={disp_rms:.2e}({}) dmax={disp_max:.2e}({}) trust={trust:.4} |dq|={:.4}",
+                report.energy_ok, report.grms_ok, report.gmax_ok, report.drms_ok, report.dmax_ok,
+                dq.iter().map(|x| x*x).sum::<f64>().sqrt()
+            );
+        }
+
         if report.converged {
             return Ok(OptimizeResult {
                 coords,
