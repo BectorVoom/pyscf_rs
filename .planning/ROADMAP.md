@@ -336,7 +336,7 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 07-05-PLAN.md — UHF + RKS(+grid_response) + UKS gradients, no CPHF (GRAD-02/03/04, D-04)
-- [ ] 07-06-PLAN.md — geomopt HDF5 checkpoint + geometric_solver/berny_solver shims + constraints error (GEOMOPT-02/03/05, D-07)
+- [x] 07-06-PLAN.md — geomopt HDF5 checkpoint + geometric_solver/berny_solver shims + constraints error (GEOMOPT-02/03/05, D-07)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

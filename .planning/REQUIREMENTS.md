@@ -119,10 +119,10 @@ REQ-IDs are stable across the project lifecycle. The numbering blocks are per-ca
 ### Geometry optimization (GEOMOPT)
 
 - [ ] **GEOMOPT-01**: `pyscf.geomopt.optimize(mf)` runs a native Rust BFGS+RFO optimizer in redundant internals; no Python `geomeTRIC` or `pyberny` runtime dependency
-- [ ] **GEOMOPT-02**: `pyscf.geomopt.geometric_solver.optimize(mf)` is a drop-in shim that delegates to the native optimizer (preserves the canonical PySCF import path)
-- [ ] **GEOMOPT-03**: `pyscf.geomopt.berny_solver.optimize(mf)` is also a drop-in shim
+- [ ] **GEOMOPT-02**: `pyscf.geomopt.geometric_solver.optimize(mf)` is a drop-in shim that delegates to the native optimizer (preserves the canonical PySCF import path) — _Rust-side shim surface complete in 07-06 (`geometric_solver::{kernel,optimize}` over the ONE native engine, D-06); the Python entry point + the canonical import path land in 07-09 (PyO3 bridge)_
+- [ ] **GEOMOPT-03**: `pyscf.geomopt.berny_solver.optimize(mf)` is also a drop-in shim — _Rust-side shim surface complete in 07-06 (`berny_solver::{kernel,optimize}` — a thin alias over the SAME native engine, T-07-20); the Python entry point lands in 07-09_
 - [x] **GEOMOPT-04**: Default convergence thresholds match geomeTRIC defaults (`gradient`, `displacement`, `energy`, `gradient_max`, `displacement_max`)
-- [ ] **GEOMOPT-05**: HDF5 checkpoint of optimizer state allows resuming a partially-converged optimization
+- [x] **GEOMOPT-05**: HDF5 checkpoint of optimizer state allows resuming a partially-converged optimization
 - [x] **GEOMOPT-06**: Wilson B-matrix construction for redundant internals, RFO step with negative-eigenvalue tracking, both ported from upstream/geomeTRIC
 - [x] **GEOMOPT-07**: Optimization trajectories on the test corpus converge to the same stationary point as upstream within chemical accuracy
 
@@ -336,10 +336,10 @@ Each v1 requirement maps to exactly one phase. v1.x-deferred requirements (the `
 | GRAD-09 | Phase 7 | Complete |
 | GRAD-10 | Phase 7 | Complete (07-07: the SINGLE matrix-free Krylov cphf::solve, D-03; single_cphf_impl structural gate asserts exactly one impl; MP2 first consumer, CCSD 07-08 reuses it; pure linear algebra, tested always-on) |
 | GEOMOPT-01 | Phase 7 | Pending |
-| GEOMOPT-02 | Phase 7 | Pending |
-| GEOMOPT-03 | Phase 7 | Pending |
+| GEOMOPT-02 | Phase 7 | Partial (07-06: Rust shim surface — geometric_solver::{kernel,optimize} over the ONE native engine, D-06; the Python entry point + canonical import path land in 07-09) |
+| GEOMOPT-03 | Phase 7 | Partial (07-06: Rust shim surface — berny_solver::{kernel,optimize}, a thin alias over the SAME engine, T-07-20; the Python entry point lands in 07-09) |
 | GEOMOPT-04 | Phase 7 | Complete |
-| GEOMOPT-05 | Phase 7 | Pending |
+| GEOMOPT-05 | Phase 7 | Complete (07-06: HDF5 OptimizerState dump/load via the pyscf_chkfile::hdf5 sole-owner alias — no own hdf5-metno dep; optimize_resume reaches the same stationary point; fail-clean schema/shape guard T-07-19; always-on test) |
 | GEOMOPT-06 | Phase 7 | Complete |
 | GEOMOPT-07 | Phase 7 | Complete |
 | BIND-01 | Phase 3 | Complete |
