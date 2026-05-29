@@ -55,7 +55,7 @@ pub use gemm::{gemm, gemm_dense};
 pub use gemv::gemv;
 pub use host_fallback::{cholesky, eigh, qr, svd};
 pub use oracle::{oracle_dot, oracle_einsum, oracle_sum};
-pub use reduce::reduce_sum;
+pub use reduce::{reduce_sum, reduce_sum_dense};
 pub use scal::scal;
 pub use solve_linear::solve_linear;
 pub use transpose::transpose;
