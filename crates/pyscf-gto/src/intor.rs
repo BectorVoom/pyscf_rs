@@ -564,8 +564,7 @@ fn evaluate_arity4(
                             for kk in 0..nk {
                                 for jj in 0..nj {
                                     for ii in 0..ni {
-                                        let b =
-                                            ii + jj * ni + kk * ni * nj + ll * ni * nj * nk;
+                                        let b = ii + jj * ni + kk * ni * nj + ll * ni * nj * nk;
                                         let o = (oi + ii)
                                             + (oj + jj) * nao_c
                                             + (ok + kk) * nao2_c

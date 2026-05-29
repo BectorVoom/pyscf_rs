@@ -70,7 +70,9 @@ fn int1e_ecp_iprinv_via_scalar_intor_is_clean_cintx_availability_error() {
     assert!(
         matches!(
             r,
-            Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(_)))
+            Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+                _
+            )))
         ),
         "expected a clean cintx-availability InvalidMolecule error for the missing iprinv \
          family, got {:?}",
