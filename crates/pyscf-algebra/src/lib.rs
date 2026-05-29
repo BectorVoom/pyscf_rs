@@ -49,7 +49,7 @@ pub use tensor::{BufferId, Tensor};
 
 pub use axpy::axpy;
 pub use df_metric::{DF_METRIC_LINEAR_DEP, df_metric_fit};
-pub use dot::dot;
+pub use dot::{dot, dot_dense};
 pub use eigh_gen::eigh_gen;
 pub use gemm::{gemm, gemm_dense};
 pub use gemv::gemv;
