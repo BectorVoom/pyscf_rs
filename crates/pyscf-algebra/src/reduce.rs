@@ -363,13 +363,17 @@ pub fn reduce_sum(
                 c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
             ),
             #[cfg(feature = "cuda")]
-            AlgebraClient::Cuda(c) => launch_reduce_axis_on_handles::<cubecl_cuda::CudaRuntime, f64>(
-                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
-            ),
+            AlgebraClient::Cuda(c) => {
+                launch_reduce_axis_on_handles::<cubecl_cuda::CudaRuntime, f64>(
+                    c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
+                )
+            }
             #[cfg(feature = "wgpu")]
-            AlgebraClient::Wgpu(c) => launch_reduce_axis_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
-                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
-            ),
+            AlgebraClient::Wgpu(c) => {
+                launch_reduce_axis_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
+                    c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
+                )
+            }
             #[cfg(feature = "rocm")]
             AlgebraClient::Rocm(c) => launch_reduce_axis_on_handles::<cubecl_hip::HipRuntime, f64>(
                 c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,

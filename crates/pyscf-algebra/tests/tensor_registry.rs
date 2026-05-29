@@ -49,7 +49,10 @@ fn check_axpy(client: &AlgebraClient, label: &str) {
     axpy(client, alpha, &xt, &mut yt).expect("axpy over Tensor");
     let got = download::<f64>(client, &yt).expect("download y");
 
-    assert_eq!(got, dense, "{label}: axpy Tensor path must equal axpy_dense");
+    assert_eq!(
+        got, dense,
+        "{label}: axpy Tensor path must equal axpy_dense"
+    );
     for (g, (xi, yi)) in got.iter().zip(x.iter().zip(y0.iter())) {
         assert!(
             (g - (yi + alpha * xi)).abs() < TOL,
@@ -57,7 +60,11 @@ fn check_axpy(client: &AlgebraClient, label: &str) {
         );
     }
     // x is untouched; y holds the update.
-    assert_eq!(download::<f64>(client, &xt).expect("download x"), x, "{label}: x intact");
+    assert_eq!(
+        download::<f64>(client, &xt).expect("download x"),
+        x,
+        "{label}: x intact"
+    );
 
     release::<f64>(&xt);
     release::<f64>(&yt);
@@ -75,7 +82,10 @@ fn check_scal(client: &AlgebraClient, label: &str) {
     scal(client, alpha, &mut xt).expect("scal over Tensor");
     let got = download::<f64>(client, &xt).expect("download x");
 
-    assert_eq!(got, dense, "{label}: scal Tensor path must equal scal_dense");
+    assert_eq!(
+        got, dense,
+        "{label}: scal Tensor path must equal scal_dense"
+    );
     release::<f64>(&xt);
 }
 
@@ -92,7 +102,10 @@ fn check_dot(client: &AlgebraClient, label: &str) {
 
     assert_eq!(got, dense, "{label}: dot Tensor path must equal dot_dense");
     let host_ref: f64 = x.iter().zip(&y).map(|(a, b)| a * b).sum();
-    assert!((got - host_ref).abs() < TOL, "{label}: dot drifted from host ref");
+    assert!(
+        (got - host_ref).abs() < TOL,
+        "{label}: dot drifted from host ref"
+    );
 
     release::<f64>(&xt);
     release::<f64>(&yt);
@@ -111,8 +124,14 @@ fn check_reduce_sum(client: &AlgebraClient, label: &str) {
     reduce_sum(client, &xt, 0, &mut out).expect("reduce_sum 1-D over Tensor");
     let got = download::<f64>(client, &out).expect("download out");
     assert_eq!(got.len(), 1, "{label}: 1-D reduce_sum out is a scalar");
-    assert_eq!(got[0], total, "{label}: 1-D reduce_sum must equal total sum");
-    assert!((got[0] - x.iter().sum::<f64>()).abs() < TOL, "{label}: 1-D sum drifted");
+    assert_eq!(
+        got[0], total,
+        "{label}: 1-D reduce_sum must equal total sum"
+    );
+    assert!(
+        (got[0] - x.iter().sum::<f64>()).abs() < TOL,
+        "{label}: 1-D sum drifted"
+    );
     release::<f64>(&xt);
     release::<f64>(&out);
 
@@ -126,7 +145,10 @@ fn check_reduce_sum(client: &AlgebraClient, label: &str) {
     let mut out0 = upload::<f64>(client, &vec![0.0_f64; cols], vec![cols]).expect("upload out0");
     reduce_sum(client, &mt, 0, &mut out0).expect("reduce_sum axis 0");
     let got0 = download::<f64>(client, &out0).expect("download out0");
-    assert_eq!(got0, dense0, "{label}: axis-0 Tensor path must equal axis dense");
+    assert_eq!(
+        got0, dense0,
+        "{label}: axis-0 Tensor path must equal axis dense"
+    );
     assert_eq!(got0, vec![5.0, 7.0, 9.0], "{label}: axis-0 host reference");
     assert_eq!(out0.shape, vec![cols], "{label}: axis-0 reduced shape set");
 
@@ -135,7 +157,10 @@ fn check_reduce_sum(client: &AlgebraClient, label: &str) {
     let mut out1 = upload::<f64>(client, &vec![0.0_f64; rows], vec![rows]).expect("upload out1");
     reduce_sum(client, &mt, 1, &mut out1).expect("reduce_sum axis 1");
     let got1 = download::<f64>(client, &out1).expect("download out1");
-    assert_eq!(got1, dense1, "{label}: axis-1 Tensor path must equal axis dense");
+    assert_eq!(
+        got1, dense1,
+        "{label}: axis-1 Tensor path must equal axis dense"
+    );
     assert_eq!(got1, vec![6.0, 15.0], "{label}: axis-1 host reference");
     assert_eq!(out1.shape, vec![rows], "{label}: axis-1 reduced shape set");
 
@@ -180,7 +205,10 @@ fn check_gemm(client: &AlgebraClient, label: &str) {
     gemm(client, &lt, &rt, &mut ot).expect("gemm over Tensor");
     let got = download::<f64>(client, &ot).expect("download out");
 
-    assert_eq!(got, dense, "{label}: gemm Tensor path must equal gemm_dense");
+    assert_eq!(
+        got, dense,
+        "{label}: gemm Tensor path must equal gemm_dense"
+    );
     // Spot-check one host-computed element: out[0,0] = 1*7 + 2*9 + 3*11 = 58.
     assert!((got[0] - 58.0).abs() < TOL, "{label}: gemm[0,0] wrong");
 
@@ -204,11 +232,17 @@ fn check_gemv(client: &AlgebraClient, label: &str) {
     gemv(client, &at, &xt, &mut yt).expect("gemv over Tensor");
     let got = download::<f64>(client, &yt).expect("download y");
 
-    assert_eq!(got, dense, "{label}: gemv Tensor path must equal gemv_dense");
+    assert_eq!(
+        got, dense,
+        "{label}: gemv Tensor path must equal gemv_dense"
+    );
     // host ref: y[i] = A[i,0]*x[0] + A[i,1]*x[1].
     for (i, g) in got.iter().enumerate() {
         let r = a[i * n] * x[0] + a[i * n + 1] * x[1];
-        assert!((g - r).abs() < TOL, "{label}: gemv[{i}] drifted from host ref");
+        assert!(
+            (g - r).abs() < TOL,
+            "{label}: gemv[{i}] drifted from host ref"
+        );
     }
 
     release::<f64>(&at);
@@ -341,7 +375,10 @@ fn check_error_contracts(client: &AlgebraClient, label: &str) {
     release::<f64>(&a);
     release::<f64>(&a);
     assert!(
-        matches!(download::<f64>(client, &a), Err(AlgebraError::UnallocatedBuffer { .. })),
+        matches!(
+            download::<f64>(client, &a),
+            Err(AlgebraError::UnallocatedBuffer { .. })
+        ),
         "{label}: released buffer must be gone"
     );
     release::<f64>(&b);

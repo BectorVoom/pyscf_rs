@@ -180,9 +180,9 @@ pub fn axpy(
     }
     let n = xb.len;
     match client {
-        AlgebraClient::Cpu(c) => {
-            launch_axpy_on_handles::<cubecl_cpu::CpuRuntime, f64>(c, alpha, &xb.handle, &yb.handle, n)
-        }
+        AlgebraClient::Cpu(c) => launch_axpy_on_handles::<cubecl_cpu::CpuRuntime, f64>(
+            c, alpha, &xb.handle, &yb.handle, n,
+        ),
         #[cfg(feature = "cuda")]
         AlgebraClient::Cuda(c) => launch_axpy_on_handles::<cubecl_cuda::CudaRuntime, f64>(
             c, alpha, &xb.handle, &yb.handle, n,
@@ -192,9 +192,9 @@ pub fn axpy(
             c, alpha, &xb.handle, &yb.handle, n,
         ),
         #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => {
-            launch_axpy_on_handles::<cubecl_hip::HipRuntime, f64>(c, alpha, &xb.handle, &yb.handle, n)
-        }
+        AlgebraClient::Rocm(c) => launch_axpy_on_handles::<cubecl_hip::HipRuntime, f64>(
+            c, alpha, &xb.handle, &yb.handle, n,
+        ),
     }
     Ok(())
 }

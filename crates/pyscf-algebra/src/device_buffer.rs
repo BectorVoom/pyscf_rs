@@ -86,7 +86,9 @@ fn registry() -> &'static Mutex<HashMap<u64, StoredBuffer>> {
 /// Lock the registry, recovering from a poisoned mutex. A panic in one test
 /// while holding the lock must not cascade into unrelated tests.
 fn lock_registry() -> std::sync::MutexGuard<'static, HashMap<u64, StoredBuffer>> {
-    registry().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Allocate a device handle on `client`'s backend holding `data`. The cubecl

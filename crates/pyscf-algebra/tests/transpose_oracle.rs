@@ -66,7 +66,11 @@ fn check_case(client: &AlgebraClient, m: usize, n: usize, seed: u64) -> f64 {
 
     let device = transpose_dense::<f64>(client, &x, m, n).expect("transpose_dense should succeed");
 
-    assert_eq!(device.len(), reference.len(), "transpose must preserve size");
+    assert_eq!(
+        device.len(),
+        reference.len(),
+        "transpose must preserve size"
+    );
     device
         .iter()
         .zip(reference.iter())
@@ -107,7 +111,10 @@ fn run_all(client: &AlgebraClient, base_seed: u64, label: &str) {
 
     // Empty input is a documented no-op: must succeed and return empty.
     let empty = transpose_dense::<f64>(client, &[], 0, 0).expect("transpose_dense empty no-op");
-    assert!(empty.is_empty(), "{label} transpose of empty must stay empty");
+    assert!(
+        empty.is_empty(),
+        "{label} transpose of empty must stay empty"
+    );
 }
 
 #[test]

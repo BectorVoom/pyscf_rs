@@ -145,11 +145,7 @@ pub fn transpose_dense<F: DeviceScalar>(
 /// yields [`AlgebraError::BackendMismatch`]. `x`'s `[M, N]` shape drives the
 /// transpose; `out` must already be allocated with `M*N` elements. Errors with
 /// `DimensionMismatch` if `x` is not rank-2 or `out` is the wrong size.
-pub fn transpose(
-    client: &AlgebraClient,
-    x: &Tensor,
-    out: &mut Tensor,
-) -> Result<(), AlgebraError> {
+pub fn transpose(client: &AlgebraClient, x: &Tensor, out: &mut Tensor) -> Result<(), AlgebraError> {
     if x.rank() != 2 {
         return Err(AlgebraError::DimensionMismatch {
             op: "transpose",

@@ -31,7 +31,9 @@ pub enum AlgebraError {
     /// passed a client for a different backend than the one its resident device
     /// buffer was uploaded on. Device handles are valid only with their owning
     /// backend, so the op refuses rather than dereference a foreign handle.
-    #[error("{op}: tensor buffer is resident on backend '{actual}' but the call used backend '{expected}'")]
+    #[error(
+        "{op}: tensor buffer is resident on backend '{actual}' but the call used backend '{expected}'"
+    )]
     BackendMismatch {
         op: &'static str,
         expected: &'static str,
