@@ -117,14 +117,17 @@ pub fn scal_dense<F: DeviceScalar>(
     Ok(())
 }
 
-/// Element-wise scale over the opaque `Tensor` surface: `x *= alpha`.
+/// Element-wise scale over the opaque `Tensor` surface: `x *= alpha`, updating
+/// `x`'s buffer in place.
 ///
-/// STILL a Phase-2 stub. `Tensor` carries a sentinel `BufferId` (the device
-/// allocator lands in Phase 2), so there is no device buffer to read here yet.
-/// The working device path is [`scal_dense`], which takes a host slice directly.
-pub fn scal(_client: &AlgebraClient, _alpha: f64, _x: &mut Tensor) -> Result<(), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented {
-        phase: 2,
-        what: "scal over Tensor (device allocator) — use scal_dense for the host-slice device path",
-    })
+/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
+/// `x` must be a device-backed tensor built with
+/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
+/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. The buffer is read
+/// from the registry, scaled by the oracle-tested [`scal_dense`] launcher on
+/// `client`'s backend, and written back to the same `BufferId`.
+pub fn scal(client: &AlgebraClient, alpha: f64, x: &mut Tensor) -> Result<(), AlgebraError> {
+    let mut x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "scal")?;
+    scal_dense::<f64>(client, alpha, &mut x_host)?;
+    crate::device_buffer::write_back::<f64>(x.id.raw(), &x_host, "scal")
 }

@@ -137,20 +137,35 @@ pub fn reduce_sum_dense<F: DeviceScalar>(
     Ok(out)
 }
 
-/// Axis reduction over the opaque `Tensor` surface: `out = sum(x, axis)`.
+/// Total reduction over the opaque `Tensor` surface: `out[0] = sum(x[i])`,
+/// writing the scalar into `out`'s buffer in place.
 ///
-/// STILL a Phase-2 stub. `Tensor` carries a sentinel `BufferId` (the device
-/// allocator lands in Phase 2), so there is no device buffer to read here yet.
-/// The working device path is [`reduce_sum_dense`], which takes a host slice
-/// directly.
+/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
+/// Both `x` and `out` must be device-backed tensors built with
+/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
+/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. `x` is read from the
+/// registry and summed by the oracle-tested [`reduce_sum_dense`] launcher on
+/// `client`'s backend; the scalar result is written back to `out`.
+///
+/// Scope: the underlying device kernel is axis-free (full reduction), so only
+/// the total-reduction case is wired — `out` must be a single-element buffer.
+/// A non-scalar `out` (per-axis reduction) returns `NotYetImplemented`; `axis`
+/// is accepted for API compatibility but the full reduction collapses every
+/// axis. (Per-axis reduction needs a strided kernel beyond `reduce_sum_dense`.)
 pub fn reduce_sum(
-    _client: &AlgebraClient,
-    _x: &Tensor,
+    client: &AlgebraClient,
+    x: &Tensor,
     _axis: usize,
-    _out: &mut Tensor,
+    out: &mut Tensor,
 ) -> Result<(), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented {
-        phase: 2,
-        what: "reduce_sum over Tensor (device allocator) — use reduce_sum_dense for the host-slice device path",
-    })
+    if out.numel() != 1 {
+        return Err(AlgebraError::NotYetImplemented {
+            phase: 2,
+            what: "per-axis reduce_sum over Tensor — only full reduction to a scalar `out` is wired; \
+                   use reduce_sum_dense for the host-slice total sum",
+        });
+    }
+    let x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "reduce_sum")?;
+    let total = reduce_sum_dense::<f64>(client, &x_host)?;
+    crate::device_buffer::write_back::<f64>(out.id.raw(), &[total], "reduce_sum")
 }

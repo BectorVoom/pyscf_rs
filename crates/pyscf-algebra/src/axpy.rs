@@ -137,19 +137,27 @@ pub fn axpy_dense<F: DeviceScalar>(
     Ok(())
 }
 
-/// Element-wise AXPY over the opaque `Tensor` surface: `y += alpha * x`.
+/// Element-wise AXPY over the opaque `Tensor` surface: `y[i] += alpha * x[i]`,
+/// updating `y`'s buffer in place.
 ///
-/// STILL a Phase-2 stub. `Tensor` carries a sentinel `BufferId` (the device
-/// allocator lands in Phase 2), so there is no device buffer to read here yet.
-/// The working device path is [`axpy_dense`], which takes host slices directly.
+/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
+/// Both `x` and `y` must be device-backed tensors built with
+/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
+/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. The operands are read
+/// from the registry, run through the oracle-tested [`axpy_dense`] launcher on
+/// `client`'s backend (which enforces the length match), and the result is
+/// written back to `y`'s buffer — so the [`Tensor`] `y` keeps its `BufferId` and
+/// callers see the update on their next [`crate::device_buffer::download`].
 pub fn axpy(
-    _client: &AlgebraClient,
-    _alpha: f64,
-    _x: &Tensor,
-    _y: &mut Tensor,
+    client: &AlgebraClient,
+    alpha: f64,
+    x: &Tensor,
+    y: &mut Tensor,
 ) -> Result<(), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented {
-        phase: 2,
-        what: "axpy over Tensor (device allocator) — use axpy_dense for the host-slice device path",
-    })
+    let x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "axpy")?;
+    let mut y_host = crate::device_buffer::read_raw::<f64>(y.id.raw(), "axpy")?;
+    // `axpy_dense` enforces x.len() == y.len() (→ DimensionMismatch) and the
+    // empty no-op; reuse it verbatim so the device math is the oracle-tested path.
+    axpy_dense::<f64>(client, alpha, &x_host, &mut y_host)?;
+    crate::device_buffer::write_back::<f64>(y.id.raw(), &y_host, "axpy")
 }

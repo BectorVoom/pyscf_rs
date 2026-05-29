@@ -21,11 +21,23 @@ use crate::scalar::dtype_of;
 pub struct BufferId(pub(crate) u64);
 
 impl BufferId {
-    // Used by the real device allocator (later phase); inert until then.
-    #[doc(hidden)]
-    #[allow(dead_code)]
+    /// Wrap a registry-assigned id. Used by the Phase-2 device-buffer registry
+    /// (`crate::device_buffer`) when it `upload`s host data and hands back a
+    /// `Tensor` referencing the stored buffer.
     pub(crate) fn from_raw(id: u64) -> Self {
         Self(id)
+    }
+
+    /// The sentinel id a [`Tensor::placeholder`] carries — never handed out by
+    /// the registry, so a placeholder tensor always misses the buffer lookup
+    /// and surfaces a clean `UnallocatedBuffer` error rather than aliasing real
+    /// device data.
+    pub(crate) const SENTINEL: u64 = u64::MAX;
+
+    /// The raw registry key. Crate-private — the integer id is an
+    /// algebra-internal detail, not part of the opaque method-crate surface.
+    pub(crate) fn raw(&self) -> u64 {
+        self.0
     }
 }
 
@@ -62,8 +74,10 @@ impl<T: Scalar> Tensor<T> {
     }
 
     /// Phase-1 placeholder constructor for integration tests. The id is
-    /// a sentinel never dereferenced by Phase 1 primitives. Phase 2's
-    /// allocator replaces this with a real id from BufferId::from_raw.
+    /// the [`BufferId::SENTINEL`], never handed out by the device-buffer
+    /// registry, so a placeholder is not backed by any uploaded data — the
+    /// Phase-2 `Tensor` ops surface `UnallocatedBuffer` for it. Build a
+    /// device-backed tensor with [`crate::device_buffer::upload`] instead.
     ///
     /// quick-260522-b06: the `dtype` is now derived from `T` via
     /// `dtype_of::<T>()`, so the old two-arg `placeholder(shape, dtype)` form
@@ -72,7 +86,20 @@ impl<T: Scalar> Tensor<T> {
     #[doc(hidden)]
     pub fn placeholder(shape: Vec<usize>) -> Self {
         Self {
-            id: BufferId(u64::MAX),
+            id: BufferId(BufferId::SENTINEL),
+            shape,
+            dtype: dtype_of::<T>(),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Construct a tensor that references a real registry buffer. Crate-private:
+    /// the only callers are the device-buffer registry's `upload` paths, which
+    /// pair the returned `id` with the bytes they just stored. The `dtype` is
+    /// derived from `T` (never set independently), matching `placeholder`.
+    pub(crate) fn from_buffer(id: BufferId, shape: Vec<usize>) -> Self {
+        Self {
+            id,
             shape,
             dtype: dtype_of::<T>(),
             _marker: PhantomData,

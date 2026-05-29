@@ -19,6 +19,14 @@ pub enum AlgebraError {
     },
     #[error("not yet implemented (Phase {phase}): {what}")]
     NotYetImplemented { phase: u8, what: &'static str },
+    /// Phase-2 device-buffer registry: a `Tensor`-based op was handed a tensor
+    /// whose `BufferId` is not in the registry — typically a `Tensor::placeholder`
+    /// (sentinel id, never uploaded) or one already `release`d. Build the tensor
+    /// with `device_buffer::upload` before passing it to a device op.
+    #[error(
+        "{op}: tensor buffer {id} is not allocated (build it with device_buffer::upload, not Tensor::placeholder)"
+    )]
+    UnallocatedBuffer { op: &'static str, id: u64 },
     #[error("cubecl runtime error: {0}")]
     CubeclRuntime(String),
     /// Phase 3 plan 03-01 — `solve_linear` shape validation. Distinct from

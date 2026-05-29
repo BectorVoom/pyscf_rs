@@ -19,6 +19,12 @@ pub mod tensor;
 // (DeviceScalar) and the ScalarKind -> DType reconciliation (dtype_of) live
 // here — inside the wall — never in pyscf-core or a method crate.
 pub mod scalar;
+// quick-260529-mtx (Phase-2 of the algebra crate): the device-buffer registry
+// backing the opaque `Tensor`/`BufferId` surface. Turns the `placeholder`
+// sentinel into real, uploadable buffers so the `Tensor`-based element-wise ops
+// (axpy/scal/dot/reduce_sum) run end-to-end instead of returning
+// `NotYetImplemented`. Stays inside the wall: cubecl never appears in its API.
+pub mod device_buffer;
 
 pub mod axpy;
 pub mod dot;
@@ -48,6 +54,7 @@ pub use select::{BackendSelection, select_backend};
 pub use tensor::{BufferId, Tensor};
 
 pub use axpy::{axpy, axpy_dense};
+pub use device_buffer::{download, release, upload};
 pub use df_metric::{DF_METRIC_LINEAR_DEP, df_metric_fit};
 pub use dot::{dot, dot_dense};
 pub use eigh_gen::eigh_gen;

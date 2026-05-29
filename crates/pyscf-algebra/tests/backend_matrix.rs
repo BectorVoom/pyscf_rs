@@ -35,14 +35,23 @@ fn primitive_signatures_callable_returning_notyetimplemented() {
     let lhs = Tensor::placeholder(vec![4, 4]);
     let rhs = Tensor::placeholder(vec![4, 4]);
     let mut out = Tensor::placeholder(vec![4, 4]);
-    // Phase 1 primitives return NotYetImplemented — that's the contract.
-    // Phase 2 wires the actual cubecl-matmul launch.
+    // gemm is STILL a Phase-1 stub — the contract is NotYetImplemented until the
+    // cubecl-matmul Tensor launch is wired (quick-260529-mtx wired the
+    // element-wise ops, not gemm).
     let r = gemm(&sel.client, &lhs, &rhs, &mut out);
     assert!(matches!(r, Err(AlgebraError::NotYetImplemented { .. })));
 
+    // axpy is now wired through the device-buffer registry (quick-260529-mtx).
+    // A `placeholder` carries the sentinel BufferId and was never uploaded, so
+    // the Tensor path must reject it with UnallocatedBuffer (NOT silently
+    // succeed and NOT NotYetImplemented). The real upload→op→download round-trip
+    // lives in tests/tensor_registry.rs.
     let r = axpy(&sel.client, 1.0, &lhs, &mut out);
-    assert!(matches!(r, Err(AlgebraError::NotYetImplemented { .. })));
+    assert!(matches!(r, Err(AlgebraError::UnallocatedBuffer { .. })));
 
+    // reduce_sum is wired only for full reduction to a SCALAR `out`; a [4,4]
+    // `out` (per-axis) is not yet implemented — that guard fires before any
+    // registry lookup, so a placeholder out still yields NotYetImplemented here.
     let r = reduce_sum(&sel.client, &lhs, 0, &mut out);
     assert!(matches!(r, Err(AlgebraError::NotYetImplemented { .. })));
 

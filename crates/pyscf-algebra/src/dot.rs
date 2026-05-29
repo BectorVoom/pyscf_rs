@@ -119,12 +119,15 @@ pub fn dot_dense<F: DeviceScalar>(
 
 /// Dot reduction over the opaque `Tensor` surface: `dot(x, y) = sum(x[i]*y[i])`.
 ///
-/// STILL a Phase-2 stub. `Tensor` carries a sentinel `BufferId` (the device
-/// allocator lands in Phase 2), so there is no device buffer to read here yet.
-/// The working device path is [`dot_dense`], which takes host slices directly.
-pub fn dot(_client: &AlgebraClient, _x: &Tensor, _y: &Tensor) -> Result<f64, AlgebraError> {
-    Err(AlgebraError::NotYetImplemented {
-        phase: 2,
-        what: "dot over Tensor (device allocator) — use dot_dense for the host-slice device path",
-    })
+/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
+/// Both `x` and `y` must be device-backed tensors built with
+/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
+/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. The operands are read
+/// from the registry and reduced by the oracle-tested [`dot_dense`] launcher on
+/// `client`'s backend (which enforces the length match). Pure reduction — no
+/// buffer is written back.
+pub fn dot(client: &AlgebraClient, x: &Tensor, y: &Tensor) -> Result<f64, AlgebraError> {
+    let x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "dot")?;
+    let y_host = crate::device_buffer::read_raw::<f64>(y.id.raw(), "dot")?;
+    dot_dense::<f64>(client, &x_host, &y_host)
 }
