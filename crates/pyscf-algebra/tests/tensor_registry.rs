@@ -21,8 +21,8 @@
 use cubecl::Runtime; // brings `::client` into scope for the concrete runtimes
 use pyscf_algebra::{
     AlgebraClient, AlgebraError, Tensor, axpy, axpy_dense, dot, dot_dense, download, gemm,
-    gemm_dense, gemv, gemv_dense, reduce_sum, reduce_sum_dense, release, scal, scal_dense,
-    transpose, transpose_dense, upload,
+    gemm_dense, gemv, gemv_dense, reduce_sum, reduce_sum_axis_dense, reduce_sum_dense, release,
+    scal, scal_dense, transpose, transpose_dense, upload,
 };
 
 /// Exact-equality tolerance: the Tensor path calls the identical `*_dense`
@@ -96,27 +96,71 @@ fn check_dot(client: &AlgebraClient, label: &str) {
     release::<f64>(&yt);
 }
 
-/// `reduce_sum` over `Tensor` (full reduction to a scalar `out`) must equal
-/// `reduce_sum_dense`.
+/// `reduce_sum` over `Tensor` covers (a) the 1-D total-sum case — where per-axis
+/// axis-0 collapses to the scalar total, equal to `reduce_sum_dense` — and (b)
+/// genuine 2-D per-axis reduction along both axes, equal to
+/// `reduce_sum_axis_dense` and a host reference, with the reduced `out` shape set.
 fn check_reduce_sum(client: &AlgebraClient, label: &str) {
+    // (a) 1-D: reducing the only axis is the total sum → scalar out.
     let x = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0];
-
-    let dense = reduce_sum_dense::<f64>(client, &x).expect("reduce_sum_dense");
-
-    let xt = upload::<f64>(&x, vec![7]).expect("upload x");
+    let total = reduce_sum_dense::<f64>(client, &x).expect("reduce_sum_dense");
+    let xt = upload::<f64>(&x, vec![7]).expect("upload 1-D x");
     let mut out = upload::<f64>(&[0.0_f64], vec![1]).expect("upload scalar out");
-    reduce_sum(client, &xt, 0, &mut out).expect("reduce_sum over Tensor");
+    reduce_sum(client, &xt, 0, &mut out).expect("reduce_sum 1-D over Tensor");
     let got = download::<f64>(&out).expect("download out");
-
-    assert_eq!(got.len(), 1, "{label}: reduce_sum out is a scalar");
-    assert_eq!(
-        got[0], dense,
-        "{label}: reduce_sum Tensor path must equal reduce_sum_dense"
-    );
-    assert!((got[0] - x.iter().sum::<f64>()).abs() < TOL, "{label}: sum drifted");
-
+    assert_eq!(got.len(), 1, "{label}: 1-D reduce_sum out is a scalar");
+    assert_eq!(got[0], total, "{label}: 1-D reduce_sum must equal total sum");
+    assert!((got[0] - x.iter().sum::<f64>()).abs() < TOL, "{label}: 1-D sum drifted");
     release::<f64>(&xt);
     release::<f64>(&out);
+
+    // (b) 2-D 2×3 row-major: [[1,2,3],[4,5,6]].
+    let m = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let (rows, cols) = (2usize, 3usize);
+
+    // axis 0 → sum down columns → len `cols` = [5, 7, 9].
+    let dense0 = reduce_sum_axis_dense::<f64>(client, &m, &[rows, cols], 0).expect("axis0 dense");
+    let mt = upload::<f64>(&m, vec![rows, cols]).expect("upload M");
+    let mut out0 = upload::<f64>(&vec![0.0_f64; cols], vec![cols]).expect("upload out0");
+    reduce_sum(client, &mt, 0, &mut out0).expect("reduce_sum axis 0");
+    let got0 = download::<f64>(&out0).expect("download out0");
+    assert_eq!(got0, dense0, "{label}: axis-0 Tensor path must equal axis dense");
+    assert_eq!(got0, vec![5.0, 7.0, 9.0], "{label}: axis-0 host reference");
+    assert_eq!(out0.shape, vec![cols], "{label}: axis-0 reduced shape set");
+
+    // axis 1 → sum across rows → len `rows` = [6, 15].
+    let dense1 = reduce_sum_axis_dense::<f64>(client, &m, &[rows, cols], 1).expect("axis1 dense");
+    let mut out1 = upload::<f64>(&vec![0.0_f64; rows], vec![rows]).expect("upload out1");
+    reduce_sum(client, &mt, 1, &mut out1).expect("reduce_sum axis 1");
+    let got1 = download::<f64>(&out1).expect("download out1");
+    assert_eq!(got1, dense1, "{label}: axis-1 Tensor path must equal axis dense");
+    assert_eq!(got1, vec![6.0, 15.0], "{label}: axis-1 host reference");
+    assert_eq!(out1.shape, vec![rows], "{label}: axis-1 reduced shape set");
+
+    // Out-of-range axis is a clean DimensionMismatch, not a panic.
+    let mut junk = upload::<f64>(&[0.0_f64], vec![1]).expect("upload junk");
+    assert!(
+        matches!(
+            reduce_sum(client, &mt, 2, &mut junk),
+            Err(AlgebraError::DimensionMismatch { .. })
+        ),
+        "{label}: reduce_sum must reject out-of-range axis"
+    );
+    // Wrong-size `out` for the reduction is a DimensionMismatch too.
+    let mut wrong = upload::<f64>(&[0.0_f64; 5], vec![5]).expect("upload wrong");
+    assert!(
+        matches!(
+            reduce_sum(client, &mt, 0, &mut wrong),
+            Err(AlgebraError::DimensionMismatch { .. })
+        ),
+        "{label}: reduce_sum must reject wrong-size out"
+    );
+
+    release::<f64>(&mt);
+    release::<f64>(&out0);
+    release::<f64>(&out1);
+    release::<f64>(&junk);
+    release::<f64>(&wrong);
 }
 
 /// `gemm` over `Tensor` must equal `gemm_dense` and fill the `out` buffer.
