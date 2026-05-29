@@ -52,11 +52,18 @@ pub fn load_basis(name: &str, symbol: &str) -> Result<ParsedBasis, BasisLoadErro
         return Ok(parsed.clone());
     }
 
-    // Slow path: resolve filename via ALIAS, read file, dispatch parser.
-    let filename = alias::lookup(&canonical).ok_or_else(|| BasisLoadError::UnknownName {
-        name: canonical.clone(),
-    })?;
-    let dir = path::basis_dir()?;
+    // Slow path: resolve filename + table via ALIAS, read file, dispatch
+    // parser. The table tells us which on-disk tree holds the file: standard
+    // Gaussian sets live under `pyscf/gto/basis/`, while CP2K/GTH basis sets
+    // and pseudopotentials live under `pyscf/pbc/gto/basis/`.
+    let (filename, kind) =
+        alias::lookup_kind(&canonical).ok_or_else(|| BasisLoadError::UnknownName {
+            name: canonical.clone(),
+        })?;
+    let dir = match kind {
+        alias::AliasKind::Standard => path::basis_dir()?,
+        alias::AliasKind::Gth | alias::AliasKind::Pp => path::pbc_basis_dir()?,
+    };
     let full = dir.join(filename);
     let text = std::fs::read_to_string(&full).map_err(|e| BasisLoadError::Io {
         path: full.display().to_string(),
@@ -108,5 +115,20 @@ mod tests {
         assert_eq!(canonicalise_basis_name("CC_PVDZ"), "ccpvdz");
         assert_eq!(canonicalise_basis_name("STO-3G"), "sto3g");
         assert_eq!(canonicalise_basis_name("def2-SVP"), "def2svp");
+    }
+
+    /// End-to-end GTH basis load: the `gthszv` alias resolves to `gth-szv.dat`,
+    /// which lives under the PBC tree (`pyscf/pbc/gto/basis/`), NOT the standard
+    /// `pyscf/gto/basis/`. Exercises the GTH-aware directory routing
+    /// (`lookup_kind` → `pbc_basis_dir`). Mirrors `path::dev_walk_up_*` in
+    /// relying on the in-repo `pyscf/` tree.
+    #[test]
+    fn load_basis_gth_szv_resolves_from_pbc_tree() {
+        // H SZV-GTH: a single l=0 shell with 4 primitives, one contraction.
+        let parsed = load_basis("gth-szv", "H").expect("gth-szv must resolve from the PBC tree");
+        assert_eq!(parsed.shells.len(), 1);
+        assert_eq!(parsed.shells[0].l, 0);
+        assert_eq!(parsed.shells[0].exponents.len(), 4);
+        approx::assert_abs_diff_eq!(parsed.shells[0].exponents[0], 8.3744350009, epsilon = 1e-9);
     }
 }

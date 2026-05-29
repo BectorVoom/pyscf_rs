@@ -194,22 +194,43 @@ fn build_pp_alias() -> HashMap<&'static str, &'static str> {
 /// Look up a canonical (post-canonicalise) basis name in the merged alias tables.
 /// Order: ALIAS → GTH_ALIAS → PP_ALIAS.
 pub fn lookup(canonical_name: &str) -> Option<&'static str> {
-    ALIAS_TABLE
-        .get_or_init(build_alias)
+    lookup_kind(canonical_name).map(|(filename, _)| filename)
+}
+
+/// Which alias table a name resolved through. Selects the on-disk directory:
+/// standard Gaussian basis sets live under `pyscf/gto/basis/`, while CP2K/GTH
+/// basis sets and pseudopotentials live under the PBC tree
+/// (`pyscf/pbc/gto/basis/`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AliasKind {
+    /// Standard Gaussian basis (`pyscf/gto/basis/`).
+    Standard,
+    /// CP2K / GTH basis (`pyscf/pbc/gto/basis/`).
+    Gth,
+    /// Pseudopotential basis (`pyscf/pbc/gto/basis/`).
+    Pp,
+}
+
+/// Like [`lookup`], but also reports which table matched so the loader can pick
+/// the correct on-disk directory. Resolution order is ALIAS → GTH_ALIAS →
+/// PP_ALIAS (matching [`lookup`]).
+pub fn lookup_kind(canonical_name: &str) -> Option<(&'static str, AliasKind)> {
+    if let Some(f) = ALIAS_TABLE.get_or_init(build_alias).get(canonical_name) {
+        return Some((f, AliasKind::Standard));
+    }
+    if let Some(f) = GTH_ALIAS_TABLE
+        .get_or_init(build_gth_alias)
         .get(canonical_name)
-        .copied()
-        .or_else(|| {
-            GTH_ALIAS_TABLE
-                .get_or_init(build_gth_alias)
-                .get(canonical_name)
-                .copied()
-        })
-        .or_else(|| {
-            PP_ALIAS_TABLE
-                .get_or_init(build_pp_alias)
-                .get(canonical_name)
-                .copied()
-        })
+    {
+        return Some((f, AliasKind::Gth));
+    }
+    if let Some(f) = PP_ALIAS_TABLE
+        .get_or_init(build_pp_alias)
+        .get(canonical_name)
+    {
+        return Some((f, AliasKind::Pp));
+    }
+    None
 }
 
 /// Number of entries in the main `ALIAS` table. Used by the floor-check test.
