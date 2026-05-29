@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 Phase: 8
 Plan: Not started
 Status: Phase 07 COMPLETE + verified (5/5 must-haves; review BLOCKERs CR-01/CR-02 fixed) — ready to discuss/plan Phase 8 (gpu-enable + oracle-hardening + distribution)
-Last activity: 2026-05-29 - Completed quick task 260529-iji: dot.rs cubecl generic-float reduction kernel + ROCm random-oracle test (passes on gfx1152)
+Last activity: 2026-05-29 - Completed quick task 260529-jcx: reduce.rs cubecl generic-float partial-sum kernel + ROCm random-oracle test (passes on gfx1152)
 
 Progress: [█████████░] 88% (7/8 phases done; Phase 7 gradients-geomopt COMPLETE + verified 5/5 must-haves, advisory code-review BLOCKERs CR-01/CR-02 fixed; Phase 7 ran as 6 DAG waves.
 
@@ -201,6 +201,7 @@ None yet.
 | 260522-b06 | implement f32/f64 precision switching using generics | 2026-05-22 | 4c6ab55 | [260522-b06-implement-f32-f64-precision-switching-us](./quick/260522-b06-implement-f32-f64-precision-switching-us/) |
 | 260529-i2x | refactor gemm.rs to cubecl generic-float kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | b720570 | [260529-i2x-refactor-gemm-rs-to-cubecl-generic-float](./quick/260529-i2x-refactor-gemm-rs-to-cubecl-generic-float/) |
 | 260529-iji | refactor dot.rs to cubecl generic-float reduction kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 7ab843b | [260529-iji-refactor-pyscf-algebra-dot-rs-to-cubecl-](./quick/260529-iji-refactor-pyscf-algebra-dot-rs-to-cubecl-/) |
+| 260529-jcx | refactor reduce.rs to cubecl generic-float partial-sum kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | be22fe8 | [260529-jcx-refactor-reduce-rs-to-cubecl-generic-flo](./quick/260529-jcx-refactor-reduce-rs-to-cubecl-generic-flo/) |
 
 ## Deferred Items
 
