@@ -8,7 +8,9 @@
 //!
 //! Public surface:
 //!   * [`load_basis`] — name + element-symbol → [`pyscf_core::ParsedBasis`]
+//!   * [`load_pseudo`] — name + element-symbol → [`pyscf_core::GthPseudo`]
 //!   * [`parse`]      — inline NWChem / Gaussian-94 text → [`pyscf_core::ParsedBasis`]
+//!   * [`parse_pseudo`] — inline CP2K/GTH pseudopotential text → [`pyscf_core::GthPseudo`]
 //!   * [`canonicalise_basis_name`] — case-insensitive ALIAS-key normaliser
 
 pub mod alias;
@@ -18,7 +20,7 @@ pub mod nwchem;
 pub mod nwchem_ecp;
 pub mod path;
 
-use pyscf_core::{BasisLoadError, ParsedBasis};
+use pyscf_core::{BasisLoadError, EcpLoadError, GthPseudo, ParsedBasis};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
@@ -62,7 +64,17 @@ pub fn load_basis(name: &str, symbol: &str) -> Result<ParsedBasis, BasisLoadErro
         })?;
     let dir = match kind {
         alias::AliasKind::Standard => path::basis_dir()?,
-        alias::AliasKind::Gth | alias::AliasKind::Pp => path::pbc_basis_dir()?,
+        alias::AliasKind::Gth => path::pbc_basis_dir()?,
+        // PP entries are pseudopotentials, not basis sets: they parse into
+        // `GthPseudo` (via `load_pseudo`), not `ParsedBasis`, and live in the
+        // pseudo tree — so a PP name reaching `load_basis` is a usage error.
+        alias::AliasKind::Pp => {
+            return Err(BasisLoadError::UnknownName {
+                name: format!(
+                    "'{canonical}' is a GTH pseudopotential, not a basis set; use load_pseudo"
+                ),
+            });
+        }
     };
     let full = dir.join(filename);
     let text = std::fs::read_to_string(&full).map_err(|e| BasisLoadError::Io {
@@ -105,6 +117,72 @@ pub fn parse(text: &str, symbol: &str) -> Result<ParsedBasis, BasisLoadError> {
     }
 }
 
+/// Process-local parsed-pseudopotential cache. Key:
+/// `(canonical_pseudo_name, element_symbol_upper)`.
+static PSEUDO_CACHE: OnceLock<Mutex<HashMap<(String, String), GthPseudo>>> = OnceLock::new();
+
+fn pseudo_cache() -> &'static Mutex<HashMap<(String, String), GthPseudo>> {
+    PSEUDO_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Load a GTH pseudopotential for one element symbol. First call parses +
+/// caches; subsequent calls hit the cache.
+///
+/// Resolves the name via `PP_ALIAS` (`AliasKind::Pp`), reads from the PBC
+/// pseudo tree (`pyscf/pbc/gto/pseudo/`), and parses with
+/// [`cp2k_pp::parse_cp2k_pp`] into [`pyscf_core::GthPseudo`]. Mirrors upstream
+/// `pyscf/gto/basis/__init__.py` `load_pseudo`.
+pub fn load_pseudo(name: &str, symbol: &str) -> Result<GthPseudo, EcpLoadError> {
+    let canonical = canonicalise_basis_name(name);
+    let key = (canonical.clone(), symbol.to_ascii_uppercase());
+
+    if let Some(p) = pseudo_cache()
+        .lock()
+        .expect("PSEUDO_CACHE mutex poisoned")
+        .get(&key)
+    {
+        return Ok(p.clone());
+    }
+
+    let (filename, kind) = alias::lookup_kind(&canonical)
+        .ok_or_else(|| EcpLoadError::UnknownName(canonical.clone()))?;
+    if kind != alias::AliasKind::Pp {
+        return Err(EcpLoadError::Parse {
+            file: canonical.clone(),
+            line: 0,
+            reason: format!(
+                "'{canonical}' is a basis set, not a GTH pseudopotential; use load_basis"
+            ),
+        });
+    }
+
+    let dir = path::pbc_pseudo_dir().map_err(|e| EcpLoadError::Parse {
+        file: "<pseudo-dir>".into(),
+        line: 0,
+        reason: e.to_string(),
+    })?;
+    let full = dir.join(filename);
+    let text = std::fs::read_to_string(&full).map_err(|e| EcpLoadError::Parse {
+        file: full.display().to_string(),
+        line: 0,
+        reason: format!("io error reading pseudopotential file: {e}"),
+    })?;
+
+    let parsed = cp2k_pp::parse_cp2k_pp(&text, &key.1, &full.display().to_string())?;
+    pseudo_cache()
+        .lock()
+        .expect("PSEUDO_CACHE mutex poisoned")
+        .insert(key.clone(), parsed.clone());
+    tracing::debug!(name = %canonical, symbol = %key.1, file = %full.display(), "pseudopotential loaded");
+    Ok(parsed)
+}
+
+/// User entry point — parse CP2K/GTH pseudopotential text directly (no file
+/// read). Mirrors [`parse`] for the pseudopotential surface.
+pub fn parse_pseudo(text: &str, symbol: &str) -> Result<GthPseudo, EcpLoadError> {
+    cp2k_pp::parse_cp2k_pp(text, symbol, "<inline-pseudo-text>")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +208,54 @@ mod tests {
         assert_eq!(parsed.shells[0].l, 0);
         assert_eq!(parsed.shells[0].exponents.len(), 4);
         approx::assert_abs_diff_eq!(parsed.shells[0].exponents[0], 8.3744350009, epsilon = 1e-9);
+    }
+
+    /// End-to-end GTH pseudopotential load: `gth-pade` resolves via PP_ALIAS to
+    /// `gth-pade.dat` under the PBC pseudo tree (`pyscf/pbc/gto/pseudo/`) and
+    /// parses into a `GthPseudo`. Na q1 (the first Na block) carries a 2×2
+    /// symmetric h-matrix in its l=0 projector.
+    #[test]
+    fn load_pseudo_gth_pade_resolves_from_pseudo_tree() {
+        let pp = load_pseudo("gth-pade", "Na").expect("gth-pade must resolve from the pseudo tree");
+        assert_eq!(pp.nelec, vec![1]);
+        approx::assert_abs_diff_eq!(pp.rloc, 0.88550938, epsilon = 1e-9);
+        assert_eq!(pp.projectors.len(), 2);
+        assert_eq!(pp.projectors[0].nproj, 2);
+        // Symmetrised off-diagonal of the l=0 h-matrix.
+        approx::assert_abs_diff_eq!(
+            pp.projectors[0].h[1],
+            pp.projectors[0].h[2],
+            epsilon = 1e-15
+        );
+
+        // `gthlda` is an alias for the same PADE file (LDA == PADE).
+        let lda = load_pseudo("gth-lda", "H").expect("gthlda alias must resolve");
+        assert_eq!(lda.nelec, vec![1]);
+        assert!(lda.projectors.is_empty()); // H GTH-PADE-q1 is local-only.
+    }
+
+    /// A pseudopotential name passed to `load_basis` is a usage error, not a
+    /// silent wrong-directory read.
+    #[test]
+    fn load_basis_rejects_pseudopotential_name() {
+        let err = load_basis("gth-pade", "Na").unwrap_err();
+        match err {
+            BasisLoadError::UnknownName { name } => {
+                assert!(name.contains("pseudopotential"), "{name}");
+            }
+            other => panic!("expected UnknownName, got {other:?}"),
+        }
+    }
+
+    /// A basis name passed to `load_pseudo` is the mirror-image usage error.
+    #[test]
+    fn load_pseudo_rejects_basis_name() {
+        let err = load_pseudo("gth-szv", "H").unwrap_err();
+        match err {
+            EcpLoadError::Parse { reason, .. } => {
+                assert!(reason.contains("not a GTH pseudopotential"), "{reason}");
+            }
+            other => panic!("expected Parse error, got {other:?}"),
+        }
     }
 }
