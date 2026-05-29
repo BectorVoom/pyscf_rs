@@ -4,9 +4,10 @@
 //! `device_buffer::download::<f64>`, run faer on host, and `device_buffer::upload`
 //! the factor(s) back (Vec<f64> round-trip per RESEARCH §9 + faer-ext Pitfall 3).
 //! This module names ONLY `device_buffer::{download,upload}`, `faer::*`, and
-//! `AlgebraError` — never a `cubecl::*` type (ALG-06 wall).
+//! `AlgebraError` — never a device-runtime type, keeping the ALG-06 wall intact
+//! (the device-runtime generics stay inside `device_buffer`).
 //!
-//! quick-260529-oj6: refactored the four Phase-1 `NotYetImplemented` stubs into
+//! quick-260529-oj6: refactored the four Phase-1 stub bodies into
 //! real faer-backed bodies (mirroring `eigh_gen.rs` / `solve_linear.rs` wrapper
 //! discipline: download → `Mat::from_fn` row-major → decompose → flat-Vec →
 //! upload). The four public signatures are LOCKED (re-exported at `lib.rs:63`).
@@ -133,21 +134,83 @@ pub fn cholesky(client: &AlgebraClient, matrix: &Tensor) -> Result<Tensor, Algeb
     device_buffer::upload::<f64>(client, &out, vec![n, n])
 }
 
-/// QR (no pivot). Phase 6 (CCSD intermediate canonicalization) wires.
-pub fn qr(_client: &AlgebraClient, _matrix: &Tensor) -> Result<(Tensor, Tensor), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented {
-        phase: 6,
-        what: "qr — Phase 6 wires faer::Mat::qr",
-    })
+/// QR (no pivot). Returns `(Q, R)` with `A = Q·R`, `Q` orthonormal and `R`
+/// upper-triangular, both as **row-major** Tensors (`out[i*n + j] = M[(i,j)]`).
+/// Routes to faer on host via a `device_buffer` Vec<f64> round-trip (ALG-05);
+/// requires a square `n×n` input (the locked signature carries no separate
+/// rows/cols — rectangular qr is a separate future change).
+///
+/// # Errors
+/// - [`AlgebraError::ShapeMismatch`] if `matrix` is not rank-2 square or the
+///   downloaded length disagrees with `n*n`.
+pub fn qr(client: &AlgebraClient, matrix: &Tensor) -> Result<(Tensor, Tensor), AlgebraError> {
+    let n = square_n(matrix)?;
+    let data = download_square(client, matrix, n)?;
+
+    let m = Mat::<f64>::from_fn(n, n, |i, j| data[i * n + j]);
+    // faer 0.24 QR is infallible (no Result). `compute_thin_Q` materializes the
+    // orthonormal factor (n×n for square input); `R()` is the upper-triangular
+    // factor MatRef.
+    let qr = m.as_ref().qr();
+    let q = qr.compute_thin_Q();
+    let r = qr.R();
+
+    // Both factors are n×n column-major Mats; store row-major.
+    let mut q_out = vec![0.0_f64; n * n];
+    let mut r_out = vec![0.0_f64; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            q_out[i * n + j] = q[(i, j)];
+            r_out[i * n + j] = r[(i, j)];
+        }
+    }
+
+    let q_t = device_buffer::upload::<f64>(client, &q_out, vec![n, n])?;
+    let r_t = device_buffer::upload::<f64>(client, &r_out, vec![n, n])?;
+    Ok((q_t, r_t))
 }
 
-/// SVD (full). Phase 7 (gradient null-space projection) wires.
+/// SVD (full). Returns `(U, singular_values, V)` with `A = U·diag(s)·Vᵀ`.
+/// Singular values are DESCENDING and ≥ 0; `U` and `V` are **row-major**
+/// Tensors (`out[i*n + j] = M[(i,j)]`). Routes to faer on host via a
+/// `device_buffer` Vec<f64> round-trip (ALG-05); requires a square `n×n` input
+/// (the locked signature carries no separate rows/cols — rectangular svd is a
+/// separate future change).
+///
+/// # Errors
+/// - [`AlgebraError::ShapeMismatch`] if `matrix` is not rank-2 square or the
+///   downloaded length disagrees with `n*n`.
+/// - [`AlgebraError::CubeclRuntime`] on faer svd failure (rare).
 pub fn svd(
-    _client: &AlgebraClient,
-    _matrix: &Tensor,
+    client: &AlgebraClient,
+    matrix: &Tensor,
 ) -> Result<(Tensor, Vec<f64>, Tensor), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented {
-        phase: 7,
-        what: "svd — Phase 7 wires faer::Mat::svd",
-    })
+    let n = square_n(matrix)?;
+    let data = download_square(client, matrix, n)?;
+
+    let m = Mat::<f64>::from_fn(n, n, |i, j| data[i * n + j]);
+    let svd = m
+        .as_ref()
+        .svd()
+        .map_err(|e| AlgebraError::CubeclRuntime(format!("svd failed: {e:?}")))?;
+
+    // Singular values DESCENDING and >= 0.
+    let s_col = svd.S();
+    let singular: Vec<f64> = (0..n).map(|k| s_col.column_vector()[k]).collect();
+
+    // U and V are n×n column-major Mats; store row-major.
+    let u = svd.U();
+    let v = svd.V();
+    let mut u_out = vec![0.0_f64; n * n];
+    let mut v_out = vec![0.0_f64; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            u_out[i * n + j] = u[(i, j)];
+            v_out[i * n + j] = v[(i, j)];
+        }
+    }
+
+    let u_t = device_buffer::upload::<f64>(client, &u_out, vec![n, n])?;
+    let v_t = device_buffer::upload::<f64>(client, &v_out, vec![n, n])?;
+    Ok((u_t, singular, v_t))
 }
