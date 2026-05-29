@@ -50,11 +50,12 @@ fn primitive_signatures_callable_returning_notyetimplemented() {
     let r = axpy(&sel.client, 1.0, &lhs, &mut out);
     assert!(matches!(r, Err(AlgebraError::UnallocatedBuffer { .. })));
 
-    // reduce_sum is wired only for full reduction to a SCALAR `out`; a [4,4]
-    // `out` (per-axis) is not yet implemented — that guard fires before any
-    // registry lookup, so a placeholder out still yields NotYetImplemented here.
+    // reduce_sum is now wired for per-axis reduction (quick-260529-mtx) via the
+    // strided kernel. `axis=0` is in range for the [4,4] lhs, so it reads x from
+    // the registry first — and lhs is a placeholder, so it rejects with
+    // UnallocatedBuffer. The real per-axis round-trip lives in tensor_registry.rs.
     let r = reduce_sum(&sel.client, &lhs, 0, &mut out);
-    assert!(matches!(r, Err(AlgebraError::NotYetImplemented { .. })));
+    assert!(matches!(r, Err(AlgebraError::UnallocatedBuffer { .. })));
 
     if let Some(v) = saved {
         unsafe {
