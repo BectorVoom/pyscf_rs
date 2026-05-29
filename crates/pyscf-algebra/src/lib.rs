@@ -47,7 +47,7 @@ pub use scalar::DeviceScalar;
 pub use select::{BackendSelection, select_backend};
 pub use tensor::{BufferId, Tensor};
 
-pub use axpy::axpy;
+pub use axpy::{axpy, axpy_dense};
 pub use df_metric::{DF_METRIC_LINEAR_DEP, df_metric_fit};
 pub use dot::{dot, dot_dense};
 pub use eigh_gen::eigh_gen;
