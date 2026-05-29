@@ -35,11 +35,12 @@ fn primitive_signatures_callable_returning_notyetimplemented() {
     let lhs = Tensor::placeholder(vec![4, 4]);
     let rhs = Tensor::placeholder(vec![4, 4]);
     let mut out = Tensor::placeholder(vec![4, 4]);
-    // gemm is STILL a Phase-1 stub — the contract is NotYetImplemented until the
-    // cubecl-matmul Tensor launch is wired (quick-260529-mtx wired the
-    // element-wise ops, not gemm).
+    // gemm is now wired through the device-buffer registry (quick-260529-mtx).
+    // The [4,4] placeholders pass the rank/shape checks but were never uploaded,
+    // so the registry lookup misses and the op rejects them with
+    // UnallocatedBuffer. The real round-trip lives in tests/tensor_registry.rs.
     let r = gemm(&sel.client, &lhs, &rhs, &mut out);
-    assert!(matches!(r, Err(AlgebraError::NotYetImplemented { .. })));
+    assert!(matches!(r, Err(AlgebraError::UnallocatedBuffer { .. })));
 
     // axpy is now wired through the device-buffer registry (quick-260529-mtx).
     // A `placeholder` carries the sentinel BufferId and was never uploaded, so

@@ -134,20 +134,42 @@ pub fn gemm_dense<F: DeviceScalar>(
     Ok(out)
 }
 
-/// Dense matrix multiply over the opaque `Tensor` surface: `out = lhs @ rhs`.
+/// Dense matrix multiply over the opaque `Tensor` surface: `out = lhs @ rhs`,
+/// written into `out`'s buffer in place.
 ///
-/// STILL a Phase-2 stub. `Tensor` carries a sentinel `BufferId` (the device
-/// allocator lands in Phase 2), so there is no device buffer to read here yet.
-/// The working device path is [`gemm_dense`], which takes host slices directly.
-/// `backend_matrix.rs` asserts this returns `NotYetImplemented`.
+/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
+/// `lhs`, `rhs`, and `out` must be device-backed rank-2 tensors built with
+/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
+/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. Shapes drive the
+/// product: `lhs` is `[M, K]`, `rhs` is `[K, N]`, and `out` must already be
+/// allocated as `[M, N]`. Errors with `DimensionMismatch` if the operands are
+/// not rank-2, the shared `K` disagrees, or `out` is not `M*N` elements. The
+/// operands are read from the registry and multiplied by the oracle-tested
+/// [`gemm_dense`] launcher on `client`'s backend.
 pub fn gemm(
-    _client: &AlgebraClient,
-    _lhs: &Tensor,
-    _rhs: &Tensor,
-    _out: &mut Tensor,
+    client: &AlgebraClient,
+    lhs: &Tensor,
+    rhs: &Tensor,
+    out: &mut Tensor,
 ) -> Result<(), AlgebraError> {
-    Err(AlgebraError::NotYetImplemented {
-        phase: 2,
-        what: "gemm over Tensor (device allocator) — use gemm_dense for the host-slice device path",
-    })
+    if lhs.rank() != 2 || rhs.rank() != 2 {
+        return Err(AlgebraError::DimensionMismatch {
+            op: "gemm",
+            lhs: lhs.shape.clone(),
+            rhs: rhs.shape.clone(),
+        });
+    }
+    let (m, k) = (lhs.shape[0], lhs.shape[1]);
+    let (k2, n) = (rhs.shape[0], rhs.shape[1]);
+    if k != k2 || out.numel() != m * n {
+        return Err(AlgebraError::DimensionMismatch {
+            op: "gemm",
+            lhs: lhs.shape.clone(),
+            rhs: rhs.shape.clone(),
+        });
+    }
+    let lhs_host = crate::device_buffer::read_raw::<f64>(lhs.id.raw(), "gemm")?;
+    let rhs_host = crate::device_buffer::read_raw::<f64>(rhs.id.raw(), "gemm")?;
+    let result = gemm_dense::<f64>(client, &lhs_host, &rhs_host, m, k, n)?;
+    crate::device_buffer::write_back::<f64>(out.id.raw(), &result, "gemm")
 }
