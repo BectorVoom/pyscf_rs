@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 Phase: 8
 Plan: Not started
 Status: Phase 07 COMPLETE + verified (5/5 must-haves; review BLOCKERs CR-01/CR-02 fixed) — ready to discuss/plan Phase 8 (gpu-enable + oracle-hardening + distribution)
-Last activity: 2026-05-29 - Completed quick task 260529-mtx: axpy.rs cubecl generic-float kernel (y += alpha*x) + axpy_dense + ROCm random-oracle test (passes on gfx1152)
+Last activity: 2026-05-29 - Completed quick task 260529-oj6: host_fallback.rs eigh/cholesky/qr/svd implemented via faer-on-host round-trip (ALG-05) + ROCm oracle differential tests (8/8 pass on gfx1152)
 
 Progress: [█████████░] 88% (7/8 phases done; Phase 7 gradients-geomopt COMPLETE + verified 5/5 must-haves, advisory code-review BLOCKERs CR-01/CR-02 fixed; Phase 7 ran as 6 DAG waves.
 
@@ -204,6 +204,7 @@ None yet.
 | 260529-jcx | refactor reduce.rs to cubecl generic-float partial-sum kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | be22fe8 | [260529-jcx-refactor-reduce-rs-to-cubecl-generic-flo](./quick/260529-jcx-refactor-reduce-rs-to-cubecl-generic-flo/) |
 | 260529-skl | refactor scal.rs to cubecl generic-float scale kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 687411a | (commits only — no quick dir) |
 | 260529-mtx | refactor axpy.rs to cubecl generic-float kernel (y += alpha*x) + implement stub + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 4ec6700 | [260529-mtx-refactor-crates-pyscf-algebra-to-cubecl-](./quick/260529-mtx-refactor-crates-pyscf-algebra-to-cubecl-/) |
+| 260529-oj6 | refactor host_fallback.rs — implement eigh/cholesky/qr/svd via faer-on-host round-trip (ALG-05, NOT native cubecl kernels) + ROCm oracle differential tests (8/8 pass on gfx1152) | 2026-05-29 | 3100d3c | [260529-oj6-refactor-host-fallback-to-cubecl-faer-ho](./quick/260529-oj6-refactor-host-fallback-to-cubecl-faer-ho/) |
 
 ## Deferred Items
 
