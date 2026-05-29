@@ -51,8 +51,8 @@ fn check_case(client: &AlgebraClient, len: usize, seed: u64) -> f64 {
     let x = random_vector(&mut rng, len);
     let y = random_vector(&mut rng, len);
 
-    let device =
-        dot_dense::<f64>(client, &x, &y).expect("dot_dense should succeed for equal-length vectors");
+    let device = dot_dense::<f64>(client, &x, &y)
+        .expect("dot_dense should succeed for equal-length vectors");
     let reference = oracle_dot(&x, &y);
     assert!(
         reference.is_finite(),
@@ -86,8 +86,9 @@ fn dot_kernel_matches_oracle_on_cpu() {
 #[test]
 fn dot_kernel_matches_oracle_on_rocm() {
     // Construct the HIP client directly on the default AMD device (gfx1152).
-    let client =
-        AlgebraClient::Rocm(cubecl_hip::HipRuntime::client(&cubecl_hip::AmdDevice::default()));
+    let client = AlgebraClient::Rocm(cubecl_hip::HipRuntime::client(
+        &cubecl_hip::AmdDevice::default(),
+    ));
     assert!(
         matches!(client, AlgebraClient::Rocm(_)),
         "test must run on the ROCm backend, not a fallback"

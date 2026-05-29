@@ -102,8 +102,9 @@ fn gemm_kernel_matches_oracle_on_cpu() {
 #[test]
 fn gemm_kernel_matches_oracle_on_rocm() {
     // Construct the HIP client directly on the default AMD device (gfx1152).
-    let client =
-        AlgebraClient::Rocm(cubecl_hip::HipRuntime::client(&cubecl_hip::AmdDevice::default()));
+    let client = AlgebraClient::Rocm(cubecl_hip::HipRuntime::client(
+        &cubecl_hip::AmdDevice::default(),
+    ));
     assert!(
         matches!(client, AlgebraClient::Rocm(_)),
         "test must run on the ROCm backend, not a fallback"
