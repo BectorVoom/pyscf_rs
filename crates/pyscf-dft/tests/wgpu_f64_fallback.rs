@@ -68,6 +68,16 @@ impl<S: tracing::Subscriber> Layer<S> for FallbackWarnCatcher {
     }
 }
 
+/// Serializes the two env-mutating tests in this binary. Both touch the SAME
+/// process-global vars (`PYSCF_BACKEND` / `PYSCF_DTYPE` / `XCFUN_FORCE_BACKEND`),
+/// and cargo runs a binary's tests on multiple threads by default — so without
+/// this lock one test's env *restore* (`remove_var("PYSCF_BACKEND")`) races the
+/// other's read inside `pipeline_fallback` (`std::env::var("PYSCF_BACKEND")`),
+/// intermittently clearing the backend before the warn check and flaking the
+/// DFT-11 fallback-warn assertion (observed under parallel build load). Each
+/// test holds this guard across its entire env set→run→restore window.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
 fn h2o_sto3g() -> Mole {
     M(MoleBuildArgs {
         atom: AtomInput::String("O 0 0 0; H 0 0 0.96; H 0 0.93 -0.24".into()),
@@ -87,6 +97,12 @@ fn one_electron_density(mol: &Mole) -> pyscf_core::Density {
 
 #[test]
 fn wgpu_f64_fallback() {
+    // Serialize against the sibling env-mutating test (recover from poisoning so
+    // a panic in the other test doesn't mask this one's real result).
+    let _env_guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     // ── Save + set the env: explicit PYSCF_BACKEND=wgpu, default f64 ──────────
     // Integration tests are separate crates (not under the lib's
     // `#![forbid(unsafe_code)]`); env mutation is `unsafe` in edition 2024 —
@@ -198,6 +214,11 @@ fn wgpu_f64_fallback() {
 /// own below-bit-exact warn). This is the escape-hatch distinction (DFT-11/D-08).
 #[test]
 fn explicit_f32_is_not_blocked_as_silent_degradation() {
+    // Serialize against the sibling env-mutating test (see ENV_LOCK).
+    let _env_guard = ENV_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let saved_backend = std::env::var("PYSCF_BACKEND").ok();
     unsafe {
         std::env::set_var("PYSCF_BACKEND", "wgpu");
