@@ -117,6 +117,42 @@ pub struct EcpShell {
     pub coeffs: Vec<f64>,
 }
 
+/// Parsed Goedecker–Teter–Hutter (GTH) pseudopotential entry (per element).
+///
+/// Source: `pyscf/gto/basis/parse_cp2k_pp.py`. GTH pseudopotentials are the
+/// PBC-pseudopotential construct (`Cell.pseudo`), NOT molecular ECPs: they
+/// carry a Gaussian-erf local part (`rloc` + a short polynomial in `r²`) plus
+/// per-angular-momentum non-local Gaussian projectors coupled by a symmetric
+/// `h` matrix. Kept DISTINCT from [`ParsedEcp`] — which models the NWChem
+/// `r^n e^{-ζr²}` ECP form consumed by the molecular ECP integral path — since
+/// the two have incompatible radial structure and feed different engines.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GthPseudo {
+    /// Valence electron count per angular momentum (`s, p, d, …`); the sum is
+    /// the effective core charge `Zion` the pseudopotential represents.
+    pub nelec: Vec<u32>,
+    /// Local part: Gaussian radius `r_loc`.
+    pub rloc: f64,
+    /// Local part: polynomial coefficients `C_1 … C_nexp`.
+    pub local_coeffs: Vec<f64>,
+    /// Non-local projector channels, one per angular momentum `l = 0, 1, …`
+    /// in file order.
+    pub projectors: Vec<GthProjector>,
+}
+
+/// One GTH non-local projector channel (a fixed angular momentum `l`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GthProjector {
+    /// Projector Gaussian radius `r_l`.
+    pub r: f64,
+    /// Number of projectors for this `l` (the `h` matrix dimension).
+    pub nproj: usize,
+    /// Full **symmetric** `nproj × nproj` coupling matrix, row-major
+    /// (`h[i * nproj + j]`). The file stores only the upper triangle; the
+    /// lower triangle is mirrored on parse.
+    pub h: Vec<f64>,
+}
+
 /// The ≥30-attribute Mole floor.
 ///
 /// EVERY attribute in RESEARCH "Standard Stack" §"Mole Attribute Floor"
