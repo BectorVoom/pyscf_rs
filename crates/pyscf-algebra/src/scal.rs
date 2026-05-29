@@ -28,6 +28,7 @@ use cubecl::Runtime;
 use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
+use cubecl::server::Handle;
 
 /// Naive one-thread-per-element scale kernel: `x[i] *= alpha`. Generic over the
 /// device float so the same kernel monomorphizes for f32 (GPU speed path) and
@@ -55,35 +56,43 @@ fn scal_kernel<F: Float>(x: &mut Array<F>, alpha: &Array<F>, n: usize) {
 /// grid is sized to cover `n` threads.
 const BLOCK: u32 = 256;
 
-/// Runtime-generic launcher: upload `x`, launch `scal_kernel` (scaling in
-/// place), then read the scaled buffer back to host. `R` is kept generic so a
-/// single body serves every backend; callers reach it only through `scal_dense`
-/// (which picks `R` from the active `AlgebraClient`), so the cubecl `Runtime`
-/// bound never escapes the wall.
+/// Core launch on a resident device handle: `x[i] *= alpha`, in place on the `x`
+/// handle, with NO host transfer. Both the host-slice path ([`launch_scal`]) and
+/// the registry-backed `Tensor` path ([`scal`]) drive this. `R` stays generic so
+/// a single body serves every backend; clones share the device binding, so the
+/// in-place scale is visible through the registry's stored handle.
+fn launch_scal_on_handle<R: Runtime, F: DeviceScalar>(
+    client: &ComputeClient<R>,
+    alpha: F,
+    x: &Handle,
+    n: usize,
+) {
+    // `alpha` rides as a single-element device buffer (see `scal_kernel`).
+    let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
+    let groups = n.div_ceil(BLOCK as usize) as u32;
+
+    scal_kernel::launch::<F, R>(
+        client,
+        CubeCount::Static(groups, 1, 1),
+        CubeDim::new_1d(BLOCK),
+        // SAFETY: `n` matches the buffer. `from_raw_parts` consumes the handle by
+        // value, so clone the caller's handle (clones share the binding).
+        unsafe { ArrayArg::from_raw_parts(x.clone(), n) },
+        unsafe { ArrayArg::from_raw_parts(alpha_handle, 1) },
+        // Scalar dimension arg is passed as a bare value (LaunchArg for usize).
+        n,
+    );
+}
+
+/// Host-slice launcher: upload `x`, scale it in place on the device, read it
+/// back. Backs `scal_dense`; the cubecl `Runtime` bound stays inside.
 fn launch_scal<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
     alpha: F,
     x: &[F],
 ) -> Vec<F> {
     let x_handle = client.create(Bytes::from_elems(x.to_vec()));
-    // `alpha` rides as a single-element device buffer (see `scal_kernel`).
-    let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
-
-    let groups = x.len().div_ceil(BLOCK as usize) as u32;
-
-    scal_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: lengths match the buffers just allocated above. `from_raw_parts`
-        // consumes the handle by value; clone the input handle so it survives for
-        // the read-back below.
-        unsafe { ArrayArg::from_raw_parts(x_handle.clone(), x.len()) },
-        unsafe { ArrayArg::from_raw_parts(alpha_handle, 1) },
-        // Scalar dimension arg is passed as a bare value (LaunchArg for usize).
-        x.len(),
-    );
-
+    launch_scal_on_handle::<R, F>(client, alpha, &x_handle, x.len());
     let bytes = client.read(vec![x_handle]);
     bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec()
 }
@@ -118,16 +127,37 @@ pub fn scal_dense<F: DeviceScalar>(
 }
 
 /// Element-wise scale over the opaque `Tensor` surface: `x *= alpha`, updating
-/// `x`'s buffer in place.
+/// `x`'s resident device buffer in place.
 ///
-/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
-/// `x` must be a device-backed tensor built with
-/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
-/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. The buffer is read
-/// from the registry, scaled by the oracle-tested [`scal_dense`] launcher on
-/// `client`'s backend, and written back to the same `BufferId`.
+/// quick-260529-mtx-2: launches directly on `x`'s resident device handle via the
+/// Phase-2 [`crate::device_buffer`] registry — no host transfer. `x` must be a
+/// device-backed tensor built with [`crate::device_buffer::upload`]; a
+/// `Tensor::placeholder` (sentinel `BufferId`) yields
+/// [`AlgebraError::UnallocatedBuffer`], and a buffer resident on another backend
+/// yields [`AlgebraError::BackendMismatch`]. The kernel scales through a clone of
+/// `x`'s handle, which shares the device binding with the registry's copy.
 pub fn scal(client: &AlgebraClient, alpha: f64, x: &mut Tensor) -> Result<(), AlgebraError> {
-    let mut x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "scal")?;
-    scal_dense::<f64>(client, alpha, &mut x_host)?;
-    crate::device_buffer::write_back::<f64>(x.id.raw(), &x_host, "scal")
+    let xb = crate::device_buffer::handle_of::<f64>(x.id.raw(), client, "scal")?;
+    if xb.len == 0 {
+        return Ok(());
+    }
+    let n = xb.len;
+    match client {
+        AlgebraClient::Cpu(c) => {
+            launch_scal_on_handle::<cubecl_cpu::CpuRuntime, f64>(c, alpha, &xb.handle, n)
+        }
+        #[cfg(feature = "cuda")]
+        AlgebraClient::Cuda(c) => {
+            launch_scal_on_handle::<cubecl_cuda::CudaRuntime, f64>(c, alpha, &xb.handle, n)
+        }
+        #[cfg(feature = "wgpu")]
+        AlgebraClient::Wgpu(c) => {
+            launch_scal_on_handle::<cubecl_wgpu::WgpuRuntime, f64>(c, alpha, &xb.handle, n)
+        }
+        #[cfg(feature = "rocm")]
+        AlgebraClient::Rocm(c) => {
+            launch_scal_on_handle::<cubecl_hip::HipRuntime, f64>(c, alpha, &xb.handle, n)
+        }
+    }
+    Ok(())
 }

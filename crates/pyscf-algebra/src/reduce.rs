@@ -31,6 +31,7 @@ use cubecl::Runtime;
 use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
+use cubecl::server::Handle;
 
 /// Partial-sum kernel: thread `tid` sequentially sums input indices
 /// `[tid*chunk, (tid+1)*chunk)` (clamped to `n`) into one partial in `F`,
@@ -174,10 +175,42 @@ fn reduce_axis_kernel<F: Float>(
     }
 }
 
-/// Runtime-generic launcher for the strided reduction: upload `x`, allocate the
-/// `outer*inner` output, launch `reduce_axis_kernel`, read it back. `R` stays
-/// generic so a single body serves every backend; reached only through
-/// `reduce_sum_axis_dense`, so the cubecl `Runtime` bound never escapes the wall.
+/// Core launch on resident device handles: strided per-axis reduction of the `x`
+/// handle into the `out` handle (`outer*inner` elements), with NO host transfer.
+/// Both the host-slice path ([`reduce_sum_axis_dense`]) and the registry-backed
+/// `Tensor` path ([`reduce_sum`]) drive this; the caller owns `out` (a fresh temp
+/// for the dense path, the resident result buffer for the `Tensor` path).
+fn launch_reduce_axis_on_handles<R: Runtime, F: DeviceScalar>(
+    client: &ComputeClient<R>,
+    x: &Handle,
+    out: &Handle,
+    x_len: usize,
+    outer: usize,
+    axis_len: usize,
+    inner: usize,
+) {
+    let n_out = outer * inner;
+    let groups = (n_out as u32).div_ceil(BLOCK);
+
+    reduce_axis_kernel::launch::<F, R>(
+        client,
+        CubeCount::Static(groups, 1, 1),
+        CubeDim::new_1d(BLOCK),
+        // SAFETY: `x_len == outer*axis_len*inner` and `out` holds `n_out`.
+        // `from_raw_parts` consumes the handle by value, so clone the caller's
+        // handles (clones share the binding).
+        unsafe { ArrayArg::from_raw_parts(x.clone(), x_len) },
+        unsafe { ArrayArg::from_raw_parts(out.clone(), n_out) },
+        // Scalar dimension args are passed as bare values (LaunchArg for usize).
+        outer,
+        axis_len,
+        inner,
+    );
+}
+
+/// Host-slice launcher: upload `x`, allocate the `outer*inner` output, run the
+/// strided kernel, read it back. Backs `reduce_sum_axis_dense`; the cubecl
+/// `Runtime` bound stays inside.
 fn launch_reduce_axis<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
     x: &[F],
@@ -188,24 +221,15 @@ fn launch_reduce_axis<R: Runtime, F: DeviceScalar>(
     let n_out = outer * inner;
     let x_handle = client.create(Bytes::from_elems(x.to_vec()));
     let out_handle = client.empty(n_out * core::mem::size_of::<F>());
-
-    let groups = (n_out as u32).div_ceil(BLOCK);
-
-    reduce_axis_kernel::launch::<F, R>(
+    launch_reduce_axis_on_handles::<R, F>(
         client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: lengths match the buffers just allocated above. `from_raw_parts`
-        // consumes the handle by value; clone the output handle so it survives
-        // for the read-back below.
-        unsafe { ArrayArg::from_raw_parts(x_handle, x.len()) },
-        unsafe { ArrayArg::from_raw_parts(out_handle.clone(), n_out) },
-        // Scalar dimension args are passed as bare values (LaunchArg for usize).
+        &x_handle,
+        &out_handle,
+        x.len(),
         outer,
         axis_len,
         inner,
     );
-
     let bytes = client.read(vec![out_handle]);
     bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec()
 }
@@ -295,16 +319,18 @@ pub fn reduce_sum_axis_dense<F: DeviceScalar>(
 }
 
 /// Per-axis reduction over the opaque `Tensor` surface: `out = sum(x, axis)`,
-/// written into `out`'s buffer in place. On success `out`'s shape is set to the
-/// reduced shape (`x.shape` with `axis` removed).
+/// written into `out`'s resident buffer in place. On success `out`'s shape is set
+/// to the reduced shape (`x.shape` with `axis` removed).
 ///
-/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry
-/// and the strided [`reduce_sum_axis_dense`] kernel. Both `x` and `out` must be
-/// device-backed tensors built with [`crate::device_buffer::upload`]; a
-/// `Tensor::placeholder` (sentinel `BufferId`) yields
-/// [`AlgebraError::UnallocatedBuffer`]. `x`'s shape drives the reduction; `out`
-/// must already be allocated with `product(reduced_shape(x.shape, axis))`
-/// elements. For a 1-D `x`, reducing axis 0 collapses to the scalar total sum.
+/// quick-260529-mtx-2: launches the strided kernel directly on the resident
+/// device handles via the Phase-2 [`crate::device_buffer`] registry — no host
+/// transfer. Both `x` and `out` must be device-backed tensors built with
+/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
+/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`], and a buffer resident
+/// on another backend yields [`AlgebraError::BackendMismatch`]. `x`'s shape
+/// drives the reduction; `out` must already be allocated with
+/// `product(reduced_shape(x.shape, axis))` elements. For a 1-D `x`, reducing
+/// axis 0 collapses to the scalar total sum.
 ///
 /// Errors with `DimensionMismatch` if `axis` is out of range or `out`'s element
 /// count does not match the reduced size.
@@ -315,21 +341,41 @@ pub fn reduce_sum(
     out: &mut Tensor,
 ) -> Result<(), AlgebraError> {
     // Validate `axis` against x's shape (metadata-only) before touching the
-    // registry, then read operands operand-first (missing x → UnallocatedBuffer).
-    axis_decomposition(&x.shape, axis)?;
-    let x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "reduce_sum")?;
-    let result = reduce_sum_axis_dense::<f64>(client, &x_host, &x.shape, axis)?;
+    // registry, then fetch operands operand-first (missing x → UnallocatedBuffer).
+    let (outer, axis_len, inner) = axis_decomposition(&x.shape, axis)?;
+    let xb = crate::device_buffer::handle_of::<f64>(x.id.raw(), client, "reduce_sum")?;
 
     let out_shape = reduced_shape(&x.shape, axis);
-    let expected: usize = out_shape.iter().product();
-    if out.numel() != expected {
+    let n_out = outer * inner;
+    let ob = crate::device_buffer::handle_of::<f64>(out.id.raw(), client, "reduce_sum")?;
+    if ob.len != n_out {
         return Err(AlgebraError::DimensionMismatch {
             op: "reduce_sum",
             lhs: out.shape.clone(),
             rhs: out_shape,
         });
     }
-    crate::device_buffer::write_back::<f64>(out.id.raw(), &result, "reduce_sum")?;
+
+    if n_out != 0 {
+        let x_len = xb.len;
+        match client {
+            AlgebraClient::Cpu(c) => launch_reduce_axis_on_handles::<cubecl_cpu::CpuRuntime, f64>(
+                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
+            ),
+            #[cfg(feature = "cuda")]
+            AlgebraClient::Cuda(c) => launch_reduce_axis_on_handles::<cubecl_cuda::CudaRuntime, f64>(
+                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
+            ),
+            #[cfg(feature = "wgpu")]
+            AlgebraClient::Wgpu(c) => launch_reduce_axis_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
+                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
+            ),
+            #[cfg(feature = "rocm")]
+            AlgebraClient::Rocm(c) => launch_reduce_axis_on_handles::<cubecl_hip::HipRuntime, f64>(
+                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
+            ),
+        }
+    }
     out.shape = out_shape;
     Ok(())
 }

@@ -28,6 +28,7 @@ use cubecl::Runtime;
 use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
+use cubecl::server::Handle;
 
 /// Naive one-thread-per-element transpose: for the row-major `M×N` input,
 /// thread `tid` reads `x[tid]` (logical position `row = tid/n`, `col = tid%n`)
@@ -52,11 +53,36 @@ fn transpose_kernel<F: Float>(x: &Array<F>, out: &mut Array<F>, m: usize, n: usi
 /// the grid is sized to cover `M*N` threads.
 const BLOCK: u32 = 256;
 
-/// Runtime-generic launcher: upload `x`, launch `transpose_kernel`, read the
-/// `N×M` result back to host. `R` is kept generic so a single body serves every
-/// backend; callers reach it only through `transpose_dense` (which picks `R`
-/// from the active `AlgebraClient`), so the cubecl `Runtime` bound never escapes
-/// the wall.
+/// Core launch on resident device handles: transpose the row-major `M×N` `x`
+/// handle into the `out` handle (`N×M`), with NO host transfer. Both the
+/// host-slice path ([`launch_transpose`]) and the registry-backed `Tensor` path
+/// ([`transpose`]) drive this; the caller owns `out` (a fresh temp for the dense
+/// path, the resident result buffer for the `Tensor` path).
+fn launch_transpose_on_handles<R: Runtime, F: DeviceScalar>(
+    client: &ComputeClient<R>,
+    x: &Handle,
+    out: &Handle,
+    m: usize,
+    n: usize,
+) {
+    let groups = (m * n).div_ceil(BLOCK as usize) as u32;
+
+    transpose_kernel::launch::<F, R>(
+        client,
+        CubeCount::Static(groups, 1, 1),
+        CubeDim::new_1d(BLOCK),
+        // SAFETY: `m*n` matches both buffers. `from_raw_parts` consumes the handle
+        // by value, so clone the caller's handles (clones share the binding).
+        unsafe { ArrayArg::from_raw_parts(x.clone(), m * n) },
+        unsafe { ArrayArg::from_raw_parts(out.clone(), m * n) },
+        // Scalar dimension args are passed as bare values (LaunchArg for usize).
+        m,
+        n,
+    );
+}
+
+/// Host-slice launcher: upload `x`, allocate the result, run the kernel, read it
+/// back. Backs `transpose_dense`; the cubecl `Runtime` bound stays inside.
 fn launch_transpose<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
     x: &[F],
@@ -65,23 +91,7 @@ fn launch_transpose<R: Runtime, F: DeviceScalar>(
 ) -> Vec<F> {
     let x_handle = client.create(Bytes::from_elems(x.to_vec()));
     let out_handle = client.empty(m * n * core::mem::size_of::<F>());
-
-    let groups = (m * n).div_ceil(BLOCK as usize) as u32;
-
-    transpose_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: lengths match the buffers just allocated above. `from_raw_parts`
-        // consumes the handle by value; clone the output handle so it survives
-        // for the read-back below.
-        unsafe { ArrayArg::from_raw_parts(x_handle, x.len()) },
-        unsafe { ArrayArg::from_raw_parts(out_handle.clone(), m * n) },
-        // Scalar dimension args are passed as bare values (LaunchArg for usize).
-        m,
-        n,
-    );
-
+    launch_transpose_on_handles::<R, F>(client, &x_handle, &out_handle, m, n);
     let bytes = client.read(vec![out_handle]);
     bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec()
 }
@@ -124,14 +134,17 @@ pub fn transpose_dense<F: DeviceScalar>(
 }
 
 /// 2-D transpose over the opaque `Tensor` surface: row-major `M×N` `x` →
-/// row-major `N×M` `out`, written into `out`'s buffer in place.
+/// row-major `N×M` `out`, written into `out`'s resident buffer in place. On
+/// success `out`'s shape is set to `[N, M]`.
 ///
-/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
-/// `x` and `out` must be device-backed rank-2 tensors built with
-/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
-/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. `x`'s `[M, N]` shape
-/// drives the transpose; `out` must already be allocated with `M*N` elements
-/// (an `[N, M]` tensor). Errors with `DimensionMismatch` if `x` is not rank-2.
+/// quick-260529-mtx-2: launches directly on the resident device handles via the
+/// Phase-2 [`crate::device_buffer`] registry — no host transfer. `x` and `out`
+/// must be device-backed tensors built with [`crate::device_buffer::upload`]; a
+/// `Tensor::placeholder` (sentinel `BufferId`) yields
+/// [`AlgebraError::UnallocatedBuffer`], and a buffer resident on another backend
+/// yields [`AlgebraError::BackendMismatch`]. `x`'s `[M, N]` shape drives the
+/// transpose; `out` must already be allocated with `M*N` elements. Errors with
+/// `DimensionMismatch` if `x` is not rank-2 or `out` is the wrong size.
 pub fn transpose(
     client: &AlgebraClient,
     x: &Tensor,
@@ -145,7 +158,34 @@ pub fn transpose(
         });
     }
     let (m, n) = (x.shape[0], x.shape[1]);
-    let x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "transpose")?;
-    let result = transpose_dense::<f64>(client, &x_host, m, n)?;
-    crate::device_buffer::write_back::<f64>(out.id.raw(), &result, "transpose")
+    let xb = crate::device_buffer::handle_of::<f64>(x.id.raw(), client, "transpose")?;
+    let ob = crate::device_buffer::handle_of::<f64>(out.id.raw(), client, "transpose")?;
+    if xb.len != m * n || ob.len != m * n {
+        return Err(AlgebraError::DimensionMismatch {
+            op: "transpose",
+            lhs: x.shape.clone(),
+            rhs: out.shape.clone(),
+        });
+    }
+    if m * n != 0 {
+        match client {
+            AlgebraClient::Cpu(c) => launch_transpose_on_handles::<cubecl_cpu::CpuRuntime, f64>(
+                c, &xb.handle, &ob.handle, m, n,
+            ),
+            #[cfg(feature = "cuda")]
+            AlgebraClient::Cuda(c) => launch_transpose_on_handles::<cubecl_cuda::CudaRuntime, f64>(
+                c, &xb.handle, &ob.handle, m, n,
+            ),
+            #[cfg(feature = "wgpu")]
+            AlgebraClient::Wgpu(c) => launch_transpose_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
+                c, &xb.handle, &ob.handle, m, n,
+            ),
+            #[cfg(feature = "rocm")]
+            AlgebraClient::Rocm(c) => launch_transpose_on_handles::<cubecl_hip::HipRuntime, f64>(
+                c, &xb.handle, &ob.handle, m, n,
+            ),
+        }
+    }
+    out.shape = vec![n, m];
+    Ok(())
 }

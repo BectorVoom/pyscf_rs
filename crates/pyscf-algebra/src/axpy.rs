@@ -30,6 +30,7 @@ use cubecl::Runtime;
 use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
+use cubecl::server::Handle;
 
 /// Naive one-thread-per-element AXPY kernel: `y[i] += alpha * x[i]`. Generic
 /// over the device float so the same kernel monomorphizes for f32 (GPU speed
@@ -58,11 +59,40 @@ fn axpy_kernel<F: Float>(x: &Array<F>, y: &mut Array<F>, alpha: &Array<F>, n: us
 /// grid is sized to cover `n` threads.
 const BLOCK: u32 = 256;
 
-/// Runtime-generic launcher: upload `x` and `y`, launch `axpy_kernel`
-/// (updating `y` in place), then read the updated `y` buffer back to host. `R`
-/// is kept generic so a single body serves every backend; callers reach it
-/// only through `axpy_dense` (which picks `R` from the active `AlgebraClient`),
-/// so the cubecl `Runtime` bound never escapes the wall.
+/// Core launch on resident device handles: `y[i] += alpha * x[i]`, in place on
+/// the `y` handle, with NO host transfer. Both the host-slice path
+/// ([`launch_axpy`]) and the registry-backed `Tensor` path ([`axpy`]) drive this.
+/// `R` is kept generic so a single body serves every backend.
+///
+/// cubecl handle clones share one device binding, so the in-place write to `y`
+/// is visible through every clone — including the registry's stored handle.
+fn launch_axpy_on_handles<R: Runtime, F: DeviceScalar>(
+    client: &ComputeClient<R>,
+    alpha: F,
+    x: &Handle,
+    y: &Handle,
+    n: usize,
+) {
+    // `alpha` rides as a single-element device buffer (see `axpy_kernel`).
+    let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
+    let groups = n.div_ceil(BLOCK as usize) as u32;
+
+    axpy_kernel::launch::<F, R>(
+        client,
+        CubeCount::Static(groups, 1, 1),
+        CubeDim::new_1d(BLOCK),
+        // SAFETY: `n` matches both buffers. `from_raw_parts` consumes the handle
+        // by value, so clone the caller's handles (clones share the binding).
+        unsafe { ArrayArg::from_raw_parts(x.clone(), n) },
+        unsafe { ArrayArg::from_raw_parts(y.clone(), n) },
+        unsafe { ArrayArg::from_raw_parts(alpha_handle, 1) },
+        // Scalar dimension arg is passed as a bare value (LaunchArg for usize).
+        n,
+    );
+}
+
+/// Host-slice launcher: upload `x`/`y`, run the kernel in place on `y`, read the
+/// updated `y` back. Backs `axpy_dense`; the cubecl `Runtime` bound stays inside.
 fn launch_axpy<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
     alpha: F,
@@ -71,26 +101,7 @@ fn launch_axpy<R: Runtime, F: DeviceScalar>(
 ) -> Vec<F> {
     let x_handle = client.create(Bytes::from_elems(x.to_vec()));
     let y_handle = client.create(Bytes::from_elems(y.to_vec()));
-    // `alpha` rides as a single-element device buffer (see `axpy_kernel`).
-    let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
-
-    let groups = x.len().div_ceil(BLOCK as usize) as u32;
-
-    axpy_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: lengths match the buffers just allocated above. `from_raw_parts`
-        // consumes the handle by value. `x` is read-only and consumed here. `y`
-        // is the output buffer that must survive the launch for read-back, so its
-        // handle is cloned below.
-        unsafe { ArrayArg::from_raw_parts(x_handle, x.len()) },
-        unsafe { ArrayArg::from_raw_parts(y_handle.clone(), y.len()) },
-        unsafe { ArrayArg::from_raw_parts(alpha_handle, 1) },
-        // Scalar dimension arg is passed as a bare value (LaunchArg for usize).
-        x.len(),
-    );
-
+    launch_axpy_on_handles::<R, F>(client, alpha, &x_handle, &y_handle, x.len());
     let bytes = client.read(vec![y_handle]);
     bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec()
 }
@@ -138,26 +149,52 @@ pub fn axpy_dense<F: DeviceScalar>(
 }
 
 /// Element-wise AXPY over the opaque `Tensor` surface: `y[i] += alpha * x[i]`,
-/// updating `y`'s buffer in place.
+/// updating `y`'s resident device buffer in place.
 ///
-/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
+/// quick-260529-mtx-2: launches directly on the operands' resident device
+/// handles via the Phase-2 [`crate::device_buffer`] registry — no host transfer.
 /// Both `x` and `y` must be device-backed tensors built with
 /// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
-/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. The operands are read
-/// from the registry, run through the oracle-tested [`axpy_dense`] launcher on
-/// `client`'s backend (which enforces the length match), and the result is
-/// written back to `y`'s buffer — so the [`Tensor`] `y` keeps its `BufferId` and
-/// callers see the update on their next [`crate::device_buffer::download`].
+/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`], and a buffer resident
+/// on another backend yields [`AlgebraError::BackendMismatch`]. The kernel
+/// writes through a clone of `y`'s handle, which shares the device binding with
+/// the registry's copy, so the update is visible on the next
+/// [`crate::device_buffer::download`] — no read-back, no re-upload.
 pub fn axpy(
     client: &AlgebraClient,
     alpha: f64,
     x: &Tensor,
     y: &mut Tensor,
 ) -> Result<(), AlgebraError> {
-    let x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "axpy")?;
-    let mut y_host = crate::device_buffer::read_raw::<f64>(y.id.raw(), "axpy")?;
-    // `axpy_dense` enforces x.len() == y.len() (→ DimensionMismatch) and the
-    // empty no-op; reuse it verbatim so the device math is the oracle-tested path.
-    axpy_dense::<f64>(client, alpha, &x_host, &mut y_host)?;
-    crate::device_buffer::write_back::<f64>(y.id.raw(), &y_host, "axpy")
+    let xb = crate::device_buffer::handle_of::<f64>(x.id.raw(), client, "axpy")?;
+    let yb = crate::device_buffer::handle_of::<f64>(y.id.raw(), client, "axpy")?;
+    if xb.len != yb.len {
+        return Err(AlgebraError::DimensionMismatch {
+            op: "axpy",
+            lhs: vec![xb.len],
+            rhs: vec![yb.len],
+        });
+    }
+    if xb.len == 0 {
+        return Ok(());
+    }
+    let n = xb.len;
+    match client {
+        AlgebraClient::Cpu(c) => {
+            launch_axpy_on_handles::<cubecl_cpu::CpuRuntime, f64>(c, alpha, &xb.handle, &yb.handle, n)
+        }
+        #[cfg(feature = "cuda")]
+        AlgebraClient::Cuda(c) => launch_axpy_on_handles::<cubecl_cuda::CudaRuntime, f64>(
+            c, alpha, &xb.handle, &yb.handle, n,
+        ),
+        #[cfg(feature = "wgpu")]
+        AlgebraClient::Wgpu(c) => launch_axpy_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
+            c, alpha, &xb.handle, &yb.handle, n,
+        ),
+        #[cfg(feature = "rocm")]
+        AlgebraClient::Rocm(c) => {
+            launch_axpy_on_handles::<cubecl_hip::HipRuntime, f64>(c, alpha, &xb.handle, &yb.handle, n)
+        }
+    }
+    Ok(())
 }

@@ -26,6 +26,7 @@ use cubecl::Runtime;
 use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
+use cubecl::server::Handle;
 
 /// Naive one-thread-per-element products kernel: `out[i] = x[i] * y[i]`.
 /// Generic over the device float so the same kernel monomorphizes for f32
@@ -48,30 +49,34 @@ fn dot_kernel<F: Float>(x: &Array<F>, y: &Array<F>, out: &mut Array<F>, n: usize
 /// grid is sized to cover `n` threads.
 const BLOCK: u32 = 256;
 
-/// Runtime-generic launcher: upload `x`/`y`, launch `dot_kernel`, read the
-/// per-element products back to host, then sum them in `F`. `R` is kept generic
-/// so a single body serves every backend; callers reach it only through
-/// `dot_dense` (which picks `R` from the active `AlgebraClient`), so the cubecl
-/// `Runtime` bound never escapes the wall.
-fn launch_dot<R: Runtime, F: DeviceScalar>(client: &ComputeClient<R>, x: &[F], y: &[F]) -> F {
-    let x_handle = client.create(Bytes::from_elems(x.to_vec()));
-    let y_handle = client.create(Bytes::from_elems(y.to_vec()));
-    let out_handle = client.empty(core::mem::size_of_val(x));
+/// Core launch on resident device handles: compute the per-element products of
+/// `x`/`y` (length `n`) into a temporary device buffer, read them back, and sum
+/// in `F`. No re-upload of `x`/`y` — both the host-slice path ([`launch_dot`])
+/// and the registry-backed `Tensor` path ([`dot`]) drive this. The products
+/// read-back is inherent to the host-sum reduction; the win is that the resident
+/// operands are not copied to the device again per op.
+fn launch_dot_on_handles<R: Runtime, F: DeviceScalar>(
+    client: &ComputeClient<R>,
+    x: &Handle,
+    y: &Handle,
+    n: usize,
+) -> F {
+    let out_handle = client.empty(n * core::mem::size_of::<F>());
 
-    let groups = x.len().div_ceil(BLOCK as usize) as u32;
+    let groups = n.div_ceil(BLOCK as usize) as u32;
 
     dot_kernel::launch::<F, R>(
         client,
         CubeCount::Static(groups, 1, 1),
         CubeDim::new_1d(BLOCK),
-        // SAFETY: lengths match the buffers just allocated above. `from_raw_parts`
-        // consumes the handle by value; clone the output handle so it survives
-        // for the read-back below.
-        unsafe { ArrayArg::from_raw_parts(x_handle, x.len()) },
-        unsafe { ArrayArg::from_raw_parts(y_handle, y.len()) },
-        unsafe { ArrayArg::from_raw_parts(out_handle.clone(), x.len()) },
+        // SAFETY: `n` matches the operand buffers and the just-allocated output.
+        // `from_raw_parts` consumes the handle by value; clone the caller's
+        // handles and the output handle (which must survive for the read-back).
+        unsafe { ArrayArg::from_raw_parts(x.clone(), n) },
+        unsafe { ArrayArg::from_raw_parts(y.clone(), n) },
+        unsafe { ArrayArg::from_raw_parts(out_handle.clone(), n) },
         // Scalar kernel args are passed as bare values (LaunchArg for T = T).
-        x.len(),
+        n,
     );
 
     let bytes = client.read(vec![out_handle]);
@@ -85,6 +90,14 @@ fn launch_dot<R: Runtime, F: DeviceScalar>(client: &ComputeClient<R>, x: &[F], y
         acc += p;
     }
     acc
+}
+
+/// Host-slice launcher: upload `x`/`y`, then reduce on the device. Backs
+/// `dot_dense`; the cubecl `Runtime` bound stays inside.
+fn launch_dot<R: Runtime, F: DeviceScalar>(client: &ComputeClient<R>, x: &[F], y: &[F]) -> F {
+    let x_handle = client.create(Bytes::from_elems(x.to_vec()));
+    let y_handle = client.create(Bytes::from_elems(y.to_vec()));
+    launch_dot_on_handles::<R, F>(client, &x_handle, &y_handle, x.len())
 }
 
 /// Dense dot product on the device: `dot(x, y) = sum(x[i] * y[i])`.
@@ -119,15 +132,42 @@ pub fn dot_dense<F: DeviceScalar>(
 
 /// Dot reduction over the opaque `Tensor` surface: `dot(x, y) = sum(x[i]*y[i])`.
 ///
-/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
-/// Both `x` and `y` must be device-backed tensors built with
-/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
-/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. The operands are read
-/// from the registry and reduced by the oracle-tested [`dot_dense`] launcher on
-/// `client`'s backend (which enforces the length match). Pure reduction — no
-/// buffer is written back.
+/// quick-260529-mtx-2: reduces directly on the operands' resident device handles
+/// via the Phase-2 [`crate::device_buffer`] registry — `x`/`y` are not re-uploaded.
+/// Both must be device-backed tensors built with [`crate::device_buffer::upload`];
+/// a `Tensor::placeholder` (sentinel `BufferId`) yields
+/// [`AlgebraError::UnallocatedBuffer`], and a buffer resident on another backend
+/// yields [`AlgebraError::BackendMismatch`]. Pure reduction — no buffer is
+/// modified. Empty operands return `0.0`.
 pub fn dot(client: &AlgebraClient, x: &Tensor, y: &Tensor) -> Result<f64, AlgebraError> {
-    let x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "dot")?;
-    let y_host = crate::device_buffer::read_raw::<f64>(y.id.raw(), "dot")?;
-    dot_dense::<f64>(client, &x_host, &y_host)
+    let xb = crate::device_buffer::handle_of::<f64>(x.id.raw(), client, "dot")?;
+    let yb = crate::device_buffer::handle_of::<f64>(y.id.raw(), client, "dot")?;
+    if xb.len != yb.len {
+        return Err(AlgebraError::ShapeMismatch {
+            expected: format!("y len {}", xb.len),
+            actual: yb.len.to_string(),
+        });
+    }
+    if xb.len == 0 {
+        return Ok(0.0);
+    }
+    let n = xb.len;
+    let result = match client {
+        AlgebraClient::Cpu(c) => {
+            launch_dot_on_handles::<cubecl_cpu::CpuRuntime, f64>(c, &xb.handle, &yb.handle, n)
+        }
+        #[cfg(feature = "cuda")]
+        AlgebraClient::Cuda(c) => {
+            launch_dot_on_handles::<cubecl_cuda::CudaRuntime, f64>(c, &xb.handle, &yb.handle, n)
+        }
+        #[cfg(feature = "wgpu")]
+        AlgebraClient::Wgpu(c) => {
+            launch_dot_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(c, &xb.handle, &yb.handle, n)
+        }
+        #[cfg(feature = "rocm")]
+        AlgebraClient::Rocm(c) => {
+            launch_dot_on_handles::<cubecl_hip::HipRuntime, f64>(c, &xb.handle, &yb.handle, n)
+        }
+    };
+    Ok(result)
 }

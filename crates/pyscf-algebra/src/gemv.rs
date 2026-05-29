@@ -15,7 +15,7 @@
 //!     an `AlgebraClient` and returns the `M`-vector `y`. Exercised by the
 //!     random oracle differential test (`tests/gemv_oracle.rs`) on ROCm.
 
-use crate::gemm::gemm_dense;
+use crate::gemm::{gemm_dense, launch_gemm_on_handles};
 use crate::scalar::DeviceScalar;
 use crate::{AlgebraClient, AlgebraError, Tensor};
 
@@ -38,13 +38,15 @@ pub fn gemv_dense<F: DeviceScalar>(
 }
 
 /// Matrix-vector product over the opaque `Tensor` surface: `y = A @ x`, written
-/// into `y`'s buffer in place.
+/// into `y`'s resident buffer in place.
 ///
-/// quick-260529-mtx: wired through the Phase-2 [`crate::device_buffer`] registry.
-/// `a`, `x`, and `y` must be device-backed tensors built with
-/// [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
-/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`]. `a`'s `[M, N]` shape
-/// drives the product; `x` must hold `N` elements and `y` must already be
+/// quick-260529-mtx-2: launches the GEMM kernel (with `N_cols = 1`) directly on
+/// the operands' resident device handles via the Phase-2 [`crate::device_buffer`]
+/// registry — no host transfer. `a`, `x`, and `y` must be device-backed tensors
+/// built with [`crate::device_buffer::upload`]; a `Tensor::placeholder` (sentinel
+/// `BufferId`) yields [`AlgebraError::UnallocatedBuffer`], and a buffer resident
+/// on another backend yields [`AlgebraError::BackendMismatch`]. `a`'s `[M, N]`
+/// shape drives the product; `x` must hold `N` elements and `y` must already be
 /// allocated with `M`. Errors with `DimensionMismatch` if `a` is not rank-2 or
 /// the operand element counts disagree with `(M, N)`.
 pub fn gemv(
@@ -68,8 +70,29 @@ pub fn gemv(
             rhs: vec![x.numel(), y.numel()],
         });
     }
-    let a_host = crate::device_buffer::read_raw::<f64>(a.id.raw(), "gemv")?;
-    let x_host = crate::device_buffer::read_raw::<f64>(x.id.raw(), "gemv")?;
-    let result = gemv_dense::<f64>(client, &a_host, &x_host, m, n)?;
-    crate::device_buffer::write_back::<f64>(y.id.raw(), &result, "gemv")
+    let ab = crate::device_buffer::handle_of::<f64>(a.id.raw(), client, "gemv")?;
+    let xb = crate::device_buffer::handle_of::<f64>(x.id.raw(), client, "gemv")?;
+    let yb = crate::device_buffer::handle_of::<f64>(y.id.raw(), client, "gemv")?;
+    if m == 0 {
+        return Ok(());
+    }
+    // A (m×n) @ x (n×1) = y (m×1): GEMM with N=1, in place on y's handle.
+    match client {
+        AlgebraClient::Cpu(c) => launch_gemm_on_handles::<cubecl_cpu::CpuRuntime, f64>(
+            c, &ab.handle, &xb.handle, &yb.handle, m, n, 1,
+        ),
+        #[cfg(feature = "cuda")]
+        AlgebraClient::Cuda(c) => launch_gemm_on_handles::<cubecl_cuda::CudaRuntime, f64>(
+            c, &ab.handle, &xb.handle, &yb.handle, m, n, 1,
+        ),
+        #[cfg(feature = "wgpu")]
+        AlgebraClient::Wgpu(c) => launch_gemm_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
+            c, &ab.handle, &xb.handle, &yb.handle, m, n, 1,
+        ),
+        #[cfg(feature = "rocm")]
+        AlgebraClient::Rocm(c) => launch_gemm_on_handles::<cubecl_hip::HipRuntime, f64>(
+            c, &ab.handle, &xb.handle, &yb.handle, m, n, 1,
+        ),
+    }
+    Ok(())
 }
