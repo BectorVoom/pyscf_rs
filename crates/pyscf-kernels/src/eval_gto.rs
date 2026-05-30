@@ -77,6 +77,12 @@
 //! the FMA-free oracle target (FOUND-05).
 
 use pyscf_algebra::{AlgebraClient, oracle_sum};
+// quick-260530-ljv: `dispatch_backend!` is now exported from pyscf-algebra
+// (`#[macro_export]`), so this downstream crate fans the s-shell cube launch out
+// over every backend without re-deriving the cfg-gated `match client { … }`. The
+// bare runtime paths inside the macro (`cubecl_cpu::CpuRuntime`, …) resolve in
+// THIS crate's namespace — pyscf-kernels carries the cfg-aligned cubecl-* deps.
+use pyscf_algebra::dispatch_backend;
 use pyscf_runtime::BackendKind;
 
 // `cubecl` is reachable from this crate per the ALG-06 carve-out
@@ -84,6 +90,9 @@ use pyscf_runtime::BackendKind;
 // `ALLOWED_CRATES`). The Wave 0 smoke test
 // (`tests/wave0_cubecl_smoke.rs`) keeps the launch path warm — see
 // the file-level doc comment for the deferral rationale.
+use cubecl::Runtime;
+use cubecl::bytes::Bytes;
+use cubecl::client::ComputeClient;
 #[allow(unused_imports)]
 use cubecl::prelude::*;
 
@@ -437,6 +446,173 @@ fn c2s_coeff(l: u32, m_row: usize, cart_col: usize) -> Result<f64, PyscfRsError>
     }
 }
 
+// ── s-shell (l=0) device kernel + launcher (quick-260530-ljv) ───────────
+//
+// First real GPU compute path for eval_gto: the l=0 radial slice
+//   out[g, ao] = Y00 · Σ_p coeff[c,p] · exp(-α_p · r²)
+// One device thread per flattened output element (g, ao_idx), mirroring
+// gemm_kernel's one-thread-per-output shape. F-order write
+// `out[g + ao_idx*ngrids]` — byte-identical index math to the host l=0 loop
+// (`eval_gto_sph_cpu` lines ~603-614). The inner primitive accumulation is a
+// SINGLE-THREAD ORDERED `acc += coef*(-alpha*r2).exp()` over p_idx (NOT a
+// tree/parallel reduce) so it tracks the host ordered sum to within <1 ULP/term
+// (bounded by the oracle TOL=1e-9, ORACLE-07 — not claimed bit-identical).
+//
+// f64-restricted (NOT generic `F: Float`): the chemistry precision path is
+// f64-only, and this sidesteps the generic-`Float` `.exp()` expansion risk noted
+// in the file header. Libcint flat arrays upload as device `Array`s: coords/env
+// as `&Array<f64>`, bas/atm/ao_loc as `&Array<i32>` (cubecl 0.10 indexes i32
+// arrays fine). The libcint slot constants + y00 ride in as bare scalar args
+// (LaunchArg for T=T, like gemm's m/k/n) so NO host-only helper fn is called
+// inside `#[cube]` (the "calling a normal Rust fn from inside #[cube]" pitfall).
+
+/// Threads per block for the s-shell launch. One thread = one output element.
+const EVAL_GTO_BLOCK: u32 = 256;
+
+/// l=0 (s-shell) AO-on-grid kernel. One thread per `(g, ao_idx)` output element.
+/// Each thread resolves its grid point + owning shell/contraction, computes
+/// `r²`, accumulates the ordered contracted radial, and writes
+/// `out[g + ao_idx*ngrids] = acc · y00`.
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_gto_sph_kernel(
+    coords: &Array<f64>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    out: &mut Array<f64>,
+    ngrids: usize,
+    nbas: usize,
+    nao: usize,
+    y00: f64,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+) {
+    let tid = ABSOLUTE_POS;
+    if tid < ngrids * nao {
+        // Decode the flat F-order index `tid = g + ao_idx*ngrids`.
+        let g = tid % ngrids;
+        let ao_idx = tid / ngrids;
+
+        let gx = coords[g];
+        let gy = coords[g + ngrids];
+        let gz = coords[g + 2 * ngrids];
+
+        // Locate the shell + contraction column that owns this AO. ao_loc is the
+        // running sum of nctr per shell, so the owning shell is the last one
+        // whose ao_loc <= ao_idx. Walk shells in order (small nbas).
+        let mut acc = 0.0_f64;
+        for shell_idx in 0..nbas {
+            let bas_row = shell_idx * bas_slots;
+            let ao_off = ao_loc[shell_idx] as usize;
+            let nctr = bas[bas_row + nctr_of] as usize;
+            // Does this AO fall inside shell_idx's contraction block?
+            if ao_idx >= ao_off && ao_idx < ao_off + nctr {
+                let c_idx = ao_idx - ao_off;
+                let atom_id = bas[bas_row + atom_of] as usize;
+                let nprim = bas[bas_row + nprim_of] as usize;
+                let pe = bas[bas_row + ptr_exp] as usize;
+                let pc = bas[bas_row + ptr_coeff] as usize;
+
+                let atm_row = atom_id * atm_slots;
+                let pcoord = atm[atm_row + ptr_coord] as usize;
+                let ax = env[pcoord];
+                let ay = env[pcoord + 1];
+                let az = env[pcoord + 2];
+
+                let dx = gx - ax;
+                let dy = gy - ay;
+                let dz = gz - az;
+                let r2 = dx * dx + dy * dy + dz * dz;
+
+                // ORDERED sequential accumulation over primitives — mirrors the
+                // host l=0 loop exactly (NOT a parallel/tree reduce).
+                for p_idx in 0..nprim {
+                    let alpha = env[pe + p_idx];
+                    // Coefficient matrix is F-order: ptr_coeff + c_idx*nprim + p.
+                    let coef = env[pc + c_idx * nprim + p_idx];
+                    acc += coef * (-alpha * r2).exp();
+                }
+                // ang_of==0 holds on this path (all-s routing); referenced so the
+                // launch arg is not flagged unused.
+                let _ = bas[bas_row + ang_of];
+            }
+        }
+        out[tid] = acc * y00;
+    }
+}
+
+/// Host-slice launcher for the s-shell kernel. Uploads the libcint flat arrays +
+/// coords, allocates the F-order output, launches the kernel on `R`, reads back.
+/// Modeled on `gemm.rs::launch_gemm`. Returns `ngrids*nao` f64 in F-order.
+#[allow(clippy::too_many_arguments)]
+fn launch_eval_gto_s<R: Runtime>(
+    client: &ComputeClient<R>,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+) -> Vec<f64> {
+    let nbas = bas.len() / BAS_SLOTS;
+    let out_len = ngrids * nao;
+
+    let coords_handle = client.create(Bytes::from_elems(coords.to_vec()));
+    let env_handle = client.create(Bytes::from_elems(env.to_vec()));
+    let bas_handle = client.create(Bytes::from_elems(bas.to_vec()));
+    let atm_handle = client.create(Bytes::from_elems(atm.to_vec()));
+    let ao_loc_handle = client.create(Bytes::from_elems(ao_loc.to_vec()));
+    let out_handle = client.empty(out_len * core::mem::size_of::<f64>());
+
+    let y00 = 0.5_f64 / std::f64::consts::PI.sqrt();
+    let groups = out_len.div_ceil(EVAL_GTO_BLOCK as usize) as u32;
+
+    // SAFETY: handle lengths match the slice lengths uploaded above; the kernel
+    // bounds-guards the tail (`if tid < ngrids*nao`). All input Arrays are
+    // read-only, `out` is the only `&mut`. `from_raw_parts` consumes the handle,
+    // so clone (clones share the binding).
+    unsafe {
+        eval_gto_sph_kernel::launch_unchecked::<R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(EVAL_GTO_BLOCK),
+            ArrayArg::from_raw_parts(coords_handle.clone(), coords.len()),
+            ArrayArg::from_raw_parts(env_handle.clone(), env.len()),
+            ArrayArg::from_raw_parts(bas_handle.clone(), bas.len()),
+            ArrayArg::from_raw_parts(atm_handle.clone(), atm.len()),
+            ArrayArg::from_raw_parts(ao_loc_handle.clone(), ao_loc.len()),
+            ArrayArg::from_raw_parts(out_handle.clone(), out_len),
+            // Bare scalar args (LaunchArg for T = T), like gemm's m/k/n.
+            ngrids,
+            nbas,
+            nao,
+            y00,
+            ATM_SLOTS,
+            BAS_SLOTS,
+            ATOM_OF,
+            ANG_OF,
+            NPRIM_OF,
+            NCTR_OF,
+            PTR_EXP,
+            PTR_COEFF,
+            PTR_COORD,
+        );
+    }
+
+    let bytes = client.read(vec![out_handle]);
+    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
+}
+
 /// Output of an eval_gto call. Flat F-order buffer + shape descriptor.
 #[derive(Debug, Clone)]
 pub struct EvalGtoBuffers {
@@ -482,18 +658,35 @@ pub fn eval_gto_sph(
     nao: usize,
     spherical: bool,
 ) -> Result<EvalGtoBuffers, PyscfRsError> {
-    // The per-backend match still lives at the public surface so future
-    // GPU arms (Phase 8) drop in cleanly. With only the `cpu` feature
-    // enabled, `BackendKind` only has the `Cpu` variant constructible
-    // from `AlgebraClient::kind()`; the fallback arm logs a warn for
-    // any future GPU backend until Phase 8 wires them.
-    let kind = client.kind();
-    if kind != BackendKind::Cpu {
-        tracing::warn!(
-            backend = ?kind,
-            "eval_gto: backend not yet wired (Phase 8 GPU enable); falling back to CPU"
+    // quick-260530-ljv: route pure-s-shell bases to the real device kernel
+    // (the FIRST GPU compute path for eval_gto), fanned out over every backend
+    // via the exported `dispatch_backend!`. ANY basis with an l>=1 shell — or an
+    // empty grid / empty basis — falls back to the UNCHANGED `eval_gto_sph_cpu`,
+    // so all l>=1 numerics stay byte-for-byte identical (behavior-preserving).
+    let all_s = !bas.is_empty()
+        && bas
+            .chunks_exact(BAS_SLOTS)
+            .all(|row| row[ANG_OF] == 0);
+
+    if all_s && ngrids * nao > 0 {
+        // Device path: pure-s-shell. y00 is folded inside the launcher; the
+        // `spherical` flag is a no-op for l=0 (Y00 identity), exactly as the
+        // host path treats s-shells.
+        let _ = spherical;
+        let values = dispatch_backend!(
+            client,
+            c,
+            Rt,
+            launch_eval_gto_s::<Rt>(c, coords, ngrids, atm, bas, env, ao_loc, nao)
         );
+        return Ok(EvalGtoBuffers {
+            values,
+            shape: vec![ngrids, nao],
+        });
     }
+
+    // Fallback: any l>=1 shell, empty basis, or empty grid → the unchanged
+    // host path (which also handles the out_len==0 early-return).
     eval_gto_sph_cpu(coords, ngrids, atm, bas, env, ao_loc, nao, spherical)
 }
 
