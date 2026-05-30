@@ -37,7 +37,7 @@ use cubecl::Runtime; // brings `::client` into scope for the concrete runtimes
 use pyscf_core::raw_layout::{
     ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, NCTR_OF, NPRIM_OF, PTR_COEFF, PTR_COORD, PTR_EXP,
 };
-use pyscf_kernels::eval_gto_sph;
+use pyscf_kernels::{eval_gto_sph, eval_gto_sph_deriv1};
 use pyscf_algebra::AlgebraClient;
 
 /// Deterministic LCG (Knuth/MMIX constants) → reproducible "random" values
@@ -865,4 +865,219 @@ fn eval_gto_lge1_matches_oracle_on_rocm() {
         );
     }
     eprintln!("[eval_gto_oracle] ROCm mixed-l (p/d/f/g) worst max_abs_diff = {worst:e}");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// quick-260530-oms: deriv1 (value + ∂x/∂y/∂z) 4-component differential oracle.
+//
+// After quick-260530-oms, `eval_gto_sph_deriv1` routes any basis with maxl in
+// 0..=4 to the general deriv1 `#[cube]` device kernel. This arm runs the device
+// deriv1 path on randomized p/d/f/g and mixed-l fixtures and diffs ALL 4 output
+// components ([4, ngrids, nao]) against an INDEPENDENT host longhand deriv1
+// reference (`oracle_eval_deriv1`), a DIFFERENT code path from the kernel —
+// NOT `eval_gto_sph_deriv1` itself (which now IS the kernel). The reference
+// ports the radial/radial_2a/cval/cdx/cdy/cdz/c2s formula from
+// `eval_gto_sph_deriv1_cpu` (eval_gto.rs ~1307-1410) using `lge1_reference::*`
+// + a LOCAL longhand `dpow`, summing radial AND radial_2a SEQUENTIALLY in ONE
+// p-loop to match the kernel's ordered acc (ORACLE-07 — the kernel sums
+// sequentially, NOT via oracle_sum). A wrong-offset radial_2a chain, a swapped
+// component write, or a transposed c2s surfaces as a diff > TOL on one of the 4
+// components. Distinct seeds from the value arms avoid fixture collisions.
+// ════════════════════════════════════════════════════════════════════════
+
+/// Independent longhand deriv1 reference (value + 3 cartesian gradients), a
+/// DIFFERENT code path from the production kernel. Mirrors
+/// `eval_gto_sph_deriv1_cpu` operand-for-operand using `lge1_reference::*` and
+/// a LOCAL host `dpow`. Output is the flat `[4, ngrids, nao]` buffer:
+/// `out[k*comp_stride + off]`, `k = 0(v)/1(vx)/2(vy)/3(vz)`,
+/// `off = g + (ao_off + c*nsph + m)*ngrids`, `comp_stride = ngrids*nao`.
+fn oracle_eval_deriv1(f: &MixedFixture) -> Vec<f64> {
+    /// Host longhand derivative of the monomial power: `lq·q^(lq-1)`, 0 for
+    /// lq==0 (byte-matches the host inner `dpow` in eval_gto_sph_deriv1_cpu).
+    fn dpow(q: f64, lq: u32) -> f64 {
+        if lq == 0 {
+            0.0
+        } else {
+            lq as f64 * q.powi(lq as i32 - 1)
+        }
+    }
+
+    let ngrids = f.ngrids;
+    let nbas = f.bas.len() / BAS_SLOTS;
+    let comp_stride = ngrids * f.nao;
+    let mut out = vec![0.0_f64; 4 * comp_stride];
+
+    for g in 0..ngrids {
+        let gx = f.coords[g];
+        let gy = f.coords[g + ngrids];
+        let gz = f.coords[g + 2 * ngrids];
+
+        // `s` drives parallel flat-array offsets (mirrors eval_gto_sph_deriv1_cpu).
+        #[allow(clippy::needless_range_loop)]
+        for s in 0..nbas {
+            let row = s * BAS_SLOTS;
+            let atom_id = f.bas[row + ATOM_OF] as usize;
+            let l = f.bas[row + ANG_OF] as u32;
+            let nprim = f.bas[row + NPRIM_OF] as usize;
+            let nctr = f.bas[row + NCTR_OF] as usize;
+            let ptr_exp = f.bas[row + PTR_EXP] as usize;
+            let ptr_coeff = f.bas[row + PTR_COEFF] as usize;
+
+            let pc = f.atm[atom_id * ATM_SLOTS + PTR_COORD] as usize;
+            let (dx, dy, dz) = (gx - f.env[pc], gy - f.env[pc + 1], gz - f.env[pc + 2]);
+            let r2 = dx * dx + dy * dy + dz * dz;
+
+            let fac1 = lge1_reference::common_fac_sp(l);
+            let powers = lge1_reference::cart_powers(l);
+            let ncart = lge1_reference::ncart(l);
+            let nsph = lge1_reference::nsph(l);
+            let ao_off = f.ao_loc[s] as usize;
+
+            for c in 0..nctr {
+                // SEQUENTIAL radial + radial_2a in ONE p-loop (form g0 once),
+                // matching the kernel's ordered acc — NOT oracle_sum.
+                let mut radial = 0.0_f64;
+                let mut radial_2a = 0.0_f64;
+                for p in 0..nprim {
+                    let alpha = f.env[ptr_exp + p];
+                    let coef = f.env[ptr_coeff + c * nprim + p];
+                    let g0 = coef * (-alpha * r2).exp();
+                    radial += g0;
+                    radial_2a += -2.0 * alpha * g0;
+                }
+                radial *= fac1;
+                radial_2a *= fac1;
+
+                let mut cval = vec![0.0_f64; ncart];
+                let mut cdx = vec![0.0_f64; ncart];
+                let mut cdy = vec![0.0_f64; ncart];
+                let mut cdz = vec![0.0_f64; ncart];
+                for (ci, &(lx, ly, lz)) in powers.iter().enumerate() {
+                    let mono =
+                        dx.powi(lx as i32) * dy.powi(ly as i32) * dz.powi(lz as i32);
+                    cval[ci] = mono * radial;
+                    // operand order IDENTICAL to host eval_gto.rs ~1382-1387.
+                    cdx[ci] = radial_2a * dx * mono
+                        + radial * dpow(dx, lx) * dy.powi(ly as i32) * dz.powi(lz as i32);
+                    cdy[ci] = radial_2a * dy * mono
+                        + radial * dx.powi(lx as i32) * dpow(dy, ly) * dz.powi(lz as i32);
+                    cdz[ci] = radial_2a * dz * mono
+                        + radial * dx.powi(lx as i32) * dy.powi(ly as i32) * dpow(dz, lz);
+                }
+
+                for m in 0..nsph {
+                    let off = g + (ao_off + c * nsph + m) * ngrids;
+                    let mut v = 0.0_f64;
+                    let mut vx = 0.0_f64;
+                    let mut vy = 0.0_f64;
+                    let mut vz = 0.0_f64;
+                    #[allow(clippy::needless_range_loop)]
+                    for ci in 0..ncart {
+                        let t = lge1_reference::c2s_coeff(l, m, ci);
+                        v += t * cval[ci];
+                        vx += t * cdx[ci];
+                        vy += t * cdy[ci];
+                        vz += t * cdz[ci];
+                    }
+                    out[off] = v;
+                    out[comp_stride + off] = vx;
+                    out[2 * comp_stride + off] = vy;
+                    out[3 * comp_stride + off] = vz;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Run one randomized mixed-l fixture on `client` (device deriv1 kernel path)
+/// and diff ALL 4 components against the independent longhand deriv1 oracle.
+fn check_deriv1_case(
+    client: &AlgebraClient,
+    n_atoms: usize,
+    l_pattern: &[u32],
+    shells_per_atom: usize,
+    ngrids: usize,
+    seed: u64,
+) -> f64 {
+    let mut rng = Lcg::new(seed);
+    let f = build_mixed_l_fixture(&mut rng, n_atoms, l_pattern, shells_per_atom, ngrids);
+
+    let device = eval_gto_sph_deriv1(
+        client, &f.coords, f.ngrids, &f.atm, &f.bas, &f.env, &f.ao_loc, f.nao,
+    )
+    .expect("eval_gto_sph_deriv1 should succeed for a valid mixed-l fixture");
+
+    let reference = oracle_eval_deriv1(&f);
+
+    assert_eq!(
+        device.shape,
+        vec![4, f.ngrids, f.nao],
+        "deriv1 device shape must be [4, ngrids, nao]"
+    );
+    assert_eq!(
+        device.values.len(),
+        4 * f.ngrids * f.nao,
+        "deriv1 device output length must be 4*ngrids*nao"
+    );
+    assert_eq!(reference.len(), 4 * f.ngrids * f.nao, "oracle output length");
+
+    // Diff the full flat buffer — all 4 components (value + ∂x/∂y/∂z) at once.
+    max_abs_diff(&device.values, &reference)
+}
+
+/// Deriv1 shapes: (n_atoms, l_pattern, shells_per_atom, ngrids). Mirrors
+/// MIXED_CASES — pure p/d/f/g + mixed s+p+d / s..g / d+f across atoms.
+const DERIV1_CASES: &[(usize, &[u32], usize, usize)] = &[
+    (1, &[1], 1, 9),              // pure p
+    (1, &[2], 1, 13),             // pure d
+    (1, &[3], 1, 11),             // pure f
+    (1, &[4], 1, 7),              // pure g (l=4)
+    (1, &[0, 1, 2], 3, 17),       // mixed s+p+d
+    (2, &[1, 2, 3], 3, 32),       // mixed p+d+f, 2 atoms
+    (1, &[0, 1, 2, 3, 4], 5, 25), // mixed s..g, all l on one centre
+    (3, &[2, 3], 2, 50),          // d+f spread over 3 atoms
+];
+
+#[test]
+fn eval_gto_deriv1_matches_oracle_on_cpu() {
+    let client = AlgebraClient::Cpu(cubecl_cpu::CpuRuntime::client(&cubecl_cpu::CpuDevice));
+    let mut worst = 0.0_f64;
+    for (i, &(na, pat, spa, ng)) in DERIV1_CASES.iter().enumerate() {
+        let diff = check_deriv1_case(&client, na, pat, spa, ng, 0xDE71_0001_u64 + i as u64);
+        worst = worst.max(diff);
+        assert!(
+            diff < TOL,
+            "CPU eval_gto deriv1 4-comp (atoms={na}, l_pattern={pat:?}, \
+             shells/atom={spa}, ngrids={ng}): max abs diff {diff:e} >= tol {TOL:e}"
+        );
+    }
+    eprintln!(
+        "[eval_gto_oracle] CPU deriv1 (4-comp p/d/f/g) worst max_abs_diff = {worst:e}"
+    );
+}
+
+#[cfg(feature = "rocm")]
+#[test]
+fn eval_gto_deriv1_matches_oracle_on_rocm() {
+    let client = AlgebraClient::Rocm(cubecl_hip::HipRuntime::client(
+        &cubecl_hip::AmdDevice::default(),
+    ));
+    assert!(
+        matches!(client, AlgebraClient::Rocm(_)),
+        "test must run on the ROCm backend, not a fallback"
+    );
+    let mut worst = 0.0_f64;
+    for (i, &(na, pat, spa, ng)) in DERIV1_CASES.iter().enumerate() {
+        let diff = check_deriv1_case(&client, na, pat, spa, ng, 0xDE71_F00D_u64 + i as u64);
+        worst = worst.max(diff);
+        assert!(
+            diff < TOL,
+            "ROCm eval_gto deriv1 4-comp (atoms={na}, l_pattern={pat:?}, \
+             shells/atom={spa}, ngrids={ng}): max abs diff {diff:e} >= tol {TOL:e}"
+        );
+    }
+    eprintln!(
+        "[eval_gto_oracle] ROCm deriv1 (4-comp p/d/f/g) worst max_abs_diff = {worst:e}"
+    );
 }
