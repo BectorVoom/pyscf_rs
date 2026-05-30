@@ -118,3 +118,6 @@ python/pyscf/**/*.pyd
 /translation*.txt
 *_translation*.txt
 
+# Windows "mark of the web" alternate-data-stream artifacts
+*:Zone.Identifier
+
