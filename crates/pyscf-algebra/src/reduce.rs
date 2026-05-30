@@ -128,15 +128,7 @@ pub fn reduce_sum_dense<F: DeviceScalar>(
     client: &AlgebraClient,
     x: &[F],
 ) -> Result<F, AlgebraError> {
-    let out = match client {
-        AlgebraClient::Cpu(c) => launch_reduce_sum::<cubecl_cpu::CpuRuntime, F>(c, x),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => launch_reduce_sum::<cubecl_cuda::CudaRuntime, F>(c, x),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => launch_reduce_sum::<cubecl_wgpu::WgpuRuntime, F>(c, x),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => launch_reduce_sum::<cubecl_hip::HipRuntime, F>(c, x),
-    };
+    let out = dispatch_backend!(client, c, Rt, launch_reduce_sum::<Rt, F>(c, x));
     Ok(out)
 }
 
@@ -298,23 +290,12 @@ pub fn reduce_sum_axis_dense<F: DeviceScalar>(
         return Ok(vec![F::from_int(0); n_out]);
     }
 
-    let out = match client {
-        AlgebraClient::Cpu(c) => {
-            launch_reduce_axis::<cubecl_cpu::CpuRuntime, F>(c, x, outer, axis_len, inner)
-        }
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => {
-            launch_reduce_axis::<cubecl_cuda::CudaRuntime, F>(c, x, outer, axis_len, inner)
-        }
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => {
-            launch_reduce_axis::<cubecl_wgpu::WgpuRuntime, F>(c, x, outer, axis_len, inner)
-        }
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => {
-            launch_reduce_axis::<cubecl_hip::HipRuntime, F>(c, x, outer, axis_len, inner)
-        }
-    };
+    let out = dispatch_backend!(
+        client,
+        c,
+        Rt,
+        launch_reduce_axis::<Rt, F>(c, x, outer, axis_len, inner)
+    );
     Ok(out)
 }
 
@@ -358,27 +339,14 @@ pub fn reduce_sum(
 
     if n_out != 0 {
         let x_len = xb.len;
-        match client {
-            AlgebraClient::Cpu(c) => launch_reduce_axis_on_handles::<cubecl_cpu::CpuRuntime, f64>(
-                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
-            ),
-            #[cfg(feature = "cuda")]
-            AlgebraClient::Cuda(c) => {
-                launch_reduce_axis_on_handles::<cubecl_cuda::CudaRuntime, f64>(
-                    c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
-                )
-            }
-            #[cfg(feature = "wgpu")]
-            AlgebraClient::Wgpu(c) => {
-                launch_reduce_axis_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
-                    c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
-                )
-            }
-            #[cfg(feature = "rocm")]
-            AlgebraClient::Rocm(c) => launch_reduce_axis_on_handles::<cubecl_hip::HipRuntime, f64>(
-                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner,
-            ),
-        }
+        dispatch_backend!(
+            client,
+            c,
+            Rt,
+            launch_reduce_axis_on_handles::<Rt, f64>(
+                c, &xb.handle, &ob.handle, x_len, outer, axis_len, inner
+            )
+        );
     }
     out.shape = out_shape;
     Ok(())

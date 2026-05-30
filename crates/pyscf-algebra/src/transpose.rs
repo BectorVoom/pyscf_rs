@@ -121,15 +121,7 @@ pub fn transpose_dense<F: DeviceScalar>(
         return Ok(Vec::new());
     }
 
-    let out = match client {
-        AlgebraClient::Cpu(c) => launch_transpose::<cubecl_cpu::CpuRuntime, F>(c, x, m, n),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => launch_transpose::<cubecl_cuda::CudaRuntime, F>(c, x, m, n),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => launch_transpose::<cubecl_wgpu::WgpuRuntime, F>(c, x, m, n),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => launch_transpose::<cubecl_hip::HipRuntime, F>(c, x, m, n),
-    };
+    let out = dispatch_backend!(client, c, Rt, launch_transpose::<Rt, F>(c, x, m, n));
     Ok(out)
 }
 
@@ -164,23 +156,12 @@ pub fn transpose(client: &AlgebraClient, x: &Tensor, out: &mut Tensor) -> Result
         });
     }
     if m * n != 0 {
-        match client {
-            AlgebraClient::Cpu(c) => launch_transpose_on_handles::<cubecl_cpu::CpuRuntime, f64>(
-                c, &xb.handle, &ob.handle, m, n,
-            ),
-            #[cfg(feature = "cuda")]
-            AlgebraClient::Cuda(c) => launch_transpose_on_handles::<cubecl_cuda::CudaRuntime, f64>(
-                c, &xb.handle, &ob.handle, m, n,
-            ),
-            #[cfg(feature = "wgpu")]
-            AlgebraClient::Wgpu(c) => launch_transpose_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
-                c, &xb.handle, &ob.handle, m, n,
-            ),
-            #[cfg(feature = "rocm")]
-            AlgebraClient::Rocm(c) => launch_transpose_on_handles::<cubecl_hip::HipRuntime, f64>(
-                c, &xb.handle, &ob.handle, m, n,
-            ),
-        }
+        dispatch_backend!(
+            client,
+            c,
+            Rt,
+            launch_transpose_on_handles::<Rt, f64>(c, &xb.handle, &ob.handle, m, n)
+        );
     }
     out.shape = vec![n, m];
     Ok(())

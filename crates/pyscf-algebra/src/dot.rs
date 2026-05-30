@@ -118,15 +118,7 @@ pub fn dot_dense<F: DeviceScalar>(
         });
     }
 
-    let out = match client {
-        AlgebraClient::Cpu(c) => launch_dot::<cubecl_cpu::CpuRuntime, F>(c, x, y),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => launch_dot::<cubecl_cuda::CudaRuntime, F>(c, x, y),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => launch_dot::<cubecl_wgpu::WgpuRuntime, F>(c, x, y),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => launch_dot::<cubecl_hip::HipRuntime, F>(c, x, y),
-    };
+    let out = dispatch_backend!(client, c, Rt, launch_dot::<Rt, F>(c, x, y));
     Ok(out)
 }
 
@@ -152,22 +144,11 @@ pub fn dot(client: &AlgebraClient, x: &Tensor, y: &Tensor) -> Result<f64, Algebr
         return Ok(0.0);
     }
     let n = xb.len;
-    let result = match client {
-        AlgebraClient::Cpu(c) => {
-            launch_dot_on_handles::<cubecl_cpu::CpuRuntime, f64>(c, &xb.handle, &yb.handle, n)
-        }
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => {
-            launch_dot_on_handles::<cubecl_cuda::CudaRuntime, f64>(c, &xb.handle, &yb.handle, n)
-        }
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => {
-            launch_dot_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(c, &xb.handle, &yb.handle, n)
-        }
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => {
-            launch_dot_on_handles::<cubecl_hip::HipRuntime, f64>(c, &xb.handle, &yb.handle, n)
-        }
-    };
+    let result = dispatch_backend!(
+        client,
+        c,
+        Rt,
+        launch_dot_on_handles::<Rt, f64>(c, &xb.handle, &yb.handle, n)
+    );
     Ok(result)
 }

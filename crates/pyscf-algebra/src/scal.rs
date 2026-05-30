@@ -113,15 +113,7 @@ pub fn scal_dense<F: DeviceScalar>(
         return Ok(());
     }
 
-    let scaled = match client {
-        AlgebraClient::Cpu(c) => launch_scal::<cubecl_cpu::CpuRuntime, F>(c, alpha, x),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => launch_scal::<cubecl_cuda::CudaRuntime, F>(c, alpha, x),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => launch_scal::<cubecl_wgpu::WgpuRuntime, F>(c, alpha, x),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => launch_scal::<cubecl_hip::HipRuntime, F>(c, alpha, x),
-    };
+    let scaled = dispatch_backend!(client, c, Rt, launch_scal::<Rt, F>(c, alpha, x));
     x.copy_from_slice(&scaled);
     Ok(())
 }
@@ -142,22 +134,11 @@ pub fn scal(client: &AlgebraClient, alpha: f64, x: &mut Tensor) -> Result<(), Al
         return Ok(());
     }
     let n = xb.len;
-    match client {
-        AlgebraClient::Cpu(c) => {
-            launch_scal_on_handle::<cubecl_cpu::CpuRuntime, f64>(c, alpha, &xb.handle, n)
-        }
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => {
-            launch_scal_on_handle::<cubecl_cuda::CudaRuntime, f64>(c, alpha, &xb.handle, n)
-        }
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => {
-            launch_scal_on_handle::<cubecl_wgpu::WgpuRuntime, f64>(c, alpha, &xb.handle, n)
-        }
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => {
-            launch_scal_on_handle::<cubecl_hip::HipRuntime, f64>(c, alpha, &xb.handle, n)
-        }
-    }
+    dispatch_backend!(
+        client,
+        c,
+        Rt,
+        launch_scal_on_handle::<Rt, f64>(c, alpha, &xb.handle, n)
+    );
     Ok(())
 }
