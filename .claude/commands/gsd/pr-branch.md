@@ -6,6 +6,7 @@ allowed-tools:
   - Bash
   - Read
   - AskUserQuestion
+requires: [review]
 ---
 
 <objective>
@@ -17,9 +18,9 @@ changes that are irrelevant to code review.
 </objective>
 
 <execution_context>
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/pr-branch.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/workflows/pr-branch.md
 </execution_context>
 
 <process>
-Execute the pr-branch workflow from @/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/pr-branch.md end-to-end.
+Execute end-to-end.
 </process>

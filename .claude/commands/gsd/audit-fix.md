@@ -12,6 +12,7 @@ allowed-tools:
   - Glob
   - Agent
   - AskUserQuestion
+requires: [audit-uat]
 ---
 <objective>
 Run an audit, classify findings as auto-fixable vs manual-only, then autonomously fix
@@ -25,9 +26,9 @@ Flags:
 </objective>
 
 <execution_context>
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/audit-fix.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/workflows/audit-fix.md
 </execution_context>
 
 <process>
-Execute the audit-fix workflow from @/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/audit-fix.md end-to-end.
+Execute end-to-end.
 </process>
