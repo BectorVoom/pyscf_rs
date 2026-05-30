@@ -613,6 +613,320 @@ fn launch_eval_gto_s<R: Runtime>(
     bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
 }
 
+// ── general l 0..=4 device kernel + launcher (quick-260530-mlg) ──────────
+//
+// Ports the host `eval_gto_sph_cpu` l>=1 branch (lines ~809-869) into a real
+// `#[cube(launch_unchecked)]` kernel and makes the device path the DEFAULT for
+// any basis whose max angular momentum is 1..=4 (which subsumes l=0, so mixed
+// s+p+d bases like cc-pVDZ run uniformly on the device). One device thread per
+// (g, shell). The cart→sph machinery rides in as HOST-PRECOMPUTED angular
+// device tables (the host helpers `ncart`/`nsph`/`common_fac_sp`/`cart_powers`/
+// `c2s_coeff` return Vec/Result, so they are ILLEGAL inside `#[cube]` — only the
+// flat tables they produce cross to the device). See the device_table_schema in
+// the plan: 9 angular arrays, all offsets prefix-summed so the kernel indexes
+// by l with O(1) arithmetic.
+//
+// BIT-EXACTNESS: the kernel mirrors the host reduction order EXACTLY —
+// sequential `acc += coef*(-alpha*r2).exp()` over primitives THEN `* fac1`
+// (the host `oracle_sum` == strict sequential sum for nprim<=128, real shells
+// have nprim<=~30), then `cart_val = mono * radial`, then
+// `v += c2s_flat[..] * cart_val`, then F-order write
+// `out[g + (ao_off + c_idx*nsph_l + m)*ngrids]`. The ONLY divergence from the
+// host is `ipow` vs `f64::powi` for l>=3 monomials (<1 ULP, far inside
+// TOL=1e-9 / ORACLE-07).
+
+/// Integer power `base^n` for `n <= 4` by repeated multiply — the device
+/// equivalent of host `f64::powi` for the cartesian monomial exponents.
+///
+/// `#[cube]` helper (Solution 1 from the host-fn-in-`#[cube]` pitfall guide):
+/// host helpers returning `Vec`/`Result` cannot be called from a kernel, so the
+/// one helper the kernel DOES call is itself a `#[cube]` fn. Written in the
+/// STATEMENT form (not `let r = if … {}`) per the mismatched-types guide §1.3 to
+/// dodge the `ExpandElementTyped` vs `{float}` mismatch.
+///
+/// This may differ from host `f64::powi` by < 1 ULP at l>=3 but is bounded by
+/// TOL=1e-9 (ORACLE-07). `n` comes from i32 cart_pow values cast to u32.
+//
+// `r = r * base` (not `r *= base`): the explicit-assignment statement form is the
+// cubecl-IR-safe pattern (mismatched-types guide §1.3 / conditionals guide);
+// compound-assign lowering is not relied upon. Allow the clippy lint that would
+// otherwise rewrite it into the compound form.
+#[allow(clippy::assign_op_pattern)]
+#[cube]
+#[inline(always)]
+fn ipow(base: f64, n: u32) -> f64 {
+    let mut r = 1.0_f64;
+    if n >= 1 {
+        r = base;
+    }
+    if n >= 2 {
+        r = r * base;
+    }
+    if n >= 3 {
+        r = r * base;
+    }
+    if n == 4 {
+        r = r * base;
+    }
+    r
+}
+
+/// General l 0..=4 AO-on-grid kernel. One thread per `(g, shell)`: the thread
+/// evaluates EVERY contraction column and EVERY spherical AO of its shell at its
+/// grid point, applying the cart→sph transform from the host-precomputed tables.
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_gto_sph_kernel_general(
+    coords: &Array<f64>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    out: &mut Array<f64>,
+    ngrids: usize,
+    nbas: usize,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+) {
+    let tid = ABSOLUTE_POS;
+    if tid < ngrids * nbas {
+        let g = tid / nbas;
+        let shell = tid % nbas;
+
+        let gx = coords[g];
+        let gy = coords[g + ngrids];
+        let gz = coords[g + 2 * ngrids];
+
+        let bas_row = shell * bas_slots;
+        let l = bas[bas_row + ang_of] as u32;
+        let lu = l as usize;
+        let atom_id = bas[bas_row + atom_of] as usize;
+        let nprim = bas[bas_row + nprim_of] as usize;
+        let nctr = bas[bas_row + nctr_of] as usize;
+        let pe = bas[bas_row + ptr_exp] as usize;
+        let pc = bas[bas_row + ptr_coeff] as usize;
+        let ao_off = ao_loc[shell] as usize;
+
+        let atm_row = atom_id * atm_slots;
+        let pcoord = atm[atm_row + ptr_coord] as usize;
+        let ax = env[pcoord];
+        let ay = env[pcoord + 1];
+        let az = env[pcoord + 2];
+
+        let dx = gx - ax;
+        let dy = gy - ay;
+        let dz = gz - az;
+        let r2 = dx * dx + dy * dy + dz * dz;
+
+        // l-indexed angular reads (cast i32 table entries to usize for indexing).
+        let ncart_l = ncart_by_l[lu] as usize;
+        let nsph_l = nsph_by_l[lu] as usize;
+        let fac1 = fac1_by_l[lu];
+        let c2s_off = c2s_off_by_l[lu] as usize;
+        let cpow_off = cpow_off_by_l[lu] as usize;
+
+        for c_idx in 0..nctr {
+            // ORDERED sequential contracted radial — mirrors the host l>=1 loop
+            // (oracle_sum == strict sequential for nprim<=128), THEN * fac1.
+            let mut acc = 0.0_f64;
+            for p_idx in 0..nprim {
+                let alpha = env[pe + p_idx];
+                let coef = env[pc + c_idx * nprim + p_idx];
+                acc += coef * (-alpha * r2).exp();
+            }
+            let radial = acc * fac1;
+
+            // cart → sph: row m = Σ_ci c2s[l][m][ci] * (mono[ci] * radial).
+            for m in 0..nsph_l {
+                let mut v = 0.0_f64;
+                for ci in 0..ncart_l {
+                    let lx = cpow_lx[cpow_off + ci] as u32;
+                    let ly = cpow_ly[cpow_off + ci] as u32;
+                    let lz = cpow_lz[cpow_off + ci] as u32;
+                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cart_val = mono * radial;
+                    v += c2s_flat[c2s_off + m * ncart_l + ci] * cart_val;
+                }
+                out[g + (ao_off + c_idx * nsph_l + m) * ngrids] = v;
+            }
+        }
+    }
+}
+
+/// Host-precomputed angular device tables for the general l 0..=4 kernel.
+/// Built once per launch for `l in 0..=maxl` (caller guarantees `maxl <= 4`).
+struct AngularTables {
+    c2s_flat: Vec<f64>,
+    cpow_lx: Vec<i32>,
+    cpow_ly: Vec<i32>,
+    cpow_lz: Vec<i32>,
+    ncart_by_l: Vec<i32>,
+    nsph_by_l: Vec<i32>,
+    fac1_by_l: Vec<f64>,
+    c2s_off_by_l: Vec<i32>,
+    cpow_off_by_l: Vec<i32>,
+}
+
+/// Build the 9 angular device tables for `l in 0..=maxl`. Calls the HOST
+/// helpers (`ncart`/`nsph`/`common_fac_sp`/`cart_powers`/`c2s_coeff`) and
+/// flattens them into the prefix-summed device_table_schema layout:
+///   c2s_flat[c2s_off_by_l[l] + m*ncart(l) + ci]
+///   cpow_l{x,y,z}[cpow_off_by_l[l] + ci]
+/// `c2s_coeff`'s `Err` is propagated, but the caller only invokes with
+/// `maxl <= 4` so it never errors on this path.
+fn build_angular_tables(maxl: u32) -> Result<AngularTables, PyscfRsError> {
+    let nl = (maxl as usize) + 1;
+    let mut c2s_flat: Vec<f64> = Vec::new();
+    let mut cpow_lx: Vec<i32> = Vec::new();
+    let mut cpow_ly: Vec<i32> = Vec::new();
+    let mut cpow_lz: Vec<i32> = Vec::new();
+    let mut ncart_by_l: Vec<i32> = Vec::with_capacity(nl);
+    let mut nsph_by_l: Vec<i32> = Vec::with_capacity(nl);
+    let mut fac1_by_l: Vec<f64> = Vec::with_capacity(nl);
+    let mut c2s_off_by_l: Vec<i32> = Vec::with_capacity(nl);
+    let mut cpow_off_by_l: Vec<i32> = Vec::with_capacity(nl);
+
+    let mut c2s_off: i32 = 0;
+    let mut cpow_off: i32 = 0;
+    for l in 0..=maxl {
+        let ncart_l = ncart(l);
+        let nsph_l = nsph(l);
+        ncart_by_l.push(ncart_l as i32);
+        nsph_by_l.push(nsph_l as i32);
+        fac1_by_l.push(common_fac_sp(l));
+        c2s_off_by_l.push(c2s_off);
+        cpow_off_by_l.push(cpow_off);
+
+        // c2s matrix block: row-major [m][ci].
+        for m in 0..nsph_l {
+            for ci in 0..ncart_l {
+                c2s_flat.push(c2s_coeff(l, m, ci)?);
+            }
+        }
+        // cart power columns (parallel lx/ly/lz arrays).
+        for (lx, ly, lz) in cart_powers(l) {
+            cpow_lx.push(lx as i32);
+            cpow_ly.push(ly as i32);
+            cpow_lz.push(lz as i32);
+        }
+
+        c2s_off += (ncart_l * nsph_l) as i32;
+        cpow_off += ncart_l as i32;
+    }
+
+    Ok(AngularTables {
+        c2s_flat,
+        cpow_lx,
+        cpow_ly,
+        cpow_lz,
+        ncart_by_l,
+        nsph_by_l,
+        fac1_by_l,
+        c2s_off_by_l,
+        cpow_off_by_l,
+    })
+}
+
+/// Host-slice launcher for the general l 0..=4 kernel. Builds the angular
+/// device tables + the libcint flat arrays, launches one thread per
+/// `(g, shell)`, reads back the F-order `(ngrids, nao)` buffer.
+/// Modeled on `launch_eval_gto_s`. `maxl` must be `<= 4` (caller guarantees).
+#[allow(clippy::too_many_arguments)]
+fn launch_eval_gto_general<R: Runtime>(
+    client: &ComputeClient<R>,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+    maxl: u32,
+) -> Result<Vec<f64>, PyscfRsError> {
+    let nbas = bas.len() / BAS_SLOTS;
+    let out_len = ngrids * nao;
+
+    let t = build_angular_tables(maxl)?;
+
+    let coords_handle = client.create(Bytes::from_elems(coords.to_vec()));
+    let env_handle = client.create(Bytes::from_elems(env.to_vec()));
+    let bas_handle = client.create(Bytes::from_elems(bas.to_vec()));
+    let atm_handle = client.create(Bytes::from_elems(atm.to_vec()));
+    let ao_loc_handle = client.create(Bytes::from_elems(ao_loc.to_vec()));
+
+    let c2s_flat_h = client.create(Bytes::from_elems(t.c2s_flat.clone()));
+    let cpow_lx_h = client.create(Bytes::from_elems(t.cpow_lx.clone()));
+    let cpow_ly_h = client.create(Bytes::from_elems(t.cpow_ly.clone()));
+    let cpow_lz_h = client.create(Bytes::from_elems(t.cpow_lz.clone()));
+    let ncart_h = client.create(Bytes::from_elems(t.ncart_by_l.clone()));
+    let nsph_h = client.create(Bytes::from_elems(t.nsph_by_l.clone()));
+    let fac1_h = client.create(Bytes::from_elems(t.fac1_by_l.clone()));
+    let c2s_off_h = client.create(Bytes::from_elems(t.c2s_off_by_l.clone()));
+    let cpow_off_h = client.create(Bytes::from_elems(t.cpow_off_by_l.clone()));
+
+    let out_handle = client.empty(out_len * core::mem::size_of::<f64>());
+
+    let groups = (ngrids * nbas).div_ceil(EVAL_GTO_BLOCK as usize) as u32;
+
+    // SAFETY: every handle length matches the slice length uploaded above; the
+    // kernel bounds-guards the tail (`if tid < ngrids*nbas`). All input Arrays
+    // are read-only, `out` is the only `&mut`. `from_raw_parts` consumes the
+    // handle, so clone (clones share the binding).
+    unsafe {
+        eval_gto_sph_kernel_general::launch_unchecked::<R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(EVAL_GTO_BLOCK),
+            ArrayArg::from_raw_parts(coords_handle.clone(), coords.len()),
+            ArrayArg::from_raw_parts(env_handle.clone(), env.len()),
+            ArrayArg::from_raw_parts(bas_handle.clone(), bas.len()),
+            ArrayArg::from_raw_parts(atm_handle.clone(), atm.len()),
+            ArrayArg::from_raw_parts(ao_loc_handle.clone(), ao_loc.len()),
+            ArrayArg::from_raw_parts(c2s_flat_h.clone(), t.c2s_flat.len()),
+            ArrayArg::from_raw_parts(cpow_lx_h.clone(), t.cpow_lx.len()),
+            ArrayArg::from_raw_parts(cpow_ly_h.clone(), t.cpow_ly.len()),
+            ArrayArg::from_raw_parts(cpow_lz_h.clone(), t.cpow_lz.len()),
+            ArrayArg::from_raw_parts(ncart_h.clone(), t.ncart_by_l.len()),
+            ArrayArg::from_raw_parts(nsph_h.clone(), t.nsph_by_l.len()),
+            ArrayArg::from_raw_parts(fac1_h.clone(), t.fac1_by_l.len()),
+            ArrayArg::from_raw_parts(c2s_off_h.clone(), t.c2s_off_by_l.len()),
+            ArrayArg::from_raw_parts(cpow_off_h.clone(), t.cpow_off_by_l.len()),
+            ArrayArg::from_raw_parts(out_handle.clone(), out_len),
+            // Bare scalar args (LaunchArg for T = T), like the s-kernel.
+            ngrids,
+            nbas,
+            ATM_SLOTS,
+            BAS_SLOTS,
+            ATOM_OF,
+            ANG_OF,
+            NPRIM_OF,
+            NCTR_OF,
+            PTR_EXP,
+            PTR_COEFF,
+            PTR_COORD,
+        );
+    }
+
+    let bytes = client.read(vec![out_handle]);
+    Ok(bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec())
+}
+
 /// Output of an eval_gto call. Flat F-order buffer + shape descriptor.
 #[derive(Debug, Clone)]
 pub struct EvalGtoBuffers {
@@ -685,8 +999,38 @@ pub fn eval_gto_sph(
         });
     }
 
-    // Fallback: any l>=1 shell, empty basis, or empty grid → the unchanged
-    // host path (which also handles the out_len==0 early-return).
+    // quick-260530-mlg: route any non-empty basis whose max angular momentum is
+    // <= 4 (p/d/f/g — which subsumes l=0 too) to the GENERAL device kernel, fanned
+    // out over every backend via `dispatch_backend!`. l>4 (h-shells and above),
+    // empty basis, and empty grid fall through to the UNCHANGED `eval_gto_sph_cpu`
+    // (preserving the NotYetImplemented{phase:4} error for l>4 and the
+    // out_len==0 early-return). The host tables are built only for l in 0..=maxl
+    // with maxl<=4, so `c2s_coeff` is never called with l>4 on the device path.
+    let maxl = bas
+        .chunks_exact(BAS_SLOTS)
+        .map(|row| row[ANG_OF])
+        .max()
+        .unwrap_or(0) as u32;
+
+    if !bas.is_empty() && maxl <= 4 && ngrids * nao > 0 {
+        // l>=1 always emits SPHERICAL AOs, matching `eval_gto_sph_cpu`; the
+        // `spherical` flag is referenced (no-op for the corpus path) so it is
+        // not flagged unused.
+        let _ = spherical;
+        let values = dispatch_backend!(
+            client,
+            c,
+            Rt,
+            launch_eval_gto_general::<Rt>(c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl)
+        )?;
+        return Ok(EvalGtoBuffers {
+            values,
+            shape: vec![ngrids, nao],
+        });
+    }
+
+    // Fallback: l>4 shell, empty basis, or empty grid → the unchanged host
+    // path (which also handles the out_len==0 early-return).
     eval_gto_sph_cpu(coords, ngrids, atm, bas, env, ao_loc, nao, spherical)
 }
 
