@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: "Completed 07-10-PLAN.md (oracle/CI close-out — registered 8 grad/geomopt oracle method names in pyscf-oracle KNOWN_METHODS (nuc_grad_rhf/uhf/rks/uks/mp2/ccsd/ecp + geomopt_h2o, 24→32, register-but-defer-dispatch); new src/grad_oracle.rs with always-on dispatch-layer arms (no python/libxc) + #[cfg(feature=python)]/#[ignore]'d byte-identity arms; ci.yml — always-on grad-structural (verify_fd D-01 + atmlst + single_cphf_impl + geomopt convergence) + geomopt-no-runtime-dep CI proof (GEOMOPT-01: pip uninstall geometric pyberny → optimize(mf) runs native, per D-05) + workflow_dispatch grad-oracle-upstream-manual (upstream byte-identity ≤1e-7 + geomopt trajectory parity, cintx-gated); 07-VALIDATION.md nyquist_compliant: true + wave_0_complete: true. Phase 07 COMPLETE — all 10 plans + the Nyquist contract closed. The upstream byte-identity numerics stay workflow_dispatch-gated on the 6 MISSING cintx grad-intor families (07-01).)"
-last_updated: "2026-05-26T05:10:55.619Z"
+stopped_at: "Phase 7 (gradients-geomopt) COMPLETE — all 10 plans across 6 DAG waves; verified 5/5 must-haves (07-VERIFICATION.md passed); advisory code review (07-REVIEW.md) reachable BLOCKERs CR-01 (oracle dispatch ↔ KNOWN_METHODS alignment) + CR-02 (oracle-order g_inverse reduction) fixed and committed. Analytical-grad upstream-byte-identity numeric stays workflow_dispatch-gated on the unscheduled cintx grad-intor workstream (6/8 families missing, 07-01); cintx-gated WARNINGs (WR-01..07) tracked as follow-ups. Next: Phase 8 (GPU enable + oracle hardening + distribution)."
+last_updated: "2026-05-26T06:01:31.842Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 8
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 07 — gradients-geomopt (COMPLETE — Nyquist contract closed)
+**Current focus:** Phase 8 — GPU enable + oracle hardening + distribution (Phase 7 gradients-geomopt COMPLETE + verified)
 
 ## Current Position
 
-Phase: 07 (gradients-geomopt) — COMPLETE (all 10 plans + the Nyquist validation contract closed)
-Plan: 07-01..07-10 of 10 complete (07-10 oracle/CI close-out done; phase Nyquist contract closed — nyquist_compliant: true, wave_0_complete: true)
-Status: Phase 07 complete — ready for phase verification / next phase (08-perf-dist)
-Last activity: 2026-05-26
+Phase: 8
+Plan: Not started
+Status: Phase 07 COMPLETE + verified (5/5 must-haves; review BLOCKERs CR-01/CR-02 fixed) — ready to discuss/plan Phase 8 (gpu-enable + oracle-hardening + distribution)
+Last activity: 2026-05-29 - Completed quick task 260529-oj6: host_fallback.rs eigh/cholesky/qr/svd implemented via faer-on-host round-trip (ALG-05) + ROCm oracle differential tests (8/8 pass on gfx1152)
 
-Progress: [█████████░] 90% (6/8 phases done + Phase 7 COMPLETE pending verification; Phase 7 Waves 1-8 done.
+Progress: [█████████░] 88% (7/8 phases done; Phase 7 gradients-geomopt COMPLETE + verified 5/5 must-haves, advisory code-review BLOCKERs CR-01/CR-02 fixed; Phase 7 ran as 6 DAG waves.
 
 07-10 (the final wave-8 plan) closes the phase: pyscf-oracle registers the 8 grad/geomopt method names (nuc_grad_rhf/uhf/rks/uks/mp2/ccsd/ecp + geomopt_h2o, KNOWN_METHODS 24→32, register-but-defer-dispatch mirroring MP2/CCSD); src/grad_oracle.rs carries always-on dispatch-layer registration arms (no python, no libxc) + #[cfg(feature=python)]/#[ignore]'d byte-identity + geomopt-trajectory arms. CI gains three jobs: the always-on grad-structural gate (cargo test -p pyscf-grad -p pyscf-geomopt -p pyscf-oracle — FD verify_fd D-01 + atmlst + single_cphf_impl + geomopt convergence, no python/libxc), the geomopt-no-runtime-dep CI proof (GEOMOPT-01: pip uninstall geometric pyberny then pyscf.geomopt.optimize(mf) runs on the fully-native engine, per D-05 — runs in CI, NOT workflow_dispatch), and the workflow_dispatch grad-oracle-upstream-manual arm (upstream byte-identity ≤1e-7 Ha/Bohr + geomopt trajectory parity, gated on the cintx grad-intor workstream + an upstream PySCF/geomeTRIC install). 07-VALIDATION.md set to nyquist_compliant: true + wave_0_complete: true. The always-on FD/structural numerics + the GEOMOPT-01 proof are green; the upstream byte-identity numerics stay workflow_dispatch-gated because 6 of 8 gradient-integral families (int2e_ip1, int1e_ip{ovlp,kin,nuc,rinv}, ECPscalar_iprinv + the with_rinv_at_nucleus origin shift) are MISSING from cintx (07-01) with no scheduled workstream — they un-gate when the cintx grad-intor workstream lands. Earlier: 07-09 lands the PyO3 BRIDGE: grad.rs — six PyGradients classes (PyRhf/PyUhf/PyRks/PyUks/PyMp2/PyCcsd) eager-snapshot the SCF reference (D-09), dispatch grad_elec subclass overrides via the cc.rs is_overridden __qualname__ MRO check + call_method1 (Pitfall 7), run the pyo3-free pyscf-grad drivers under py.detach (BIND-05; kernel does NOT detach at top), return a C-contiguous (natm,3) NumPy gradient (BIND-04), and expose as_scanner returning the Mole->(e_tot,de) TUPLE seam (rhf.py:248-262); the Gradients() factory dispatches MP2->/CCSD->/KS->/UHF->/RHF. geomopt.rs — pyscf.geomopt.optimize(method) + geometric_solver/berny_solver.{kernel,optimize} all route through ONE shared run_geomopt core driving pyscf_geomopt::geometric_solver::kernel (D-06/T-07-20 — berny is a thin alias, NO second optimizer), resolving a Python method into a native GradScanner whose closures re-enter Python under Python::attach with a per-step memoization cache; constraints->clear error (T-07-33), maxsteps default 100 (T-07-32), GeomError->Python exception (T-07-29/BIND-09). python/pyscf/grad+geomopt overlays — _graft_nuc_grad_onto_scf over scf+dft pyclasses (subclass-override-wins guard), NO geometric/pyberny import (GEOMOPT-01). Completes the GEOMOPT-02/03 Python optimize(mf) entry point 07-06 left Partial. pyscf-py scoped: 31 always-on structural tests pass (grad_bridge 4 + geomopt_bridge 4 new); clippy clean; check-dependency-wall PASS; pyscf-grad/pyscf-geomopt stay pyo3-free. The analytical-grad + the Python end-to-end NUMERIC stay cintx-gated (the 6 MISSING grad-intor families) per the 07-03 precedent; the structural bridge is always-on. The GEOMOPT-01 no-runtime-dep proof + the upstream byte-identity arms are 07-10.
 
@@ -40,7 +40,7 @@ Earlier Phase-7 waves: RHF analytical gradient headline (GRAD-01); the native BF
 
 **Velocity:**
 
-- Total plans completed: 79
+- Total plans completed: 89
 - Average duration: — (no plans run yet)
 - Total execution time: 0 hours
 
@@ -54,6 +54,7 @@ Earlier Phase-7 waves: RHF analytical gradient headline (GRAD-01); the native BF
 | 05 | 7 | - | - |
 | 01 | 9 | - | - |
 | 06 | 11 | - | - |
+| 07 | 10 | - | - |
 
 **Recent Trend:**
 
@@ -198,6 +199,12 @@ None yet.
 | 260512-8jv | Create issue in cintx repository about remaining tasks from pyscf_rs Phase 2 ([cintx#11](https://github.com/BectorVoom/cintx/issues/11)) | 2026-05-11 | 7dcdf08 | [260512-8jv-create-issue-in-cintx-repository-about-r](./quick/260512-8jv-create-issue-in-cintx-repository-about-r/) |
 | 260512-8wb | Rewrite cintx#11 as cintx-only Phase 2 task list (drop pyscf_rs framing) | 2026-05-11 | f53cc0e | [260512-8wb-rewrite-cintx-11-as-cintx-only-phase-2-t](./quick/260512-8wb-rewrite-cintx-11-as-cintx-only-phase-2-t/) |
 | 260522-b06 | implement f32/f64 precision switching using generics | 2026-05-22 | 4c6ab55 | [260522-b06-implement-f32-f64-precision-switching-us](./quick/260522-b06-implement-f32-f64-precision-switching-us/) |
+| 260529-i2x | refactor gemm.rs to cubecl generic-float kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | b720570 | [260529-i2x-refactor-gemm-rs-to-cubecl-generic-float](./quick/260529-i2x-refactor-gemm-rs-to-cubecl-generic-float/) |
+| 260529-iji | refactor dot.rs to cubecl generic-float reduction kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 7ab843b | [260529-iji-refactor-pyscf-algebra-dot-rs-to-cubecl-](./quick/260529-iji-refactor-pyscf-algebra-dot-rs-to-cubecl-/) |
+| 260529-jcx | refactor reduce.rs to cubecl generic-float partial-sum kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | be22fe8 | [260529-jcx-refactor-reduce-rs-to-cubecl-generic-flo](./quick/260529-jcx-refactor-reduce-rs-to-cubecl-generic-flo/) |
+| 260529-skl | refactor scal.rs to cubecl generic-float scale kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 687411a | (commits only — no quick dir) |
+| 260529-mtx | refactor axpy.rs to cubecl generic-float kernel (y += alpha*x) + implement stub + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 4ec6700 | [260529-mtx-refactor-crates-pyscf-algebra-to-cubecl-](./quick/260529-mtx-refactor-crates-pyscf-algebra-to-cubecl-/) |
+| 260529-oj6 | refactor host_fallback.rs — implement eigh/cholesky/qr/svd via faer-on-host round-trip (ALG-05, NOT native cubecl kernels) + ROCm oracle differential tests (8/8 pass on gfx1152) | 2026-05-29 | 3100d3c | [260529-oj6-refactor-host-fallback-to-cubecl-faer-ho](./quick/260529-oj6-refactor-host-fallback-to-cubecl-faer-ho/) |
 
 ## Deferred Items
 

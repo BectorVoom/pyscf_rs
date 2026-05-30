@@ -19,6 +19,12 @@ pub mod tensor;
 // (DeviceScalar) and the ScalarKind -> DType reconciliation (dtype_of) live
 // here — inside the wall — never in pyscf-core or a method crate.
 pub mod scalar;
+// quick-260529-mtx (Phase-2 of the algebra crate): the device-buffer registry
+// backing the opaque `Tensor`/`BufferId` surface. Turns the `placeholder`
+// sentinel into real, uploadable buffers so the `Tensor`-based element-wise ops
+// (axpy/scal/dot/reduce_sum) run end-to-end instead of returning
+// `NotYetImplemented`. Stays inside the wall: cubecl never appears in its API.
+pub mod device_buffer;
 
 pub mod axpy;
 pub mod dot;
@@ -47,15 +53,16 @@ pub use scalar::DeviceScalar;
 pub use select::{BackendSelection, select_backend};
 pub use tensor::{BufferId, Tensor};
 
-pub use axpy::axpy;
+pub use axpy::{axpy, axpy_dense};
+pub use device_buffer::{download, release, upload};
 pub use df_metric::{DF_METRIC_LINEAR_DEP, df_metric_fit};
-pub use dot::dot;
+pub use dot::{dot, dot_dense};
 pub use eigh_gen::eigh_gen;
-pub use gemm::gemm;
-pub use gemv::gemv;
+pub use gemm::{gemm, gemm_dense};
+pub use gemv::{gemv, gemv_dense};
 pub use host_fallback::{cholesky, eigh, qr, svd};
 pub use oracle::{oracle_dot, oracle_einsum, oracle_sum};
-pub use reduce::reduce_sum;
-pub use scal::scal;
+pub use reduce::{reduce_sum, reduce_sum_axis_dense, reduce_sum_dense, reduced_shape};
+pub use scal::{scal, scal_dense};
 pub use solve_linear::solve_linear;
-pub use transpose::transpose;
+pub use transpose::{transpose, transpose_dense};

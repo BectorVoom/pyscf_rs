@@ -35,16 +35,27 @@ fn primitive_signatures_callable_returning_notyetimplemented() {
     let lhs = Tensor::placeholder(vec![4, 4]);
     let rhs = Tensor::placeholder(vec![4, 4]);
     let mut out = Tensor::placeholder(vec![4, 4]);
-    // Phase 1 primitives return NotYetImplemented — that's the contract.
-    // Phase 2 wires the actual cubecl-matmul launch.
+    // gemm is now wired through the device-buffer registry (quick-260529-mtx).
+    // The [4,4] placeholders pass the rank/shape checks but were never uploaded,
+    // so the registry lookup misses and the op rejects them with
+    // UnallocatedBuffer. The real round-trip lives in tests/tensor_registry.rs.
     let r = gemm(&sel.client, &lhs, &rhs, &mut out);
-    assert!(matches!(r, Err(AlgebraError::NotYetImplemented { .. })));
+    assert!(matches!(r, Err(AlgebraError::UnallocatedBuffer { .. })));
 
+    // axpy is now wired through the device-buffer registry (quick-260529-mtx).
+    // A `placeholder` carries the sentinel BufferId and was never uploaded, so
+    // the Tensor path must reject it with UnallocatedBuffer (NOT silently
+    // succeed and NOT NotYetImplemented). The real upload→op→download round-trip
+    // lives in tests/tensor_registry.rs.
     let r = axpy(&sel.client, 1.0, &lhs, &mut out);
-    assert!(matches!(r, Err(AlgebraError::NotYetImplemented { .. })));
+    assert!(matches!(r, Err(AlgebraError::UnallocatedBuffer { .. })));
 
+    // reduce_sum is now wired for per-axis reduction (quick-260529-mtx) via the
+    // strided kernel. `axis=0` is in range for the [4,4] lhs, so it reads x from
+    // the registry first — and lhs is a placeholder, so it rejects with
+    // UnallocatedBuffer. The real per-axis round-trip lives in tensor_registry.rs.
     let r = reduce_sum(&sel.client, &lhs, 0, &mut out);
-    assert!(matches!(r, Err(AlgebraError::NotYetImplemented { .. })));
+    assert!(matches!(r, Err(AlgebraError::UnallocatedBuffer { .. })));
 
     if let Some(v) = saved {
         unsafe {

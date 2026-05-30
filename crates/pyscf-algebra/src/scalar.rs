@@ -40,7 +40,12 @@ pub(crate) fn dtype_of<T: Scalar>() -> DType {
 ///
 /// Sealed via the `pyscf_core::Scalar` supertrait (itself sealed), so only
 /// `f32` and `f64` can implement it.
-pub trait DeviceScalar: Scalar + cubecl::prelude::Float {}
+///
+/// quick-260529-i2x: also bounds `bytemuck::Pod` so the device launchers in
+/// this crate (e.g. `gemm_dense`) can move `&[F]` host data through
+/// `cubecl::bytes::Bytes::from_elems` and read it back via `bytemuck::cast_slice`
+/// without re-stating the byte-copy bound at every call site. f32/f64 are Pod.
+pub trait DeviceScalar: Scalar + cubecl::prelude::Float + bytemuck::Pod {}
 
 impl DeviceScalar for f32 {}
 impl DeviceScalar for f64 {}

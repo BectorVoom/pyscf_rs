@@ -193,7 +193,10 @@ fn int2e_ip1_dispatch_is_never_phase_7_not_yet_implemented() {
     let mol = M(h2_args()).expect("H2/STO-3G should build");
     let r = intor(&mol, "int2e_ip1");
     assert!(
-        !matches!(r, Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 7, .. })),
+        !matches!(
+            r,
+            Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 7, .. })
+        ),
         "int2e_ip1 must NOT be NotYetImplemented{{phase:7}} after the Phase 7 \
          structural guard removal; got {r:?}",
     );

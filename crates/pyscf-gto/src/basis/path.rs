@@ -58,6 +58,50 @@ pub fn basis_dir() -> Result<&'static PathBuf, BasisLoadError> {
         })
 }
 
+static PBC_BASIS_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Resolve the PBC basis directory (`pyscf/pbc/gto/basis/`), where CP2K/GTH
+/// basis sets and pseudopotentials live, distinct from the standard Gaussian
+/// basis directory.
+///
+/// Derived from [`basis_dir`] (`…/pyscf/gto/basis` → `…/pyscf/pbc/gto/basis`)
+/// so it inherits the env-override and walk-up resolution rather than
+/// duplicating the priority chain.
+pub fn pbc_basis_dir() -> Result<&'static PathBuf, BasisLoadError> {
+    let resolved = PBC_BASIS_DIR.get_or_init(|| {
+        let std_dir = basis_dir().ok()?; // …/pyscf/gto/basis
+        let pbc = std_dir.parent()?.parent()?.join("pbc/gto/basis"); // …/pyscf/pbc/gto/basis
+        pbc.is_dir().then_some(pbc)
+    });
+
+    resolved
+        .as_ref()
+        .ok_or_else(|| BasisLoadError::PathNotFound {
+            tried: "<standard basis dir>/../pbc/gto/basis (GTH / pseudopotential tree)".into(),
+        })
+}
+
+static PBC_PSEUDO_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Resolve the PBC pseudopotential directory (`pyscf/pbc/gto/pseudo/`), where
+/// GTH pseudopotential files (`gth-pade.dat`, `gth-pbe.dat`, …) live.
+///
+/// Derived from [`basis_dir`] (`…/pyscf/gto/basis` → `…/pyscf/pbc/gto/pseudo`)
+/// so it inherits the env-override and walk-up resolution.
+pub fn pbc_pseudo_dir() -> Result<&'static PathBuf, BasisLoadError> {
+    let resolved = PBC_PSEUDO_DIR.get_or_init(|| {
+        let std_dir = basis_dir().ok()?; // …/pyscf/gto/basis
+        let pp = std_dir.parent()?.parent()?.join("pbc/gto/pseudo"); // …/pyscf/pbc/gto/pseudo
+        pp.is_dir().then_some(pp)
+    });
+
+    resolved
+        .as_ref()
+        .ok_or_else(|| BasisLoadError::PathNotFound {
+            tried: "<standard basis dir>/../pbc/gto/pseudo (GTH pseudopotential tree)".into(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

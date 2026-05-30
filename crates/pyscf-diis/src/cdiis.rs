@@ -19,9 +19,13 @@
 //! `pyscf_algebra::oracle_sum` (extrapolated-iterate cross-iterate sums).
 //! Threat T-3-09: bit-identical across thread counts.
 //!
-//! Threat T-3-13 mitigation: `solve_linear` returns
-//! `AlgebraError::Singular` on rank-deficient B; we re-package that as
-//! `DiisError::Singular` so the caller can fall back to a damped Fock.
+//! Threat T-3-13 mitigation: a rank-deficient B (collinear error vectors —
+//! common for low-dimensional amplitude spaces such as H2/STO-3G CCSD) makes
+//! the direct `solve_linear` LU singular. Instead of aborting, `extrapolate`
+//! falls back to a truncated-eigendecomposition pseudo-inverse
+//! (`pinv_solve_symmetric`), mirroring pyscf `lib/diis.py`'s `scipy.linalg.eigh`
+//! recovery. `DiisError::Singular` now surfaces only if the eigensolver itself
+//! fails (a fully degenerate B), which the caller may still treat as fatal.
 
 use crate::{DiisError, DiisStorable};
 
@@ -105,11 +109,17 @@ impl<S: DiisStorable + Clone> Diis<S> {
         rhs[n] = -1.0;
 
         // Solve via pyscf-algebra::solve_linear (plan 03-01 host-faer LU).
-        // Threat T-3-13: AlgebraError::Singular → DiisError::Singular.
-        let c = pyscf_algebra::solve_linear(&b, &rhs, dim).map_err(|e| match e {
-            pyscf_algebra::AlgebraError::Singular => DiisError::Singular,
-            other => DiisError::Algebra(other),
-        })?;
+        // Threat T-3-13: a rank-deficient B (collinear error vectors — e.g. a
+        // low-dimensional amplitude space like H2/STO-3G CCSD, where every
+        // residual is a scalar multiple of the last) makes the direct LU
+        // singular. Rather than abort, fall back to the truncated-eigen
+        // pseudo-inverse — exactly pyscf `lib/diis.py`'s `scipy.linalg.eigh`
+        // recovery path (keep only the well-conditioned directions).
+        let c = match pyscf_algebra::solve_linear(&b, &rhs, dim) {
+            Ok(c) => c,
+            Err(pyscf_algebra::AlgebraError::Singular) => pinv_solve_symmetric(&b, &rhs, dim)?,
+            Err(other) => return Err(DiisError::Algebra(other)),
+        };
 
         // Extrapolated iterate: F_new[k] = Σ_{i<n} c[i] · bookkeep[i].as_flat()[k].
         // Cross-iterate reduction must go through oracle_sum (Pitfall 9).
@@ -139,6 +149,59 @@ impl<S: DiisStorable + Clone> Diis<S> {
     pub fn is_empty(&self) -> bool {
         self.bookkeep.is_empty()
     }
+}
+
+/// Truncated-eigendecomposition pseudo-inverse solve of the symmetric
+/// (indefinite) Pulay system `B·c = rhs`, used when the direct LU solve reports
+/// a rank-deficient `B`.
+///
+/// Mirrors pyscf `lib/diis.py`'s `scipy.linalg.eigh` fallback: diagonalize
+/// `B = V·diag(λ)·Vᵀ`, invert ONLY the well-conditioned eigenvalues
+/// (`|λ| > rcond·max|λ|` — the rank-deficient/null directions are projected
+/// out), and reconstruct `c = Σ_k λ_k⁻¹ (v_kᵀ·rhs) v_k`.
+///
+/// `B` is symmetric, so the standard symmetric eigendecomposition is obtained
+/// from [`pyscf_algebra::eigh_gen`] with `S = I` (the generalized solver
+/// reduces to the standard one when the metric is the identity). On the
+/// `dim ≤ space+1` matrix faer runs single-threaded, so the result is
+/// bit-reproducible for identical input — the extrapolated iterate stays
+/// thread-count invariant (T-3-09 / T-06-03-FP). The `k`-accumulation below is
+/// a fixed-order sequential sum, hence deterministic by construction.
+fn pinv_solve_symmetric(b: &[f64], rhs: &[f64], dim: usize) -> Result<Vec<f64>, DiisError> {
+    // Standard symmetric eig via the generalized solver with S = identity.
+    let mut ident = vec![0.0_f64; dim * dim];
+    for i in 0..dim {
+        ident[i * dim + i] = 1.0;
+    }
+    let (eigvals, evecs) = pyscf_algebra::eigh_gen(b, &ident, dim).map_err(|e| match e {
+        pyscf_algebra::AlgebraError::Singular => DiisError::Singular,
+        other => DiisError::Algebra(other),
+    })?;
+
+    // `evecs` is column-major (F-order): eigenvector k is `evecs[i + k*dim]`.
+    // Relative cutoff vs the largest-magnitude eigenvalue drops the
+    // rank-deficient subspace while keeping the O(1) border-coupled
+    // directions (1e-12 mirrors `eigh_gen::S_LINEAR_DEP_TOL`).
+    let max_abs = eigvals.iter().fold(0.0_f64, |m, &x| m.max(x.abs()));
+    let tol = 1e-12_f64 * max_abs;
+
+    let mut out = vec![0.0_f64; dim];
+    for k in 0..dim {
+        let lam = eigvals[k];
+        if !lam.is_finite() || lam.abs() <= tol {
+            continue; // null / dropped direction
+        }
+        // proj = (v_kᵀ · rhs) / λ_k, then accumulate proj · v_k into `out`.
+        let mut dot = 0.0_f64;
+        for i in 0..dim {
+            dot += evecs[i + k * dim] * rhs[i];
+        }
+        let proj = dot / lam;
+        for i in 0..dim {
+            out[i] += proj * evecs[i + k * dim];
+        }
+    }
+    Ok(out)
 }
 
 /// SDF − FDS error vector for SCF use.

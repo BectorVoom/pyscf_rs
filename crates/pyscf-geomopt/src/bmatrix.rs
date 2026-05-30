@@ -205,24 +205,34 @@ pub fn g_inverse(g: &[f64], nint: usize) -> Result<Vec<f64>, PyscfRsError> {
     }
     let (evals, evecs_fortran) = eigh_gen(g, &identity, nint).map_err(crate::error::GeomError::from)?;
 
-    let mut ginv = vec![0.0_f64; nint * nint];
+    // Pre-compute the kept directions `(1/λ_k, k)` once: only eigenpairs with a
+    // finite eigenvalue above [`G_EIGENVALUE_TOL`] survive (the redundant
+    // null-space is dropped, T-07-13). This keeps the per-(i,j) reduction loop
+    // below free of the tolerance branch.
+    let mut kept: Vec<(f64, usize)> = Vec::with_capacity(nint);
     for k in 0..nint {
         let lam = evals[k];
-        if !lam.is_finite() || lam <= G_EIGENVALUE_TOL {
-            continue; // redundant / dropped direction
+        if lam.is_finite() && lam > G_EIGENVALUE_TOL {
+            kept.push((1.0 / lam, k));
         }
-        let inv = 1.0 / lam;
-        // v_k is column k of the F-order eigenvector buffer.
-        for i in 0..nint {
-            let vik = evecs_fortran[i + k * nint];
-            for j in 0..nint {
+    }
+
+    let mut ginv = vec![0.0_f64; nint * nint];
+    // For each entry G⁻[i,j], materialize the vector of per-k rank-1 terms
+    // `(1/λ_k) v_ik v_jk` (over the kept directions) and reduce it through the
+    // project's oracle-ordered summation — NO bare `+=` in the reduction
+    // (CLAUDE.md / Pitfall 2, the mandatory reduction-order convention). The
+    // F-order eigenvector buffer stores column `k` at offsets `c[i + k*nint]`.
+    let mut terms: Vec<f64> = Vec::with_capacity(kept.len());
+    for i in 0..nint {
+        for j in 0..nint {
+            terms.clear();
+            for &(inv, k) in &kept {
+                let vik = evecs_fortran[i + k * nint];
                 let vjk = evecs_fortran[j + k * nint];
-                // Accumulate the rank-1 outer product (1/λ) v v^T. The full
-                // entry G⁻[i,j] is the ordered sum over k of these rank-1
-                // contributions; we build per-(i,j) term buffers below to keep
-                // the reduction oracle-ordered.
-                ginv[i * nint + j] += inv * vik * vjk;
+                terms.push(inv * vik * vjk);
             }
+            ginv[i * nint + j] = oracle_sum(&terms);
         }
     }
     Ok(ginv)

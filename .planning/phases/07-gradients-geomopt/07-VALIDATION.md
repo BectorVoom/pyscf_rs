@@ -133,3 +133,45 @@ closed: 2026-05-26
 > (= `ECPscalar_ipnuc`, the ECP `get_hcore` term) are cintx-ready. These arms
 > un-gate when the cintx grad-intor workstream lands the missing families
 > (analogous to the int2e / d-shell-Rys workstream in project memory).
+
+---
+
+## Validation Audit 2026-05-26
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+**Method.** Retroactive State-A audit (`/gsd:validate-phase 7`). Ground-truthed
+the per-task map against the live tree rather than trusting the recorded
+statuses: confirmed every claimed test file exists, every requirement ID
+(GRAD-01..10 + GEOMOPT-01..07 = 17/17) maps to a test, and ran the always-on
+scoped suite — `cargo test -p pyscf-grad -p pyscf-geomopt -p pyscf-oracle
+--locked -- --test-threads=1` (libxc-free: `libxc_rs` is `optional` and absent
+from the default dep graph — xcfun-rs is the default XC backend).
+
+**Result: `113 passed; 0 failed; 8 ignored`.** The 8 ignored tests are exactly
+the documented `workflow_dispatch`/Manual-Only arms — no surprises:
+
+- `rhf/uhf/rks/uks/mp2/ccsd/ecp_verify_fd_numeric` (7) — upstream-byte-identity
+  FD-vs-analytical numeric arms, `#[ignore]`'d on the six MISSING cintx
+  grad-intor families (07-01, no scheduled workstream).
+- `equilibrium_via_rhf_gradient` (1, in `h2o_equilibrium.rs`) — the
+  upstream-trajectory-parity arm (vs `geometric_solver`), gated on the same
+  cintx workstream + an upstream geomeTRIC install.
+
+Every daily-gate behaviour has an automated, green always-on verify; the only
+deferred checks are the un-automatable upstream/trajectory cross-checks already
+recorded in Manual-Only. CI wiring verified present: `grad-structural`
+(always-on), `geomopt-no-runtime-dep` (GEOMOPT-01, always-on), and
+`grad-oracle-upstream-manual` (`workflow_dispatch`). **`nyquist_compliant: true`
+holds — confirmed, not merely asserted.**
+
+**Minor cross-ref note (no coverage impact).** The Per-Task Map `Plan` column
+attributes GRAD-05 to 07-06 and GRAD-10 to 07-02; per REQUIREMENTS.md and the
+07-07-SUMMARY both the relaxed-density MP2 gradient (`Mp2Gradients`/
+`mp2_verify_fd`) and the single matrix-free `cphf::solve` (GRAD-10) actually
+shipped in plan **07-07**. Cosmetic plan-number drift only — the owning test
+files exist and run green regardless; left in place to avoid churn.

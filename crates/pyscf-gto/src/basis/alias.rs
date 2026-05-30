@@ -184,32 +184,66 @@ fn build_gth_alias() -> HashMap<&'static str, &'static str> {
 }
 
 fn build_pp_alias() -> HashMap<&'static str, &'static str> {
-    // Phase 2 stub — empty for now; PP_ALIAS expands as 02-07 ECP work
-    // surfaces concrete user requirements. The dispatch path through
-    // `lookup` returns None for empty map; CP2K stubs in `cp2k_pp` handle
-    // any format-detection routing.
-    HashMap::new()
+    // GTH pseudopotentials (`Cell.pseudo`). Hand-ported from upstream
+    // `pyscf/gto/basis/__init__.py` `PP_ALIAS`. Keys are post-canonicalise
+    // (lower-cased, no dashes/underscores). Files live under the PBC pseudo
+    // tree (`pyscf/pbc/gto/pseudo/`); the loader routes `AliasKind::Pp` there
+    // and parses with `cp2k_pp::parse_cp2k_pp`.
+    let mut m = HashMap::new();
+    m.insert("gthblyp", "gth-blyp.dat");
+    m.insert("gthbp", "gth-bp.dat");
+    m.insert("gthhcth120", "gth-hcth120.dat");
+    m.insert("gthhcth407", "gth-hcth407.dat");
+    m.insert("gtholyp", "gth-olyp.dat");
+    m.insert("gthlda", "gth-pade.dat");
+    m.insert("gthpade", "gth-pade.dat");
+    m.insert("gthpbe", "gth-pbe.dat");
+    m.insert("gthpbesol", "gth-pbesol.dat");
+    m.insert("gthhf", "gth-hf.dat");
+    m.insert("gthhfrev", "gth-hf-rev.dat");
+    m
 }
 
 /// Look up a canonical (post-canonicalise) basis name in the merged alias tables.
 /// Order: ALIAS → GTH_ALIAS → PP_ALIAS.
 pub fn lookup(canonical_name: &str) -> Option<&'static str> {
-    ALIAS_TABLE
-        .get_or_init(build_alias)
+    lookup_kind(canonical_name).map(|(filename, _)| filename)
+}
+
+/// Which alias table a name resolved through. Selects the on-disk directory:
+/// standard Gaussian basis sets live under `pyscf/gto/basis/`, while CP2K/GTH
+/// basis sets and pseudopotentials live under the PBC tree
+/// (`pyscf/pbc/gto/basis/`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AliasKind {
+    /// Standard Gaussian basis (`pyscf/gto/basis/`).
+    Standard,
+    /// CP2K / GTH basis (`pyscf/pbc/gto/basis/`).
+    Gth,
+    /// Pseudopotential basis (`pyscf/pbc/gto/basis/`).
+    Pp,
+}
+
+/// Like [`lookup`], but also reports which table matched so the loader can pick
+/// the correct on-disk directory. Resolution order is ALIAS → GTH_ALIAS →
+/// PP_ALIAS (matching [`lookup`]).
+pub fn lookup_kind(canonical_name: &str) -> Option<(&'static str, AliasKind)> {
+    if let Some(f) = ALIAS_TABLE.get_or_init(build_alias).get(canonical_name) {
+        return Some((f, AliasKind::Standard));
+    }
+    if let Some(f) = GTH_ALIAS_TABLE
+        .get_or_init(build_gth_alias)
         .get(canonical_name)
-        .copied()
-        .or_else(|| {
-            GTH_ALIAS_TABLE
-                .get_or_init(build_gth_alias)
-                .get(canonical_name)
-                .copied()
-        })
-        .or_else(|| {
-            PP_ALIAS_TABLE
-                .get_or_init(build_pp_alias)
-                .get(canonical_name)
-                .copied()
-        })
+    {
+        return Some((f, AliasKind::Gth));
+    }
+    if let Some(f) = PP_ALIAS_TABLE
+        .get_or_init(build_pp_alias)
+        .get(canonical_name)
+    {
+        return Some((f, AliasKind::Pp));
+    }
+    None
 }
 
 /// Number of entries in the main `ALIAS` table. Used by the floor-check test.
@@ -240,6 +274,28 @@ mod tests {
     fn gth_aliases_resolve() {
         assert_eq!(lookup("gthdzvp"), Some("gth-dzvp.dat"));
         assert_eq!(lookup("gthtzv2p"), Some("gth-tzv2p.dat"));
+    }
+
+    #[test]
+    fn lookup_kind_classifies_each_table() {
+        // Standard Gaussian basis.
+        assert_eq!(
+            lookup_kind("sto3g"),
+            Some(("sto-3g.dat", AliasKind::Standard))
+        );
+        // GTH basis set.
+        assert_eq!(
+            lookup_kind("gthdzvp"),
+            Some(("gth-dzvp.dat", AliasKind::Gth))
+        );
+        // GTH pseudopotential (incl. the gthlda == gthpade alias).
+        assert_eq!(
+            lookup_kind("gthpade"),
+            Some(("gth-pade.dat", AliasKind::Pp))
+        );
+        assert_eq!(lookup_kind("gthlda"), Some(("gth-pade.dat", AliasKind::Pp)));
+        assert_eq!(lookup_kind("gthpbe"), Some(("gth-pbe.dat", AliasKind::Pp)));
+        assert_eq!(lookup_kind("totally-fake"), None);
     }
 
     #[test]

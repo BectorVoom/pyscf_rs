@@ -35,6 +35,9 @@ pub use density::Density;
 pub use energy::Energy;
 pub use error::{BasisLoadError, CoreError, EcpLoadError, PyscfRsError};
 pub use mo::MOCoefficients;
-pub use mole::{EcpShell, Mole, NuclearModel, ParsedAtom, ParsedBasis, ParsedEcp, ShellSpec, Unit};
+pub use mole::{
+    EcpShell, GthProjector, GthPseudo, Mole, NuclearModel, ParsedAtom, ParsedBasis, ParsedEcp,
+    ShellSpec, Unit,
+};
 pub use scalar::{Scalar, ScalarKind};
 pub use traits::{EcpEngine, Gradient, IntegralEngine, KohnSham, Method, PostScf, Scf};

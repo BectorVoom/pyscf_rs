@@ -191,6 +191,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo run --quiet -p xtask --bin check-cubecl-pin
 
+  # BIND-06: forbid lazy_static! in crates/pyscf-py (deadlocks under 3.13t).
+  xtask-forbid-lazy-static:
+    name: xtask check-forbid-lazy-static (BIND-06)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --quiet -p xtask --bin check-forbid-lazy-static
+
   # FOUND-10: license + advisory + bans gating.
   cargo-deny:
     name: cargo deny check (FOUND-10)

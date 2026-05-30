@@ -132,7 +132,10 @@ fn int3c2e_ip1_sph_round_trips_a_real_shell_triple() {
         outcome.tensor.extents,
     );
     for (i, &v) in block.iter().enumerate() {
-        assert!(v.is_finite(), "int3c2e_ip1_sph block[{i}] = {v} must be finite");
+        assert!(
+            v.is_finite(),
+            "int3c2e_ip1_sph block[{i}] = {v} must be finite"
+        );
     }
 
     // sanity: He/STO-3G builds (used by the ECP-grad companion test fixtures).
@@ -158,7 +161,10 @@ fn int1e_ecp_ipnuc_returns_component_leading_3_nao_nao() {
         .expect("int1e_ecp_ipnuc must evaluate via the cintx ECP engine (cintx-ready family 2)");
 
     // Component-leading [3, nao, nao] F-order: nao on the AO axis, 3*nao*nao flat.
-    assert_eq!(density.nao, nao, "ecp_int1e_ipnuc nao axis must equal mol.nao_nr");
+    assert_eq!(
+        density.nao, nao,
+        "ecp_int1e_ipnuc nao axis must equal mol.nao_nr"
+    );
     assert_eq!(
         density.data.len(),
         3 * nao * nao,
@@ -167,7 +173,10 @@ fn int1e_ecp_ipnuc_returns_component_leading_3_nao_nao() {
     );
 
     for (i, &v) in density.data.iter().enumerate() {
-        assert!(v.is_finite(), "ecp_int1e_ipnuc data[{i}] = {v} must be finite");
+        assert!(
+            v.is_finite(),
+            "ecp_int1e_ipnuc data[{i}] = {v} must be finite"
+        );
     }
     let nonzero = density.data.iter().filter(|&&v| v.abs() > 1e-18).count();
     assert!(
@@ -207,7 +216,9 @@ fn ecp_iprinv_is_clean_cintx_availability_error_not_phase_7() {
     assert!(
         matches!(
             r,
-            Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(_)))
+            Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+                _
+            )))
         ),
         "iprinv must surface a clean cintx-availability InvalidMolecule error; got {r:?}",
     );
