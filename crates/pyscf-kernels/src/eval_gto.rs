@@ -83,7 +83,6 @@ use pyscf_algebra::{AlgebraClient, oracle_sum};
 // bare runtime paths inside the macro (`cubecl_cpu::CpuRuntime`, …) resolve in
 // THIS crate's namespace — pyscf-kernels carries the cfg-aligned cubecl-* deps.
 use pyscf_algebra::dispatch_backend;
-use pyscf_runtime::BackendKind;
 
 // `cubecl` is reachable from this crate per the ALG-06 carve-out
 // (`xtask/check_dependency_wall.rs:47` lists `pyscf-kernels` in
@@ -671,6 +670,31 @@ fn ipow(base: f64, n: u32) -> f64 {
     r
 }
 
+/// Derivative of the cartesian monomial power: `dpow(q, lq) = lq · q^(lq-1)`,
+/// and `0` for `lq == 0`. The device equivalent of host `dpow` (eval_gto.rs
+/// ~1299): `if lq==0 { 0.0 } else { lq as f64 * q.powi(lq as i32 - 1) }`.
+///
+/// `#[cube]` helper (Solution 1 from the host-fn-in-`#[cube]` pitfall guide):
+/// it CALLS the `#[cube]` `ipow` (legal — both participate in the cubecl IR),
+/// avoiding any plain-Rust call. Written in the STATEMENT form (not
+/// `let r = if … {}`) per the mismatched-types guide §1.3 to dodge the
+/// `ExpandElementTyped` vs `{float}` mismatch.
+///
+/// The `if lq >= 1` gate short-circuits `lq == 0` BEFORE evaluating `lq - 1`,
+/// so the u32 subtraction never underflows. This parallels host
+/// `q.powi(lq as i32 - 1)`; `ipow`-vs-`powi` diverges by < 1 ULP at l>=3, far
+/// inside TOL=1e-9 (ORACLE-07).
+#[allow(clippy::assign_op_pattern)]
+#[cube]
+#[inline(always)]
+fn dpow(q: f64, lq: u32) -> f64 {
+    let mut r = 0.0_f64;
+    if lq >= 1 {
+        r = (lq as f64) * ipow(q, lq - 1);
+    }
+    r
+}
+
 /// General l 0..=4 AO-on-grid kernel. One thread per `(g, shell)`: the thread
 /// evaluates EVERY contraction column and EVERY spherical AO of its shell at its
 /// grid point, applying the cart→sph transform from the host-precomputed tables.
@@ -764,6 +788,132 @@ fn eval_gto_sph_kernel_general(
                     v += c2s_flat[c2s_off + m * ncart_l + ci] * cart_val;
                 }
                 out[g + (ao_off + c_idx * nsph_l + m) * ngrids] = v;
+            }
+        }
+    }
+}
+
+/// General l 0..=4 AO-on-grid **deriv1** kernel (value + ∂x/∂y/∂z). One thread
+/// per `(g, shell)`: identical arg shape to `eval_gto_sph_kernel_general` PLUS a
+/// trailing `comp_stride: usize` scalar and an `out` of length `4*ngrids*nao`.
+/// Mirrors host `eval_gto_sph_deriv1_cpu` (eval_gto.rs ~1307-1409) operand-for-
+/// operand: ordered sequential `radial` AND `radial_2a` in ONE p-loop (g0 formed
+/// once), then the analytic-gradient chain rule per cartesian monomial, then the
+/// cart→sph transform applied to all 4 components, written F-order into the 4
+/// component blocks `out[k*comp_stride + off]`, `k = 0(v)/1(vx)/2(vy)/3(vz)`.
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_gto_sph_deriv1_kernel(
+    coords: &Array<f64>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    out: &mut Array<f64>,
+    ngrids: usize,
+    nbas: usize,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    comp_stride: usize,
+) {
+    let tid = ABSOLUTE_POS;
+    if tid < ngrids * nbas {
+        let g = tid / nbas;
+        let shell = tid % nbas;
+
+        let gx = coords[g];
+        let gy = coords[g + ngrids];
+        let gz = coords[g + 2 * ngrids];
+
+        let bas_row = shell * bas_slots;
+        let l = bas[bas_row + ang_of] as u32;
+        let lu = l as usize;
+        let atom_id = bas[bas_row + atom_of] as usize;
+        let nprim = bas[bas_row + nprim_of] as usize;
+        let nctr = bas[bas_row + nctr_of] as usize;
+        let pe = bas[bas_row + ptr_exp] as usize;
+        let pc = bas[bas_row + ptr_coeff] as usize;
+        let ao_off = ao_loc[shell] as usize;
+
+        let atm_row = atom_id * atm_slots;
+        let pcoord = atm[atm_row + ptr_coord] as usize;
+        let ax = env[pcoord];
+        let ay = env[pcoord + 1];
+        let az = env[pcoord + 2];
+
+        let dx = gx - ax;
+        let dy = gy - ay;
+        let dz = gz - az;
+        let r2 = dx * dx + dy * dy + dz * dz;
+
+        let ncart_l = ncart_by_l[lu] as usize;
+        let nsph_l = nsph_by_l[lu] as usize;
+        let fac1 = fac1_by_l[lu];
+        let c2s_off = c2s_off_by_l[lu] as usize;
+        let cpow_off = cpow_off_by_l[lu] as usize;
+
+        for c_idx in 0..nctr {
+            // ORDERED sequential radial + radial_2a in ONE p-loop: form g0 once,
+            // then acc += g0 and acc2a += -2α·g0 (mirrors host operand order
+            // eval_gto.rs ~1359-1361). THEN * fac1. Plain sequential acc (NOT
+            // oracle_sum) — the T2 oracle sums sequentially to match (ORACLE-07).
+            let mut acc = 0.0_f64;
+            let mut acc2a = 0.0_f64;
+            for p_idx in 0..nprim {
+                let alpha = env[pe + p_idx];
+                let coef = env[pc + c_idx * nprim + p_idx];
+                let g0 = coef * (-alpha * r2).exp();
+                acc += g0;
+                acc2a += (-2.0) * alpha * g0;
+            }
+            let radial = acc * fac1;
+            let radial_2a = acc2a * fac1;
+
+            for m in 0..nsph_l {
+                let mut v = 0.0_f64;
+                let mut vx = 0.0_f64;
+                let mut vy = 0.0_f64;
+                let mut vz = 0.0_f64;
+                for ci in 0..ncart_l {
+                    let lx = cpow_lx[cpow_off + ci] as u32;
+                    let ly = cpow_ly[cpow_off + ci] as u32;
+                    let lz = cpow_lz[cpow_off + ci] as u32;
+                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cval = mono * radial;
+                    // operand order EXACTLY matches host eval_gto.rs ~1382-1387.
+                    let cdx =
+                        radial_2a * dx * mono + radial * dpow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cdy =
+                        radial_2a * dy * mono + radial * ipow(dx, lx) * dpow(dy, ly) * ipow(dz, lz);
+                    let cdz =
+                        radial_2a * dz * mono + radial * ipow(dx, lx) * ipow(dy, ly) * dpow(dz, lz);
+                    let t = c2s_flat[c2s_off + m * ncart_l + ci];
+                    v += t * cval;
+                    vx += t * cdx;
+                    vy += t * cdy;
+                    vz += t * cdz;
+                }
+                let off = g + (ao_off + c_idx * nsph_l + m) * ngrids;
+                out[off] = v;
+                out[comp_stride + off] = vx;
+                out[2 * comp_stride + off] = vy;
+                out[3 * comp_stride + off] = vz;
             }
         }
     }
@@ -920,6 +1070,92 @@ fn launch_eval_gto_general<R: Runtime>(
             PTR_EXP,
             PTR_COEFF,
             PTR_COORD,
+        );
+    }
+
+    let bytes = client.read(vec![out_handle]);
+    Ok(bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec())
+}
+
+/// Host-slice launcher for the general l 0..=4 **deriv1** kernel. Clones
+/// `launch_eval_gto_general` byte-for-byte EXCEPT: `out_len = 4*ngrids*nao`,
+/// launches `eval_gto_sph_deriv1_kernel`, and passes the extra `comp_stride =
+/// ngrids*nao` scalar AFTER the existing trailing scalar args. Reads back the
+/// F-order `[4, ngrids, nao]` buffer. `maxl` must be `<= 4` (caller guarantees).
+#[allow(clippy::too_many_arguments)]
+fn launch_eval_gto_deriv1<R: Runtime>(
+    client: &ComputeClient<R>,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+    maxl: u32,
+) -> Result<Vec<f64>, PyscfRsError> {
+    let nbas = bas.len() / BAS_SLOTS;
+    let comp_stride = ngrids * nao;
+    let out_len = 4 * comp_stride;
+
+    let t = build_angular_tables(maxl)?;
+
+    let coords_handle = client.create(Bytes::from_elems(coords.to_vec()));
+    let env_handle = client.create(Bytes::from_elems(env.to_vec()));
+    let bas_handle = client.create(Bytes::from_elems(bas.to_vec()));
+    let atm_handle = client.create(Bytes::from_elems(atm.to_vec()));
+    let ao_loc_handle = client.create(Bytes::from_elems(ao_loc.to_vec()));
+
+    let c2s_flat_h = client.create(Bytes::from_elems(t.c2s_flat.clone()));
+    let cpow_lx_h = client.create(Bytes::from_elems(t.cpow_lx.clone()));
+    let cpow_ly_h = client.create(Bytes::from_elems(t.cpow_ly.clone()));
+    let cpow_lz_h = client.create(Bytes::from_elems(t.cpow_lz.clone()));
+    let ncart_h = client.create(Bytes::from_elems(t.ncart_by_l.clone()));
+    let nsph_h = client.create(Bytes::from_elems(t.nsph_by_l.clone()));
+    let fac1_h = client.create(Bytes::from_elems(t.fac1_by_l.clone()));
+    let c2s_off_h = client.create(Bytes::from_elems(t.c2s_off_by_l.clone()));
+    let cpow_off_h = client.create(Bytes::from_elems(t.cpow_off_by_l.clone()));
+
+    let out_handle = client.empty(out_len * core::mem::size_of::<f64>());
+
+    let groups = (ngrids * nbas).div_ceil(EVAL_GTO_BLOCK as usize) as u32;
+
+    // SAFETY: every handle length matches the slice length uploaded above; the
+    // kernel bounds-guards the tail (`if tid < ngrids*nbas`). All input Arrays
+    // are read-only, `out` (len 4*ngrids*nao) is the only `&mut`.
+    unsafe {
+        eval_gto_sph_deriv1_kernel::launch_unchecked::<R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(EVAL_GTO_BLOCK),
+            ArrayArg::from_raw_parts(coords_handle.clone(), coords.len()),
+            ArrayArg::from_raw_parts(env_handle.clone(), env.len()),
+            ArrayArg::from_raw_parts(bas_handle.clone(), bas.len()),
+            ArrayArg::from_raw_parts(atm_handle.clone(), atm.len()),
+            ArrayArg::from_raw_parts(ao_loc_handle.clone(), ao_loc.len()),
+            ArrayArg::from_raw_parts(c2s_flat_h.clone(), t.c2s_flat.len()),
+            ArrayArg::from_raw_parts(cpow_lx_h.clone(), t.cpow_lx.len()),
+            ArrayArg::from_raw_parts(cpow_ly_h.clone(), t.cpow_ly.len()),
+            ArrayArg::from_raw_parts(cpow_lz_h.clone(), t.cpow_lz.len()),
+            ArrayArg::from_raw_parts(ncart_h.clone(), t.ncart_by_l.len()),
+            ArrayArg::from_raw_parts(nsph_h.clone(), t.nsph_by_l.len()),
+            ArrayArg::from_raw_parts(fac1_h.clone(), t.fac1_by_l.len()),
+            ArrayArg::from_raw_parts(c2s_off_h.clone(), t.c2s_off_by_l.len()),
+            ArrayArg::from_raw_parts(cpow_off_h.clone(), t.cpow_off_by_l.len()),
+            ArrayArg::from_raw_parts(out_handle.clone(), out_len),
+            // Bare scalar args (LaunchArg for T = T), like the general kernel.
+            ngrids,
+            nbas,
+            ATM_SLOTS,
+            BAS_SLOTS,
+            ATOM_OF,
+            ANG_OF,
+            NPRIM_OF,
+            NCTR_OF,
+            PTR_EXP,
+            PTR_COEFF,
+            PTR_COORD,
+            comp_stride,
         );
     }
 
@@ -1241,13 +1477,36 @@ pub fn eval_gto_sph_deriv1(
     ao_loc: &[i32],
     nao: usize,
 ) -> Result<EvalGtoBuffers, PyscfRsError> {
-    let kind = client.kind();
-    if kind != BackendKind::Cpu {
-        tracing::warn!(
-            backend = ?kind,
-            "eval_gto_deriv1: backend not yet wired (Phase 8 GPU enable); falling back to CPU"
-        );
+    // quick-260530-oms: route any non-empty basis whose max angular momentum is
+    // <= 4 (p/d/f/g, subsuming l=0) to the general deriv1 device kernel, fanned
+    // out over every backend via `dispatch_backend!`. l>4 (h-shells+), empty
+    // basis, and empty grid fall through to the UNCHANGED
+    // `eval_gto_sph_deriv1_cpu` (preserving NotYetImplemented{phase:4} for l>4
+    // and the comp_stride==0 early-return). Host tables are built only for l in
+    // 0..=maxl with maxl<=4, so `c2s_coeff` is never called with l>4 on device.
+    let maxl = bas
+        .chunks_exact(BAS_SLOTS)
+        .map(|row| row[ANG_OF])
+        .max()
+        .unwrap_or(0) as u32;
+    let comp_stride = ngrids * nao;
+
+    if !bas.is_empty() && maxl <= 4 && comp_stride > 0 {
+        let values = dispatch_backend!(
+            client,
+            c,
+            Rt,
+            launch_eval_gto_deriv1::<Rt>(c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl)
+        )?;
+        return Ok(EvalGtoBuffers {
+            values,
+            shape: vec![4, ngrids, nao],
+        });
     }
+
+    // Fallback: l>4 shell, empty basis, or empty grid → the unchanged host
+    // deriv1 path (which handles the comp_stride==0 early-return and the l>4
+    // NotYetImplemented{phase:4} error).
     eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc, nao)
 }
 
