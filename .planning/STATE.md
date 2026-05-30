@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 Phase: 8
 Plan: Not started
 Status: Phase 07 COMPLETE + verified (5/5 must-haves; review BLOCKERs CR-01/CR-02 fixed) — ready to discuss/plan Phase 8 (gpu-enable + oracle-hardening + distribution)
-Last activity: 2026-05-30 - Completed quick task 260530-l29: consolidated cubecl backend-dispatch boilerplate into one `dispatch_backend!` macro (16 cfg-gated 4-arm matches → 1 across 8 pyscf-algebra engines, net −154 lines, byte-exact)
+Last activity: 2026-05-30 - Completed quick task 260530-ljv [VALIDATED 5/5]: Phase-8 GPU-enable first slice — exported dispatch_backend! cross-crate + real #[cube] s-shell eval_gto kernel via macro fanout (l≥1 → unchanged CPU); differential oracle CpuRuntime diff=0, real ROCm gfx1152 diff=1.11e-16. Deferred: l≥1 kernel, deriv1/2, numint backend
 
 Progress: [█████████░] 88% (7/8 phases done; Phase 7 gradients-geomopt COMPLETE + verified 5/5 must-haves, advisory code-review BLOCKERs CR-01/CR-02 fixed; Phase 7 ran as 6 DAG waves.
 
@@ -206,6 +206,7 @@ None yet.
 | 260529-mtx | refactor axpy.rs to cubecl generic-float kernel (y += alpha*x) + implement stub + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 4ec6700 | [260529-mtx-refactor-crates-pyscf-algebra-to-cubecl-](./quick/260529-mtx-refactor-crates-pyscf-algebra-to-cubecl-/) |
 | 260529-oj6 | refactor host_fallback.rs — implement eigh/cholesky/qr/svd via faer-on-host round-trip (ALG-05, NOT native cubecl kernels) + ROCm oracle differential tests (8/8 pass on gfx1152) | 2026-05-29 | 3100d3c | [260529-oj6-refactor-host-fallback-to-cubecl-faer-ho](./quick/260529-oj6-refactor-host-fallback-to-cubecl-faer-ho/) |
 | 260530-l29 | consolidate cubecl backend-dispatch boilerplate — one `dispatch_backend!` macro replaces 16 hand-written cfg-gated 4-arm `match AlgebraClient` blocks across 8 pyscf-algebra engines (net −154 lines, byte-exact tests pass; ALG-06 wall intact; default+wgpu cfg-correct; clippy clean). pyscf-kernels/pyscf-dft scoped out (genuinely different dispatch axes) | 2026-05-30 | f70615c | [260530-l29-consolidate-cubecl-backend-dispatch-boil](./quick/260530-l29-consolidate-cubecl-backend-dispatch-boil/) |
+| 260530-ljv | **[VALIDATED 5/5]** Phase-8 GPU-enable first slice: exported `dispatch_backend!` cross-crate (`#[macro_export]`); real `#[cube(launch_unchecked)]` s-shell eval_gto kernel + macro-wrapped multi-backend fanout in pyscf-kernels; device path gated on all-l0 (l≥1 → unchanged CPU, byte-identical). Differential oracle: CpuRuntime diff=0 (always-on), **real ROCm gfx1152 diff=1.11e-16** (~1 ULP, TOL 1e-9). DEFERRED remainder: l≥1 cart→sph kernel, deriv1/deriv2, pyscf-dft numint backend | 2026-05-30 | 12ea384 | [260530-ljv-gpu-enable-eval-gto-via-macro-wrapped-mu](./quick/260530-ljv-gpu-enable-eval-gto-via-macro-wrapped-mu/) |
 
 ## Deferred Items
 
