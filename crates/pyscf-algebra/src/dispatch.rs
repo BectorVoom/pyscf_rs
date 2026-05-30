@@ -39,6 +39,18 @@
 /// The cubecl `Runtime` type appears ONLY in the per-arm `type $rt = …;`
 /// aliases inside this expansion; it never leaks into a signature. Adding a
 /// backend = adding one arm here.
+///
+/// # Cross-crate export (quick-260530-ljv)
+/// `#[macro_export]` hoists this macro to the crate root
+/// (`pyscf_algebra::dispatch_backend`) so downstream wall-allowlisted crates
+/// (pyscf-kernels) can fan a launch out over every backend without re-deriving
+/// the cfg-gated match. The macro body uses `$crate::AlgebraClient` and bare
+/// runtime paths (`cubecl_cpu::CpuRuntime`, …) that resolve in the CALLER's
+/// namespace — every downstream caller must carry the cfg-aligned cubecl-*
+/// optional deps + matching features (pyscf-kernels already does). In-crate
+/// call sites keep resolving it unqualified via the `#[macro_use] mod dispatch;`
+/// in `lib.rs` (macro_use + macro_export coexist).
+#[macro_export]
 macro_rules! dispatch_backend {
     ($client:expr, $c:ident, $rt:ident, $body:expr) => {
         match $client {

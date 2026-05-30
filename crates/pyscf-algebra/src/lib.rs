@@ -13,7 +13,16 @@
 
 // quick-260530-l29: the SINGLE cfg-gated AlgebraClient backend fanout. Declared
 // with `#[macro_use]` BEFORE the engine modules so `dispatch_backend!` is in
-// scope for axpy/dot/gemm/… without a `use`. Crate-internal — never re-exported.
+// scope for axpy/dot/gemm/… without a `use`.
+//
+// quick-260530-ljv: the macro now ALSO carries `#[macro_export]`, hoisting it to
+// the crate root (`pyscf_algebra::dispatch_backend`) so pyscf-kernels (a
+// downstream wall-allowlisted crate) can fan a cube launch out over every
+// backend. `#[macro_use]` is RETAINED alongside `#[macro_export]` (they coexist)
+// so the 16 in-crate call sites keep resolving it unqualified — minimal diff. Do
+// NOT add it to the `pub use` list below: `#[macro_export]` already publishes it
+// at the crate root, and a `pub use self::dispatch::dispatch_backend;` would
+// double-export and warn.
 #[macro_use]
 mod dispatch;
 
