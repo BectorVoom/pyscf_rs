@@ -105,3 +105,16 @@ python/pyscf/**/*.so
 python/pyscf/**/*.dylib
 python/pyscf/**/*.pyd
 
+# Local Python / tooling environments (never committed)
+.venv/
+.upstream-venv/
+.serena/
+
+# Local agent state (Claude/GSD): isolated git worktrees + per-repo memory
+.claude/worktrees/
+.claude/memory/
+
+# Scratch translation drafts
+/translation*.txt
+*_translation*.txt
+
