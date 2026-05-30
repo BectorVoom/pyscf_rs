@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 Phase: 8
 Plan: Not started
 Status: Phase 07 COMPLETE + verified (5/5 must-haves; review BLOCKERs CR-01/CR-02 fixed) — ready to discuss/plan Phase 8 (gpu-enable + oracle-hardening + distribution)
-Last activity: 2026-05-29 - Completed quick task 260529-oj6: host_fallback.rs eigh/cholesky/qr/svd implemented via faer-on-host round-trip (ALG-05) + ROCm oracle differential tests (8/8 pass on gfx1152)
+Last activity: 2026-05-30 - Completed quick task 260530-l29: consolidated cubecl backend-dispatch boilerplate into one `dispatch_backend!` macro (16 cfg-gated 4-arm matches → 1 across 8 pyscf-algebra engines, net −154 lines, byte-exact)
 
 Progress: [█████████░] 88% (7/8 phases done; Phase 7 gradients-geomopt COMPLETE + verified 5/5 must-haves, advisory code-review BLOCKERs CR-01/CR-02 fixed; Phase 7 ran as 6 DAG waves.
 
@@ -205,6 +205,7 @@ None yet.
 | 260529-skl | refactor scal.rs to cubecl generic-float scale kernel + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 687411a | (commits only — no quick dir) |
 | 260529-mtx | refactor axpy.rs to cubecl generic-float kernel (y += alpha*x) + implement stub + ROCm random-oracle test (passes on gfx1152) | 2026-05-29 | 4ec6700 | [260529-mtx-refactor-crates-pyscf-algebra-to-cubecl-](./quick/260529-mtx-refactor-crates-pyscf-algebra-to-cubecl-/) |
 | 260529-oj6 | refactor host_fallback.rs — implement eigh/cholesky/qr/svd via faer-on-host round-trip (ALG-05, NOT native cubecl kernels) + ROCm oracle differential tests (8/8 pass on gfx1152) | 2026-05-29 | 3100d3c | [260529-oj6-refactor-host-fallback-to-cubecl-faer-ho](./quick/260529-oj6-refactor-host-fallback-to-cubecl-faer-ho/) |
+| 260530-l29 | consolidate cubecl backend-dispatch boilerplate — one `dispatch_backend!` macro replaces 16 hand-written cfg-gated 4-arm `match AlgebraClient` blocks across 8 pyscf-algebra engines (net −154 lines, byte-exact tests pass; ALG-06 wall intact; default+wgpu cfg-correct; clippy clean). pyscf-kernels/pyscf-dft scoped out (genuinely different dispatch axes) | 2026-05-30 | f70615c | [260530-l29-consolidate-cubecl-backend-dispatch-boil](./quick/260530-l29-consolidate-cubecl-backend-dispatch-boil/) |
 
 ## Deferred Items
 
