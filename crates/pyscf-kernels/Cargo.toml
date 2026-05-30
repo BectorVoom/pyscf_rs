@@ -16,10 +16,17 @@ path = "src/lib.rs"
 # pyscf-algebra and pyscf-runtime; see xtask/check_dependency_wall.rs.
 [features]
 default = ["cpu"]
-cpu     = ["cubecl/cpu", "dep:cubecl-cpu"]
-cuda    = ["dep:cubecl-cuda"]
-wgpu    = ["dep:cubecl-wgpu"]
-rocm    = ["dep:cubecl-hip"]
+# quick-260530-ljv: each per-backend feature FORWARDS to pyscf-algebra so the
+# matching `AlgebraClient::{Cpu,Cuda,Wgpu,Rocm}` variant exists. The exported
+# `dispatch_backend!` (now called from eval_gto.rs) expands ALL cfg-enabled arms
+# of that enum, so e.g. building this crate with `--features rocm` must also
+# enable pyscf-algebra's `rocm` feature — otherwise the macro's `Rocm` arm
+# references a non-existent variant and fails to compile. Pre-ljv these forwards
+# were unnecessary because pyscf-kernels never invoked the macro.
+cpu     = ["cubecl/cpu", "dep:cubecl-cpu", "pyscf-algebra/cpu"]
+cuda    = ["dep:cubecl-cuda", "pyscf-algebra/cuda"]
+wgpu    = ["dep:cubecl-wgpu", "pyscf-algebra/wgpu"]
+rocm    = ["dep:cubecl-hip", "pyscf-algebra/rocm"]
 # `metal` aliases `wgpu` (cubecl-metal not on crates.io) per cintx-cubecl
 # precedent (Phase 1 D-12 carry-forward).
 metal   = ["wgpu"]

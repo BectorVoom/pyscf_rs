@@ -36,6 +36,34 @@
 //!     cast back to the active scalar before the Vxc back-contraction. NO
 //!     `set_precision` runtime override (deferred per D-08); NO f32
 //!     numeric-parity tolerance (deferred per D-08).
+//!
+//! ### Device AO eval vs. host ρ contraction (Phase-8 GPU-enable; FOUND-06)
+//!
+//! Two architecturally distinct halves of the grid loop:
+//!
+//!   (a) **AO evaluation is transparently DEVICE-routed.** Both
+//!       `GTOval_sph` (LDA value) and `GTOval_sph_deriv1` (GGA value + ∇)
+//!       go through [`eval_gto_block`] → `pyscf_gto::eval_gto` →
+//!       `pyscf_algebra::select_backend` → the cubecl `eval_gto` kernels
+//!       (Phase-8 ljv/mlg/oms: value + l ≥ 1 + deriv1). So DFT inherits GPU
+//!       AO evaluation for free whenever `PYSCF_BACKEND` selects a device
+//!       backend; with `PYSCF_BACKEND` unset the resolved client is the
+//!       `CpuRuntime` `#[cube]` kernel (still the device code path, not a
+//!       bespoke host loop). The device eval_gto surface is complete here —
+//!       value + l ≥ 1 + deriv1 — and numint consumes it unchanged. The lock
+//!       test `crates/pyscf-dft/tests/numint_device_ao_path.rs` (quick-task
+//!       260530-p40) is the regression gate on this path (ρ-over-device-AO
+//!       correctness + cross-kernel value self-consistency).
+//!
+//!   (b) **ρ = AOᵀ·D·AO stays HOST BY DESIGN.** [`NumInt::eval_rho`]'s
+//!       contraction reduces each ρ[g] with `oracle_sum` (pairwise tree over
+//!       nao² terms) — the bit-exact FOUND-06 discipline that SCF/DFT
+//!       byte-matching against upstream PySCF depends on. A GPU `eval_rho`
+//!       would be tolerance-bounded (~1e-9), NOT bit-identical, so it is an
+//!       explicitly DEFERRED perf item: it must NOT be "optimized" onto the
+//!       device without an explicit SCF-bit-exactness decision first, or it
+//!       silently breaks regression byte-matching. Keeping the ρ contraction
+//!       host by design is intentional, not an oversight.
 
 use pyscf_algebra::oracle_sum;
 use pyscf_core::{Density, Mole, PyscfRsError};
@@ -873,6 +901,13 @@ impl NumInt {
 /// `pyscf_kernels::eval_gto_sph` behind the algebra wall — D-07). The AO
 /// buffer is always f64 (`eval_gto` is `KernelScalar = f64`; the D-08 f32
 /// boundary covers only the downstream matmul chain).
+///
+/// This is the single seam where DFT inherits **device** AO evaluation: the
+/// `eval_gto` call resolves the backend via `select_backend` and dispatches the
+/// cubecl `eval_gto` kernels (Phase-8 ljv/mlg/oms). See the module header
+/// `### Device AO eval vs. host ρ contraction` note for why the *downstream* ρ
+/// contraction (`eval_rho`) stays host by design (FOUND-06), and the lock test
+/// `tests/numint_device_ao_path.rs` (quick-task 260530-p40) for the gate.
 fn eval_gto_block(
     mol: &Mole,
     xctype: XcType,

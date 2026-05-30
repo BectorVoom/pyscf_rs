@@ -95,28 +95,12 @@ fn lock_registry() -> std::sync::MutexGuard<'static, HashMap<u64, StoredBuffer>>
 /// `Handle` type is runtime-agnostic, so a single return type serves every arm;
 /// the `Runtime` generic stays inside this match (ALG-06 wall).
 fn create_handle<F: DeviceScalar>(client: &AlgebraClient, data: &[F]) -> Handle {
-    match client {
-        AlgebraClient::Cpu(c) => c.create(Bytes::from_elems(data.to_vec())),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => c.create(Bytes::from_elems(data.to_vec())),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => c.create(Bytes::from_elems(data.to_vec())),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => c.create(Bytes::from_elems(data.to_vec())),
-    }
+    dispatch_backend!(client, c, Rt, c.create(Bytes::from_elems(data.to_vec())))
 }
 
 /// Read a resident handle back to host bytes on `client`'s backend.
 fn read_handle(client: &AlgebraClient, handle: &Handle) -> Vec<u8> {
-    let mut bytes = match client {
-        AlgebraClient::Cpu(c) => c.read(vec![handle.clone()]),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => c.read(vec![handle.clone()]),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => c.read(vec![handle.clone()]),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => c.read(vec![handle.clone()]),
-    };
+    let mut bytes = dispatch_backend!(client, c, Rt, c.read(vec![handle.clone()]));
     bytes.remove(0).to_vec()
 }
 

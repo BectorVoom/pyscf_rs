@@ -77,22 +77,11 @@ pub fn gemv(
         return Ok(());
     }
     // A (m×n) @ x (n×1) = y (m×1): GEMM with N=1, in place on y's handle.
-    match client {
-        AlgebraClient::Cpu(c) => launch_gemm_on_handles::<cubecl_cpu::CpuRuntime, f64>(
-            c, &ab.handle, &xb.handle, &yb.handle, m, n, 1,
-        ),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => launch_gemm_on_handles::<cubecl_cuda::CudaRuntime, f64>(
-            c, &ab.handle, &xb.handle, &yb.handle, m, n, 1,
-        ),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => launch_gemm_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
-            c, &ab.handle, &xb.handle, &yb.handle, m, n, 1,
-        ),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => launch_gemm_on_handles::<cubecl_hip::HipRuntime, f64>(
-            c, &ab.handle, &xb.handle, &yb.handle, m, n, 1,
-        ),
-    }
+    dispatch_backend!(
+        client,
+        c,
+        Rt,
+        launch_gemm_on_handles::<Rt, f64>(c, &ab.handle, &xb.handle, &yb.handle, m, n, 1)
+    );
     Ok(())
 }

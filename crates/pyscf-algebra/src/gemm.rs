@@ -136,15 +136,7 @@ pub fn gemm_dense<F: DeviceScalar>(
         });
     }
 
-    let out = match client {
-        AlgebraClient::Cpu(c) => launch_gemm::<cubecl_cpu::CpuRuntime, F>(c, lhs, rhs, m, k, n),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => launch_gemm::<cubecl_cuda::CudaRuntime, F>(c, lhs, rhs, m, k, n),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => launch_gemm::<cubecl_wgpu::WgpuRuntime, F>(c, lhs, rhs, m, k, n),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => launch_gemm::<cubecl_hip::HipRuntime, F>(c, lhs, rhs, m, k, n),
-    };
+    let out = dispatch_backend!(client, c, Rt, launch_gemm::<Rt, F>(c, lhs, rhs, m, k, n));
     Ok(out)
 }
 
@@ -188,22 +180,11 @@ pub fn gemm(
     if m * n == 0 {
         return Ok(());
     }
-    match client {
-        AlgebraClient::Cpu(c) => launch_gemm_on_handles::<cubecl_cpu::CpuRuntime, f64>(
-            c, &lb.handle, &rb.handle, &ob.handle, m, k, n,
-        ),
-        #[cfg(feature = "cuda")]
-        AlgebraClient::Cuda(c) => launch_gemm_on_handles::<cubecl_cuda::CudaRuntime, f64>(
-            c, &lb.handle, &rb.handle, &ob.handle, m, k, n,
-        ),
-        #[cfg(feature = "wgpu")]
-        AlgebraClient::Wgpu(c) => launch_gemm_on_handles::<cubecl_wgpu::WgpuRuntime, f64>(
-            c, &lb.handle, &rb.handle, &ob.handle, m, k, n,
-        ),
-        #[cfg(feature = "rocm")]
-        AlgebraClient::Rocm(c) => launch_gemm_on_handles::<cubecl_hip::HipRuntime, f64>(
-            c, &lb.handle, &rb.handle, &ob.handle, m, k, n,
-        ),
-    }
+    dispatch_backend!(
+        client,
+        c,
+        Rt,
+        launch_gemm_on_handles::<Rt, f64>(c, &lb.handle, &rb.handle, &ob.handle, m, k, n)
+    );
     Ok(())
 }
