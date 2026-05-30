@@ -6,8 +6,9 @@ allowed-tools:
   - Read
   - Bash
   - Write
-  - Task
+  - Agent
   - AskUserQuestion
+requires: [config, phase, plan-phase]
 ---
 <runtime_note>
 **Copilot (VS Code):** Use `vscode_askquestions` wherever this workflow calls `AskUserQuestion`. They are equivalent — `vscode_askquestions` is the VS Code Copilot implementation of the same interactive question API.
@@ -29,18 +30,18 @@ Initialize a new project through unified flow: questioning → research (optiona
 - `.planning/ROADMAP.md` — phase structure
 - `.planning/STATE.md` — project memory
 
-**After this command:** Run `/gsd-plan-phase 1` to start execution.
+**After this command:** Run `/gsd:plan-phase 1` to start execution.
 </objective>
 
 <execution_context>
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/new-project.md
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/references/questioning.md
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/references/ui-brand.md
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/templates/project.md
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/templates/requirements.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/workflows/new-project.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/references/questioning.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/references/ui-brand.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/templates/project.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/templates/requirements.md
 </execution_context>
 
 <process>
-Execute the new-project workflow from @/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/new-project.md end-to-end.
+Execute end-to-end.
 Preserve all workflow gates (validation, approvals, commits, routing).
 </process>

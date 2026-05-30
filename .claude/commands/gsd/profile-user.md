@@ -9,7 +9,7 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
-  - Task
+  - Agent
 ---
 
 <objective>
@@ -19,8 +19,8 @@ Routes to the profile-user workflow which orchestrates the full flow: consent ga
 </objective>
 
 <execution_context>
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/profile-user.md
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/references/ui-brand.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/workflows/profile-user.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/references/ui-brand.md
 </execution_context>
 
 <context>

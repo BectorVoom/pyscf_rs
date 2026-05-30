@@ -7,7 +7,7 @@ Standard format for presenting next steps after completing a command or workflow
 ```
 ---
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **{identifier}: {name}** — {one-line description}
 
@@ -24,6 +24,9 @@ Standard format for presenting next steps after completing a command or workflow
 ---
 ```
 
+> If `project_code` is not set in the init context, omit the project identity suffix:
+> `## ▶ Next Up` (no ` — [CODE] Title`).
+
 ## Format Rules
 
 1. **Always show what it is** — name + description, never just a command path
@@ -32,6 +35,7 @@ Standard format for presenting next steps after completing a command or workflow
 4. **`/clear` first** — always show `/clear` before the command so users run it in the correct order
 5. **"Also available" not "Other options"** — sounds more app-like
 6. **Visual separators** — `---` above and below to make it stand out
+7. **Project identity in heading** — include `[PROJECT_CODE] PROJECT_TITLE` from init context so handoffs are self-identifying across sessions. If `project_code` is not set, omit the suffix entirely (just `## ▶ Next Up`)
 
 ## Variants
 
@@ -40,13 +44,13 @@ Standard format for presenting next steps after completing a command or workflow
 ```
 ---
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **02-03: Refresh Token Rotation** — Add /api/auth/refresh with sliding expiry
 
 `/clear` then:
 
-`/gsd-execute-phase 2`
+`/gsd:execute-phase 2`
 
 ---
 
@@ -64,14 +68,14 @@ Add note that this is the last plan and what comes after:
 ```
 ---
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **02-03: Refresh Token Rotation** — Add /api/auth/refresh with sliding expiry
 <sub>Final plan in Phase 2</sub>
 
 `/clear` then:
 
-`/gsd-execute-phase 2`
+`/gsd:execute-phase 2`
 
 ---
 
@@ -87,19 +91,19 @@ Add note that this is the last plan and what comes after:
 ```
 ---
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **Phase 2: Authentication** — JWT login flow with refresh tokens
 
 `/clear` then:
 
-`/gsd-plan-phase 2`
+`/gsd:plan-phase 2`
 
 ---
 
 **Also available:**
-- `/gsd-discuss-phase 2` — gather context first
-- `/gsd-research-phase 2` — investigate unknowns
+- `/gsd:discuss-phase 2` — gather context first
+- `/gsd:plan-phase --research-phase 2` — investigate unknowns
 - Review roadmap
 
 ---
@@ -116,19 +120,19 @@ Show completion status before next action:
 
 3/3 plans executed
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **Phase 3: Core Features** — User dashboard, settings, and data export
 
 `/clear` then:
 
-`/gsd-plan-phase 3`
+`/gsd:plan-phase 3`
 
 ---
 
 **Also available:**
-- `/gsd-discuss-phase 3` — gather context first
-- `/gsd-research-phase 3` — investigate unknowns
+- `/gsd:discuss-phase 3` — gather context first
+- `/gsd:plan-phase --research-phase 3` — investigate unknowns
 - Review what Phase 2 built
 
 ---
@@ -141,17 +145,17 @@ When there's no clear primary action:
 ```
 ---
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **Phase 3: Core Features** — User dashboard, settings, and data export
 
 `/clear` then one of:
 
-**To plan directly:** `/gsd-plan-phase 3`
+**To plan directly:** `/gsd:plan-phase 3`
 
-**To discuss context first:** `/gsd-discuss-phase 3`
+**To discuss context first:** `/gsd:discuss-phase 3`
 
-**To research unknowns:** `/gsd-research-phase 3`
+**To research unknowns:** `/gsd:plan-phase --research-phase 3`
 
 ---
 ```
@@ -165,13 +169,13 @@ When there's no clear primary action:
 
 All 4 phases shipped
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **Start v1.1** — questioning → research → requirements → roadmap
 
 `/clear` then:
 
-`/gsd-new-milestone`
+`/gsd:new-milestone`
 
 ---
 ```
@@ -214,7 +218,7 @@ Extract: `**02-03: Refresh Token Rotation** — Add /api/auth/refresh with slidi
 ## To Continue
 
 Run `/clear`, then paste:
-/gsd-execute-phase 2
+/gsd:execute-phase 2
 ```
 
 User has no idea what 02-03 is about.
@@ -222,7 +226,7 @@ User has no idea what 02-03 is about.
 ### Don't: Missing /clear explanation
 
 ```
-`/gsd-plan-phase 3`
+`/gsd:plan-phase 3`
 
 Run /clear first.
 ```
@@ -242,7 +246,7 @@ Sounds like an afterthought. Use "Also available:" instead.
 
 ```
 ```
-/gsd-plan-phase 3
+/gsd:plan-phase 3
 ```
 ```
 

@@ -212,7 +212,7 @@ For each classified PR, review against its template requirements.
 - [ ] PR title is descriptive (not just "fix" or "update")
 - [ ] One concern per PR (not mixing fix + enhancement)
 - [ ] No unrelated formatting changes visible in diff
-- [ ] CHANGELOG.md updated
+- [ ] `.changeset/*.md` fragment added for user-facing changes (or `no-changelog` label applied)
 - [ ] Not using `--no-verify` or skipping hooks
 
 **Scoring:** Same as issues — completeness percentage per PR.
@@ -326,6 +326,9 @@ gh pr close {number} --comment "Closed by GSD inbox triage: this PR does not mee
 ```
 
 Always confirm with the user before closing anything:
+
+**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available.
+
 ```
 AskUserQuestion:
   question: "Found {N} items to close. Review the list above — proceed with closing?"
@@ -367,10 +370,10 @@ Next steps:
 <offer_next>
 After triage:
 
-- /gsd-review — Run cross-AI peer review on a specific phase plan
-- /gsd-ship — Create a PR from completed work
-- /gsd-progress — See overall project state
-- /gsd-inbox --label — Re-run with auto-labeling enabled
+- /gsd:review — Run cross-AI peer review on a specific phase plan
+- /gsd:ship — Create a PR from completed work
+- /gsd:progress — See overall project state
+- /gsd:inbox --label — Re-run with auto-labeling enabled
 </offer_next>
 
 <success_criteria>

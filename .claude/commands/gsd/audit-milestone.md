@@ -7,8 +7,9 @@ allowed-tools:
   - Glob
   - Grep
   - Bash
-  - Task
+  - Agent
   - Write
+requires: [execute-phase]
 ---
 <objective>
 Verify milestone achieved its definition of done. Check requirements coverage, cross-phase integration, and end-to-end flows.
@@ -17,7 +18,7 @@ Verify milestone achieved its definition of done. Check requirements coverage, c
 </objective>
 
 <execution_context>
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/audit-milestone.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/workflows/audit-milestone.md
 </execution_context>
 
 <context>
@@ -31,6 +32,6 @@ Glob: .planning/phases/*/*-VERIFICATION.md
 </context>
 
 <process>
-Execute the audit-milestone workflow from @/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/audit-milestone.md end-to-end.
+Execute end-to-end.
 Preserve all workflow gates (scope determination, verification reading, integration check, requirements coverage, routing).
 </process>

@@ -12,7 +12,7 @@ Scan all phases for pending, skipped, blocked, and human_needed UAT items. Cross
 </objective>
 
 <execution_context>
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/audit-uat.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/workflows/audit-uat.md
 </execution_context>
 
 <context>

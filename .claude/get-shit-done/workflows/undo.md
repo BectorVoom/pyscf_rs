@@ -3,8 +3,8 @@ Safe git revert workflow. Rolls back GSD phase or plan commits using the phase m
 </purpose>
 
 <required_reading>
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/references/ui-brand.md
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/references/gate-prompts.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/references/ui-brand.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/references/gate-prompts.md
 </required_reading>
 
 <process>
@@ -29,7 +29,7 @@ Parse $ARGUMENTS for the undo mode:
 If no valid argument is provided, display usage and exit:
 
 ```
-Usage: /gsd-undo --last N | --phase NN | --plan NN-MM
+Usage: /gsd:undo --last N | --phase NN | --plan NN-MM
 
 Modes:
   --last N      Show last N GSD commits for interactive selection
@@ -37,9 +37,9 @@ Modes:
   --plan NN-MM  Revert all commits for plan NN-MM
 
 Examples:
-  /gsd-undo --last 5
-  /gsd-undo --phase 03
-  /gsd-undo --plan 03-02
+  /gsd:undo --last 5
+  /gsd:undo --phase 03
+  /gsd:undo --plan 03-02
 ```
 </step>
 
@@ -63,6 +63,8 @@ Recent GSD commits:
   3. ghi9012 fix(02-03): correct validation logic
 ```
 
+
+**Text mode (`workflow.text_mode: true` in config or `--text` flag):** Set `TEXT_MODE=true` if `--text` is present in `$ARGUMENTS` OR `text_mode` from init JSON is `true`. When TEXT_MODE is active, replace every `AskUserQuestion` call with a plain-text numbered list and ask the user to type their choice number. This is required for non-Claude runtimes (OpenAI Codex, Gemini CLI, etc.) where `AskUserQuestion` is not available.
 Use AskUserQuestion to ask:
 - question: "Which commits to revert? Enter numbers (e.g., 1,3) or 'all'"
 - header: "Select"
@@ -202,7 +204,7 @@ Store the response as REVERT_REASON. Continue to execute_revert.
 
 Run `git status --porcelain`. If the output is non-empty, display the dirty files and abort:
 ```
-Working tree has uncommitted changes. Commit or stash them before running /gsd-undo.
+Working tree has uncommitted changes. Commit or stash them before running /gsd:undo.
 ```
 Exit immediately — do not proceed to any revert operations.
 
@@ -277,19 +279,19 @@ Show next steps:
 ```
 ───────────────────────────────────────────────────────────────
 
-## ▶ Next Up
+## ▶ Next Up — [${PROJECT_CODE}] ${PROJECT_TITLE}
 
 **Review state** — verify project is in expected state after revert
 
 /clear then:
 
-/gsd-progress
+/gsd:progress
 
 ───────────────────────────────────────────────────────────────
 
 **Also available:**
-- `/gsd-execute-phase ${PHASE}` — re-execute if needed
-- `/gsd-undo --last 1` — undo the revert itself if something went wrong
+- `/gsd:execute-phase ${PHASE}` — re-execute if needed
+- `/gsd:undo --last 1` — undo the revert itself if something went wrong
 
 ───────────────────────────────────────────────────────────────
 ```

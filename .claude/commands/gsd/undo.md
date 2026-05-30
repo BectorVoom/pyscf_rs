@@ -8,6 +8,7 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
+requires: [phase]
 ---
 
 <objective>
@@ -20,9 +21,9 @@ Three modes:
 </objective>
 
 <execution_context>
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/undo.md
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/references/ui-brand.md
-@/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/references/gate-prompts.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/workflows/undo.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/references/ui-brand.md
+@/home/user/Documents/workspace/pyscf_rs/.claude/get-shit-done/references/gate-prompts.md
 </execution_context>
 
 <context>
@@ -30,5 +31,5 @@ $ARGUMENTS
 </context>
 
 <process>
-Execute the undo workflow from @/home/chemtech/workspace/pyscf_rs/.claude/get-shit-done/workflows/undo.md end-to-end.
+Execute end-to-end.
 </process>
