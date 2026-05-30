@@ -11,6 +11,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::unwrap_used)] // FOUND-07
 
+// quick-260530-l29: the SINGLE cfg-gated AlgebraClient backend fanout. Declared
+// with `#[macro_use]` BEFORE the engine modules so `dispatch_backend!` is in
+// scope for axpy/dot/gemm/… without a `use`. Crate-internal — never re-exported.
+#[macro_use]
+mod dispatch;
+
 pub mod client;
 pub mod error;
 pub mod select;
