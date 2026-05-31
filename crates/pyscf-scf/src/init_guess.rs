@@ -3,7 +3,7 @@
 //! until a Phase 3 follow-up plan or Phase 4 dependency lands.
 //! Plan 03-06 ships the `Chkfile(path)` body (`init_guess_by_chkfile`).
 use crate::{InitGuessMode, chkfile::load_scf_from_file, error::ScfError};
-use pyscf_core::{Density, Mole, PyscfRsError};
+use pyscf_core::{Density, MOCoefficients, Mole, PyscfRsError};
 
 pub fn default_get_init_guess(mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
     match mode {
@@ -24,11 +24,14 @@ pub fn default_get_init_guess(mol: &Mole, mode: &InitGuessMode) -> Result<Densit
 ///
 /// Density formula: `D[μν] = Σ_i mo_occ[i] * mo_coeff[μ, i] * mo_coeff[ν, i]`
 ///
-/// Phase 3 ships the SIMPLE case — same basis (prior.nao == current nao).
-/// Basis-projection (`pyscf/scf/hf.py:673-763` general case) is deferred:
-/// returns `NotYetImplemented{phase:3}` on a basis mismatch so a future
-/// plan can fill the projection path without changing this function's
-/// signature.
+/// Two cases:
+///   - **Same basis** (`prior.nao == current nao`): direct RDM1 from the prior
+///     MOs (byte-verified Phase 3 path).
+///   - **Different basis** (`prior.nao != current nao`): the prior MOs are
+///     projected onto the current basis first, via `project_mo_nr2nr`
+///     (`pyscf/scf/addons.py`): `C2 = S22⁻¹·(S21·C1)` with `S22 = <cur|cur>`
+///     and `S21 = <cur|prior>`. The prior molecule/basis is reconstructed from
+///     the `mol` JSON stored in the same chkfile.
 pub(crate) fn init_guess_by_chkfile(
     mol: &Mole,
     path: &std::path::Path,
@@ -45,33 +48,117 @@ pub(crate) fn init_guess_by_chkfile(
         )))
     })?;
     let nao = mol.nao_nr;
-    if prior.mo_coeff.nao != nao {
-        return Err(PyscfRsError::NotYetImplemented {
-            phase: 3,
-            what: "init_guess_by_chkfile basis projection (prior.nao != current nao); same-basis case only in Phase 3",
-        });
+    if prior.mo_coeff.nao == nao {
+        // Same-basis fast path (byte-verified): D[μν] = Σ_i occ_i C[μ,i] C[ν,i].
+        return Ok(density_from_mos(
+            nao,
+            prior.mo_coeff.nmo,
+            &prior.mo_coeff.data,
+            &prior.mo_occ,
+        ));
     }
-    // Build density (row-major, the Density.data convention).
-    // D[mu,nu] = sum_i occ_i * C[mu,i] * C[nu,i]
-    // MOCoefficients.data is F-order: C[mu, i] = data[mu + i * nao].
-    let nmo = prior.mo_coeff.nmo;
+
+    // Cross-basis: reconstruct the prior Mole from the chkfile's stored JSON,
+    // then project the prior MOs onto the current basis before forming the seed.
+    let mol_json = crate::chkfile::load_mol_json_from_file(path).map_err(|e| {
+        PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
+            "chkfile read prior mol: {}",
+            e
+        )))
+    })?;
+    let prior_mol = pyscf_gto::loads(&mol_json)?;
+    project_density_from_chkfile(mol, &prior_mol, &prior.mo_coeff, &prior.mo_occ)
+}
+
+/// Build a restricted RDM1 from MO coefficients: `D[μν] = Σ_i occ_i·C[μ,i]·C[ν,i]`.
+///
+/// `coeff` is F-order (`C[μ,i] = coeff[μ + i*nao]`, PySCF/LAPACK convention);
+/// the output `Density.data` is row-major. The `i`-axis reduction goes through
+/// `oracle_sum` (Pitfall 9 — no bare `+=`), matching rdm.rs / energy.rs.
+fn density_from_mos(nao: usize, nmo: usize, coeff: &[f64], occ: &[f64]) -> Density {
     let mut data = vec![0.0_f64; nao * nao];
     for mu in 0..nao {
         for nu in 0..nao {
-            // Materialize the i-axis terms into a scratch Vec so the
-            // reduction goes through oracle_sum (Pitfall 9 mitigation —
-            // matches plan 03-11's rdm.rs / energy.rs pattern).
             let terms: Vec<f64> = (0..nmo)
-                .map(|i| {
-                    prior.mo_occ[i]
-                        * prior.mo_coeff.data[mu + i * nao]
-                        * prior.mo_coeff.data[nu + i * nao]
-                })
+                .map(|i| occ[i] * coeff[mu + i * nao] * coeff[nu + i * nao])
                 .collect();
             data[mu * nao + nu] = pyscf_algebra::oracle_sum(&terms);
         }
     }
-    Ok(Density { nao, data })
+    Density { nao, data }
+}
+
+/// Project prior-basis MO coefficients onto the current basis, then build the
+/// seed density. Faithful port of `project_mo_nr2nr` (`pyscf/scf/addons.py`):
+///
+/// ```text
+/// C2 = S22⁻¹ · (S21 · C1),   S22 = <cur|cur> = int1e_ovlp(cur),
+///                            S21 = <cur|prior> = intor_cross(cur, prior)
+/// ```
+///
+/// then `D[μν] = Σ_i occ_i·C2[μ,i]·C2[ν,i]`. Mirrors the layout/solve idiom of
+/// `init_guess_by_minao` (which is `project_mo_nr2nr(ano, I, mol)`): overlaps
+/// are F-order in `IntorOutput.values`, and each MO column is recovered with a
+/// per-column `solve_linear` against `S22`.
+///
+/// Verification scope: exercised in-tree by the same-basis identity invariant
+/// (`prior == current ⇒ C2 == C1`) plus symmetry/finiteness checks. Exact
+/// cross-basis numbers are NOT oracle-verified against live PySCF in-sandbox.
+fn project_density_from_chkfile(
+    mol: &Mole,
+    prior_mol: &Mole,
+    prior_coeff: &MOCoefficients,
+    prior_occ: &[f64],
+) -> Result<Density, PyscfRsError> {
+    use pyscf_core::CoreError;
+    use pyscf_gto::{intor, intor_cross};
+
+    let nao = mol.nao_nr;
+    let prior_nao = prior_coeff.nao;
+    let nmo = prior_coeff.nmo;
+    if prior_mol.nao_nr != prior_nao {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "chkfile projection: reconstructed prior mol nao_nr {} != stored mo_coeff nao {}",
+            prior_mol.nao_nr, prior_nao
+        ))));
+    }
+    if prior_occ.len() < nmo {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "chkfile projection: mo_occ len {} < nmo {}",
+            prior_occ.len(),
+            nmo
+        ))));
+    }
+
+    // S22 = <cur|cur> (nao×nao, F-order); S21 = <cur|prior> (nao×prior_nao, F-order).
+    let s22 = intor(mol, "int1e_ovlp_sph")?;
+    let s21 = intor_cross(mol, prior_mol, "int1e_ovlp_sph")?;
+
+    // B = S21 · C1  (nao × nmo, F-order). B[μ,i] = Σ_k S21[μ,k]·C1[k,i],
+    //   S21[μ,k] = s21.values[μ + k*nao];  C1[k,i] = prior_coeff.data[k + i*prior_nao].
+    let mut b = vec![0.0_f64; nao * nmo];
+    for i in 0..nmo {
+        for mu in 0..nao {
+            let terms: Vec<f64> = (0..prior_nao)
+                .map(|k| s21.values[mu + k * nao] * prior_coeff.data[k + i * prior_nao])
+                .collect();
+            b[mu + i * nao] = pyscf_algebra::oracle_sum(&terms);
+        }
+    }
+
+    // C2[:,i] = S22⁻¹ · B[:,i] (per-column LU solve, as in init_guess_by_minao).
+    let mut c2 = vec![0.0_f64; nao * nmo];
+    for i in 0..nmo {
+        let rhs = &b[i * nao..i * nao + nao];
+        let col = pyscf_algebra::solve_linear(&s22.values, rhs, nao).map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "chkfile projection: S22 solve failed (MO col {i}): {e}"
+            )))
+        })?;
+        c2[i * nao..i * nao + nao].copy_from_slice(&col);
+    }
+
+    Ok(density_from_mos(nao, nmo, &c2, prior_occ))
 }
 
 /// `init_guess_by_1e(mol)` — build the initial density by diagonalizing
@@ -505,5 +592,93 @@ pub fn parse_init_guess_mode(name: &str) -> Result<InitGuessMode, PyscfRsError> 
         other => Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
             format!("unknown init_guess mode '{}'", other),
         ))),
+    }
+}
+
+#[cfg(test)]
+mod chkfile_projection_tests {
+    use super::{density_from_mos, project_density_from_chkfile};
+    use pyscf_core::{MOCoefficients, Unit};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
+
+    fn h2(basis: &str) -> pyscf_core::Mole {
+        M(MoleBuildArgs {
+            atom: AtomInput::String("H 0 0 0; H 0 0 0.74".into()),
+            basis: BasisInput::Name(basis.into()),
+            unit: Unit::Ang,
+            ..Default::default()
+        })
+        .expect("build H2")
+    }
+
+    fn coeff(nao: usize, nmo: usize, data: Vec<f64>) -> MOCoefficients {
+        MOCoefficients {
+            nao,
+            nmo,
+            data,
+            energies: vec![0.0; nmo],
+            occupations: vec![0.0; nmo],
+        }
+    }
+
+    /// Core correctness anchor: projecting onto the SAME basis must be the
+    /// identity (`S22 == S21 == S ⇒ C2 = S⁻¹·S·C1 = C1`), so the projected
+    /// density equals the direct same-basis RDM1. This exercises the full
+    /// `S21·C1` contraction + per-column `S22` solve and proves it collapses
+    /// to identity — independent of any external oracle.
+    #[test]
+    fn projection_same_basis_is_identity() {
+        let mol = h2("sto-3g");
+        let nao = mol.nao_nr;
+        assert_eq!(nao, 2);
+        // Arbitrary non-trivial prior coefficients (F-order [nao, nmo]).
+        let c = coeff(nao, nao, vec![0.8, 0.1, 0.2, 0.9]);
+        let occ = vec![2.0, 0.0];
+
+        let projected = project_density_from_chkfile(&mol, &mol, &c, &occ).unwrap();
+        let direct = density_from_mos(nao, nao, &c.data, &occ);
+
+        assert_eq!(projected.nao, nao);
+        for k in 0..nao * nao {
+            assert!(
+                (projected.data[k] - direct.data[k]).abs() < 1e-8,
+                "elem {k}: projected {} vs direct {} (Δ={:.3e})",
+                projected.data[k],
+                direct.data[k],
+                (projected.data[k] - direct.data[k]).abs()
+            );
+        }
+    }
+
+    /// Cross-basis projection (sto-3g → 6-31g) must produce a well-formed seed:
+    /// shaped to the CURRENT basis (nao=4), finite, and symmetric. Exact
+    /// numbers are not oracle-checked in-sandbox (see fn doc / AUDIT-FIX report).
+    #[test]
+    fn projection_cross_basis_is_finite_and_symmetric() {
+        let prior_mol = h2("sto-3g");
+        let cur_mol = h2("6-31g");
+        let prior_nao = prior_mol.nao_nr;
+        let cur_nao = cur_mol.nao_nr;
+        assert_eq!(prior_nao, 2);
+        assert!(cur_nao > prior_nao, "6-31g must be larger than sto-3g");
+
+        // One doubly-occupied prior MO (bonding-like) + one virtual.
+        let c = coeff(prior_nao, prior_nao, vec![0.55, 0.55, 1.0, -1.0]);
+        let occ = vec![2.0, 0.0];
+
+        let d = project_density_from_chkfile(&cur_mol, &prior_mol, &c, &occ).unwrap();
+        assert_eq!(d.nao, cur_nao);
+        assert_eq!(d.data.len(), cur_nao * cur_nao);
+        assert!(
+            d.data.iter().all(|x| x.is_finite()),
+            "density has non-finite entries"
+        );
+        for i in 0..cur_nao {
+            for j in 0..cur_nao {
+                let a = d.data[i * cur_nao + j];
+                let b = d.data[j * cur_nao + i];
+                assert!((a - b).abs() < 1e-10, "asymmetry at ({i},{j}): {a} vs {b}");
+            }
+        }
     }
 }
