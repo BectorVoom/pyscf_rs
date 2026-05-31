@@ -135,9 +135,15 @@ fn rhf_grad_nuc_returns_natm_by_3() {
     // H2 aligned on z: the x/y nuclear-repulsion force is zero, z is non-zero
     // and equal-and-opposite on the two H.
     for r in &gn {
-        assert!(r[0].abs() < 1e-12 && r[1].abs() < 1e-12, "off-axis force must vanish");
+        assert!(
+            r[0].abs() < 1e-12 && r[1].abs() < 1e-12,
+            "off-axis force must vanish"
+        );
     }
-    assert!(gn[0][2].abs() > 1e-6, "on-axis nuclear force must be non-zero");
+    assert!(
+        gn[0][2].abs() > 1e-6,
+        "on-axis nuclear force must be non-zero"
+    );
     assert!(
         (gn[0][2] + gn[1][2]).abs() < 1e-12,
         "Newton's third law: z-forces are equal and opposite"
@@ -230,7 +236,8 @@ fn rhf_verify_fd_numeric() {
     let mut rhf = RHF::new(mol.clone());
     rhf.conv_tol = 1e-12;
     rhf.max_cycle = 100;
-    rhf.kernel().expect("RHF SCF must converge for the FD reference");
+    rhf.kernel()
+        .expect("RHF SCF must converge for the FD reference");
 
     let mo_coeff = rhf.mo_coeff.clone().expect("converged mo_coeff");
     let mo_energy = rhf.mo_energy.clone().expect("converged mo_energy");

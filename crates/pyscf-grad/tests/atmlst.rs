@@ -86,15 +86,27 @@ fn kernel_subset_returns_exactly_those_rows() {
     // [1,2] of the full (3,3) gradient.
     let g = RefGrad { mol: mock_h3() };
     let subset = [1usize, 2usize];
-    let de = g.kernel(Some(&subset)).expect("kernel([1,2]) should succeed");
+    let de = g
+        .kernel(Some(&subset))
+        .expect("kernel([1,2]) should succeed");
 
     assert_eq!(de.len(), 2, "atmlst=[1,2] must return exactly 2 rows");
-    assert_eq!(de[0], [10.0, 11.0, 12.0], "row 0 must be full-gradient row 1");
-    assert_eq!(de[1], [20.0, 21.0, 22.0], "row 1 must be full-gradient row 2");
+    assert_eq!(
+        de[0],
+        [10.0, 11.0, 12.0],
+        "row 0 must be full-gradient row 1"
+    );
+    assert_eq!(
+        de[1],
+        [20.0, 21.0, 22.0],
+        "row 1 must be full-gradient row 2"
+    );
 
     // And the order follows atmlst, not the natural atom order.
     let reordered = [2usize, 0usize];
-    let de2 = g.kernel(Some(&reordered)).expect("kernel([2,0]) should succeed");
+    let de2 = g
+        .kernel(Some(&reordered))
+        .expect("kernel([2,0]) should succeed");
     assert_eq!(de2[0], [20.0, 21.0, 22.0]);
     assert_eq!(de2[1], [0.0, 1.0, 2.0]);
 }
@@ -170,7 +182,9 @@ fn grad_scanner_returns_energy_and_gradient_tuple() {
     let scanner = GradScanner::new(energy, grad);
     let mol = mock_h3();
 
-    let (e_tot, de) = scanner.eval(&mol, None).expect("scanner.eval should succeed");
+    let (e_tot, de) = scanner
+        .eval(&mol, None)
+        .expect("scanner.eval should succeed");
     assert_eq!(de.len(), mol.natm, "de must have shape (natm, 3)");
     // sum of z = 0 + 1.4 + 2.8 = 4.2
     assert!((e_tot.0 - 4.2).abs() < 1e-12, "e_tot = {}", e_tot.0);

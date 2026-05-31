@@ -120,7 +120,10 @@ pub fn get_hcore_ecp(mol: &Mole) -> Result<Vec<f64>, PyscfRsError> {
 pub fn hcore_deriv_ecp(mol: &Mole, atm_id: usize) -> Result<Vec<f64>, PyscfRsError> {
     if atm_id >= mol.natm {
         return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-            format!("hcore_deriv_ecp: atm_id {atm_id} out of range (natm={})", mol.natm),
+            format!(
+                "hcore_deriv_ecp: atm_id {atm_id} out of range (natm={})",
+                mol.natm
+            ),
         )));
     }
     let engine = pyscf_gto::ecp_engine();

@@ -203,7 +203,8 @@ pub fn g_inverse(g: &[f64], nint: usize) -> Result<Vec<f64>, PyscfRsError> {
     for i in 0..nint {
         identity[i * nint + i] = 1.0;
     }
-    let (evals, evecs_fortran) = eigh_gen(g, &identity, nint).map_err(crate::error::GeomError::from)?;
+    let (evals, evecs_fortran) =
+        eigh_gen(g, &identity, nint).map_err(crate::error::GeomError::from)?;
 
     // Pre-compute the kept directions `(1/λ_k, k)` once: only eigenpairs with a
     // finite eigenvalue above [`G_EIGENVALUE_TOL`] survive (the redundant
@@ -335,22 +336,14 @@ mod tests {
     fn g_inverse_drops_redundant_nullspace() {
         // H2O: 3 internals (2 bonds + 1 angle), but only 3 internal DOF.
         // G is 3×3 and full-rank here; verify G⁻ is symmetric + finite.
-        let coords = [
-            [0.0, 0.0, 0.0],
-            [1.43, 1.11, 0.0],
-            [-1.43, 1.11, 0.0],
-        ];
+        let coords = [[0.0, 0.0, 0.0], [1.43, 1.11, 0.0], [-1.43, 1.11, 0.0]];
         let prims = crate::internals::generate(&coords, &[8, 1, 1]);
         let (_, _, ginv) = build(&prims, &coords).expect("build");
         let nint = prims.len();
         for i in 0..nint {
             for j in 0..nint {
                 assert!(ginv[i * nint + j].is_finite());
-                assert_relative_eq!(
-                    ginv[i * nint + j],
-                    ginv[j * nint + i],
-                    epsilon = 1e-10
-                );
+                assert_relative_eq!(ginv[i * nint + j], ginv[j * nint + i], epsilon = 1e-10);
             }
         }
     }

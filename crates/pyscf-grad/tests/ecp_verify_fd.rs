@@ -90,7 +90,8 @@ fn ecp_ipnuc_term_is_zero_contribution_for_a_non_ecp_molecule() {
     // (never a panic, never NotYetImplemented{phase:7}).
     let mol = he_sto3g();
     let nao = mol.nao_nr;
-    let hcore_ecp = get_hcore_ecp(&mol).expect("non-ECP molecule → zero contribution, not an error");
+    let hcore_ecp =
+        get_hcore_ecp(&mol).expect("non-ECP molecule → zero contribution, not an error");
     assert_eq!(
         hcore_ecp.len(),
         3 * nao * nao,

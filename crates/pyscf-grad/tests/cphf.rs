@@ -82,8 +82,8 @@ impl Synthetic {
         for r in 0..ndim {
             for c in 0..ndim {
                 // Deterministic, smallish off-diagonal coupling.
-                kmat[r * ndim + c] = 0.05 * ((r + 1) as f64) / ((c + 2) as f64)
-                    + if r == c { 0.2 } else { 0.0 };
+                kmat[r * ndim + c] =
+                    0.05 * ((r + 1) as f64) / ((c + 2) as f64) + if r == c { 0.2 } else { 0.0 };
             }
         }
 
@@ -191,7 +191,10 @@ fn cphf_krylov_converges_to_dense_reference() {
 fn cphf_defaults_are_exact_upstream() {
     // The locked upstream defaults (cphf.py:29-31): max_cycle=50, tol=1e-9,
     // level_shift=0.
-    assert_eq!(DEFAULT_MAX_CYCLE, 50, "upstream cphf.py:30 default max_cycle");
+    assert_eq!(
+        DEFAULT_MAX_CYCLE, 50,
+        "upstream cphf.py:30 default max_cycle"
+    );
     assert_eq!(DEFAULT_TOL, 1e-9, "upstream cphf.py:30 default tol");
     assert_eq!(
         DEFAULT_LEVEL_SHIFT, 0.0,
@@ -257,7 +260,10 @@ fn cphf_withs1_branch_is_rejected_this_phase() {
         false,
         DEFAULT_LEVEL_SHIFT,
     );
-    assert!(r.is_err(), "s1=Some (solve_withs1) must be rejected this phase");
+    assert!(
+        r.is_err(),
+        "s1=Some (solve_withs1) must be rejected this phase"
+    );
 }
 
 #[test]

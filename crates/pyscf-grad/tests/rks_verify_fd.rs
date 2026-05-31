@@ -97,9 +97,18 @@ fn is_clean_cintx_availability_error(err: &PyscfRsError) -> bool {
 fn rks_grid_response_defaults_off_extra_force_zero() {
     let mol = h2_sto3g();
     let grad = RksGradients::new(identity_rks_reference(mol));
-    assert!(!grad.grid_response, "grid_response must default OFF (GRAD-03)");
-    let ef = grad.extra_force(0).expect("extra_force is cintx-independent");
-    assert_eq!(ef, [0.0, 0.0, 0.0], "extra_force must be zero when grid_response is off");
+    assert!(
+        !grad.grid_response,
+        "grid_response must default OFF (GRAD-03)"
+    );
+    let ef = grad
+        .extra_force(0)
+        .expect("extra_force is cintx-independent");
+    assert_eq!(
+        ef,
+        [0.0, 0.0, 0.0],
+        "extra_force must be zero when grid_response is off"
+    );
 }
 
 /// `grid_response = true` is fully supported on request: `extra_force` runs the
@@ -108,8 +117,13 @@ fn rks_grid_response_defaults_off_extra_force_zero() {
 fn rks_grid_response_on_extra_force_finite() {
     let mol = h2_sto3g();
     let grad = RksGradients::new(identity_rks_reference(mol)).with_grid_response(true);
-    assert!(grad.grid_response, "grid_response must be ON after with_grid_response(true)");
-    let ef = grad.extra_force(0).expect("extra_force grid path must run (xcfun, no libxc)");
+    assert!(
+        grad.grid_response,
+        "grid_response must be ON after with_grid_response(true)"
+    );
+    let ef = grad
+        .extra_force(0)
+        .expect("extra_force grid path must run (xcfun, no libxc)");
     assert!(
         ef.iter().all(|v| v.is_finite()),
         "grid_response extra_force must be finite; got {ef:?}"

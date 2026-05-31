@@ -95,7 +95,8 @@ fn identity_ccsd_reference(mol: Mole) -> CcsdGradReference {
         for j in 0..nocc {
             for a in 0..nvir {
                 for b in 0..nvir {
-                    t2[((i * nocc + j) * nvir + a) * nvir + b] = 0.01 * ((i + j + a + b + 1) as f64);
+                    t2[((i * nocc + j) * nvir + a) * nvir + b] =
+                        0.01 * ((i + j + a + b + 1) as f64);
                 }
             }
         }
@@ -299,7 +300,9 @@ fn single_lambda_solver_in_grad() {
                 // declarations only — NOT `solve_lambda(` CALL sites (which are
                 // path-prefixed `pyscf_ccsd::solve_lambda(` or `solve_lambda(` as
                 // a call, never preceded by `fn `).
-                if (t.starts_with("fn ") || t.starts_with("pub fn ") || t.starts_with("pub(crate) fn "))
+                if (t.starts_with("fn ")
+                    || t.starts_with("pub fn ")
+                    || t.starts_with("pub(crate) fn "))
                     && t.contains("lambda")
                 {
                     offenders.push(format!("{}: {}", path.display(), t));

@@ -180,7 +180,8 @@ pub fn make_rdm1e(refr: &RhfReference) -> Result<Vec<f64>, PyscfRsError> {
                 let occ = refr.mo_occ[i];
                 if occ > 0.0 {
                     let w = refr.mo_energy[i] * occ;
-                    terms[i] = w * refr.mo_coeff.data[mu + i * nao] * refr.mo_coeff.data[nu + i * nao];
+                    terms[i] =
+                        w * refr.mo_coeff.data[mu + i * nao] * refr.mo_coeff.data[nu + i * nao];
                 } else {
                     terms[i] = 0.0;
                 }
@@ -211,7 +212,9 @@ fn make_rdm1(refr: &RhfReference) -> Result<Vec<f64>, PyscfRsError> {
     for mu in 0..nao {
         for nu in 0..nao {
             for i in 0..nmo {
-                terms[i] = refr.mo_occ[i] * refr.mo_coeff.data[mu + i * nao] * refr.mo_coeff.data[nu + i * nao];
+                terms[i] = refr.mo_occ[i]
+                    * refr.mo_coeff.data[mu + i * nao]
+                    * refr.mo_coeff.data[nu + i * nao];
             }
             dm0[mu * nao + nu] = oracle_sum(&terms);
         }
@@ -346,7 +349,8 @@ fn get_veff(mol: &Mole, dm0: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
     let n2 = nao * nao;
     let n3 = n2 * nao;
     let n4 = n3 * nao;
-    let idx = |x: usize, i: usize, j: usize, k: usize, l: usize| x * n4 + i + j * nao + k * n2 + l * n3;
+    let idx =
+        |x: usize, i: usize, j: usize, k: usize, l: usize| x * n4 + i + j * nao + k * n2 + l * n3;
     // dm0 is row-major (nao,nao): D[a,b] at a*nao + b.
     let dval = |a: usize, b: usize| dm0[a * nao + b];
 
@@ -377,7 +381,10 @@ fn get_veff(mol: &Mole, dm0: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
 
 /// The RHF electronic gradient (`rhf.py:59-76`). Free-fn form so the PyO3 bridge
 /// can reuse it without the trait.
-pub fn grad_elec(refr: &RhfReference, atmlst: Option<&[usize]>) -> Result<Vec<[f64; 3]>, PyscfRsError> {
+pub fn grad_elec(
+    refr: &RhfReference,
+    atmlst: Option<&[usize]>,
+) -> Result<Vec<[f64; 3]>, PyscfRsError> {
     let mol = &refr.mol;
     let nao = mol.nao_nr;
     let rows = crate::resolve_atmlst(atmlst, mol.natm)?;

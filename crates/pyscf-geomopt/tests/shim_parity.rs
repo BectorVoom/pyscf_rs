@@ -46,10 +46,12 @@ fn harmonic_scanner(kb: f64, ka: f64) -> GradScanner {
         let r1 = dist(coords, 0, 1);
         let r2 = dist(coords, 0, 2);
         let th = angle_at(coords, 1, 0, 2);
-        0.5 * kb * ((r1 - EQ_ROH).powi(2) + (r2 - EQ_ROH).powi(2)) + 0.5 * ka * (th - theta_eq).powi(2)
+        0.5 * kb * ((r1 - EQ_ROH).powi(2) + (r2 - EQ_ROH).powi(2))
+            + 0.5 * ka * (th - theta_eq).powi(2)
     };
     let e_energy = e_of;
-    let energy: EnergyClosure = Box::new(move |mol: &Mole| Ok(Energy(e_energy(&mol.atom_coords()))));
+    let energy: EnergyClosure =
+        Box::new(move |mol: &Mole| Ok(Energy(e_energy(&mol.atom_coords()))));
     let grad: GradClosure = Box::new(move |mol: &Mole, _atmlst: Option<&[usize]>| {
         let coords = mol.atom_coords();
         let h = 1e-6;
@@ -98,7 +100,8 @@ fn geometric_solver_kernel_returns_conv_mol_shape() {
     let mol = perturbed_h2o();
     let scanner = harmonic_scanner(0.5, 0.2);
     let (conv, optimized): (bool, Mole) =
-        geometric_solver::kernel(&scanner, &mol, ShimParams::default()).expect("kernel must not error");
+        geometric_solver::kernel(&scanner, &mol, ShimParams::default())
+            .expect("kernel must not error");
     assert!(conv, "the model PES must converge to its minimum");
     // The returned mol carries the optimized geometry (H2O equilibrium).
     let coords = optimized.atom_coords();
@@ -115,8 +118,8 @@ fn geometric_solver_optimize_returns_mol() {
     // optimize mirrors upstream `optimize(...) -> mol` (== kernel(...).1).
     let mol = perturbed_h2o();
     let scanner = harmonic_scanner(0.5, 0.2);
-    let optimized: Mole =
-        geometric_solver::optimize(&scanner, &mol, ShimParams::default()).expect("optimize must not error");
+    let optimized: Mole = geometric_solver::optimize(&scanner, &mol, ShimParams::default())
+        .expect("optimize must not error");
     let coords = optimized.atom_coords();
     let oh = dist(&coords, 0, 1);
     assert!(
@@ -189,7 +192,9 @@ fn constraints_kwarg_raises_clear_error_not_silent_noop() {
         match result {
             Err(GeomError::ConstraintsUnsupported) => { /* the required clear error */ }
             Err(other) => panic!("expected ConstraintsUnsupported, got a different error: {other}"),
-            Ok(_) => panic!("constraints kwarg was SILENTLY IGNORED — must raise a clear error (T-07-17)"),
+            Ok(_) => panic!(
+                "constraints kwarg was SILENTLY IGNORED — must raise a clear error (T-07-17)"
+            ),
         }
     }
 
@@ -224,6 +229,9 @@ fn maxsteps_out_of_range_rejected_at_shim_boundary() {
 fn shim_default_maxsteps_is_100() {
     // D-07: the shims default maxsteps to 100 (the upstream default).
     let p = ShimParams::default();
-    assert_eq!(p.maxsteps, 100, "the shim default maxsteps must be 100 (upstream parity)");
+    assert_eq!(
+        p.maxsteps, 100,
+        "the shim default maxsteps must be 100 (upstream parity)"
+    );
     assert!(p.constraints.is_none(), "default constraints must be None");
 }

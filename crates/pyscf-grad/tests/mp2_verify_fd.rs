@@ -107,7 +107,10 @@ fn mp2_max_cycle_override_is_30_not_50() {
     // GRAD-05 / Pitfall 5: the MP2 Z-vector solve OVERRIDES the cphf default
     // max_cycle=50 with 30 (mp2.py:280). The constant the MP2 path passes must
     // be 30, distinct from the cphf default.
-    assert_eq!(MP2_CPHF_MAX_CYCLE, 30, "MP2 grad must override max_cycle to 30");
+    assert_eq!(
+        MP2_CPHF_MAX_CYCLE, 30,
+        "MP2 grad must override max_cycle to 30"
+    );
     assert_eq!(DEFAULT_MAX_CYCLE, 50, "the cphf default stays 50");
     assert_ne!(
         MP2_CPHF_MAX_CYCLE, DEFAULT_MAX_CYCLE,
@@ -130,9 +133,8 @@ fn mp2_zvector_solve_runs_through_cphf_at_max_cycle_30() {
     let mo_occ = vec![2.0, 0.0, 0.0];
     let h1: Vec<f64> = (0..ndim).map(|k| 0.2 - 0.05 * k as f64).collect();
     // Diagonally-dominant synthetic kernel ⇒ rapid convergence.
-    let fvind = |x: &[f64]| -> Result<Vec<f64>, PyscfRsError> {
-        Ok(x.iter().map(|&v| 0.1 * v).collect())
-    };
+    let fvind =
+        |x: &[f64]| -> Result<Vec<f64>, PyscfRsError> { Ok(x.iter().map(|&v| 0.1 * v).collect()) };
     let z = cphf::solve(
         &fvind,
         &mo_energy,
@@ -272,8 +274,8 @@ fn mp2_verify_fd_numeric() {
         Ok(0.0)
     };
 
-    let report = verify_fd(&coords, &analytical, energy, DEFAULT_DISP, FD_TOL)
-        .expect("verify_fd runs");
+    let report =
+        verify_fd(&coords, &analytical, energy, DEFAULT_DISP, FD_TOL).expect("verify_fd runs");
     assert!(
         report.passed,
         "MP2 analytical gradient disagrees with FD: max|Δ| = {} Ha/Bohr (tol {})",

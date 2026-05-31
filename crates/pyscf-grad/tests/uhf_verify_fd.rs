@@ -32,8 +32,8 @@
 
 use pyscf_core::{MOCoefficients, Mole, PyscfRsError};
 use pyscf_grad::Gradients;
-use pyscf_grad::uhf::{UhfGradients, UhfReference};
 use pyscf_grad::rhf::RhfReference;
+use pyscf_grad::uhf::{UhfGradients, UhfReference};
 
 /// Build a tiny H2 / STO-3G molecule (nao = 2, natm = 2) that does NOT pull
 /// libxc — pure HF, smallest basis.
@@ -135,7 +135,10 @@ fn uhf_grad_nuc_returns_natm_by_3() {
         "grad_nuc must be finite"
     );
     for r in &gn {
-        assert!(r[0].abs() < 1e-12 && r[1].abs() < 1e-12, "off-axis force must vanish");
+        assert!(
+            r[0].abs() < 1e-12 && r[1].abs() < 1e-12,
+            "off-axis force must vanish"
+        );
     }
     assert!(
         (gn[0][2] + gn[1][2]).abs() < 1e-12,

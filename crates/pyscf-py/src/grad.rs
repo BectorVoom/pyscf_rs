@@ -44,7 +44,7 @@ use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use pyscf_core::{Mole, MOCoefficients, PyscfRsError};
+use pyscf_core::{MOCoefficients, Mole, PyscfRsError};
 use pyscf_grad::{
     CcsdGradReference, CcsdGradients, Gradients, Mp2Gradients, Mp2Reference, RhfGradients,
     RhfReference, RksGradients, RksReference, UhfGradients, UhfReference, UksGradients,
@@ -91,7 +91,10 @@ fn read_vec_attr(mf: &Bound<'_, PyAny>, attr: &str) -> PyResult<Vec<f64>> {
 /// `Mole` out of a Python `mf` into the plain-array tuple every grad reference
 /// is built from (D-09). The MOCoefficients carry the energies/occupations so
 /// the grad helpers that read `mo.occupations` stay consistent.
-fn snapshot_mo(py: Python<'_>, mf: &Py<PyAny>) -> PyResult<(MOCoefficients, Vec<f64>, Vec<f64>, Mole)> {
+fn snapshot_mo(
+    py: Python<'_>,
+    mf: &Py<PyAny>,
+) -> PyResult<(MOCoefficients, Vec<f64>, Vec<f64>, Mole)> {
     let bound = mf.bind(py);
     let mol = extract_mole_from_pyany(py, mf)?;
 
@@ -187,7 +190,10 @@ fn de_to_pyarray<'py>(py: Python<'py>, de: &[[f64; 3]]) -> PyResult<Bound<'py, P
 fn is_overridden(slf: &Py<PyAny>, py: Python<'_>, method: &str, base_classes: &[&str]) -> bool {
     let bound = slf.bind(py);
     match bound.getattr(method) {
-        Ok(m) => match m.getattr("__qualname__").and_then(|q| q.extract::<String>()) {
+        Ok(m) => match m
+            .getattr("__qualname__")
+            .and_then(|q| q.extract::<String>())
+        {
             Ok(qual) => {
                 // Base method qualname looks like "RhfGradients.grad_elec"; a
                 // subclass override looks like "MyGrad.grad_elec". If the class
@@ -732,8 +738,12 @@ fn build_ccsd_grad_reference(py: Python<'_>, mycc: &Py<PyAny>) -> PyResult<CcsdG
         .detach(|| -> Result<_, PyscfRsError> {
             let pool = WorkspacePool::from_env();
             let eris = pyscf_ccsd::default_ao2mo(&ccsd_ref, &Frozen::None)?;
-            let result =
-                pyscf_ccsd::ccsd_kernel(&ccsd_ref, &Frozen::None, &pyscf_ccsd::NoCcsdOverrides, &pool)?;
+            let result = pyscf_ccsd::ccsd_kernel(
+                &ccsd_ref,
+                &Frozen::None,
+                &pyscf_ccsd::NoCcsdOverrides,
+                &pool,
+            )?;
             Ok((result.amplitudes, eris))
         })
         .map_err(pyscf_to_py)?;

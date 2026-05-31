@@ -96,9 +96,18 @@ fn is_clean_cintx_availability_error(err: &PyscfRsError) -> bool {
 fn uks_grid_response_defaults_off_extra_force_zero() {
     let mol = h2_sto3g();
     let grad = UksGradients::new(identity_uks_reference(mol));
-    assert!(!grad.grid_response, "grid_response must default OFF (GRAD-04)");
-    let ef = grad.extra_force(0).expect("extra_force is cintx-independent");
-    assert_eq!(ef, [0.0, 0.0, 0.0], "extra_force must be zero when grid_response is off");
+    assert!(
+        !grad.grid_response,
+        "grid_response must default OFF (GRAD-04)"
+    );
+    let ef = grad
+        .extra_force(0)
+        .expect("extra_force is cintx-independent");
+    assert_eq!(
+        ef,
+        [0.0, 0.0, 0.0],
+        "extra_force must be zero when grid_response is off"
+    );
 }
 
 /// `grid_response = true` runs the cintx-independent grid path → finite force.
@@ -107,8 +116,13 @@ fn uks_grid_response_on_extra_force_finite() {
     let mol = h2_sto3g();
     let grad = UksGradients::new(identity_uks_reference(mol)).with_grid_response(true);
     assert!(grad.grid_response);
-    let ef = grad.extra_force(0).expect("extra_force grid path must run (xcfun, no libxc)");
-    assert!(ef.iter().all(|v| v.is_finite()), "extra_force must be finite; got {ef:?}");
+    let ef = grad
+        .extra_force(0)
+        .expect("extra_force grid path must run (xcfun, no libxc)");
+    assert!(
+        ef.iter().all(|v| v.is_finite()),
+        "extra_force must be finite; got {ef:?}"
+    );
 }
 
 /// `make_rdm1e` (spin-summed energy-weighted RDM) is cintx-independent.
