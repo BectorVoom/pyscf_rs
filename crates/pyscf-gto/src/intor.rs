@@ -191,6 +191,7 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
             nao,
             layout,
             &full_name,
+            ExecutionOptions::default(),
         ),
         4 => evaluate_arity4(
             descriptor,
@@ -230,6 +231,148 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
     }
 }
 
+/// Compute the per-atom nuclear-attraction derivative `int1e_iprinv` with a
+/// caller-supplied `rinv` origin (in **Bohr**). Mirrors upstream
+/// `pyscf/gto/mole.py::with_rinv_origin` wrapping `mol.intor('int1e_iprinv')`.
+///
+/// Plain `intor(mol, "int1e_iprinv")` passes `ExecutionOptions::default()`
+/// (`rinv_orig: None`); cintx's validator REQUIRES `rinv_orig: Some(..)` for any
+/// operator whose name contains `"iprinv"` and rejects `None` with
+/// `InvalidEnvParam{PTR_RINV_ORIG}`. This entry point threads `origin` into the
+/// options so the integral EVALUATES, returning the component-leading
+/// `[3, nao, nao]` F-order buffer (element `(comp, i, j)` at
+/// `comp*nao*nao + i + j*nao`).
+///
+/// Scoped to the `int1e_iprinv` family: a non-iprinv name (suffix-stripped core
+/// ≠ `"int1e_iprinv"`) errors cleanly, since the `rinv` origin is only
+/// meaningful/validated for `iprinv` operators.
+///
+/// F-08 / quick 260601-sln. Precedent: the F-05 `ecp_int1e_iprinv` options idiom.
+///
+/// # Errors
+///   - `Core(InvalidMolecule)` — unbuilt Mole, non-iprinv name, unknown layout,
+///     cintx workspace/evaluate failure.
+///   - `NotYetImplemented{ phase: 3 }` — spinor representation.
+pub fn intor_with_rinv_origin(
+    mol: &Mole,
+    name: &str,
+    rinv_origin: [f64; 3],
+) -> Result<IntorOutput, PyscfRsError> {
+    // ── Built check (same as `intor`) ─────────────────────────────────
+    if !mol._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "intor_with_rinv_origin: Mole not built — call pyscf_gto::M(args) or mol.build() first"
+                .into(),
+        )));
+    }
+
+    // ── Suffix normalisation, then scope to the iprinv family ──────────
+    let full_name = add_suffix(name, mol.cart);
+    let core = full_name
+        .strip_suffix("_sph")
+        .or_else(|| full_name.strip_suffix("_cart"))
+        .or_else(|| full_name.strip_suffix("_spinor"))
+        .unwrap_or(&full_name);
+    if core != "int1e_iprinv" {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_with_rinv_origin is scoped to the int1e_iprinv family; '{full_name}' has \
+             core '{core}'. The rinv origin is only meaningful/validated for iprinv — use \
+             plain pyscf_gto::intor(mol, name) for non-iprinv integrals."
+        ))));
+    }
+
+    // ── Layout (must be component-leading [3, nao, nao]) ───────────────
+    let layout = layout_table::lookup(&full_name).ok_or_else(|| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "unknown intor: {} (not in INTOR_LAYOUTS — extend \
+             crates/pyscf-gto/src/layout_table.rs)",
+            full_name,
+        )))
+    })?;
+
+    // ── Representation per suffix (spinor → Phase 3) ───────────────────
+    let representation = if full_name.ends_with("_cart") {
+        Representation::Cart
+    } else if full_name.ends_with("_sph") {
+        Representation::Spheric
+    } else if full_name.ends_with("_spinor") {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "spinor int1e_iprinv is complex-valued: see F-03 plan (intor_spinor)",
+        });
+    } else {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_with_rinv_origin name lacks _sph/_cart/_spinor suffix after normalisation: \
+             {full_name}",
+        ))));
+    };
+
+    // ── cintx OperatorId resolution (NO iprinv const — by symbol, F-05) ─
+    let descriptor = Resolver::descriptor_by_symbol(&full_name).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx-ops resolver does not know symbol '{full_name}': {e}."
+        )))
+    })?;
+    let operator = descriptor.id;
+
+    // ── Typed cintx BasisSet (zero-copy Arc clone) ─────────────────────
+    let basis_arc: Arc<CintxBasisSet> = mol.cintx_basis()?;
+    let basis_ref: &CintxBasisSet = &basis_arc;
+    let nbas = basis_ref.shells().len();
+    let nao = basis_ref.meta().total_ao;
+    if mol.nao_nr != nao {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "internal inconsistency: mol.nao_nr={} but basis_set.meta().total_ao={}",
+            mol.nao_nr, nao
+        ))));
+    }
+
+    // The cintx validator REQUIRES rinv_orig: Some(..) for any iprinv operator;
+    // passing None errors InvalidEnvParam{PTR_RINV_ORIG}. Kept on one line
+    // (rustfmt::skip) so the grep gate sees the LIVE constructor, not a comment
+    // (the F-05 idiom).
+    #[rustfmt::skip]
+    let opts = ExecutionOptions { rinv_orig: Some(rinv_origin), ..Default::default() };
+
+    // Reuse the single-source arity-2 stitch loop with the origin-bearing opts.
+    evaluate_arity2(
+        descriptor,
+        operator,
+        representation,
+        basis_ref,
+        nbas,
+        nao,
+        layout,
+        &full_name,
+        opts,
+    )
+}
+
+/// Compute `int1e_iprinv` with the `rinv` origin pinned to nucleus `atm_id`'s
+/// coordinate. Mirrors `pyscf/grad/rhf.py:121-143` `with_rinv_at_nucleus(atm_id)`
+/// — resolves the origin from `mol.atom_coord(atm_id)` (Bohr) and delegates to
+/// [`intor_with_rinv_origin`].
+///
+/// F-08 / quick 260601-sln.
+///
+/// # Errors
+///   - `Core(InvalidMolecule)` — `atm_id >= mol.natm` (bounds-checked before
+///     `atom_coord`, never an OOB panic), plus every error
+///     [`intor_with_rinv_origin`] can raise.
+pub fn intor_with_rinv_at_nucleus(
+    mol: &Mole,
+    name: &str,
+    atm_id: usize,
+) -> Result<IntorOutput, PyscfRsError> {
+    if atm_id >= mol.natm {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_with_rinv_at_nucleus: atm_id={atm_id} out of range (mol.natm={})",
+            mol.natm,
+        ))));
+    }
+    intor_with_rinv_origin(mol, name, mol.atom_coord(atm_id))
+}
+
 /// Arity-2 dispatch: iterate (i, j) shell pairs, evaluate per pair, stitch
 /// blocks into an `nao × nao` (or `c × nao × nao` if component-leading)
 /// F-order output buffer.
@@ -237,6 +380,14 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
 /// F-order layout: `out[i + j * nao]` is `M[i, j]`. For component-leading
 /// the caller treats axis 0 as the component and the inner two axes are
 /// F-order on (i, j).
+///
+/// `opts` is the per-request [`ExecutionOptions`]; the plain `intor` arity-2
+/// call site passes `ExecutionOptions::default()` (`rinv_orig: None`), while the
+/// `intor_with_rinv_origin` entry point passes an origin-bearing
+/// `ExecutionOptions { rinv_orig: Some(..), .. }` so the cintx validator accepts
+/// the `int1e_iprinv` family (it rejects `None` with
+/// `InvalidEnvParam{PTR_RINV_ORIG}`). Keeping `opts` a parameter keeps this
+/// stitch body single-source across both callers.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_arity2(
     descriptor: &'static OperatorDescriptor,
@@ -247,6 +398,7 @@ fn evaluate_arity2(
     nao: usize,
     layout: IntorLayout,
     intor_name: &str,
+    opts: ExecutionOptions,
 ) -> Result<IntorOutput, PyscfRsError> {
     let _ = descriptor; // descriptor read for arity above; future-proof.
 
@@ -277,13 +429,8 @@ fn evaluate_arity2(
                 )))
             })?;
 
-            let request = SessionRequest::new(
-                operator,
-                representation,
-                basis,
-                shells,
-                ExecutionOptions::default(),
-            );
+            let request =
+                SessionRequest::new(operator, representation, basis, shells, opts.clone());
             let outcome = request
                 .query_workspace()
                 .map_err(|e| {

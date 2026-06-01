@@ -1,25 +1,36 @@
 //! GRAD-07 (plan 07-01): cintx grad-intor round-trip smoke for the TWO
 //! gradient-integral families cintx ships TODAY.
 //!
-//! Per 07-RESEARCH §"Gradient-Integral Availability Matrix" (re-confirmed at
-//! plan-execution time against the live cintx manifest), cintx ships only
-//! **2 of 8** needed gradient-integral families:
-//!   - `int3c2e_ip1_sph`     (DF-gradient 3-center derivative) — manifest present
-//!   - `int1e_ecp_ipnuc_sph` (= `ECPscalar_ipnuc`, ECP gradient) — manifest present
+//! cintx grad-intor availability matrix (re-confirmed at plan-execution time
+//! against the live cintx manifest) — the ready families are growing:
+//!   - `int3c2e_ip1_sph`     (DF-gradient 3-center derivative) — present
+//!   - `int1e_ecp_ipnuc_sph` (= `ECPscalar_ipnuc`, ECP gradient) — present
+//!   - `int1e_ecp_iprinv_sph` (ECP per-atom iprinv) — present (cintx 21-07, F-05)
+//!   - `int1e_iprinv_sph`    (non-ECP nuclear-attraction per-atom derivative) —
+//!     present and EVALUATES once a `rinv` origin is supplied
+//!     (`intor_with_rinv_origin` / `with_rinv_at_nucleus`, F-08 / quick 260601-sln).
 //!
-//! The other 6 (`int2e_ip1`, `int1e_ip{ovlp,kin,nuc,rinv}`, `ECPscalar_iprinv`)
-//! are MISSING from every cintx branch and route to a clean cintx-availability
-//! error (asserted in `intor_smoke.rs` / `ecp_engine_stub.rs`).
+//! `int1e_iprinv` is NOT cintx-missing: it is a real `AllCint1e` operator that
+//! evaluates the moment a `rinv_orig` is threaded into `ExecutionOptions`. Plain
+//! origin-less `intor(mol, "int1e_iprinv")` still fails the cintx validator
+//! (`InvalidEnvParam{PTR_RINV_ORIG}`) by design — the origin is mandatory.
 //!
-//! This file is the always-on structural round-trip for the two ready families
-//! (the 02-01 cintx-smoke pattern): SHAPE + FINITE only. Byte-identity vs
-//! upstream PySCF is the venv-gated / workflow_dispatch oracle arm.
+//! Still genuinely MISSING from cintx (route to a clean availability error):
+//! `int2e_ip1`, `int1e_ip{ovlp,kin,nuc}`.
+//!
+//! This file is the always-on structural round-trip for the ready families
+//! (the 02-01 cintx-smoke pattern): SHAPE + FINITE, plus the F-08
+//! translational-invariance physics oracle (Σ_atoms (-Z)·iprinv|@atom ==
+//! int1e_ipnuc) — NO live PySCF, NO libxc. Upstream byte-identity is the
+//! venv-gated / workflow_dispatch arm.
 
 use cintx_core::Representation;
 use cintx_ops::resolver::Resolver;
 use cintx_rs::SessionRequest;
 use cintx_runtime::ExecutionOptions;
+use pyscf_algebra::oracle_sum;
 use pyscf_core::{EcpEngine, Unit};
+use pyscf_gto::layout_table::IntorLayout;
 use pyscf_gto::{AtomInput, BasisInput, CintxEcpEngine, EcpInput, M, MoleBuildArgs};
 
 mod common;
@@ -36,6 +47,21 @@ fn he_sto3g() -> pyscf_core::Mole {
         ..Default::default()
     })
     .expect("He/STO-3G build")
+}
+
+/// H2/STO-3G as a fully-built Mole (2 nuclei, non-ECP, 2 AOs) — the fixture for
+/// the F-08 `int1e_iprinv` origin entry points + the translational-invariance
+/// oracle (multiple nuclei, so the Σ-over-atoms identity is non-trivial).
+fn h2_sto3g_mol() -> pyscf_core::Mole {
+    M(MoleBuildArgs {
+        atom: AtomInput::String("H 0 0 0; H 0 0 1.4".into()),
+        basis: BasisInput::Name("sto-3g".into()),
+        unit: Unit::Bohr,
+        max_memory: 4000.0,
+        axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        ..Default::default()
+    })
+    .expect("H2/STO-3G build")
 }
 
 /// Cu/LANL2DZ carries an ECP — the only molecule on which the ECP-gradient
@@ -296,5 +322,132 @@ fn ecp_iprinv_origin_matching_no_atom_is_all_zeros() {
     assert!(
         density.data.iter().all(|&v| v == 0.0),
         "iprinv at an origin matching no ECP atom must be all-zeros",
+    );
+}
+
+// ── F-08: non-ECP int1e_iprinv via a caller-supplied rinv origin ─────────────
+// quick 260601-sln: plumb `rinv_origin` through `intor` for the iprinv arm.
+// `int1e_iprinv` is a real cintx AllCint1e operator — it EVALUATES once an
+// origin is supplied; only the origin-less default (rinv_orig: None) fails the
+// validator (PTR_RINV_ORIG), by design.
+
+#[test]
+fn int1e_iprinv_with_origin_evaluates_component_leading() {
+    // intor_with_rinv_origin returns a finite, component-leading [3, nao, nao]
+    // buffer on a real molecule (was: validator/availability error with the
+    // origin-less default None).
+    let mol = h2_sto3g_mol();
+    let nao = mol.nao_nr;
+    assert!(nao > 0, "H2/STO-3G must have a non-empty AO basis");
+
+    let origin = mol.atom_coord(0); // pin rinv at H1 (Bohr).
+    let out = pyscf_gto::intor_with_rinv_origin(&mol, "int1e_iprinv", origin)
+        .expect("int1e_iprinv must EVALUATE once a rinv origin is supplied (F-08)");
+
+    assert_eq!(
+        out.layout,
+        IntorLayout::ComponentLeadingFOrder { components: 3 },
+        "int1e_iprinv must be 3-component-leading (never [.., 3])",
+    );
+    assert_eq!(
+        out.shape,
+        vec![3, nao, nao],
+        "int1e_iprinv shape must be [3, nao, nao]",
+    );
+    assert_eq!(out.values.len(), 3 * nao * nao);
+    for (i, &v) in out.values.iter().enumerate() {
+        assert!(
+            v.is_finite(),
+            "int1e_iprinv values[{i}] = {v} must be finite"
+        );
+    }
+}
+
+#[test]
+fn int1e_iprinv_at_nucleus_matches_explicit_origin() {
+    // The convenience entry point resolves the origin from mol.atom_coord(atm_id)
+    // and must agree elementwise with the explicit-origin call.
+    let mol = h2_sto3g_mol();
+    for atm_id in 0..mol.natm {
+        let via_nucleus = pyscf_gto::intor_with_rinv_at_nucleus(&mol, "int1e_iprinv", atm_id)
+            .expect("intor_with_rinv_at_nucleus must evaluate");
+        let via_origin =
+            pyscf_gto::intor_with_rinv_origin(&mol, "int1e_iprinv", mol.atom_coord(atm_id))
+                .expect("intor_with_rinv_origin must evaluate");
+        assert_eq!(via_nucleus.values.len(), via_origin.values.len());
+        for (k, (&a, &b)) in via_nucleus
+            .values
+            .iter()
+            .zip(via_origin.values.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                a, b,
+                "with_rinv_at_nucleus(atm={atm_id}) must equal with_rinv_origin(atom_coord) at \
+                 element {k}: {a} vs {b}",
+            );
+        }
+    }
+}
+
+#[test]
+fn int1e_iprinv_sum_over_nuclei_equals_ipnuc() {
+    // PHYSICS ORACLE (translational-invariance identity, the rigorous in-tree
+    // anchor — NO live PySCF, NO libxc):
+    //   int1e_ipnuc == Σ_atoms (-Z_atom) · int1e_iprinv|rinv@atom_coord(atom)
+    // because the nuclear-attraction operator is Σ_A (-Z_A)/|r - R_A| and
+    // int1e_iprinv|@R_A is its per-nucleus contribution. This is exactly the
+    // relation hcore_deriv exploits, checked against the already-available
+    // int1e_ipnuc (plain intor).
+    let mol = h2_sto3g_mol();
+    let nao = mol.nao_nr;
+    let charges = mol.atom_charges();
+
+    // Reference: int1e_ipnuc (full nuclear-attraction derivative), available today.
+    let ipnuc = pyscf_gto::intor(&mol, "int1e_ipnuc").expect("int1e_ipnuc must evaluate");
+    assert_eq!(ipnuc.values.len(), 3 * nao * nao);
+
+    // Accumulate Σ_atoms (-Z) · int1e_iprinv|@atom via the project's pairwise sum.
+    let mut acc = vec![0.0_f64; 3 * nao * nao];
+    for atm_id in 0..mol.natm {
+        let z = charges[atm_id] as f64;
+        let iprinv = pyscf_gto::intor_with_rinv_at_nucleus(&mol, "int1e_iprinv", atm_id)
+            .expect("per-atom int1e_iprinv must evaluate");
+        assert_eq!(iprinv.values.len(), 3 * nao * nao);
+        for (slot, &v) in acc.iter_mut().zip(iprinv.values.iter()) {
+            *slot = oracle_sum(&[*slot, -z * v]);
+        }
+    }
+
+    let mut max_abs = 0.0_f64;
+    for (k, (&got, &want)) in acc.iter().zip(ipnuc.values.iter()).enumerate() {
+        let d = (got - want).abs();
+        if d > max_abs {
+            max_abs = d;
+        }
+        assert!(
+            d <= 1e-10,
+            "translational-invariance oracle broke at element {k}: \
+             Σ(-Z)·iprinv={got} vs int1e_ipnuc={want} (|Δ|={d} > 1e-10)",
+        );
+    }
+    assert!(
+        max_abs <= 1e-10,
+        "max |Σ(-Z)·iprinv - int1e_ipnuc| = {max_abs} exceeds 1e-10",
+    );
+}
+
+#[test]
+fn intor_with_rinv_origin_rejects_non_iprinv_name() {
+    // The entry point is scoped to the iprinv family — the rinv origin is only
+    // meaningful/validated for iprinv. A non-iprinv name (e.g. int1e_ovlp) must
+    // error cleanly (never silently ignore the origin / evaluate the wrong op).
+    let mol = h2_sto3g_mol();
+    let err = pyscf_gto::intor_with_rinv_origin(&mol, "int1e_ovlp", [0.0, 0.0, 0.0])
+        .expect_err("a non-iprinv name must error cleanly");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("iprinv"),
+        "error must name the iprinv-family scope, got: {msg}",
     );
 }
