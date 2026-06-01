@@ -224,9 +224,9 @@ fn make_rdm1(refr: &RhfReference) -> Result<Vec<f64>, PyscfRsError> {
 
 /// The overlap derivative `s1 = -int1e_ipovlp` (`rhf.py:146`).
 ///
-/// Returns a flat component-leading `[3, nao, nao]` buffer (axis 0 = x/y/z;
-/// Pitfall 4). `int1e_ipovlp` is MISSING from cintx today → this propagates a
-/// clean cintx-availability error.
+/// Returns a flat F-order `(3, nao, nao)` buffer with the COMPONENT axis fastest
+/// (pyscf-gto stitches `out[comp + ncomp*i + ncomp*nao*j]`). `int1e_ipovlp`
+/// evaluates in cintx and is byte-correct for s/p shells (verified vs PySCF).
 pub fn get_ovlp(mol: &Mole) -> Result<Vec<f64>, PyscfRsError> {
     let out = pyscf_gto::intor(mol, "int1e_ipovlp")?;
     let nao = mol.nao_nr;
@@ -236,12 +236,14 @@ pub fn get_ovlp(mol: &Mole) -> Result<Vec<f64>, PyscfRsError> {
 }
 
 /// The core-Hamiltonian gradient `get_hcore` part: `-(int1e_ipkin + int1e_ipnuc)`
-/// (`rhf.py:109-118`), component-leading `[3, nao, nao]`.
+/// (`rhf.py:109-118`), F-order `(3, nao, nao)` (component fastest). Elementwise,
+/// so it inherits the input layout — no per-component indexing here.
 ///
 /// (The ECP `ECPscalar_ipnuc` branch (cintx-ready) lands in the ECP-grad wave
-/// 07-08; pure-Coulomb RHF needs only the kinetic + nuclear terms here.) Both
-/// `int1e_ipkin` and `int1e_ipnuc` are MISSING from cintx → clean availability
-/// error.
+/// 07-08; pure-Coulomb RHF needs only the kinetic + nuclear terms here.)
+/// `int1e_ipkin` is byte-correct in cintx; `int1e_ipnuc` is currently WRONG for
+/// l≥1 shells (external cintx p-shell kernel bug — F-08), so only s-shell
+/// gradients are numerically validated.
 fn get_hcore(mol: &Mole) -> Result<Vec<f64>, PyscfRsError> {
     let nao = mol.nao_nr;
     let kin = pyscf_gto::intor(mol, "int1e_ipkin")?;
@@ -298,14 +300,16 @@ fn hcore_deriv(
         *slot = -z * iprinv.values[idx];
     }
 
-    // vrinv[:, p0:p1] += h1[:, p0:p1]. The component-leading layout means
-    // element (comp, i, j) lives at comp*nao*nao + (i + j*nao) (F-order inner).
+    // numpy `vrinv[:, p0:p1] += h1[:, p0:p1]` slices AXIS 1 — the FIRST AO index
+    // `i` (the ∇-bra/row), all columns `j`. The cintx grad intors are F-order
+    // `(3, nao, nao)` with the COMPONENT axis fastest (pyscf-gto stitches
+    // `out[comp + ncomp*i + ncomp*nao*j]`), so element (comp, i, j) lives at
+    // `comp + NCOMP*(i + j*nao)` — NOT the component-slowest `comp*nao*nao + …`.
     let (p0, p1) = aoslices[atm_id];
     for comp in 0..NCOMP {
-        let base = comp * nao * nao;
-        for j in p0..p1 {
-            for i in 0..nao {
-                let off = base + i + j * nao;
+        for i in p0..p1 {
+            for j in 0..nao {
+                let off = comp + NCOMP * (i + j * nao);
                 vrinv[off] = oracle_sum(&[vrinv[off], h1[off]]);
             }
         }
@@ -314,11 +318,10 @@ fn hcore_deriv(
     // hcore_deriv = vrinv + vrinv.transpose(0,2,1) (symmetrise the AO axes).
     let mut out = vec![0.0_f64; NCOMP * nao * nao];
     for comp in 0..NCOMP {
-        let base = comp * nao * nao;
         for j in 0..nao {
             for i in 0..nao {
-                let ij = base + i + j * nao;
-                let ji = base + j + i * nao;
+                let ij = comp + NCOMP * (i + j * nao);
+                let ji = comp + NCOMP * (j + i * nao);
                 out[ij] = oracle_sum(&[vrinv[ij], vrinv[ji]]);
             }
         }
@@ -326,18 +329,21 @@ fn hcore_deriv(
     Ok(out)
 }
 
-/// `get_veff = vj - 0.5·vk` (`rhf.py:180-183`), the 2e Coulomb-repulsion
+/// `get_veff = -(vj - 0.5·vk)` (`rhf.py:180-183`), the 2e Coulomb-repulsion
 /// gradient, built from `get_jk` over `int2e_ip1` (`rhf.py:149-178`).
 ///
-/// `J[x,i,j] = Σ_kl (∇_x i j|kl) D_lk`, `K[x,i,j] = Σ_kl (∇_x i j|kl) D_jk`,
-/// then `vj,vk = -vj,-vk` (the `∇` sits on the bra). Returns a flat
-/// component-leading `[3, nao, nao]` buffer. `int2e_ip1` is MISSING from cintx
-/// → clean availability error.
+/// Mirrors PySCF `_vhf.direct_mapdm('int2e_ip1', 's2kl', ('lk->s1ij',
+/// 'jk->s1il'), …)`:
+///   `J[x,i,j] = Σ_kl (∇_x i,j|k,l) D[l,k]`  (`lk->s1ij`)
+///   `K[x,i,l] = Σ_jk (∇_x i,j|k,l) D[j,k]`  (`jk->s1il`)
+/// then `vj,vk = -vj,-vk` (the `∇` sits on the bra). The K output index is the
+/// FOURTH integral axis `l`, summing the second/third — NOT a copy of the J
+/// pattern (those coincide only for 1-function-per-shell systems like H2/STO-3G).
+/// Returns a flat F-order `(3, nao, nao)` buffer (component fastest).
+/// NOTE: `int2e_ip1` evaluates but is numerically WRONG for l≥1 shells (external
+/// cintx p-shell kernel bug — F-08); s-shell gradients are validated.
 fn get_veff(mol: &Mole, dm0: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
     let nao = mol.nao_nr;
-    // int2e_ip1 is component-leading arity-4 [3, nao, nao, nao, nao] (F-order
-    // inner). MISSING from cintx → `?`-propagates a clean availability error;
-    // the contraction below is the always-on structural form.
     let eri = pyscf_gto::intor(mol, "int2e_ip1")?;
     let expect = NCOMP * nao * nao * nao * nao;
     if eri.values.len() != expect {
@@ -348,35 +354,45 @@ fn get_veff(mol: &Mole, dm0: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
         .into());
     }
 
-    // Component-leading F-order index: (x,i,j,k,l) at
-    //   x*nao^4 + i + j*nao + k*nao^2 + l*nao^3.
+    // The cintx grad intor is F-order `(3, nao, nao, nao, nao)` with the
+    // COMPONENT axis fastest (pyscf-gto stitches
+    // `out[comp + ncomp*i + ncomp*nao*j + …]`), so element (x,i,j,k,l) lives at
+    //   x + NCOMP*(i + j*nao + k*nao^2 + l*nao^3).
     let n2 = nao * nao;
     let n3 = n2 * nao;
-    let n4 = n3 * nao;
-    let idx =
-        |x: usize, i: usize, j: usize, k: usize, l: usize| x * n4 + i + j * nao + k * n2 + l * n3;
+    let idx = |x: usize, i: usize, j: usize, k: usize, l: usize| {
+        x + NCOMP * (i + j * nao + k * n2 + l * n3)
+    };
     // dm0 is row-major (nao,nao): D[a,b] at a*nao + b.
     let dval = |a: usize, b: usize| dm0[a * nao + b];
 
     let mut veff = vec![0.0_f64; NCOMP * nao * nao];
-    // Per (x,i,j): materialise the kl products, oracle_sum them (no bare `+=`).
+    // Per (x,i,j): materialise the contraction products, oracle_sum them (no bare
+    // `+=`). vj contracts the (k,l) pair against D[l,k]; vk contracts the (jp,k)
+    // pair of `(∇_x i,jp|k,j)` against D[jp,k] (output index j is the integral's
+    // FOURTH axis l).
     let mut j_terms = vec![0.0_f64; n2];
     let mut k_terms = vec![0.0_f64; n2];
     for x in 0..NCOMP {
         for i in 0..nao {
             for j in 0..nao {
+                // vj[x,i,j] = Σ_kl (∇_x i,j|k,l) D[l,k].
                 for k in 0..nao {
                     for l in 0..nao {
-                        let g = eri.values[idx(x, i, j, k, l)];
-                        // vj: (∇i j|kl) D_lk ; vk: (∇i j|kl) D_jk.
-                        j_terms[k * nao + l] = g * dval(l, k);
-                        k_terms[k * nao + l] = g * dval(j, k);
+                        j_terms[k * nao + l] = eri.values[idx(x, i, j, k, l)] * dval(l, k);
+                    }
+                }
+                // vk[x,i,j] = Σ_{jp,k} (∇_x i,jp|k,j) D[jp,k]  (j is the l-axis).
+                for jp in 0..nao {
+                    for k in 0..nao {
+                        k_terms[jp * nao + k] = eri.values[idx(x, i, jp, k, j)] * dval(jp, k);
                     }
                 }
                 let vj = oracle_sum(&j_terms);
                 let vk = oracle_sum(&k_terms);
                 // get_jk returns (-vj, -vk); get_veff = (-vj) - 0.5·(-vk).
-                veff[x * n2 + i + j * nao] = oracle_sum(&[-vj, 0.5 * vk]);
+                // Store component-fastest to match the cintx F-order layout.
+                veff[x + NCOMP * (i + j * nao)] = oracle_sum(&[-vj, 0.5 * vk]);
             }
         }
     }
@@ -413,13 +429,15 @@ pub fn grad_elec(
 
         let mut row = [0.0_f64; 3];
         for (comp, slot) in row.iter_mut().enumerate() {
-            let base = comp * n2;
+            // The component buffers (h1ao, vhf, s1) are F-order `(3, nao, nao)`
+            // with the component axis fastest: element (comp, i, j) lives at
+            // `comp + NCOMP*(i + j*nao)`. dm0/dme0 are row-major (i,j) at i*nao+j.
+            let off = |i: usize, j: usize| comp + NCOMP * (i + j * nao);
             // term1 = einsum('ij,ij->', h1ao[comp], dm0)  (Hellmann-Feynman, full AO).
-            // dm0 row-major (i,j) at i*nao+j; h1ao component-leading F-order at base + i + j*nao.
             let mut t1 = Vec::with_capacity(n2);
             for j in 0..nao {
                 for i in 0..nao {
-                    t1.push(h1ao[base + i + j * nao] * dm0[i * nao + j]);
+                    t1.push(h1ao[off(i, j)] * dm0[i * nao + j]);
                 }
             }
             let term1 = oracle_sum(&t1);
@@ -433,8 +451,8 @@ pub fn grad_elec(
             let mut t3 = Vec::new();
             for i in p0..p1 {
                 for j in 0..nao {
-                    t2.push(vhf[base + i + j * nao] * dm0[i * nao + j]);
-                    t3.push(s1[base + i + j * nao] * dme0[i * nao + j]);
+                    t2.push(vhf[off(i, j)] * dm0[i * nao + j]);
+                    t3.push(s1[off(i, j)] * dme0[i * nao + j]);
                 }
             }
             let term2 = 2.0 * oracle_sum(&t2);
