@@ -29,14 +29,19 @@
 //!   - `GTOval_sph_deriv1` — Phase 4 plan 04-03: value + 3 Cartesian
 //!     gradient components `[value, ∂x, ∂y, ∂z]` (the GGA ∇ρ input).
 //!     Output layout `[4, ngrids, nao]` (component-leading).
+//!   - `GTOval_ip_sph` / `GTOval_ip` (spherical) — `nabla |AO>`, 3 components
+//!     `[3, ngrids, nao]`. Byte-identical to `GTOval_sph_deriv1[1:4]`
+//!     (no sign flip; verified vs upstream), so it reuses the deriv1 kernel
+//!     and slices off the value block (F-01).
 //!
 //! Deferred:
 //!   - `GTOval_cart_deriv1` → `NotYetImplemented{phase: 4}` (needs
 //!     cartesian `ao_loc`; v1 DFT uses the spherical deriv1).
 //!   - `GTOval_sph_deriv2` / `GTOval_cart_deriv2` → `NotYetImplemented
 //!     {phase: 4}` (deriv2 not needed for v1 DFT energy).
-//!   - `GTOval_ip*` / `GTOval_ig*` / `GTOval_ip` / `GTOval_ig` →
-//!     `NotYetImplemented{phase: 7}` (Phase 7 grad).
+//!   - `GTOval_ip_cart` → `NotYetImplemented{phase: 4}` (needs cart deriv1, F-02).
+//!   - `GTOval_ig*` (magnetic-gauge) → `NotYetImplemented{phase: 7}` — a distinct
+//!     GIAO kernel, not derivable from deriv1.
 //!
 //! Unknown variants return `CoreError::InvalidMolecule` (consistent
 //! with `mol.intor("foo")` per 02-05). Unbuilt Mole returns
@@ -87,6 +92,22 @@ pub fn eval_gto(
                 "GTOval_cart"
             } else {
                 "GTOval_sph"
+            }
+        }
+        // Bare derivative aliases get the rep suffix per mol.cart, mirroring
+        // upstream `_get_intor_and_comp` (`pyscf/gto/eval_gto.py`).
+        "GTOval_ip" => {
+            if mol.cart {
+                "GTOval_ip_cart"
+            } else {
+                "GTOval_ip_sph"
+            }
+        }
+        "GTOval_ig" => {
+            if mol.cart {
+                "GTOval_ig_cart"
+            } else {
+                "GTOval_ig_sph"
             }
         }
         other => other,
@@ -168,9 +189,65 @@ pub fn eval_gto(
             phase: 4,
             what: "GTOval_sph_deriv2 (Phase 4 DFT grid integration extends the kernel)",
         }),
-        "GTOval_ip_sph" | "GTOval_ip_cart" | "GTOval_ip" => Err(PyscfRsError::NotYetImplemented {
-            phase: 7,
-            what: "GTOval_ip (gradient variant; Phase 7 grad)",
+        // `GTOval_ip_sph` = `nabla |AO>` (3 components) — verified byte-identical
+        // to the gradient block `GTOval_sph_deriv1[1:4]` of the Phase-4 deriv1
+        // kernel (upstream `pyscf/gto/eval_gto.py`: `GTOval_ip_sph` ≡
+        // `+GTOval_sph_deriv1[1:4]`, no sign flip). So we evaluate deriv1 and
+        // drop the value component, yielding `[3, ngrids, nao]`.
+        "GTOval_ip_sph" => {
+            let ngrids = coords.len();
+            let mut coords_flat = Vec::with_capacity(ngrids * 3);
+            coords_flat.extend(coords.iter().map(|c| c[0]));
+            coords_flat.extend(coords.iter().map(|c| c[1]));
+            coords_flat.extend(coords.iter().map(|c| c[2]));
+
+            let selection = select_backend().map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_gto: backend selection failed: {e}"
+                )))
+            })?;
+
+            let buffers = pyscf_kernels::eval_gto_sph_deriv1(
+                &selection.client,
+                &coords_flat,
+                ngrids,
+                &mol._atm,
+                &mol._bas,
+                &mol._env,
+                &mol.ao_loc_nr,
+                mol.nao_nr,
+            )?;
+
+            // deriv1 layout: component-leading `[4, ngrids, nao]`, component c
+            // at `values[c*block..]` with `block = ngrids*nao`. The 3 gradient
+            // components (c=1,2,3) are already contiguous in order — slice off
+            // the leading value block (c=0).
+            let block = ngrids.checked_mul(mol.nao_nr).ok_or_else(|| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "GTOval_ip_sph: size overflow ngrids={ngrids} nao={}",
+                    mol.nao_nr
+                )))
+            })?;
+            // Defensive: the deriv1 kernel must return exactly 4 blocks.
+            if buffers.values.len() != 4 * block {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "GTOval_ip_sph: deriv1 returned {} values, expected {} (4*ngrids*nao)",
+                    buffers.values.len(),
+                    4 * block
+                ))));
+            }
+            let grad = buffers.values[block..4 * block].to_vec();
+            Ok(EvalGtoOutput {
+                values: grad,
+                shape: vec![3, ngrids, mol.nao_nr],
+            })
+        }
+        // Cartesian gradient needs the cart `ao_loc`/`nao` deriv1 surface, which
+        // is still deferred (same blocker as `GTOval_cart_deriv1`, F-02).
+        "GTOval_ip_cart" => Err(PyscfRsError::NotYetImplemented {
+            phase: 4,
+            what: "GTOval_ip_cart (cartesian gradient needs cart ao_loc deriv1; \
+                   spherical GTOval_ip_sph is live)",
         }),
         "GTOval_ig_sph" | "GTOval_ig_cart" | "GTOval_ig" => Err(PyscfRsError::NotYetImplemented {
             phase: 7,
