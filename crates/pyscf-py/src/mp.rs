@@ -27,11 +27,13 @@
 // PyO3 boundary: hook methods marshal NumPy arrays + multi-field results.
 #![allow(clippy::type_complexity)]
 
-use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{
+    PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
-use pyscf_core::{Density, Mole, PyscfRsError};
+use pyscf_core::{Density, MOCoefficients, Mole, PyscfRsError};
 use pyscf_df::{DfIntegrals, cholesky_eri, default_ri};
 use pyscf_mp2::{
     ChemistsEris, Frozen, Mp2OverrideHooks, Mp2Reference, NoMp2Overrides, UmpReference,
@@ -484,16 +486,93 @@ impl PyUMP2 {
     }
 }
 
+/// Build a per-spin `Mp2Reference` from spin index `s` of a UHF `mf`, where
+/// `mf.mo_coeff` is the 3-D `[2, nao, nmo]` array and `mf.mo_energy`/`mf.mo_occ`
+/// are 2-D `[2, n*]` arrays. Both spins share `mf.mol` and `mf.e_tot`.
+fn ump_channel_from_3d(
+    py: Python<'_>,
+    mf: &Py<PyAny>,
+    mol: &Mole,
+    e_hf: f64,
+    converged: bool,
+    s: usize,
+) -> PyResult<Mp2Reference> {
+    let bound = mf.bind(py);
+
+    // mo_coeff[s] — slice the [2,nao,nmo] array into a column-major [nao,nmo].
+    let mo3: PyReadonlyArray3<f64> = bound.getattr("mo_coeff")?.extract()?;
+    let shape = mo3.shape();
+    if shape.len() != 3 || shape[0] < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "UHF mf.mo_coeff must be [2,nao,nmo], got shape {shape:?}"
+        )));
+    }
+    let (nao, nmo) = (shape[1], shape[2]);
+    let view = mo3.as_array();
+    // Column-major [nao, nmo]: C[ao, mo] at ao + mo*nao.
+    let mut data = Vec::with_capacity(nao * nmo);
+    for mo in 0..nmo {
+        for ao in 0..nao {
+            data.push(view[[s, ao, mo]]);
+        }
+    }
+
+    // mo_energy[s] / mo_occ[s] — slice the [2,n*] arrays.
+    let e2: PyReadonlyArray2<f64> = bound.getattr("mo_energy")?.extract()?;
+    let o2: PyReadonlyArray2<f64> = bound.getattr("mo_occ")?.extract()?;
+    let ev = e2.as_array();
+    let ov = o2.as_array();
+    let mo_energy: Vec<f64> = (0..nmo).map(|m| ev[[s, m]]).collect();
+    let mo_occ: Vec<f64> = (0..nmo).map(|m| ov[[s, m]]).collect();
+
+    let mo_coeff = MOCoefficients {
+        nao,
+        nmo,
+        data,
+        energies: mo_energy.clone(),
+        occupations: mo_occ.clone(),
+    };
+
+    Ok(Mp2Reference {
+        mo_coeff,
+        mo_energy,
+        mo_occ,
+        e_hf,
+        converged,
+        mol: mol.clone(),
+    })
+}
+
 /// Snapshot an unrestricted `mf` into a `UmpReference`. Upstream UHF carries
-/// `mo_coeff[0/1]` (α/β); the snapshot reads the α/β slices. When the mf has a
-/// single (restricted-shaped) MO set, both channels share it (a self-consistent
-/// closed-shell-as-open-shell reference).
+/// `mo_coeff[0/1]` (α/β); when `mf.mo_coeff` is the 3-D `[2,nao,nmo]` UHF array
+/// the α/β channels are read from the spin-0/spin-1 slices (the genuine
+/// open-shell reference). When the mf carries a single restricted-shaped MO set
+/// (2-D `mo_coeff`), both channels share it (closed-shell-as-open-shell).
 fn snapshot_ump_reference(py: Python<'_>, mf: &Py<PyAny>) -> PyResult<UmpReference> {
-    // The α/β reference share the same `mol`; we snapshot the closed-shell-
-    // shaped reference twice (the structural surface). A fully-wired UHF
-    // snapshot reads mo_coeff[0]/mo_coeff[1]; that is a live-CI concern (the
-    // env lacks libpython/pyscf) — the structural contract is the two-channel
-    // UmpReference shape consumed by ump2_kernel.
+    let bound = mf.bind(py);
+    let mol: Mole = extract_mole_from_pyany(py, mf)?;
+    let e_hf: f64 = bound.getattr("e_tot")?.extract()?;
+    let converged: bool = bound
+        .getattr("converged")
+        .and_then(|c| c.extract())
+        .unwrap_or(true);
+
+    // Detect the UHF [2,nao,nmo] mo_coeff: read the α/β split when present.
+    let is_uhf_shaped = bound
+        .getattr("mo_coeff")
+        .ok()
+        .and_then(|o| o.getattr("ndim").ok())
+        .and_then(|n| n.extract::<usize>().ok())
+        .map(|ndim| ndim == 3)
+        .unwrap_or(false);
+
+    if is_uhf_shaped {
+        let alpha = ump_channel_from_3d(py, mf, &mol, e_hf, converged, 0)?;
+        let beta = ump_channel_from_3d(py, mf, &mol, e_hf, converged, 1)?;
+        return Ok(UmpReference { alpha, beta });
+    }
+
+    // Restricted-shaped fallback (closed-shell treated as α==β).
     let alpha = snapshot_reference(py, mf)?;
     let beta = alpha.clone();
     Ok(UmpReference { alpha, beta })
