@@ -3,12 +3,13 @@
 //!
 //! Source: `pyscf/gto/mole.py:320-415` (Apache-2.0).
 //!
-//! Forms shipping in Phase 2: `String`, `Tuples`, `TupleVec`, `FilePath`.
+//! Forms: `String`, `Tuples`, `TupleVec`, `FilePath`, `Callable`.
 //! The `String`/`FilePath` forms accept BOTH the Cartesian (`Sym x y z`) and
 //! the Z-matrix (`Sym ref bond [ref2 angle [ref3 dihedral]]`) layouts — the
 //! block format is auto-detected exactly as upstream `format_atom` does.
-//! Form 5 (`Callable`) returns `NotYetImplemented{phase:3}` per Deferred
-//! Ideas (`02-CONTEXT.md`).
+//! Form 5 (`Callable`) invokes the user closure and resolves its produced spec
+//! recursively (one level — see [`crate::types::AtomCallable`]), mirroring
+//! upstream PySCF's callable `atom=` form (F-12).
 
 use crate::types::AtomInput;
 use pyscf_core::{CoreError, ParsedAtom, PyscfRsError, Unit};
@@ -57,10 +58,23 @@ pub fn format_atom(
             Ok(apply_unit_origin_axes(normalised, unit, origin, axes))
         }
         AtomInput::FilePath(p) => parse_atom_file(p, unit, origin, axes),
-        AtomInput::Callable => Err(PyscfRsError::NotYetImplemented {
-            phase: 3,
-            what: "atom callable form (GTO-01.5)",
-        }),
+        AtomInput::Callable(produce) => {
+            // Invoke the user closure to obtain the concrete atom spec, then
+            // resolve it through the same `format_atom` path so the produced
+            // form gets identical unit/origin/axes treatment.
+            let produced = produce()?;
+            // One-level recursion guard: the callable must yield a concrete
+            // spec, not another callable. This bounds the recursion and keeps
+            // the "callable produces a concrete spec" contract (F-12 design
+            // decision).
+            if matches!(produced, AtomInput::Callable(_)) {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+                    "atom callable returned another callable; nested callables are not supported"
+                        .into(),
+                )));
+            }
+            format_atom(&produced, unit, origin, axes)
+        }
     }
 }
 

@@ -44,7 +44,7 @@ pub use pyscf_core::{Mole, Unit};
 pub use range_coulomb::{PTR_RANGE_OMEGA, get_k_with_omega, intor_with_omega};
 pub use set_geom::set_geom_;
 pub use spinor::{IntorOutputComplex, intor_spinor};
-pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
+pub use types::{AtomCallable, AtomInput, BasisInput, EcpInput, MoleBuildArgs};
 
 /// Returns the active ECP engine. Gap-closure plan 02-10 swapped this from
 /// the Phase 2 `EcpEngineNotAvailable` stub to the cintx-backed
