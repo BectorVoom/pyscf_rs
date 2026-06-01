@@ -136,9 +136,14 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
     } else if full_name.ends_with("_sph") {
         Representation::Spheric
     } else if full_name.ends_with("_spinor") {
+        // Spinor integrals are complex-valued, so they do NOT route through the
+        // real-valued `intor`/`IntorOutput` path — use `intor_spinor` (returns
+        // `IntorOutputComplex`). That surface is currently a planned-feature
+        // scaffold (F-03); see `.planning/features/F-03-spinor-integrals-PLAN.md`.
         return Err(PyscfRsError::NotYetImplemented {
             phase: 3,
-            what: "spinor representation (out of v1 scope)",
+            what: "spinor representation: use intor_spinor (complex output); \
+                   F-03 scaffold — see .planning/features/F-03-spinor-integrals-PLAN.md",
         });
     } else {
         // add_suffix guarantees one of _sph / _cart / _spinor; falling
@@ -874,9 +879,13 @@ pub fn intor_cross(mol_a: &Mole, mol_b: &Mole, name: &str) -> Result<IntorOutput
     } else if full_name.ends_with("_sph") {
         Representation::Spheric
     } else if full_name.ends_with("_spinor") {
+        // Cross-mol spinor integrals are complex; the real-valued intor_cross
+        // path cannot carry them. F-03 scaffold tracks the dedicated surface;
+        // see `.planning/features/F-03-spinor-integrals-PLAN.md`.
         return Err(PyscfRsError::NotYetImplemented {
             phase: 3,
-            what: "spinor representation (out of v1 scope)",
+            what: "spinor representation (complex output): F-03 scaffold — \
+                   see .planning/features/F-03-spinor-integrals-PLAN.md",
         });
     } else {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
