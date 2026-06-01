@@ -16,9 +16,38 @@ use crate::error::{CoreError, PyscfRsError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::basis_set::BasisSet;
+
+/// Inversion-of-control builder hook (F-11).
+///
+/// `pyscf-core` is zero-compute-deps (FOUND-02): it cannot parse basis input
+/// itself and cannot depend on `pyscf-gto` (that would be circular). To still
+/// let `Mole::build()` work as the upstream-faithful entry point, the higher
+/// `pyscf-gto` layer *registers* its builder here at runtime. The hook type is
+/// `fn(&mut Mole)` — a purely core-owned signature, so no `pyscf-gto` type ever
+/// leaks into `pyscf-core` and the crate dependency direction (`gto → core`)
+/// is unchanged.
+pub type MoleBuilderHook = fn(&mut Mole) -> Result<(), PyscfRsError>;
+
+static MOLE_BUILDER: OnceLock<MoleBuilderHook> = OnceLock::new();
+
+/// Register the process-global [`Mole`] builder hook (F-11).
+///
+/// Called by `pyscf-gto` (from `pyscf_gto::M` / `build_from` and the PyO3
+/// module init) to arm `Mole::build()`. Idempotent: only the first
+/// registration wins; subsequent calls are silently ignored (there is exactly
+/// one builder impl in-tree, so a re-registration is never a conflict).
+pub fn register_mole_builder(hook: MoleBuilderHook) {
+    // Ignore the `Err` returned when already set — re-registration is a no-op.
+    let _ = MOLE_BUILDER.set(hook);
+}
+
+/// `true` once a builder hook has been registered (test/diagnostic helper).
+pub fn mole_builder_is_registered() -> bool {
+    MOLE_BUILDER.get().is_some()
+}
 
 /// Length unit for atom coordinates.
 ///
@@ -253,22 +282,39 @@ pub struct Mole {
 }
 
 impl Mole {
-    /// Plan 02-04 implements `mol.build()` (basis load + flat-array projection)
-    /// via `pyscf_gto::M(MoleBuildArgs { ... })` / `pyscf_gto::build_from`. The
-    /// preferred entry-point in Phase 2 is `pyscf_gto::M(...)`; calling
-    /// `Mole::build()` on an already-`format_atom`-populated Mole succeeds
-    /// only if `_built` was already set by the gto crate. Direct callers who
-    /// haven't gone through the gto front-door get `NotYetImplemented` —
-    /// pyscf-core has zero-compute-deps (FOUND-02) so it cannot itself parse
-    /// basis input.
+    /// Build (basis load + flat-array projection) — the upstream-faithful
+    /// `mol.build()` entry point.
+    ///
+    /// `pyscf-core` is zero-compute-deps (FOUND-02) and cannot parse basis
+    /// input itself, so the real work is delegated to a builder hook the
+    /// `pyscf-gto` layer registers at runtime via [`register_mole_builder`]
+    /// (F-11 inversion-of-control). Dispatch contract:
+    ///
+    /// - **hook registered** → invoke it (always, so the upstream
+    ///   `mol.copy(); mol.basis = aux; mol.build()` rebuild pattern works) and
+    ///   return `Ok(self)`. Any gto front-door use (`pyscf_gto::M` /
+    ///   `build_from`, or the PyO3 module init) arms the hook, so a Mole cloned
+    ///   from a built one can always be rebuilt directly.
+    /// - **hook not registered, already `_built`** → `Ok(self)` (idempotent:
+    ///   the gto front-door already populated this Mole).
+    /// - **hook not registered, not built** → `NotYetImplemented` with an
+    ///   actionable message. Reachable only on a pure cold start that never
+    ///   touched `pyscf-gto`; calling `pyscf_gto::register_mole_builder()` (or
+    ///   any `pyscf_gto::M`) once enables this path.
     pub fn build(&mut self) -> Result<&mut Self, PyscfRsError> {
-        if self._built {
-            return Ok(self);
+        match MOLE_BUILDER.get() {
+            Some(hook) => {
+                hook(self)?;
+                Ok(self)
+            }
+            None if self._built => Ok(self),
+            None => Err(PyscfRsError::NotYetImplemented {
+                phase: 2,
+                what: "Mole::build(): no builder registered (pyscf-core is zero-compute-deps, FOUND-02). \
+                       Build via pyscf_gto::M(MoleBuildArgs { atom, basis, .. }), or call \
+                       pyscf_gto::register_mole_builder() once to arm Mole::build().",
+            }),
         }
-        Err(PyscfRsError::NotYetImplemented {
-            phase: 2,
-            what: "Mole::build called directly on pyscf-core; use pyscf_gto::M(args) (GTO-04, plan 02-04)",
-        })
     }
 
     /// GTO-11 zero-copy accessor — returns the `Arc<BasisSet>` if built.
