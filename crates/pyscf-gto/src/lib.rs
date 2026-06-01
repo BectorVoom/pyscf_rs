@@ -148,7 +148,22 @@ pub fn build_from(mol: &mut Mole, args: MoleBuildArgs) -> Result<(), pyscf_core:
     mol.ao_loc_nr = env_out.ao_loc_nr;
     mol.nao_nr = env_out.nao_nr;
     mol.nbas = mol._bas.len() / pyscf_core::raw_layout::BAS_SLOTS;
-    mol.nao_2c = 0; // Phase 2 stub — spinor not in scope; Phase 3 may extend.
+
+    // F-03 T1: 2-component spinor AO count = Σ over shells of 2·(2l+1)·nctr.
+    // Spinors are inherently spherical-harmonic based, so this count is
+    // independent of `mol.cart` (cf. PySCF `Mole.nao_2c`). Walks the libcint
+    // `_bas` table (ANG_OF/NCTR_OF) and sums the unit-tested `n2c_per_shell`
+    // formula, giving `nao_2c == 2·nao_nr` for spherical bases.
+    mol.nao_2c = {
+        use pyscf_core::raw_layout::{ANG_OF, BAS_SLOTS, NCTR_OF};
+        (0..mol.nbas)
+            .map(|i| {
+                let l = mol._bas[i * BAS_SLOTS + ANG_OF] as u32;
+                let nctr = mol._bas[i * BAS_SLOTS + NCTR_OF] as usize;
+                spinor::n2c_per_shell(l, nctr)
+            })
+            .sum()
+    };
 
     // GTO-11: zero-copy Arc<BasisSet>. Stored in mol.basis_set; consumers
     // (02-05 intor, 02-06 eval_gto, SCF, DFT, ...) clone the Arc rather than
