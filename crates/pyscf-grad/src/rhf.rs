@@ -263,8 +263,12 @@ fn get_hcore(mol: &Mole) -> Result<Vec<f64>, PyscfRsError> {
 /// and the result is symmetrised over the two AO axes:
 /// `hcore_deriv(ia) = vrinv + vrinv.transpose(0,2,1)`.
 ///
-/// Returns a flat component-leading `[3, nao, nao]` buffer. `int1e_iprinv` +
-/// `with_rinv_at_nucleus` are MISSING from cintx → clean availability error.
+/// Returns a flat component-leading `[3, nao, nao]` buffer. `int1e_iprinv`
+/// evaluates the real per-atom Hellmann-Feynman shift via
+/// `pyscf_gto::intor_with_rinv_at_nucleus(mol, "int1e_iprinv", atm_id)`, which
+/// pins the cintx `rinv` origin to `mol.atom_coord(atm_id)` (F-08 / quick
+/// 260601-sln). (Origin-less `intor(mol, "int1e_iprinv")` fails the cintx
+/// validator with `InvalidEnvParam{PTR_RINV_ORIG}` — the origin is mandatory.)
 fn hcore_deriv(
     mol: &Mole,
     h1: &[f64],
@@ -280,11 +284,11 @@ fn hcore_deriv(
         }
         .into());
     }
-    // The per-atom rinv-origin shift (`with_rinv_at_nucleus`) is MISSING from
-    // cintx today; request the integral so the shape contract is wired and the
-    // call `?`-propagates a clean cintx-availability error until it lands. The
-    // origin-shift parameter rides the same workstream.
-    let iprinv = pyscf_gto::intor(mol, "int1e_iprinv")?;
+    // The per-atom rinv-origin shift (`with_rinv_at_nucleus`, pyscf/grad/rhf.py:
+    // 121-143): pin the cintx `rinv` origin to this nucleus's coordinate so
+    // `int1e_iprinv` evaluates the real per-atom Hellmann-Feynman shift
+    // (F-08 / quick 260601-sln). cintx REQUIRES the origin for any iprinv op.
+    let iprinv = pyscf_gto::intor_with_rinv_at_nucleus(mol, "int1e_iprinv", atm_id)?;
     assert_component_leading(&iprinv, nao, "int1e_iprinv")?;
 
     let z = charges[atm_id] as f64;
