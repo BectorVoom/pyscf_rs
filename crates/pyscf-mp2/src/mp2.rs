@@ -149,9 +149,30 @@ pub fn default_ao2mo(refr: &Mp2Reference, frozen: &Frozen) -> Result<ChemistsEri
     // substitute zeros (D-05/T-05-03-FFI).
     let eri = pyscf_gto::intor(&refr.mol, "int2e")?;
 
-    // ao2mo.general expects the (o,v,o,v) ordering → (ia|jb) block.
-    let ovov = pyscf_ao2mo::general(&eri.values, nao, [&co, &cv, &co, &cv])
+    // ao2mo.general returns FLAT F-ORDER [nocc,nvir,nocc,nvir] (incore.rs:29):
+    //   element (i,a,j,b) at  i + a*nocc + j*nocc*nvir + b*nocc*nvir*nocc.
+    let f_order = pyscf_ao2mo::general(&eri.values, nao, [&co, &cv, &co, &cv])
         .map_err(crate::error::Mp2Error::from)?;
+
+    // rmp2_kernel reads `ovov` in C-ORDER (mp2.rs `idx`):
+    //   (ia|jb) at ((i*nvir+a)*nocc+j)*nvir+b.
+    // The two layouts only coincide when nvir==1 (the F↔C difference reduces to
+    // an i↔j swap that the (ia|ja)==(ja|ia) symmetry absorbs); for nvir>1 the
+    // raw F-order buffer is the WRONG element at every (i,a,j,b) with a≠b. So the
+    // explicit F→C repack is MANDATORY — the same re-stride cross_spin_ao2mo does
+    // (this is the αα/ββ special case n0=n2=nocc, n1=n3=nvir).
+    let mut ovov = vec![0.0f64; nocc * nvir * nocc * nvir];
+    for i in 0..nocc {
+        for a in 0..nvir {
+            for j in 0..nocc {
+                for b in 0..nvir {
+                    let f_idx = i + a * nocc + j * nocc * nvir + b * nocc * nvir * nocc;
+                    let c_idx = ((i * nvir + a) * nocc + j) * nvir + b;
+                    ovov[c_idx] = f_order[f_idx];
+                }
+            }
+        }
+    }
 
     Ok(ChemistsEris { ovov, nocc, nvir })
 }

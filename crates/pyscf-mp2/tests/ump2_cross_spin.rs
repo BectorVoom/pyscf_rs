@@ -31,7 +31,7 @@ use pyscf_core::MOCoefficients;
 use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 use pyscf_mp2::{
     ChemistsEris, Frozen, Mp2Reference, NoMp2Overrides, UmpReference, cross_spin_ao2mo,
-    rmp2_kernel, ump2_kernel,
+    default_ao2mo, rmp2_kernel, ump2_kernel,
 };
 
 /// Build a REAL `Mp2Reference` on `atom`/`basis` with an identity `mo_coeff`
@@ -247,5 +247,61 @@ fn test_b_closed_shell_ump2_equals_rmp2() {
          (necessary, NOT sufficient — open-shell oracle is the real gate)",
         ump2.e_corr,
         rmp2.e_corr
+    );
+}
+
+/// Test C — `default_ao2mo` (the restricted / αα / ββ same-spin block) must obey
+/// the bra-ket particle-exchange symmetry `(ia|jb) == (jb|ia)` when indexed
+/// through `rmp2_kernel`'s C-order `idx`, on a case with `nvir > 1`.
+///
+/// REGRESSION GUARD (260601-nfb): `default_ao2mo` previously returned
+/// `ao2mo::general`'s raw **F-order** `[nocc,nvir,nocc,nvir]` buffer while
+/// `rmp2_kernel` reads it **C-order** (`((i*nvir+a)*nocc+j)*nvir+b`). The two
+/// layouts coincide ONLY when `nvir == 1` (the F↔C difference collapses to an
+/// i↔j swap that `(ia|ja)==(ja|ia)` absorbs) — so the long-standing H₂/STO-3G
+/// smoke test (`nvir==1`) passed while restricted RMP2 was silently wrong by
+/// ~mHa for every polyatomic (`nvir>1`: H₂O ~9.7 mHa, NH₃ ~10 mHa). This test
+/// uses `nvir==2` so the raw F-order layout VIOLATES the physical
+/// `(ia|jb)==(jb|ia)` symmetry and is caught oracle-free. The fix adds the
+/// explicit F→C repack to `default_ao2mo` (mirroring `cross_spin_ao2mo`).
+#[test]
+fn test_c_default_ao2mo_obeys_bra_ket_symmetry_nvir_gt_1() {
+    // H₄ linear / STO-3G → nao=4; 2 occupied columns → nocc=2, nvir=2 (nvir>1).
+    let refr = real_reference("H 0 0 0; H 0 0 1.0; H 0 0 2.0; H 0 0 3.0", "sto-3g", &[0, 1]);
+    let nao = refr.mol.nao_nr;
+    assert_eq!(nao, 4, "H₄/STO-3G must give nao=4");
+
+    let eris = default_ao2mo(&refr, &Frozen::None).expect("default_ao2mo must run");
+    let (nocc, nvir) = (eris.nocc, eris.nvir);
+    assert_eq!((nocc, nvir), (2, 2), "expected nocc=2, nvir=2 (nvir>1)");
+
+    // rmp2_kernel's flat C-order index into ovov.
+    let idx = |i: usize, a: usize, j: usize, b: usize| ((i * nvir + a) * nocc + j) * nvir + b;
+
+    // Physical invariant for real ERIs: (ia|jb) == (jb|ia). Indexed through the
+    // kernel's C-order map, ovov[idx(i,a,j,b)] must equal ovov[idx(j,b,i,a)].
+    // The pre-fix raw-F-order buffer violates this for nvir>1.
+    let mut max_asym = 0.0f64;
+    for i in 0..nocc {
+        for a in 0..nvir {
+            for j in 0..nocc {
+                for b in 0..nvir {
+                    let lhs = eris.ovov[idx(i, a, j, b)];
+                    let rhs = eris.ovov[idx(j, b, i, a)];
+                    max_asym = max_asym.max((lhs - rhs).abs());
+                }
+            }
+        }
+    }
+    assert!(
+        eris.ovov.iter().any(|&v| v.abs() > 1e-12),
+        "the (ia|jb) block must be non-trivially non-zero (else the symmetry \
+         check is vacuous)"
+    );
+    assert!(
+        max_asym < 1e-12,
+        "default_ao2mo must obey (ia|jb)==(jb|ia) through the kernel's C-order \
+         index; max bra-ket asymmetry {max_asym:.3e} indicates the raw F-order \
+         layout bug (missing F→C repack) for nvir>1"
     );
 }
