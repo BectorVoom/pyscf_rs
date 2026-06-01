@@ -54,11 +54,6 @@ fn cu_lanl2dz() -> Mole {
     .expect("Cu/LANL2DZ build")
 }
 
-/// Is the error a clean cintx-availability error (NOT `NotYetImplemented{phase:7}`)?
-fn is_clean_cintx_availability_error(err: &PyscfRsError) -> bool {
-    !matches!(err, PyscfRsError::NotYetImplemented { phase: 7, .. })
-}
-
 #[test]
 fn ecp_ipnuc_term_is_component_leading_for_an_ecp_molecule() {
     // GRAD-07: the get_hcore `+ ECPscalar_ipnuc` term (cintx-READY, un-gated)
@@ -104,35 +99,65 @@ fn ecp_ipnuc_term_is_zero_contribution_for_a_non_ecp_molecule() {
 }
 
 #[test]
-fn ecp_iprinv_per_atom_term_routes_to_the_gated_arm() {
-    // GRAD-07 / T-07-27: the hcore_deriv `+ ECPscalar_iprinv` per-atom term is
-    // MISSING from cintx (07-01). It MUST route to a clean cintx-availability
-    // error — NEVER a panic, NEVER a silent zero, NEVER NotYetImplemented{phase:7}.
+fn ecp_iprinv_per_atom_term_returns_real_buffer() {
+    // F-05 / cintx 21-07: iprinv un-gated; the prior assertion (iprinv →
+    // cintx-availability error) is superseded. The hcore_deriv `+ ECPscalar_iprinv`
+    // per-atom term is now cintx-READY. For Cu/LANL2DZ (Cu IS the ECP atom) the
+    // per-atom buffer at atom 0 is the REAL [3, nao, nao] contribution — this is
+    // the runtime exercise of Task 2's new call site THROUGH hcore_deriv_ecp.
     let mol = cu_lanl2dz();
-    match hcore_deriv_ecp(&mol, 0) {
-        Ok(_) => panic!(
-            "ECPscalar_iprinv is MISSING from cintx (07-01) — hcore_deriv_ecp must \
-             surface a clean availability error, not Ok"
-        ),
-        Err(e) => assert!(
-            is_clean_cintx_availability_error(&e),
-            "ECPscalar_iprinv must route to a CLEAN cintx-availability error, got: {e}"
-        ),
-    }
+    let nao = mol.nao_nr;
+    let buf = hcore_deriv_ecp(&mol, 0)
+        .expect("ECPscalar_iprinv is cintx-ready (F-05) — hcore_deriv_ecp must return Ok");
+    assert_eq!(
+        buf.len(),
+        3 * nao * nao,
+        "hcore_deriv_ecp must return a [3, nao, nao] component-leading buffer"
+    );
+    assert!(
+        buf.iter().all(|v| v.is_finite()),
+        "hcore_deriv_ecp iprinv buffer must be finite"
+    );
+    let nonzero = buf.iter().filter(|&&v| v.abs() > 1e-18).count();
+    assert!(
+        nonzero > 0,
+        "the per-atom iprinv term on the Cu ECP atom must carry real (non-zero) values"
+    );
+}
+
+#[test]
+fn ecp_iprinv_per_atom_term_is_zero_for_a_non_ecp_molecule() {
+    // Independent anchor: He/STO-3G has NO ECP, so the per-atom iprinv term
+    // contributes nothing → an all-zero [3, nao, nao] buffer (never a panic,
+    // never an error). The cintx kernel also zero-fills when the rinv origin
+    // matches no ECP atom, so a non-ECP atom is a zero contribution by both routes.
+    let mol = he_sto3g();
+    let nao = mol.nao_nr;
+    let buf = hcore_deriv_ecp(&mol, 0)
+        .expect("non-ECP molecule → zero iprinv contribution, not an error");
+    assert_eq!(
+        buf.len(),
+        3 * nao * nao,
+        "even a zero contribution must carry the [3, nao, nao] shape"
+    );
+    assert!(
+        buf.iter().all(|&v| v == 0.0),
+        "a non-ECP molecule contributes an all-zero per-atom iprinv term"
+    );
 }
 
 /// NUMERIC arm — `#[ignore]`'d behind the cintx grad-intor gate.
 ///
 /// The FULL ECP gradient FD-vs-analytical comparison still needs the RHF base
-/// `de` assembly (`int2e_ip1` + `int1e_ip*` — MISSING from cintx) plus the
-/// iprinv per-atom term. So although `ECPscalar_ipnuc` itself is cintx-ready, the
-/// END-TO-END ECP gradient numeric stays `#[ignore]`'d until the six grad-intor
-/// families + `ECPscalar_iprinv` land. Run on demand:
+/// `de` assembly (`int2e_ip1` + `int1e_ip*` — MISSING from cintx). Both the
+/// `ECPscalar_ipnuc` (GRAD-07) and the per-atom `ECPscalar_iprinv` (F-05) terms
+/// are now cintx-ready, but the END-TO-END ECP gradient numeric stays
+/// `#[ignore]`'d until the base grad-intor families land. Run on demand:
 ///   cargo test -p pyscf-grad --locked -- --ignored ecp_verify_fd_numeric
 #[test]
 #[ignore = "cintx grad-intor workstream pending: int2e_ip1 + int1e_ip{ovlp,kin,nuc,rinv} \
-            + ECPscalar_iprinv absent (07-01); the ipnuc term is cintx-ready but the \
-            end-to-end ECP gradient FD needs the full base assembly + iprinv"]
+            absent; the ipnuc + iprinv ECP terms are cintx-ready (GRAD-07 / F-05) but the \
+            end-to-end ECP gradient FD needs the full base assembly"]
 fn ecp_verify_fd_numeric() {
     let mol = cu_lanl2dz();
     let coords = mol.atom_coords();

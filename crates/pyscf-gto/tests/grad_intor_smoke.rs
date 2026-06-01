@@ -19,7 +19,7 @@ use cintx_core::Representation;
 use cintx_ops::resolver::Resolver;
 use cintx_rs::SessionRequest;
 use cintx_runtime::ExecutionOptions;
-use pyscf_core::{EcpEngine, PyscfRsError, Unit};
+use pyscf_core::{EcpEngine, Unit};
 use pyscf_gto::{AtomInput, BasisInput, CintxEcpEngine, EcpInput, M, MoleBuildArgs};
 
 mod common;
@@ -200,26 +200,101 @@ fn ecpscalar_ipnuc_alias_resolves_like_int1e_ecp_ipnuc() {
     assert!(density.data.iter().all(|v| v.is_finite()));
 }
 
+// ── F-05: ECP per-atom iprinv (un-gated by cintx 21-07) ──────────────────────
+// F-05 / cintx 21-07: iprinv un-gated; the prior assertion (iprinv → cintx
+// -availability error) is superseded. iprinv now evaluates through the dedicated
+// CintxEcpEngine::ecp_int1e_iprinv method with a per-atom rinv origin.
+
 #[test]
-fn ecp_iprinv_is_clean_cintx_availability_error_not_phase_7() {
-    // ECPscalar_iprinv / int1e_ecp_iprinv is MISSING from every cintx branch
-    // today (no scheduled cintx workstream). The ecp_int1e_ipnuc method must
-    // reject it with a clean cintx-availability error — NEVER
-    // NotYetImplemented{phase:7} (that disposition is closed by GRAD-07).
+fn ecp_iprinv_evaluates_real_per_atom_buffer() {
+    // F-05: the per-atom iprinv ECP-gradient family is cintx-READY (workstream
+    // 21-07). Round-trip end-to-end through CintxEcpEngine::ecp_int1e_iprinv on
+    // an ECP-bearing molecule, with the rinv origin set to the Cu nucleus; assert
+    // the [3, nao, nao] component-leading buffer (3*nao*nao flat), finite, and
+    // carrying real (non-zero-fill) values.
     let mol = cu_lanl2dz();
+    let nao = mol.nao_nr;
+    assert!(nao > 0, "Cu/LANL2DZ must have a non-empty AO basis");
+
     let engine = CintxEcpEngine;
-    let r = engine.ecp_int1e_ipnuc(&mol, "int1e_ecp_iprinv");
-    assert!(
-        !matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 7, .. })),
-        "iprinv must NOT be NotYetImplemented{{phase:7}}; got {r:?}",
+    let origin = mol.atom_coord(0); // the Cu nucleus (Bohr).
+    let density = engine
+        .ecp_int1e_iprinv(&mol, "ECPscalar_iprinv", origin)
+        .expect("int1e_ecp_iprinv must evaluate via the cintx ECP engine (F-05 / cintx 21-07)");
+
+    assert_eq!(
+        density.nao, nao,
+        "ecp_int1e_iprinv nao axis must equal mol.nao_nr"
     );
+    assert_eq!(
+        density.data.len(),
+        3 * nao * nao,
+        "ecp_int1e_iprinv must be a [3, nao, nao] component-leading buffer (3*nao*nao); \
+         never [nao, nao, 3] (T-07-01)",
+    );
+    for (i, &v) in density.data.iter().enumerate() {
+        assert!(
+            v.is_finite(),
+            "ecp_int1e_iprinv data[{i}] = {v} must be finite"
+        );
+    }
+    let nonzero = density.data.iter().filter(|&&v| v.abs() > 1e-18).count();
     assert!(
-        matches!(
-            r,
-            Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-                _
-            )))
-        ),
-        "iprinv must surface a clean cintx-availability InvalidMolecule error; got {r:?}",
+        nonzero > 0,
+        "ecp_int1e_iprinv is all-zeros at the Cu nucleus — cintx ECP-iprinv not delivering \
+         real values (regression to a zero-fill stub?)",
+    );
+}
+
+#[test]
+fn ecp_iprinv_at_cu_equals_ipnuc_single_nucleus() {
+    // SELF-CONSISTENCY / structural smoke (NOT an external oracle): for the
+    // single-ECP-atom Cu/LANL2DZ fixture (exactly ONE ECP nucleus, at atom index
+    // 0) the per-nucleus rinv selection degenerates — `iprinv@Cu == ipnuc`,
+    // because with a single ECP nucleus the per-atom rinv selection coincides
+    // with the all-slot accumulation. This compares the cintx iprinv kernel
+    // against the cintx ipnuc kernel through the SAME engine + the SAME stitch;
+    // if cintx returned the same WRONG value for both, this check would still
+    // pass. The math (single-ECP-atom degeneracy) is what makes the compare
+    // meaningful, but the EXTERNAL byte-identity vs upstream PySCF nr_ecp_deriv
+    // is owned by cintx's own cintx-oracle/tests/ecp_iprinv_parity.rs, NOT here.
+    let mol = cu_lanl2dz();
+    let nao = mol.nao_nr;
+    let engine = CintxEcpEngine;
+
+    let ipnuc = engine
+        .ecp_int1e_ipnuc(&mol, "ECPscalar_ipnuc")
+        .expect("ECPscalar_ipnuc cintx-ready");
+    let iprinv = engine
+        .ecp_int1e_iprinv(&mol, "ECPscalar_iprinv", mol.atom_coord(0))
+        .expect("ECPscalar_iprinv cintx-ready (F-05)");
+
+    assert_eq!(ipnuc.data.len(), 3 * nao * nao);
+    assert_eq!(iprinv.data.len(), ipnuc.data.len());
+    for (k, (&a, &b)) in iprinv.data.iter().zip(ipnuc.data.iter()).enumerate() {
+        assert!(
+            (a - b).abs() <= 1e-12,
+            "single-ECP-atom self-consistency broke at element {k}: iprinv={a} vs ipnuc={b} \
+             (|Δ|={} > 1e-12)",
+            (a - b).abs(),
+        );
+    }
+}
+
+#[test]
+fn ecp_iprinv_origin_matching_no_atom_is_all_zeros() {
+    // F-05 / T-rhc-02: an iprinv rinv origin matching NO ECP atom must yield an
+    // all-zero [3, nao, nao] buffer (the cintx no-match → zero-fill path), never
+    // a panic and never a wrong-atom selection.
+    let mol = cu_lanl2dz();
+    let nao = mol.nao_nr;
+    let engine = CintxEcpEngine;
+    let density = engine
+        .ecp_int1e_iprinv(&mol, "ECPscalar_iprinv", [100.0, 100.0, 100.0])
+        .expect("iprinv with a no-match origin must be Ok (zero-fill), not an error");
+    assert_eq!(density.data.len(), 3 * nao * nao);
+    assert!(
+        density.data.iter().all(|&v| v == 0.0),
+        "iprinv at an origin matching no ECP atom must be all-zeros",
     );
 }
