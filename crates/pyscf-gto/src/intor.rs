@@ -138,12 +138,14 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
     } else if full_name.ends_with("_spinor") {
         // Spinor integrals are complex-valued, so they do NOT route through the
         // real-valued `intor`/`IntorOutput` path — use `intor_spinor` (returns
-        // `IntorOutputComplex`). That surface is currently a planned-feature
-        // scaffold (F-03); see `.planning/features/F-03-spinor-integrals-PLAN.md`.
+        // `IntorOutputComplex`). It is implemented for the 1e families
+        // (F-03, route-through-cintx); see
+        // `.planning/features/F-03-spinor-integrals-PLAN.md`.
         return Err(PyscfRsError::NotYetImplemented {
             phase: 3,
-            what: "spinor representation: use intor_spinor (complex output); \
-                   F-03 scaffold — see .planning/features/F-03-spinor-integrals-PLAN.md",
+            what: "spinor representation is complex-valued: call \
+                   pyscf_gto::intor_spinor(mol, name) instead (returns \
+                   IntorOutputComplex). See F-03 plan.",
         });
     } else {
         // add_suffix guarantees one of _sph / _cart / _spinor; falling
