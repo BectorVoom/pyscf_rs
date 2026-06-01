@@ -30,7 +30,13 @@
 #![allow(clippy::needless_range_loop)]
 #![allow(clippy::too_many_arguments)]
 
-use crate::ccsd::{CONV_TOL_NORMT, MAX_CYCLE};
+// Open-shell Λ-path convergence (F-07). Like the UCCSD amplitude loop, the
+// spin-orbital Λ iteration has NO DIIS, so the shared closed-shell 1e-5 step
+// norm leaves λ ~1e-5 from its fixed point — enough to move the 1-RDM past the
+// 1e-7 make_rdm1 gate. Tighten to 1e-8 (with a higher cycle cap) so λ is
+// genuinely converged. Mirrors `uccsd::UCONV_TOL_NORMT`/`UMAX_CYCLE`.
+const ULAMBDA_CONV_TOL_NORMT: f64 = 1e-8;
+const ULAMBDA_MAX_CYCLE: usize = 300;
 use crate::error::CcsdError;
 use crate::uintermediates::{self as imd, SpinOrbitalEris};
 use pyscf_algebra::oracle_sum;
@@ -362,9 +368,15 @@ impl ULambdaImds {
                         // -0.5*einsum('jacb->bcaj', ovvv): ovvv[k? ] — index map
                         //   output (b,c,a,k=j) from ovvv[j,a,c,b].
                         terms.push(-0.5 * ovvv(k, a, c, b));
-                        for j in 0..no {
+                        // + einsum('kbad,jkcd->bcaj', ovvv, t2): output free index
+                        //   is `j` (= rs output `k`); the einsum's `k` and `d` are
+                        //   BOTH summed. So sum a dummy occupied `m` over ovvv's
+                        //   first slot and t2's SECOND slot, with the rs output `k`
+                        //   as t2's FIRST (free occupied) slot.
+                        //   Σ_{m,d} ovvv[m,b,a,d] * t2[k,m,c,d].
+                        for m in 0..no {
                             for d in 0..nv {
-                                terms.push(ovvv(k, b, a, d) * t2e(j, k, c, d));
+                                terms.push(ovvv(m, b, a, d) * t2e(k, m, c, d));
                             }
                         }
                         wvvvo[((b * nv + c) * nv + a) * no + k] = oracle_sum(&terms);
@@ -650,13 +662,16 @@ pub fn update_ulambda(
         oracle_sum(&terms)
     };
     // tmpC[i,j,a,b] from l.139-142:
-    //   einsum('ic,jcba->jiba', l1, ovvv) → element (i,j,a,b): Σ_c l1[j,c]*ovvv[i,c,b,a]
+    //   einsum('ic,jcba->jiba', l1, ovvv): ovvv labels (j,c,b,a), output (j,i,b,a).
+    //   T[I,J,A,B] requires output (j'=I,i'=J,b'=A,a'=B) ⇒ Σ_c l1[J,c]*ovvv[I,c,A,B].
+    //   So tmp_c[i,j,a,b] = Σ_c l1[j,c]*ovvv[i,c,a,b]  (NOT ovvv[i,c,b,a] — the
+    //   a<->b swap was a transposed-index bug masked at α==β; F-07 fix).
     //   + einsum('kiab,jk->ijab', l2, v2) → Σ_k l2[k,i,a,b]*v2[j,k]
     //   - einsum('ik,kjab->ijab', tmp1oo, oovv) → -Σ_k tmp1oo[i,k]*oovv[k,j,a,b]
     let tmp_c = |i: usize, j: usize, a: usize, b: usize| -> f64 {
         let mut terms: Vec<f64> = Vec::new();
         for c in 0..nv {
-            terms.push(l1e(j, c) * ovvv(i, c, b, a));
+            terms.push(l1e(j, c) * ovvv(i, c, a, b));
         }
         for k in 0..no {
             terms.push(l2e(k, i, a, b) * v2e(j, k));
@@ -878,7 +893,7 @@ pub fn solve_ulambda(
     let mut converged = false;
     let mut niter = 0usize;
 
-    for istep in 0..MAX_CYCLE {
+    for istep in 0..ULAMBDA_MAX_CYCLE {
         niter = istep + 1;
 
         let (l1new, l2new) = pool
@@ -901,7 +916,7 @@ pub fn solve_ulambda(
         l1_cur = l1new;
         l2_cur = l2new;
 
-        if normt < CONV_TOL_NORMT {
+        if normt < ULAMBDA_CONV_TOL_NORMT {
             converged = true;
             break;
         }
