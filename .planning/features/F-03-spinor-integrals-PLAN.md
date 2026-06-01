@@ -1,6 +1,6 @@
 # F-03 — Spinor (relativistic 2-component) integral representation
 
-**Status:** SCAFFOLDED (foundation + plan landed; implementation tasks T1–T5 open)
+**Status:** IN PROGRESS (scaffold + T1 landed; T2–T5 open — gated on live-PySCF oracle)
 **Source finding:** `.planning/AUDIT-FIX-2026-06-01.md` F-03
 **Stub origin:** `crates/pyscf-gto/src/intor.rs` `_spinor` arm (`NotYetImplemented{phase:3}`)
 **Owner:** unassigned · **Created:** 2026-06-01
@@ -82,15 +82,15 @@ congruence applied to the spherical integral blocks.
 
 Wiring: `pub mod spinor` + `pub use spinor::{IntorOutputComplex, intor_spinor}`;
 the `intor`/`intor_cross` `_spinor` arms now redirect to `intor_spinor` and this
-plan. `mol.nao_2c` left as the documented `0` stub (T1) — deliberately NOT
-edited blind: it needs reliable `_bas` raw-array indexing (ANG_OF/NCTR_OF), best
-done as a focused, reviewed task.
+plan. `mol.nao_2c` is now computed for real (T1, commit `79061a3`) by walking
+`_bas` (ANG_OF/NCTR_OF) and summing `n2c_per_shell` — the prior documented `0`
+stub is gone.
 
 ## 5. Task DAG
 
 | Task | Depends on | Description | Verification |
 |------|-----------|-------------|--------------|
-| **T1** | — | Compute real `mol.nao_2c` = Σ `n2c_per_shell(l, nctr)` over shells (walk `_bas` ANG_OF/NCTR_OF, or `_basis` shells). Wire in `build_from`. | Unit: H2/STO-3G → 4; mol with p/d shells → hand counts; `nao_2c == 2·nao_nr` for spherical bases. (oracle-free) |
+| ~~**T1**~~ ✅ | — | ~~Compute real `mol.nao_2c` = Σ `n2c_per_shell(l, nctr)` over shells (walk `_bas` ANG_OF/NCTR_OF, or `_basis` shells). Wire in `build_from`.~~ **DONE** (`79061a3`): walks `_bas` ANG_OF/NCTR_OF, sums `n2c_per_shell`. | ✅ `tests/nao_2c.rs`: H2/STO-3G → 4; `nao_2c == 2·nao_nr` across sto-3g/6-31g/cc-pvdz (s/p/d). `cargo +nightly test -p pyscf-gto` green. (oracle-free) |
 | **T2** | — | Transcribe `sph2spinor_coeff` CG tables (l = 0..4 at least) from libcint `CINTc2s_bra_spinor`. Real `(re, im)` per `(l, row, col, spin)`. | **Live-PySCF**: per-l `U` block equals `mol.sph2spinor_coeff()` to 1e-12. Plus unitarity `U†U = I`. |
 | **T3** | T1, T2 | Implement the per-shell congruence `S_2c = U†(S_sph⊗I₂)U` over spherical integral blocks → assemble `IntorOutputComplex` (F-order, `[n2c, n2c]`). | Unit: shape/Hermiticity; block-diagonal correctness on a 1-atom, 1-shell case computable by hand. |
 | **T4** | T3 | Build the live-PySCF spinor oracle harness; wire `intor_spinor` for `int1e_{ovlp,kin,nuc}_spinor`. Un-`#[ignore]` the contract tests. | **GATE:** byte-identity to upstream `mol.intor("int1e_*_spinor")` at atol 1e-10 on H2O/cc-pVDZ + a heavier-l fixture. |
