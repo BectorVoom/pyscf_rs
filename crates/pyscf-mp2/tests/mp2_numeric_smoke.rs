@@ -193,9 +193,15 @@ fn df_b_tensor_reconstructs_exact_eri() {
         "(00|00)_DF must be > 0"
     );
     eprintln!("DF reconstruction max abs error vs exact int2e = {max_err:.3e}");
-    // Loose DF-accuracy bound (the largest H2/STO-3G ERI ~0.77 Hartree).
+    // DF-accuracy bound, tightened from the original 5e-2 after the cintx
+    // 2c2e/3c2e d-shell normalization fix (DF-01, cintx 55bf984). The weigend
+    // aux for H2/STO-3G includes d functions; the missing n*b00 recurrence
+    // factor previously inflated this to 1.686e-3. With the fix the true
+    // DF-incompleteness error is 1.06e-4; 5e-4 guards against a d-shell
+    // regression with ~5x margin.
     assert!(
-        max_err < 5e-2,
-        "DF reconstruction error {max_err:.3e} exceeds the loose DF-accuracy bound"
+        max_err < 5e-4,
+        "DF reconstruction error {max_err:.3e} exceeds the DF-accuracy bound — \
+         possible regression of the cintx 2c2e/3c2e d-shell n*b00 fix (DF-01)"
     );
 }

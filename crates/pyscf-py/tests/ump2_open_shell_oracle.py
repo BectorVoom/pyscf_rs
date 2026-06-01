@@ -22,11 +22,11 @@ Acceptance gate (the cross-spin F→C LAYOUT): |e_corr_rs − e_corr_upstream| <
 for CONVENTIONAL open-shell UMP2. A larger delta means the F→C transpose (or the
 αα/ββ same-spin block layout) is wrong.
 
-DFUMP2 is reported but is a KNOWN, SEPARATE pre-existing DF-subsystem accuracy gap
-(rs DF-MP2 reconstructs (ia|jb) ~40x less accurately than upstream for the same
-aux — DF-RMP2 is already off ~1e-4..1e-3 even for nvir==1 diatomics, independent
-of this task). It is NOT the cross-spin layout and does not gate this task; it is
-deferred to the DF-metric/B-tensor accuracy fix.
+DFUMP2 is reported but does not gate this task. The cintx d-shell integral bug
+(DF-01) that once put it at 1.78e-3 is FIXED (cintx 55bf984: the n*b00
+mixed-recurrence factor); DFUMP2 is now ~2.6e-5, the DF metric-fit-inverse method
+level (rs eigh+lindep vs upstream Cholesky) — a separate, smaller item, not the
+cross-spin layout.
 
 Per `docs/rust_crate_test_guideline.md`: the specification source is upstream
 PySCF 2.12.1 (the byte-identity oracle); the verified scope is the open-shell
@@ -204,14 +204,17 @@ def main() -> int:
         # cross_spin_ao2mo + the αα/ββ blocks from default_ao2mo). This gate
         # certifies the F→C layout work of this task.
         ok_ump2 = d_ump2 <= TOL
-        # DFUMP2 is a SEPARATE, pre-existing DF-subsystem accuracy gap (NOT a
-        # cross-spin/layout defect): rs DF-MP2 reconstructs (ia|jb) ~40x less
-        # accurately than upstream for the SAME aux, so DF-RMP2 is already off by
-        # ~1e-4..1e-3 even for nvir==1 diatomics (H2 ~4.3e-4, HF ~1.3e-3) —
-        # independent of this task. The conventional cross-spin gate above does
-        # NOT depend on it. Reported here as a KNOWN GAP, deferred to the
-        # DF-metric/B-tensor accuracy fix (see SUMMARY); the DFUMP2 PyO3 wiring
-        # itself (dfump2_kernel routing) is in place and correct.
+        # DFUMP2 residual is now the DF metric-fit-INVERSE method difference
+        # (rs cholesky_eri rank-revealing eigh + lindep=1e-9 vs upstream Cholesky),
+        # NOT the cross-spin layout and NOT the d-shell integral bug. The cintx
+        # 2c2e/3c2e d-shell normalization bug (DF-01, the n*b00 mixed-recurrence
+        # factor; cintx 55bf984) is FIXED: the (P|Q) metric now byte-matches
+        # upstream for d/f/g and DFUMP2 dropped from 1.78e-3 to ~2.6e-5 (the
+        # expected DF-method level — H2, where int3c2e is trivially correct, also
+        # shows ~3e-6, which can only be the metric-fit method). Reported as a
+        # KNOWN (small) GAP; closing it to 1e-9 needs matching upstream's exact
+        # metric-inverse method, a separate item. The DFUMP2 PyO3 wiring
+        # (dfump2_kernel routing) is in place and correct.
         ok_dfump2 = d_dfump2 <= TOL
         if ok_ump2:
             print("RESULT: PASS (cross-spin layout gate) — open-shell CONVENTIONAL "
