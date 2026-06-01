@@ -2175,7 +2175,39 @@ pub fn eval_gto_sph_deriv1(
     // Fallback: l>4 shell, empty basis, or empty grid → the unchanged host
     // deriv1 path (which handles the comp_stride==0 early-return, evaluates
     // l=5/l=6 generically, and returns NotYetImplemented{phase:4} for l>6).
-    eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc, nao)
+    eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc, nao, true)
+}
+
+/// Evaluate `GTOval_cart_deriv1` on the grid: the *cartesian* AO value plus
+/// the three Cartesian gradient components (∂/∂x, ∂/∂y, ∂/∂z) per cartesian
+/// AO per grid point. Output layout matches `eval_gto_sph_deriv1`
+/// (`[4, ngrids, nao]`, component-leading) but `nao`/`ao_loc` are the
+/// **cartesian** counts/offsets (`ncart(l)·nctr` per shell, not `2l+1`).
+///
+/// Cartesian output is exactly the pre-`c2s` value the spherical kernel
+/// transforms: `GTOval_sph_deriv1 = c2s · GTOval_cart_deriv1` per shell/
+/// component (the libcint relationship — `GTOshell_eval_grid_cart` produces
+/// these, `GTOval_sph` applies `CINTc2s_ket_sph` on top). So this shares the
+/// byte-verified deriv1 stencil and only skips the final transform.
+///
+/// **Host-only** (F-02): the device deriv1 launcher emits spherical AOs; the
+/// cartesian path runs on the CPU host kernel directly. `client` is accepted
+/// for API symmetry with the spherical entry point. Unlike the spherical
+/// path there is no `l` ceiling — cartesian output never calls `c2s_coeff`,
+/// so it is well-defined for every angular momentum the basis supplies.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_gto_cart_deriv1(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc_cart: &[i32],
+    nao_cart: usize,
+) -> Result<EvalGtoBuffers, PyscfRsError> {
+    let _ = client; // host-only; no device cartesian deriv1 kernel yet.
+    eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc_cart, nao_cart, false)
 }
 
 /// CPU-host deriv1 kernel. Mirrors `eval_gto_sph_cpu` for the value and
@@ -2185,7 +2217,16 @@ pub fn eval_gto_sph_deriv1(
 ///                        + R · lq · q^(lq−1) · (other two monomials)
 /// where the first term is the radial-derivative chain rule
 /// (`exps_2a = Σ −2α c exp`) and the second is the monomial-power
-/// derivative. The c2s transform is applied to each of the 4 components.
+/// derivative.
+///
+/// `spherical = true` applies the libcint `c2s` transform to each of the 4
+/// components and writes `2l+1` spherical AOs per contraction (the
+/// `GTOval_sph_deriv1` surface — `ao_loc`/`nao` must be spherical).
+/// `spherical = false` skips the transform and writes the `ncart(l)`
+/// cartesian components directly (the `GTOval_cart_deriv1` surface —
+/// `ao_loc`/`nao` must be cartesian). The two share every numeric stencil up
+/// to the final write, so the cartesian output is exactly the pre-transform
+/// value the spherical path consumes.
 #[allow(clippy::too_many_arguments)]
 fn eval_gto_sph_deriv1_cpu(
     coords_host: &[f64],
@@ -2195,6 +2236,7 @@ fn eval_gto_sph_deriv1_cpu(
     env_host: &[f64],
     ao_loc_host: &[i32],
     nao: usize,
+    spherical: bool,
 ) -> Result<EvalGtoBuffers, PyscfRsError> {
     debug_assert_eq!(
         coords_host.len(),
@@ -2314,25 +2356,40 @@ fn eval_gto_sph_deriv1_cpu(
                         + radial * dx.powi(lx as i32) * dy.powi(ly as i32) * dpow(dz, lz);
                 }
 
-                // cart → sph per component, written into the 4 component blocks.
-                for m_idx in 0..nsph_l {
-                    let ao_idx = ao_off + c_idx * nsph_l + m_idx;
-                    let off = g + ao_idx * ngrids;
-                    let mut v = 0.0_f64;
-                    let mut vx = 0.0_f64;
-                    let mut vy = 0.0_f64;
-                    let mut vz = 0.0_f64;
-                    for ci in 0..ncart_l {
-                        let t = c2s_coeff(l, m_idx, ci)?;
-                        v += t * cval[ci];
-                        vx += t * cdx[ci];
-                        vy += t * cdy[ci];
-                        vz += t * cdz[ci];
+                if spherical {
+                    // cart → sph per component, written into the 4 component blocks.
+                    for m_idx in 0..nsph_l {
+                        let ao_idx = ao_off + c_idx * nsph_l + m_idx;
+                        let off = g + ao_idx * ngrids;
+                        let mut v = 0.0_f64;
+                        let mut vx = 0.0_f64;
+                        let mut vy = 0.0_f64;
+                        let mut vz = 0.0_f64;
+                        for ci in 0..ncart_l {
+                            let t = c2s_coeff(l, m_idx, ci)?;
+                            v += t * cval[ci];
+                            vx += t * cdx[ci];
+                            vy += t * cdy[ci];
+                            vz += t * cdz[ci];
+                        }
+                        out[off] = v;
+                        out[comp_stride + off] = vx;
+                        out[2 * comp_stride + off] = vy;
+                        out[3 * comp_stride + off] = vz;
                     }
-                    out[off] = v;
-                    out[comp_stride + off] = vx;
-                    out[2 * comp_stride + off] = vy;
-                    out[3 * comp_stride + off] = vz;
+                } else {
+                    // Cartesian output: write the ncart_l cartesian components
+                    // directly (no c2s), at ao_off + c_idx*ncart_l + ci.
+                    // `ao_loc`/`nao` are the cartesian counts so this stays in
+                    // bounds; never calls c2s_coeff → no `l` ceiling.
+                    for ci in 0..ncart_l {
+                        let ao_idx = ao_off + c_idx * ncart_l + ci;
+                        let off = g + ao_idx * ngrids;
+                        out[off] = cval[ci];
+                        out[comp_stride + off] = cdx[ci];
+                        out[2 * comp_stride + off] = cdy[ci];
+                        out[3 * comp_stride + off] = cdz[ci];
+                    }
                 }
             }
         }

@@ -110,16 +110,21 @@ fn deriv1_sph_returns_four_component_result() {
 }
 
 #[test]
-fn deriv1_cart_returns_not_yet_implemented_phase_4() {
-    // Cartesian deriv1 stays deferred (needs cart ao_loc).
+fn deriv1_cart_returns_four_component_result() {
+    // F-02: cartesian deriv1 is now live (replaces the stale phase-4
+    // NotYetImplemented assertion). For the single s-shell H/STO-3G fixture
+    // ncart(0)=nsph(0)=1, so the cart layout equals the spherical one. The
+    // (s,p,d) congruence-vs-sph oracle lives in
+    // tests/eval_gto_cart_deriv1_oracle.rs.
     let mol = h_at_origin_sto3g();
-    let r = eval_gto(&mol, "GTOval_cart_deriv1", &[[0.0, 0.0, 0.0]]);
-    match r {
-        Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 4, what }) => {
-            assert!(what.contains("deriv1"), "what = {}", what);
-        }
-        other => panic!("expected NotYetImplemented{{phase: 4}}, got {:?}", other),
-    }
+    let r = eval_gto(&mol, "GTOval_cart_deriv1", &[[0.1, 0.2, 0.3]]);
+    assert!(
+        r.is_ok(),
+        "GTOval_cart_deriv1 must return a real result, got {r:?}"
+    );
+    let out = r.unwrap();
+    assert_eq!(out.shape, vec![4, 1, mol.nao_nr]); // s-shell: cart nao == sph nao
+    assert_eq!(out.values.len(), 4 * mol.nao_nr);
 }
 
 #[test]
