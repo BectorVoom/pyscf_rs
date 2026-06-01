@@ -1,6 +1,8 @@
 # F-03 — Spinor (relativistic 2-component) integral representation
 
-**Status:** IN PROGRESS (scaffold + T1 landed; T2–T5 open — gated on live-PySCF oracle)
+**Status:** IN PROGRESS — **architecture pivoted to route-through-cintx**
+(scaffold + T1 + working `intor_spinor` for 1e families landed; T5 PyO3 + the
+global-ordering byte-identity gate remain). See §3a below.
 **Source finding:** `.planning/AUDIT-FIX-2026-06-01.md` F-03
 **Stub origin:** `crates/pyscf-gto/src/intor.rs` `_spinor` arm (`NotYetImplemented{phase:3}`)
 **Owner:** unassigned · **Created:** 2026-06-01
@@ -42,7 +44,53 @@ audit-fix sweep recorded for *not* force-fixing it):
    *native* spinor operators from cintx, but still depends on the spherical
    integrals cintx already provides.
 
-## 3. Chosen architecture — transform-from-spherical
+## 3a. ARCHITECTURE PIVOT (2026-06-01) — route through cintx
+
+**The premise behind §2.3 / §3 was wrong.** cintx **does** ship a
+libcint-parity-validated cart→spinor transform and resolves `_spinor` operator
+symbols:
+
+- `cintx/crates/cintx-cubecl/src/transform/c2spinor_coeffs.rs` — the
+  `g_trans_cart2j` CG tables (l=0..4) extracted verbatim from libcint
+  `cart2sph.c` (this is literally the artifact T2 proposed to hand-transcribe).
+- `…/transform/c2spinor.rs` — the cart→spinor drivers (`cart_to_spinor_sf_2d`,
+  `_si`, `_4d`, `_3c2e`, derivatives), transcribed verbatim from libcint.
+- `cintx/crates/cintx-oracle/tests/one_electron_scalar_spinor_parity.rs` —
+  gates `int1e_{ovlp,kin,nuc}_spinor` against **vendor libcint at atol 1e-12**
+  (exactly F-03 v1's three operators).
+
+**Consequence:** the "transform-from-spherical" congruence (T2 CG transcription
++ T3 manual `U†(S⊗I)U`) is unnecessary and *less* verifiable than reusing
+cintx. `intor_spinor` now mirrors the real `intor` arity-2 path:
+
+1. Build a `Representation::Spinor`-tagged `BasisSet`
+   (`projection::build_cintx_spinor_basis_set`) — cintx applies its cart→spinor
+   transform and the representation-aware `BasisMeta` reports `n2c`-unit AO
+   offsets/counts.
+2. Evaluate each shell pair via `SessionRequest` (`Representation::Spinor`),
+   read the complex block with `IntegralTensor::complex_values()`.
+3. Stitch per-pair blocks (F-order, bra-fastest — identical convention to the
+   scalar `stitch_arity2_block`) into one F-order `[n2c, n2c]`
+   `IntorOutputComplex`.
+
+**T2 and T3 are therefore RESOLVED-via-cintx (obsoleted), not hand-built.**
+Implemented in `crates/pyscf-gto/src/spinor.rs` + `projection.rs`; verified by
+`crates/pyscf-gto/tests/spinor_intor.rs` (shape, `n2c == 2·nao_nr`,
+Hermiticity `S=S†`, real-positive overlap diagonal, finiteness, name
+normalisation, int2e-deferred error). Per-pair numerics inherit cintx's vendor
+parity.
+
+**Residual gap (still live-PySCF gated, shared with F-14):** the *global
+shell-block ordering* of the assembled `[n2c,n2c]` matrix vs upstream
+`mol.intor("int1e_*_spinor")` — captured by the `#[ignore]`d
+`ovlp_spinor_byte_matches_upstream` contract. cintx's spinor `ao_loc` ordering
+mirrors libcint, but matching upstream PySCF's global layout byte-for-byte
+needs the live-PySCF environment. T5 (PyO3 complex128 bridge) is unchanged.
+
+The original transform-from-spherical design is retained below for historical
+context; it is **superseded** by §3a.
+
+## 3. ~~Chosen architecture~~ (SUPERSEDED by §3a) — transform-from-spherical
 
 Rather than wait for native spinor operators in cintx, build spinor integrals
 from the **already-correct spherical** integrals via the c2s-spinor transform:
@@ -91,9 +139,9 @@ stub is gone.
 | Task | Depends on | Description | Verification |
 |------|-----------|-------------|--------------|
 | ~~**T1**~~ ✅ | — | ~~Compute real `mol.nao_2c` = Σ `n2c_per_shell(l, nctr)` over shells (walk `_bas` ANG_OF/NCTR_OF, or `_basis` shells). Wire in `build_from`.~~ **DONE** (`79061a3`): walks `_bas` ANG_OF/NCTR_OF, sums `n2c_per_shell`. | ✅ `tests/nao_2c.rs`: H2/STO-3G → 4; `nao_2c == 2·nao_nr` across sto-3g/6-31g/cc-pvdz (s/p/d). `cargo +nightly test -p pyscf-gto` green. (oracle-free) |
-| **T2** | — | Transcribe `sph2spinor_coeff` CG tables (l = 0..4 at least) from libcint `CINTc2s_bra_spinor`. Real `(re, im)` per `(l, row, col, spin)`. | **Live-PySCF**: per-l `U` block equals `mol.sph2spinor_coeff()` to 1e-12. Plus unitarity `U†U = I`. |
-| **T3** | T1, T2 | Implement the per-shell congruence `S_2c = U†(S_sph⊗I₂)U` over spherical integral blocks → assemble `IntorOutputComplex` (F-order, `[n2c, n2c]`). | Unit: shape/Hermiticity; block-diagonal correctness on a 1-atom, 1-shell case computable by hand. |
-| **T4** | T3 | Build the live-PySCF spinor oracle harness; wire `intor_spinor` for `int1e_{ovlp,kin,nuc}_spinor`. Un-`#[ignore]` the contract tests. | **GATE:** byte-identity to upstream `mol.intor("int1e_*_spinor")` at atol 1e-10 on H2O/cc-pVDZ + a heavier-l fixture. |
+| ~~**T2**~~ | — | ~~Transcribe `sph2spinor_coeff` CG tables…~~ **OBSOLETED by §3a** (`28876f4`→pivot): cintx already ships the libcint `g_trans_cart2j` CG tables + validated cart→spinor drivers; no hand-transcription. | n/a — superseded; correctness via cintx vendor parity. |
+| ~~**T3**~~ | — | ~~Per-shell congruence `S_2c = U†(S_sph⊗I₂)U`…~~ **OBSOLETED by §3a**: replaced by routing through cintx's cart→spinor transform + per-pair stitch in `spinor.rs::intor_spinor`. | ✅ `tests/spinor_intor.rs`: shape/Hermiticity/diagonal/finiteness. |
+| **T4** | (pivot) | ✅ **PARTIAL** — `intor_spinor` wired for `int1e_{ovlp,kin,nuc}_spinor` via cintx; in-sandbox invariants green. **Remaining:** global-ordering byte-identity vs upstream still needs live PySCF (`#[ignore]`d `ovlp_spinor_byte_matches_upstream`). | **GATE (open):** byte-identity to upstream at atol 1e-10 — live-PySCF env (shared F-14 blocker). |
 | **T5** | T4 | PyO3 bridge: expose `intor_spinor` returning a complex array (numpy `complex128`). | Python parity test under maturin + live PySCF. |
 | T6 (opt) | T4 | `int2e_spinor` (two-electron). Separate, larger effort. | byte-identity vs upstream 2e spinor. |
 
