@@ -202,14 +202,28 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
             layout,
             &full_name,
         ),
-        // Plain arity-3 through `intor(mol, name)` is not an MP2/DF path:
-        // `int3c2e_sph` (μν|P) needs the auxiliary basis as its third center
-        // and is dispatched via `intor_with_auxmol` (see `evaluate_int3c2e_with_auxmol`).
-        3 => Err(PyscfRsError::NotYetImplemented {
-            phase: 3,
-            what: "single-mol arity-3 intors — int3c2e_sph (μν|P) uses \
-                   intor_with_auxmol(mol, name, auxmol) for the orbital×aux 3-center",
-        }),
+        // Single-mol arity-3 through `intor(mol, name)`: `int3c2e_sph` (μν|P)
+        // with all three centers drawn from `mol`'s own basis — the
+        // `auxmol == mol` specialisation of `intor_with_auxmol`. (The DF path
+        // with a distinct auxiliary basis still goes through
+        // `intor_with_auxmol(mol, name, auxmol)`.) Scalar arity-3 only;
+        // component-leading arity-3 derivatives (int3c2e_ip1 …) are grad-path
+        // families — cintx-gated (F-01/F-08), still deferred.
+        3 => match layout {
+            IntorLayout::ScalarFOrder => evaluate_arity3_single_mol(
+                operator,
+                representation,
+                basis_ref,
+                nbas,
+                nao,
+                &full_name,
+            ),
+            IntorLayout::ComponentLeadingFOrder { .. } => Err(PyscfRsError::NotYetImplemented {
+                phase: 3,
+                what: "component-leading arity-3 intors (int3c2e_ip1 …) are grad-path \
+                       derivatives — cintx-gated; the scalar (μν|P) single-mol path is live",
+            }),
+        },
         n => Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
             "unsupported arity {n} for intor '{full_name}' (libcint maxes at 4)",
         )))),
@@ -643,6 +657,122 @@ fn evaluate_arity4(
         values: out,
         shape,
         layout,
+    })
+}
+
+/// Single-mol arity-3 *scalar* intors — `(μ ν | P)` with all three centers
+/// drawn from `mol`'s own basis. Equivalent to upstream
+/// `mol.intor('int3c2e_sph')` called with no auxiliary basis (the third center
+/// ranges over the same shells as μ, ν). Returns shape `[nao, nao, nao]` in
+/// F-order.
+///
+/// This is the `auxmol == mol` specialisation of
+/// `evaluate_int3c2e_with_auxmol`: the combined orbital+aux basis collapses to
+/// the single `mol` basis, so we iterate every shell triple `(i, j, k)`
+/// directly over `basis` and stitch the per-triple F-order block `[ni,nj,nk]`
+/// into the global `[nao,nao,nao]` buffer. The same cintx `OperatorId` /
+/// `SessionRequest` path the DF wrapper uses evaluates each triple, so this
+/// inherits its libcint byte-identity at the cintx source. In-tree oracle:
+/// the result must equal `intor_with_auxmol(mol, name, mol)` (mol as its own
+/// auxmol) — exercised by `tests/int3c2e_auxmol.rs`.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_arity3_single_mol(
+    operator: OperatorId,
+    representation: Representation,
+    basis: &CintxBasisSet,
+    nbas: usize,
+    nao: usize,
+    intor_name: &str,
+) -> Result<IntorOutput, PyscfRsError> {
+    let total = nao
+        .checked_mul(nao)
+        .and_then(|n| n.checked_mul(nao))
+        .ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "single-mol arity-3 '{intor_name}': shape overflow nao={nao}",
+            )))
+        })?;
+
+    let meta = basis.meta();
+    let shell_offsets: Vec<usize> = (0..nbas)
+        .map(|s| meta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
+
+    let mut out = vec![0.0f64; total];
+    let nao2 = nao * nao;
+
+    // (μ ν | P): all three indices range over every shell of `mol`.
+    for i in 0..nbas {
+        for j in 0..nbas {
+            for k in 0..nbas {
+                let shells = basis.shell_tuple_for_indices([i, j, k]).map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "shell_tuple_for_indices(i={i}, j={j}, k={k}) failed for \
+                         '{intor_name}': {e}",
+                    )))
+                })?;
+                let request = SessionRequest::new(
+                    operator,
+                    representation,
+                    basis,
+                    shells,
+                    ExecutionOptions::default(),
+                );
+                let outcome = request
+                    .query_workspace()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx workspace query failed for '{intor_name}' triple ({i},{j},{k}): {e}",
+                        )))
+                    })?
+                    .evaluate()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx evaluate failed for '{intor_name}' triple ({i},{j},{k}): {e}",
+                        )))
+                    })?;
+
+                let ni = shell_counts[i];
+                let nj = shell_counts[j];
+                let nk = shell_counts[k];
+                let oi = shell_offsets[i];
+                let oj = shell_offsets[j];
+                let ok = shell_offsets[k];
+
+                let block = &outcome.tensor.owned_values;
+                let expected = ni * nj * nk;
+                // Never panic / never zero-substitute on a shape surprise
+                // (T-05-08-FFI; the Phase-4 CR-02 lesson).
+                if block.len() != expected {
+                    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx returned {} elements for '{intor_name}' triple ({i},{j},{k}), \
+                         expected {} (ni={ni}, nj={nj}, nk={nk}, extents={:?})",
+                        block.len(),
+                        expected,
+                        outcome.tensor.extents,
+                    ))));
+                }
+
+                // Per-triple block F-order [ni,nj,nk] (i fastest) → global
+                // F-order [nao,nao,nao]: out[(oi+ii)+(oj+jj)*nao+(ok+kk)*nao^2].
+                for kk in 0..nk {
+                    for jj in 0..nj {
+                        for ii in 0..ni {
+                            let b = ii + jj * ni + kk * ni * nj;
+                            let o = (oi + ii) + (oj + jj) * nao + (ok + kk) * nao2;
+                            out[o] = block[b];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(IntorOutput {
+        values: out,
+        shape: vec![nao, nao, nao],
+        layout: IntorLayout::ScalarFOrder,
     })
 }
 
