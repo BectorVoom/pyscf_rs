@@ -113,6 +113,27 @@ pub struct UccsdResult {
     pub emp2: f64,
     /// Converged spin-resolved amplitudes.
     pub amplitudes: UccsdAmplitudes,
+    /// Converged spin-orbital `t1`, flat `[no,nv]` C-order (occ = [α-occ, β-occ],
+    /// vir = [α-vir, β-vir]). Consumed by the open-shell λ/RDM surface
+    /// (`solve_ulambda`/`umake_rdm1`/`umake_rdm2`); the spin-block
+    /// [`UccsdAmplitudes`] carries NO t1.
+    pub so_t1: Vec<f64>,
+    /// Converged spin-orbital `t2`, flat `[no,no,nv,nv]` C-order. The single
+    /// spin-orbital tensor the spin-block triple is sliced from.
+    pub so_t2: Vec<f64>,
+    /// The converged spin-orbital antisymmetrized ERIs + Fock the kernel built
+    /// (the λ/RDM read these directly — rebuilding them would re-run the
+    /// `int2e`+`ao2mo` transform).
+    pub so_eris: SpinOrbitalEris,
+    /// Number of (active) α-occupied spin-orbitals (= `0..no_a` of the spin-
+    /// orbital occupied range).
+    pub no_a: usize,
+    /// Number of (active) α-virtual spin-orbitals (= `0..nv_a` of the vir range).
+    pub nv_a: usize,
+    /// Number of (active) β-occupied spin-orbitals (= `no_a..no`).
+    pub no_b: usize,
+    /// Number of (active) β-virtual spin-orbitals (= `nv_a..nv`).
+    pub nv_b: usize,
 }
 
 /// Per-channel active occupied / virtual columns: returns the AO×nmo MO
@@ -967,6 +988,7 @@ pub fn uccsd_kernel(
     pool.release(wid);
 
     // Decompose the energy by spin channel + pack the spin-resolved amplitudes.
+    // pack_amplitudes BORROWS &t2_cur before t2_cur is moved into so_t2 below.
     let (e_aa, e_bb, e_ab) = decompose_energy(&t1_cur, &t2_cur, &eris, no, nv, no_a, nv_a);
     let amplitudes = pack_amplitudes(&t2_cur, no, nv, no_a, nv_a, no_b, nv_b);
 
@@ -979,6 +1001,15 @@ pub fn uccsd_kernel(
         niter,
         emp2,
         amplitudes,
+        // Surface the converged spin-orbital amps + eris (otherwise dropped here)
+        // so the open-shell λ/RDM surface can consume them without a re-transform.
+        so_t1: t1_cur,
+        so_t2: t2_cur,
+        so_eris: eris,
+        no_a,
+        nv_a,
+        no_b,
+        nv_b,
     })
 }
 
