@@ -1,11 +1,13 @@
 //! F-03 — `intor_spinor` integration tests (route-through-cintx architecture).
 //!
-//! In-sandbox verification of the complex one-electron spinor integrals
-//! (`int1e_{ovlp,kin,nuc}_spinor`):
-//!   - shape `[n2c, n2c]` with `n2c == mol.nao_2c == 2·nao_nr`,
-//!   - buffer length and finiteness,
-//!   - Hermiticity `S = S†` (re symmetric, im antisymmetric),
-//!   - non-trivial (nonzero) output.
+//! In-sandbox verification of the complex spinor integrals:
+//!   1e (`int1e_{ovlp,kin,nuc}_spinor`, `[n2c,n2c]`):
+//!   - shape with `n2c == mol.nao_2c == 2·nao_nr`, buffer length, finiteness,
+//!   - Hermiticity `S = S†` (re symmetric, im antisymmetric), nonzero output.
+//!   2e (`int2e_spinor`, `[n2c;4]`, F-03 T6):
+//!   - shape/finiteness/nonzero, ERI permutation symmetries
+//!     `(ij|kl)==(kl|ij)` and `(ij|kl)==conj(ji|lk)`,
+//!   - clean error on a general-contracted (nctr>1) basis.
 //!
 //! The per-shell-pair cart→spinor numerics are cintx's, validated against
 //! vendor libcint at atol 1e-12 (`cintx-oracle/tests/
@@ -126,15 +128,69 @@ fn name_normalisation_accepts_bare_operator() {
     assert_eq!(a.im, b.im);
 }
 
+// ── F-03 T6: two-electron spinor ERIs (int2e_spinor) ─────────────────────
+
+/// `int2e_spinor` element `(ij|kl)` from the F-order `[n2c]^4` buffer.
+fn eri(out: &IntorOutputComplex, i: usize, j: usize, k: usize, l: usize, n: usize) -> (f64, f64) {
+    let idx = i + j * n + k * n * n + l * n * n * n;
+    (out.re[idx], out.im[idx])
+}
+
 #[test]
-fn int2e_spinor_is_deferred() {
-    // Two-electron spinor ERIs are F-03 T6 (deferred) — must error cleanly,
-    // not panic or return garbage.
+fn h2_sto3g_int2e_spinor_shape_and_symmetry() {
     let mol = build("H 0 0 0; H 0 0 1.4", "sto-3g");
+    let out = intor_spinor(&mol, "int2e_spinor").unwrap();
+    let n = mol.nao_2c; // 4
+    assert_eq!(out.shape, vec![n, n, n, n], "int2e: shape [n2c;4]");
+    assert_eq!(out.re.len(), n * n * n * n, "int2e: buffer length n2c^4");
+    assert!(
+        out.re.iter().chain(out.im.iter()).all(|v| v.is_finite()),
+        "int2e: all finite"
+    );
+    let nz = out
+        .re
+        .iter()
+        .zip(out.im.iter())
+        .filter(|(r, i)| r.abs() > 1e-12 || i.abs() > 1e-12)
+        .count();
+    assert!(nz > 0, "int2e: expected nonzero ERIs");
+
+    // Physical ERI symmetries (hold for complex spinor ERIs by construction;
+    // also validate the F-order quartet stitching):
+    //   particle exchange   (ij|kl) == (kl|ij)
+    //   complex conjugation (ij|kl) == conj((ji|lk))
+    const ATOL: f64 = 1e-10;
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                for l in 0..n {
+                    let (re1, im1) = eri(&out, i, j, k, l, n);
+                    let (re2, im2) = eri(&out, k, l, i, j, n);
+                    assert!(
+                        (re1 - re2).abs() < ATOL && (im1 - im2).abs() < ATOL,
+                        "particle-exchange (ij|kl)==(kl|ij) fails at ({i}{j}|{k}{l})"
+                    );
+                    let (re3, im3) = eri(&out, j, i, l, k, n);
+                    assert!(
+                        (re1 - re3).abs() < ATOL && (im1 + im3).abs() < ATOL,
+                        "conjugation (ij|kl)==conj(ji|lk) fails at ({i}{j}|{k}{l})"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn int2e_spinor_general_contraction_errors_cleanly() {
+    // cintx wires the 4D cart→spinor transform for SEGMENTED bases only;
+    // a general-contracted basis (cc-pVDZ, nctr>1) must error cleanly — never
+    // panic or silently return a zero/garbage tensor.
+    let mol = build("C 0 0 0; O 0 0 2.1", "cc-pvdz");
     let r = intor_spinor(&mol, "int2e_spinor");
     assert!(
         r.is_err(),
-        "int2e_spinor should be a clean error (deferred)"
+        "int2e_spinor on a general-contracted basis must error (cintx nctr==1 limit)"
     );
 }
 

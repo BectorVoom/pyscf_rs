@@ -1,8 +1,9 @@
 # F-03 — Spinor (relativistic 2-component) integral representation
 
 **Status:** IN PROGRESS — **architecture pivoted to route-through-cintx**
-(scaffold + T1 + working `intor_spinor` for 1e families landed; T5 PyO3 + the
-global-ordering byte-identity gate remain). See §3a below.
+(scaffold + T1 + working `intor_spinor` for 1e families *and* `int2e_spinor`
+2e (T6, segmented bases) landed; T5 PyO3 + the global-ordering byte-identity
+gate remain). See §3a below.
 **Source finding:** `.planning/AUDIT-FIX-2026-06-01.md` F-03
 **Stub origin:** `crates/pyscf-gto/src/intor.rs` `_spinor` arm (`NotYetImplemented{phase:3}`)
 **Owner:** unassigned · **Created:** 2026-06-01
@@ -143,7 +144,7 @@ stub is gone.
 | ~~**T3**~~ | — | ~~Per-shell congruence `S_2c = U†(S_sph⊗I₂)U`…~~ **OBSOLETED by §3a**: replaced by routing through cintx's cart→spinor transform + per-pair stitch in `spinor.rs::intor_spinor`. | ✅ `tests/spinor_intor.rs`: shape/Hermiticity/diagonal/finiteness. |
 | **T4** | (pivot) | ✅ **PARTIAL** — `intor_spinor` wired for `int1e_{ovlp,kin,nuc}_spinor` via cintx; in-sandbox invariants green. **Remaining:** global-ordering byte-identity vs upstream still needs live PySCF (`#[ignore]`d `ovlp_spinor_byte_matches_upstream`). | **GATE (open):** byte-identity to upstream at atol 1e-10 — live-PySCF env (shared F-14 blocker). |
 | **T5** | T4 | PyO3 bridge: expose `intor_spinor` returning a complex array (numpy `complex128`). | Python parity test under maturin + live PySCF. |
-| T6 (opt) | T4 | `int2e_spinor` (two-electron). Separate, larger effort. | byte-identity vs upstream 2e spinor. |
+| **T6** | (pivot) | ✅ **DONE (segmented)** via route-through-cintx — `intor_spinor` extended to arity-4 `int2e_spinor` (plain spin-free Coulomb), F-order `[n2c;4]`, mirroring `evaluate_arity4`. cintx's `cart_to_spinor_sf_4d` is vendor-validated (`cintx-oracle/.../oracle_gate_closure.rs` int2e_spinor vs libcint 6.1.3). **Limitation:** cintx wires the 4D spinor transform for SEGMENTED bases only (`nctr==1`); general contraction errors cleanly. | ✅ `tests/spinor_intor.rs`: shape `[n2c;4]`, finiteness, nonzero, ERI symmetries `(ij\|kl)==(kl\|ij)` + `(ij\|kl)==conj(ji\|lk)`, nctr>1 clean-error. **Open:** global-ordering byte-identity (live-PySCF, shared T4 gate). |
 
 Critical path: **T1∥T2 → T3 → T4** (→ T5). T4 is the hard gate (needs the
 live-PySCF environment that also blocks F-14).

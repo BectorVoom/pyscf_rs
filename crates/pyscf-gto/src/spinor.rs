@@ -101,20 +101,22 @@ fn spinor_symbol(name: &str) -> String {
 }
 
 /// Compute a named **complex** spinor integral, the 2-component analogue of
-/// [`crate::intor`]. v1 covers the scalar one-electron families
-/// (`int1e_ovlp_spinor`, `int1e_kin_spinor`, `int1e_nuc_spinor`).
+/// [`crate::intor`]. Covers the scalar one-electron families
+/// (`int1e_{ovlp,kin,nuc}_spinor`, arity 2 → `[n2c, n2c]`) and the
+/// two-electron ERIs (`int2e_spinor`, arity 4 → `[n2c, n2c, n2c, n2c]`).
 ///
-/// Mirrors the real arity-2 dispatch (see module docs): builds a
-/// `Representation::Spinor` basis, evaluates each shell pair through cintx,
-/// and stitches the per-pair complex blocks into an F-order `[n2c, n2c]`
-/// [`IntorOutputComplex`]. The per-pair cart→spinor numerics are cintx's,
+/// Mirrors the real dispatch (see module docs): builds a
+/// `Representation::Spinor` basis, evaluates each shell tuple through cintx, and
+/// stitches the per-tuple complex blocks (F-order) into an
+/// [`IntorOutputComplex`]. The per-tuple cart→spinor numerics are cintx's,
 /// vendor-libcint-validated.
 ///
 /// Errors:
 /// - `Core(InvalidMolecule)` — unbuilt Mole, unknown/unsupported symbol, or a
 ///   cintx workspace/evaluate failure.
-/// - `NotYetImplemented{phase:3}` — non-arity-2 spinor families (e.g.
-///   `int2e_spinor`, F-03 T6, deferred).
+/// - `NotYetImplemented{phase:3}` — a symbol that is neither arity 2 nor 4, or
+///   `int2e_spinor` on a general-contracted basis (cintx wires the 4D
+///   cart→spinor transform for segmented `nctr==1` shells only).
 pub fn intor_spinor(mol: &Mole, name: &str) -> Result<IntorOutputComplex, PyscfRsError> {
     if !mol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
@@ -143,12 +145,12 @@ pub fn intor_spinor(mol: &Mole, name: &str) -> Result<IntorOutputComplex, PyscfR
 
     let operator = descriptor.id;
     let arity = descriptor.entry.arity as usize;
-    if arity != 2 {
+    if arity != 2 && arity != 4 {
         return Err(PyscfRsError::NotYetImplemented {
             phase: 3,
-            what: "intor_spinor v1 supports only arity-2 one-electron spinor \
-                   integrals (int1e_{ovlp,kin,nuc}_spinor); int2e_spinor is \
-                   F-03 T6 (deferred)",
+            what: "intor_spinor supports arity-2 one-electron families \
+                   (int1e_{ovlp,kin,nuc}_spinor) and arity-4 two-electron \
+                   (int2e_spinor); this symbol is neither",
         });
     }
 
@@ -175,80 +177,224 @@ pub fn intor_spinor(mol: &Mole, name: &str) -> Result<IntorOutputComplex, PyscfR
         .collect();
     let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
 
+    let (re, im, shape) = match arity {
+        2 => evaluate_spinor_arity2(
+            operator,
+            basis,
+            nbas,
+            n2c,
+            &shell_offsets,
+            &shell_counts,
+            &full_name,
+        )?,
+        4 => {
+            // cintx wires the 4D cart→spinor transform for SEGMENTED shells only
+            // (`two_electron.rs`: nctr>1 → UnsupportedApi). Guard upfront with a
+            // clear message rather than failing deep in the quartet loop.
+            ensure_segmented_for_spinor_2e(mol)?;
+            evaluate_spinor_arity4(
+                operator,
+                basis,
+                nbas,
+                n2c,
+                &shell_offsets,
+                &shell_counts,
+                &full_name,
+            )?
+        }
+        _ => unreachable!("arity already validated to be 2 or 4"),
+    };
+
+    Ok(IntorOutputComplex {
+        re,
+        im,
+        shape,
+        layout: IntorLayout::ScalarFOrder,
+    })
+}
+
+/// cintx's 4D cart→spinor transform only covers segmented shells (`nctr == 1`);
+/// general contraction (`nctr > 1`) returns `UnsupportedApi`. Surface that as a
+/// clean, documented error before the (expensive) quartet loop.
+fn ensure_segmented_for_spinor_2e(mol: &Mole) -> Result<(), PyscfRsError> {
+    use pyscf_core::raw_layout::{BAS_SLOTS, NCTR_OF};
+    let nbas = mol._bas.len() / BAS_SLOTS;
+    for s in 0..nbas {
+        if mol._bas[s * BAS_SLOTS + NCTR_OF] != 1 {
+            return Err(PyscfRsError::NotYetImplemented {
+                phase: 3,
+                what: "int2e_spinor currently requires a SEGMENTED basis (nctr==1 per \
+                       shell): cintx does not wire the 4D cart→spinor transform for \
+                       general contraction (nctr>1). Use a segmented basis (e.g. STO-3G) \
+                       or decontract first.",
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Evaluate + stitch a complex arity-2 spinor integral into F-order
+/// `[n2c, n2c]` `(re, im)` buffers. Mirrors the validated scalar
+/// `intor::stitch_arity2_block` (per-pair block F-order, bra-fastest).
+#[allow(clippy::type_complexity)]
+fn evaluate_spinor_arity2(
+    operator: cintx_core::OperatorId,
+    basis: &CintxBasisSet,
+    nbas: usize,
+    n2c: usize,
+    shell_offsets: &[usize],
+    shell_counts: &[usize],
+    full_name: &str,
+) -> Result<(Vec<f64>, Vec<f64>, Vec<usize>), PyscfRsError> {
     let mut re = vec![0.0f64; n2c * n2c];
     let mut im = vec![0.0f64; n2c * n2c];
 
     for i in 0..nbas {
         for j in 0..nbas {
-            let shells = basis.shell_tuple_for_indices([i, j]).map_err(|e| {
-                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "shell_tuple_for_indices(i={i}, j={j}) failed for '{full_name}': {e}",
-                )))
-            })?;
-
-            let outcome = SessionRequest::new(
-                operator,
-                Representation::Spinor,
-                basis,
-                shells,
-                ExecutionOptions::default(),
-            )
-            .query_workspace()
-            .map_err(|e| {
-                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "cintx workspace query failed for '{full_name}' shell pair ({i},{j}): {e}",
-                )))
-            })?
-            .evaluate()
-            .map_err(|e| {
-                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "cintx evaluate failed for '{full_name}' shell pair ({i},{j}): {e}",
-                )))
-            })?;
-
-            let cv = outcome.tensor.complex_values().ok_or_else(|| {
-                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "cintx spinor evaluate for '{full_name}' pair ({i},{j}) returned a real \
-                     tensor (complex_interleaved == false)",
-                )))
-            })?;
-
+            let cv = eval_spinor_block(operator, basis, &[i, j], full_name)?;
             let ni = shell_counts[i];
             let nj = shell_counts[j];
             let oi = shell_offsets[i];
             let oj = shell_offsets[j];
 
             if cv.len() != ni * nj {
-                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "spinor block ({i},{j}) for '{full_name}' has {} elements; expected \
-                     ni*nj = {}*{} = {}",
-                    cv.len(),
-                    ni,
-                    nj,
-                    ni * nj,
-                ))));
+                return Err(block_size_err(full_name, &[i, j], cv.len(), ni * nj));
             }
 
-            // Per-pair block is F-order (bra fastest), identical to the scalar
-            // arity-2 stitch in `intor::stitch_arity2_block`: block[ii + jj*ni]
-            // lands at global F-order (oi+ii) + (oj+jj)*n2c.
+            // block[ii + jj*ni] → global F-order (oi+ii) + (oj+jj)*n2c.
             for jj in 0..nj {
                 for ii in 0..ni {
-                    let c = cv[ii + jj * ni];
+                    let (cr, ci) = cv[ii + jj * ni];
                     let g = (oi + ii) + (oj + jj) * n2c;
-                    re[g] = c.re;
-                    im[g] = c.im;
+                    re[g] = cr;
+                    im[g] = ci;
                 }
             }
         }
     }
 
-    Ok(IntorOutputComplex {
-        re,
-        im,
-        shape: vec![n2c, n2c],
-        layout: IntorLayout::ScalarFOrder,
-    })
+    Ok((re, im, vec![n2c, n2c]))
+}
+
+/// Evaluate + stitch a complex arity-4 spinor ERI (`int2e_spinor`) into F-order
+/// `[n2c, n2c, n2c, n2c]` `(re, im)` buffers. Mirrors the scalar
+/// `intor::evaluate_arity4` quartet stitch (per-quad block F-order, i-fastest).
+#[allow(clippy::type_complexity)]
+fn evaluate_spinor_arity4(
+    operator: cintx_core::OperatorId,
+    basis: &CintxBasisSet,
+    nbas: usize,
+    n2c: usize,
+    shell_offsets: &[usize],
+    shell_counts: &[usize],
+    full_name: &str,
+) -> Result<(Vec<f64>, Vec<f64>, Vec<usize>), PyscfRsError> {
+    let total = n2c.checked_pow(4).ok_or_else(|| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_spinor '{full_name}': n2c={n2c} overflows the arity-4 buffer (n2c^4)",
+        )))
+    })?;
+    let mut re = vec![0.0f64; total];
+    let mut im = vec![0.0f64; total];
+
+    let n2c2 = n2c * n2c;
+    let n2c3 = n2c2 * n2c;
+
+    for i in 0..nbas {
+        for j in 0..nbas {
+            for k in 0..nbas {
+                for l in 0..nbas {
+                    let cv = eval_spinor_block(operator, basis, &[i, j, k, l], full_name)?;
+                    let ni = shell_counts[i];
+                    let nj = shell_counts[j];
+                    let nk = shell_counts[k];
+                    let nl = shell_counts[l];
+                    let oi = shell_offsets[i];
+                    let oj = shell_offsets[j];
+                    let ok = shell_offsets[k];
+                    let ol = shell_offsets[l];
+
+                    let expected = ni * nj * nk * nl;
+                    if cv.len() != expected {
+                        return Err(block_size_err(full_name, &[i, j, k, l], cv.len(), expected));
+                    }
+
+                    // block[ii + jj*ni + kk*ni*nj + ll*ni*nj*nk] → global F-order
+                    // (oi+ii) + (oj+jj)*n2c + (ok+kk)*n2c^2 + (ol+ll)*n2c^3.
+                    for ll in 0..nl {
+                        for kk in 0..nk {
+                            for jj in 0..nj {
+                                for ii in 0..ni {
+                                    let b = ii + jj * ni + kk * ni * nj + ll * ni * nj * nk;
+                                    let g = (oi + ii)
+                                        + (oj + jj) * n2c
+                                        + (ok + kk) * n2c2
+                                        + (ol + ll) * n2c3;
+                                    let (cr, ci) = cv[b];
+                                    re[g] = cr;
+                                    im[g] = ci;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((re, im, vec![n2c, n2c, n2c, n2c]))
+}
+
+/// Evaluate one spinor shell tuple through cintx and return its complex block
+/// as `(re, im)` pairs (avoids a direct `num_complex` dependency; the order
+/// matches `IntegralTensor::complex_values`).
+fn eval_spinor_block(
+    operator: cintx_core::OperatorId,
+    basis: &CintxBasisSet,
+    idx: &[usize],
+    full_name: &str,
+) -> Result<Vec<(f64, f64)>, PyscfRsError> {
+    let shells = basis
+        .shell_tuple_for_indices(idx.iter().copied())
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "shell_tuple_for_indices({idx:?}) failed for '{full_name}': {e}",
+            )))
+        })?;
+
+    let outcome = SessionRequest::new(
+        operator,
+        Representation::Spinor,
+        basis,
+        shells,
+        ExecutionOptions::default(),
+    )
+    .query_workspace()
+    .map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx workspace query failed for '{full_name}' shells {idx:?}: {e}",
+        )))
+    })?
+    .evaluate()
+    .map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx evaluate failed for '{full_name}' shells {idx:?}: {e}",
+        )))
+    })?;
+
+    let cv = outcome.tensor.complex_values().ok_or_else(|| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx spinor evaluate for '{full_name}' shells {idx:?} returned a real tensor \
+             (complex_interleaved == false)",
+        )))
+    })?;
+    Ok(cv.into_iter().map(|c| (c.re, c.im)).collect())
+}
+
+fn block_size_err(full_name: &str, idx: &[usize], got: usize, expected: usize) -> PyscfRsError {
+    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+        "spinor block {idx:?} for '{full_name}' has {got} elements; expected {expected}",
+    )))
 }
 
 #[cfg(test)]
