@@ -1,6 +1,9 @@
 //! `gto` submodule - minimal Python-facing Mole wrapper.
 
 use crate::errors::pyscf_to_py;
+use numpy::ndarray::{ArrayD, IxDyn, ShapeBuilder};
+use numpy::{Complex64, IntoPyArray, PyArrayDyn};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyscf_core::{Mole, Unit};
 use pyscf_gto::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
@@ -78,6 +81,46 @@ impl PyMole {
 
     fn nao_nr(&self) -> usize {
         self.inner.nao_nr
+    }
+
+    /// 2-component (spinor) AO count, `n2c = Σ 2·(2l+1)·nctr` (F-03 T1).
+    fn nao_2c(&self) -> usize {
+        self.inner.nao_2c
+    }
+
+    /// F-03 T5 — complex spinor integrals as a numpy `complex128` array.
+    ///
+    /// Wraps [`pyscf_gto::intor_spinor`]: `name` is a spinor operator (e.g.
+    /// `"int1e_ovlp_spinor"`, `"int1e_kin_spinor"`, `"int1e_nuc_spinor"`, or
+    /// `"int2e_spinor"`; a bare/`_sph`/`_cart` name is normalised to `_spinor`).
+    /// Returns an F-order array shaped `[n2c, n2c]` (1e) or `[n2c; 4]` (2e).
+    ///
+    /// The `re`/`im` F-order buffers are interleaved into `Complex64` and handed
+    /// to numpy with the matching column-major (`order='F'`) layout, so the
+    /// result indexes identically to upstream `mol.intor("…_spinor")`.
+    fn intor_spinor<'py>(
+        &self,
+        py: Python<'py>,
+        name: &str,
+    ) -> PyResult<Bound<'py, PyArrayDyn<Complex64>>> {
+        let out = pyscf_gto::intor_spinor(&self.inner, name).map_err(pyscf_to_py)?;
+        let data: Vec<Complex64> = out
+            .re
+            .iter()
+            .zip(out.im.iter())
+            .map(|(&re, &im)| Complex64::new(re, im))
+            .collect();
+        // F-order: `IxDyn(&shape).f()` reads the flat column-major buffer with
+        // the given shape, so element (i,j,…) = data[i + j·n + …] — exactly the
+        // F-order convention of `IntorOutputComplex`.
+        let arr = ArrayD::from_shape_vec(IxDyn(&out.shape).f(), data).map_err(|e| {
+            PyValueError::new_err(format!(
+                "intor_spinor('{name}'): cannot shape {} elements as {:?} (F-order): {e}",
+                out.re.len(),
+                out.shape,
+            ))
+        })?;
+        Ok(arr.into_pyarray(py))
     }
 
     fn dumps(&self) -> PyResult<String> {

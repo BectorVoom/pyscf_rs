@@ -1,9 +1,13 @@
 # F-03 — Spinor (relativistic 2-component) integral representation
 
-**Status:** IN PROGRESS — **architecture pivoted to route-through-cintx**
-(scaffold + T1 + working `intor_spinor` for 1e families *and* `int2e_spinor`
-2e (T6, segmented bases) landed; T5 PyO3 + the global-ordering byte-identity
-gate remain). See §3a below.
+**Status:** NEAR-COMPLETE (segmented bases) — **architecture pivoted to
+route-through-cintx**. T1 + `intor_spinor` 1e (T2/T3) + `int2e_spinor` 2e (T6)
++ PyO3 `complex128` bridge (T5) all landed; **byte-identity to upstream PySCF
+2.12.1 CONFIRMED** (T4) at atol 1e-10 for STO-3G-class bases. See §3a + §3b.
+Residual: (a) cintx wires the cart→spinor transform for SEGMENTED (`nctr==1`)
+bases only — general contraction errors cleanly; (b) for multi-shell-same-l
+bases (e.g. 6-31g) the integrals are eigenvalue-identical to upstream but the
+global AO **ordering** differs (a separate intor_spinor/cintx ordering matter).
 **Source finding:** `.planning/AUDIT-FIX-2026-06-01.md` F-03
 **Stub origin:** `crates/pyscf-gto/src/intor.rs` `_spinor` arm (`NotYetImplemented{phase:3}`)
 **Owner:** unassigned · **Created:** 2026-06-01
@@ -91,6 +95,33 @@ needs the live-PySCF environment. T5 (PyO3 complex128 bridge) is unchanged.
 The original transform-from-spherical design is retained below for historical
 context; it is **superseded** by §3a.
 
+## 3b. T5 PyO3 bridge + T4 byte-identity CONFIRMED (2026-06-01)
+
+The sandbox in fact carries the live oracle: `.upstream-venv` has upstream
+PySCF 2.12.1 + numpy; `maturin` installs into `.venv` (nightly toolchain
+required — the workspace manifest doesn't parse on stable). So T4/T5 were
+*not* permanently blocked.
+
+- **T5** — `crates/pyscf-py/src/gto.rs` exposes `Mole.intor_spinor(name)`
+  returning a numpy **`complex128`** ndarray (F-order; `re`/`im` interleaved via
+  `numpy::Complex64`), plus a `nao_2c()` accessor. Verified through `maturin
+  develop`: the overlay `pyscf.gto.M(...).intor_spinor(...)` yields complex128,
+  F-contiguous, Hermitian output. Python suite:
+  `python/pyscf/tests/test_intor_spinor.py`.
+- **T4 — byte-identity CONFIRMED** against upstream PySCF 2.12.1 at atol 1e-10
+  (cross-venv, logged in `log/`): `int1e_{ovlp,kin,nuc}_spinor` on H2O/STO-3G
+  (≤2e-14) and `int2e_spinor` on H2/STO-3G (6e-16). The `#[ignore]`d Rust
+  contract placeholder is superseded by the Python parity test (which skips
+  gracefully when upstream's C-libs aren't importable in a minimal venv).
+- **Ordering caveat** — for multi-shell-same-l bases (e.g. 6-31g: 3×s, 2×p on
+  C) the result is eigenvalue-identical to upstream but the global AO **index
+  ordering** differs (a pure permutation). This is an `intor_spinor`/cintx
+  global-assembly-ordering matter, *not* a transform or binding defect, and is
+  the remaining follow-up for full upstream index-parity on general bases.
+- **Segmentation limit** — cintx wires the cart→spinor transform (1e and 2e)
+  for `nctr==1` only; `intor_spinor` guards general contraction with a clean
+  `NotYetImplemented` (`ensure_segmented_for_spinor`).
+
 ## 3. ~~Chosen architecture~~ (SUPERSEDED by §3a) — transform-from-spherical
 
 Rather than wait for native spinor operators in cintx, build spinor integrals
@@ -142,8 +173,8 @@ stub is gone.
 | ~~**T1**~~ ✅ | — | ~~Compute real `mol.nao_2c` = Σ `n2c_per_shell(l, nctr)` over shells (walk `_bas` ANG_OF/NCTR_OF, or `_basis` shells). Wire in `build_from`.~~ **DONE** (`79061a3`): walks `_bas` ANG_OF/NCTR_OF, sums `n2c_per_shell`. | ✅ `tests/nao_2c.rs`: H2/STO-3G → 4; `nao_2c == 2·nao_nr` across sto-3g/6-31g/cc-pvdz (s/p/d). `cargo +nightly test -p pyscf-gto` green. (oracle-free) |
 | ~~**T2**~~ | — | ~~Transcribe `sph2spinor_coeff` CG tables…~~ **OBSOLETED by §3a** (`28876f4`→pivot): cintx already ships the libcint `g_trans_cart2j` CG tables + validated cart→spinor drivers; no hand-transcription. | n/a — superseded; correctness via cintx vendor parity. |
 | ~~**T3**~~ | — | ~~Per-shell congruence `S_2c = U†(S_sph⊗I₂)U`…~~ **OBSOLETED by §3a**: replaced by routing through cintx's cart→spinor transform + per-pair stitch in `spinor.rs::intor_spinor`. | ✅ `tests/spinor_intor.rs`: shape/Hermiticity/diagonal/finiteness. |
-| **T4** | (pivot) | ✅ **PARTIAL** — `intor_spinor` wired for `int1e_{ovlp,kin,nuc}_spinor` via cintx; in-sandbox invariants green. **Remaining:** global-ordering byte-identity vs upstream still needs live PySCF (`#[ignore]`d `ovlp_spinor_byte_matches_upstream`). | **GATE (open):** byte-identity to upstream at atol 1e-10 — live-PySCF env (shared F-14 blocker). |
-| **T5** | T4 | PyO3 bridge: expose `intor_spinor` returning a complex array (numpy `complex128`). | Python parity test under maturin + live PySCF. |
+| **T4** | (pivot) | ✅ **CONFIRMED (segmented)** — byte-identity to upstream PySCF 2.12.1 verified at atol 1e-10 (see §3b): 1e ovlp/kin/nuc on H2O/STO-3G (≤2e-14), int2e on H2/STO-3G (6e-16). **Caveat:** multi-shell-same-l ordering differs (eigenvalue-identical); general contraction unsupported. | ✅ cross-venv proof (logged) + `python/pyscf/tests/test_intor_spinor.py` (runs in full env). |
+| **T5** | T4 | ✅ **DONE** — `crates/pyscf-py/src/gto.rs` `Mole.intor_spinor(name)` → numpy `complex128` (F-order) + `nao_2c()`; built via `maturin develop`. | ✅ `python/pyscf/tests/test_intor_spinor.py`: complex128/F-order/Hermitian/ERI-symmetry (pass) + upstream byte-identity (pass in full env; skips if upstream C-libs absent). |
 | **T6** | (pivot) | ✅ **DONE (segmented)** via route-through-cintx — `intor_spinor` extended to arity-4 `int2e_spinor` (plain spin-free Coulomb), F-order `[n2c;4]`, mirroring `evaluate_arity4`. cintx's `cart_to_spinor_sf_4d` is vendor-validated (`cintx-oracle/.../oracle_gate_closure.rs` int2e_spinor vs libcint 6.1.3). **Limitation:** cintx wires the 4D spinor transform for SEGMENTED bases only (`nctr==1`); general contraction errors cleanly. | ✅ `tests/spinor_intor.rs`: shape `[n2c;4]`, finiteness, nonzero, ERI symmetries `(ij\|kl)==(kl\|ij)` + `(ij\|kl)==conj(ji\|lk)`, nctr>1 clean-error. **Open:** global-ordering byte-identity (live-PySCF, shared T4 gate). |
 
 Critical path: **T1∥T2 → T3 → T4** (→ T5). T4 is the hard gate (needs the

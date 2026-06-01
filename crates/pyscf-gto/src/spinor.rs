@@ -177,6 +177,11 @@ pub fn intor_spinor(mol: &Mole, name: &str) -> Result<IntorOutputComplex, PyscfR
         .collect();
     let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
 
+    // cintx wires the cart→spinor transform (both 1e and 2e) for SEGMENTED shells
+    // only (nctr>1 → UnsupportedApi). Guard upfront with a clear message rather
+    // than failing deep in the shell loop.
+    ensure_segmented_for_spinor(mol)?;
+
     let (re, im, shape) = match arity {
         2 => evaluate_spinor_arity2(
             operator,
@@ -187,21 +192,15 @@ pub fn intor_spinor(mol: &Mole, name: &str) -> Result<IntorOutputComplex, PyscfR
             &shell_counts,
             &full_name,
         )?,
-        4 => {
-            // cintx wires the 4D cart→spinor transform for SEGMENTED shells only
-            // (`two_electron.rs`: nctr>1 → UnsupportedApi). Guard upfront with a
-            // clear message rather than failing deep in the quartet loop.
-            ensure_segmented_for_spinor_2e(mol)?;
-            evaluate_spinor_arity4(
-                operator,
-                basis,
-                nbas,
-                n2c,
-                &shell_offsets,
-                &shell_counts,
-                &full_name,
-            )?
-        }
+        4 => evaluate_spinor_arity4(
+            operator,
+            basis,
+            nbas,
+            n2c,
+            &shell_offsets,
+            &shell_counts,
+            &full_name,
+        )?,
         _ => unreachable!("arity already validated to be 2 or 4"),
     };
 
@@ -213,18 +212,19 @@ pub fn intor_spinor(mol: &Mole, name: &str) -> Result<IntorOutputComplex, PyscfR
     })
 }
 
-/// cintx's 4D cart→spinor transform only covers segmented shells (`nctr == 1`);
-/// general contraction (`nctr > 1`) returns `UnsupportedApi`. Surface that as a
-/// clean, documented error before the (expensive) quartet loop.
-fn ensure_segmented_for_spinor_2e(mol: &Mole) -> Result<(), PyscfRsError> {
+/// cintx's cart→spinor transform (both the 1e and the 4D 2e paths) covers
+/// SEGMENTED shells only (`nctr == 1`); general contraction (`nctr > 1`)
+/// returns `UnsupportedApi`. Surface that as a clean, documented error before
+/// the (expensive) shell loop.
+fn ensure_segmented_for_spinor(mol: &Mole) -> Result<(), PyscfRsError> {
     use pyscf_core::raw_layout::{BAS_SLOTS, NCTR_OF};
     let nbas = mol._bas.len() / BAS_SLOTS;
     for s in 0..nbas {
         if mol._bas[s * BAS_SLOTS + NCTR_OF] != 1 {
             return Err(PyscfRsError::NotYetImplemented {
                 phase: 3,
-                what: "int2e_spinor currently requires a SEGMENTED basis (nctr==1 per \
-                       shell): cintx does not wire the 4D cart→spinor transform for \
+                what: "intor_spinor currently requires a SEGMENTED basis (nctr==1 per \
+                       shell): cintx does not wire the cart→spinor transform for \
                        general contraction (nctr>1). Use a segmented basis (e.g. STO-3G) \
                        or decontract first.",
             });

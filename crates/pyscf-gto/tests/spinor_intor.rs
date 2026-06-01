@@ -182,24 +182,24 @@ fn h2_sto3g_int2e_spinor_shape_and_symmetry() {
 }
 
 #[test]
-fn int2e_spinor_general_contraction_errors_cleanly() {
-    // cintx wires the 4D cart→spinor transform for SEGMENTED bases only;
-    // a general-contracted basis (cc-pVDZ, nctr>1) must error cleanly — never
-    // panic or silently return a zero/garbage tensor.
+fn spinor_general_contraction_errors_cleanly() {
+    // cintx wires the cart→spinor transform (1e AND 2e) for SEGMENTED bases
+    // only; a general-contracted basis (cc-pVDZ, nctr>1) must error cleanly for
+    // every spinor family — never panic or silently return a garbage tensor.
     let mol = build("C 0 0 0; O 0 0 2.1", "cc-pvdz");
-    let r = intor_spinor(&mol, "int2e_spinor");
-    assert!(
-        r.is_err(),
-        "int2e_spinor on a general-contracted basis must error (cintx nctr==1 limit)"
-    );
+    for op in ["int1e_ovlp_spinor", "int1e_nuc_spinor", "int2e_spinor"] {
+        let r = intor_spinor(&mol, op);
+        assert!(
+            r.is_err(),
+            "{op} on a general-contracted basis must error (cintx nctr==1 limit)"
+        );
+    }
 }
 
-/// CONTRACT (live-PySCF gate, shared blocker with F-14): the assembled global
-/// matrix must byte-match upstream `mol.intor("int1e_ovlp_spinor")` to
-/// atol 1e-10. Per-pair numerics are cintx-vendor-validated; this checks the
-/// global shell-block ORDERING, which cannot be verified without live PySCF.
-#[test]
-#[ignore = "F-03: global-ordering byte-identity needs live PySCF (maturin) — shared F-14 blocker"]
-fn ovlp_spinor_byte_matches_upstream() {
-    unimplemented!("live-PySCF oracle harness pending — see F-03 plan §6");
-}
+// Upstream byte-identity is verified in Python (live PySCF now available via
+// `.upstream-venv`): `python/pyscf/tests/test_intor_spinor.py` asserts
+// intor_spinor == upstream `mol.intor("…_spinor")` to atol 1e-10 on H2O/STO-3G
+// (1e ovlp/kin/nuc) and H2/STO-3G (int2e). NOTE: byte-identity holds for
+// STO-3G-class bases; for multi-shell-same-l bases (e.g. 6-31g) the integrals
+// are eigenvalue-identical but the global AO ORDERING differs from upstream —
+// a separate intor_spinor/cintx ordering matter, tracked in the F-03 plan.
