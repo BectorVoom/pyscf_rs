@@ -228,6 +228,24 @@ fn vec_to_pyarray2<'py>(
     Ok(PyArray2::from_owned_array(py, arr))
 }
 
+/// Reshape a flat row-major `Vec<f64>` into a `[d0,d1,d2,d3]` NumPy 4-D array
+/// (the open-shell dm2 spin-block marshalling helper, F-07). PySCF returns the
+/// CCSD 2-RDM spin blocks as rank-4 tensors (`dm2aa`/`dm2bb` are
+/// `[nmo,nmo,nmo,nmo]`; `dm2ab` is `[nmo_a,nmo_a,nmo_b,nmo_b]`), so the bridge
+/// must hand back rank-4, not a flattened `[side²,side²]`.
+fn vec_to_pyarray4<'py>(
+    py: Python<'py>,
+    data: &[f64],
+    d0: usize,
+    d1: usize,
+    d2: usize,
+    d3: usize,
+) -> PyResult<Bound<'py, numpy::PyArray4<f64>>> {
+    let arr = ndarray::Array4::from_shape_vec((d0, d1, d2, d3), data.to_vec())
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(numpy::PyArray4::from_owned_array(py, arr))
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // CcsdPyBridge — the pyo3 side of the CcsdOverrideHooks seam (D-09).
 // Holds a Py<PyAny> handle to the Python `self` (PyRCCSD-or-subclass). Each
@@ -863,11 +881,13 @@ impl PyUCCSD {
                 )
             })
             .map_err(pyscf_to_py)?;
-        // Each spin block flat [side^4] → reshape to [side^2, side^2].
-        let aa = vec_to_pyarray2(py, &r.dm2aa, r.na * r.na)?;
-        let ab_side = ((r.dm2ab.len() as f64).sqrt()) as usize;
-        let ab = vec_to_pyarray2(py, &r.dm2ab, ab_side)?;
-        let bb = vec_to_pyarray2(py, &r.dm2bb, r.nb * r.nb)?;
+        // PySCF-shaped rank-4 spin blocks: dm2aa=[na,na,na,na],
+        // dm2ab=[na,na,nb,nb], dm2bb=[nb,nb,nb,nb] (F-07; not a flattened
+        // [side²,side²] — the open-shell make_rdm2 bonus comparison is shape-
+        // sensitive and PySCF returns rank-4).
+        let aa = vec_to_pyarray4(py, &r.dm2aa, r.na, r.na, r.na, r.na)?;
+        let ab = vec_to_pyarray4(py, &r.dm2ab, r.na, r.na, r.nb, r.nb)?;
+        let bb = vec_to_pyarray4(py, &r.dm2bb, r.nb, r.nb, r.nb, r.nb)?;
         PyTuple::new(py, [aa.into_any(), ab.into_any(), bb.into_any()])
     }
 
