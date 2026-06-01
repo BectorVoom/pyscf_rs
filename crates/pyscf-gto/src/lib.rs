@@ -61,6 +61,82 @@ pub fn ecp_engine() -> ecp_engine_cintx::CintxEcpEngine {
     ecp_engine_cintx::CintxEcpEngine
 }
 
+/// F-11 — register `pyscf-gto`'s builder as the `pyscf-core` IoC hook so a
+/// direct `pyscf_core::Mole::build()` call works without `pyscf-core` ever
+/// depending on `pyscf-gto` (FOUND-02 intact).
+///
+/// Idempotent (the underlying `OnceLock` ignores re-registration). Armed
+/// automatically by [`M`] / [`build_from`] (so the canonical
+/// `mol.copy(); mol.basis = aux; mol.build()` pattern always works) and by the
+/// PyO3 module init; pure-Rust cold-start callers who construct a `Mole`
+/// without any gto front-door call can invoke this once to enable
+/// `Mole::build()`.
+pub fn register_mole_builder() {
+    pyscf_core::register_mole_builder(build_in_place);
+}
+
+/// F-11 IoC builder hook body: complete an unbuilt (or rebuild a mutated)
+/// [`Mole`] in place by reconstructing [`MoleBuildArgs`] from the Mole's own
+/// fields and delegating to [`build_from`].
+///
+/// Inputs are re-derived **losslessly for the canonical case**:
+/// - **atom** from the structured `mol._atom` (already in Bohr) via
+///   [`AtomInput::Tuples`] with `unit = Bohr` — no double unit conversion.
+/// - **basis** from `mol.basis`: the raw name a caller assigned
+///   (`mol.basis = "weigend".into()`) *or* the `{:?}` echo `build_from` stores
+///   (`Name("sto-3g")`), both reduced to the bare name via
+///   [`strip_name_echo`] → [`BasisInput::Name`].
+/// - **ecp** from `mol.ecp` (`"None"` → [`EcpInput::None`], else a `Name`).
+/// - scalars (`charge`, `spin`, `cart`, `verbose`, `max_memory`, `output`).
+///
+/// Limitation (documented, not a regression): only the `Name` basis/ecp form
+/// round-trips through the direct-build path — the dominant case and exactly
+/// what the upstream `auxmol` pattern uses. `PerElement`/`NwchemText`/text
+/// forms are not reconstructible from the echo; those callers use [`M`].
+/// After a rebuild `mol.unit` reads `Bohr` (the coordinates are Bohr).
+pub fn build_in_place(mol: &mut Mole) -> Result<(), pyscf_core::PyscfRsError> {
+    // Clone the structured atom list out BEFORE build_from overwrites mol._atom.
+    let atom = AtomInput::Tuples(mol._atom.clone());
+
+    let basis = BasisInput::Name(strip_name_echo(&mol.basis));
+
+    let ecp = match strip_name_echo(&mol.ecp) {
+        // EcpInput::None echoes as the bare string "None".
+        s if s == "None" || s.is_empty() => EcpInput::None,
+        s => EcpInput::Name(s),
+    };
+
+    let args = MoleBuildArgs {
+        atom,
+        basis,
+        ecp,
+        charge: mol.charge,
+        spin: mol.spin,
+        cart: mol.cart,
+        // mol._atom is stored in Bohr; feed Bohr so Tuples isn't re-converted.
+        unit: Unit::Bohr,
+        verbose: mol.verbose,
+        max_memory: mol.max_memory,
+        output: mol.output.clone(),
+        ..Default::default()
+    };
+
+    build_from(mol, args)
+}
+
+/// Reduce a possibly-`{:?}`-echoed input string to its bare name.
+/// `Name("cc-pvdz")` → `cc-pvdz`; any other string is returned verbatim
+/// (covers the raw name a caller assigns directly). Mirrors
+/// `pyscf-scf::df_scf::extract_basis_name`.
+fn strip_name_echo(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix("Name(\"")
+        && let Some(name) = rest.strip_suffix("\")")
+    {
+        return name.to_string();
+    }
+    s.to_string()
+}
+
 /// Shortcut to build a Mole. Equivalent to `pyscf.M(...)` upstream.
 ///
 /// Source: `pyscf/gto/mole.py:106-118` (Apache-2.0).
@@ -81,6 +157,8 @@ pub fn ecp_engine() -> ecp_engine_cintx::CintxEcpEngine {
 /// ```
 #[allow(non_snake_case)]
 pub fn M(args: MoleBuildArgs) -> Result<Mole, pyscf_core::PyscfRsError> {
+    // F-11: arm the IoC hook so a later `clone().build()` works (FOUND-02).
+    register_mole_builder();
     let mut mol = Mole::default();
     build_from(&mut mol, args)?;
     Ok(mol)
@@ -97,6 +175,10 @@ pub fn M(args: MoleBuildArgs) -> Result<Mole, pyscf_core::PyscfRsError> {
 /// (the cintx flat-array projection). Plan 02-07 will extend with
 /// `format_ecp` + `make_ecp_env`.
 pub fn build_from(mol: &mut Mole, args: MoleBuildArgs) -> Result<(), pyscf_core::PyscfRsError> {
+    // F-11: arm the IoC builder hook so a Mole cloned from this one can be
+    // rebuilt via a direct `Mole::build()` (FOUND-02 intact — runtime registration).
+    register_mole_builder();
+
     // Echo user input for `dumps()` round-trip later.
     mol.atom = format!("{:?}", args.atom);
     mol.basis = format!("{:?}", args.basis);

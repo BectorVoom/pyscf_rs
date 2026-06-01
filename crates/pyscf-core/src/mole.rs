@@ -491,6 +491,41 @@ mod tests {
         assert_eq!(mol.enuc(), 0.0);
     }
 
+    // F-11 — IoC builder hook. In the pyscf-core test binary `pyscf-gto` is
+    // never linked, so no builder is ever registered: this exercises the
+    // unregistered (cold-start / FOUND-02) arm of `Mole::build()`.
+
+    #[test]
+    fn build_unregistered_unbuilt_is_not_yet_implemented() {
+        assert!(
+            !mole_builder_is_registered(),
+            "no gto hook should be registered in the pyscf-core test binary"
+        );
+        let mut mol = Mole::default();
+        match mol.build() {
+            Err(PyscfRsError::NotYetImplemented { phase, what }) => {
+                assert_eq!(phase, 2);
+                assert!(
+                    what.contains("pyscf_gto::M") && what.contains("register_mole_builder"),
+                    "error message should point at the gto front-door + register helper, got: {what}"
+                );
+            }
+            other => panic!("expected NotYetImplemented, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_unregistered_already_built_is_idempotent_ok() {
+        // A Mole the gto front-door already populated carries `_built = true`;
+        // calling `build()` again with no hook registered is a no-op Ok.
+        let mut mol = Mole {
+            _built: true,
+            ..Default::default()
+        };
+        assert!(mol.build().is_ok());
+        assert!(mol._built);
+    }
+
     #[test]
     fn default_mole_mass_list_empty() {
         let mol = Mole::default();

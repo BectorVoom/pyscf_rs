@@ -58,6 +58,12 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
         py.get_type::<crate::errors::PyscfRsRuntimeError>(),
     )?;
 
+    // F-11 — arm the pyscf-core IoC builder hook so a direct
+    // `pyscf_core::Mole::build()` works across the whole Python surface (the
+    // `mol.copy(); mol.basis = aux; mol.build()` rebuild pattern). FOUND-02
+    // stays intact: pyscf-core holds only a `fn(&mut Mole)` pointer.
+    pyscf_gto::register_mole_builder();
+
     // BIND-02 — `scf` submodule containing PyRHF/PyUHF/PyGHF.
     let scf_mod = PyModule::new(py, "scf")?;
     crate::scf::register(py, &scf_mod)?;
