@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod basis; // Plan 02-03 — GTO-03 (basis loading).
+pub mod cart2sph; // Molecular cart→sph coeff (Mole.cart2sph_coeff analog).
 pub mod dumps_loads; // Plan 02-08 — GTO-09 (semantic JSON round-trip).
 pub mod ecp_engine_cintx; // Plan 02-10 — GTO-05 (eval half: cintx-backed engine).
 pub mod ecp_engine_stub; // Plan 02-07 — GTO-05 (engine half: stub trait impl).
@@ -30,6 +31,7 @@ pub mod types;
 // the copy. Tests in `tests/mole_copy.rs` verify both halves.
 
 pub use basis::{load_basis, parse as parse_basis};
+pub use cart2sph::cart2sph_coeff;
 pub use dumps_loads::{dumps, loads};
 pub use ecp_engine_cintx::CintxEcpEngine;
 pub use ecp_engine_stub::EcpEngineNotAvailable;

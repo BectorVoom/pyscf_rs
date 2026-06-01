@@ -1114,6 +1114,31 @@ fn c2s_coeff(l: u32, m_row: usize, cart_col: usize) -> Result<f64, PyscfRsError>
     }
 }
 
+/// Public per-`l` cart→sph coefficient matrix `T[l]` as a flat **row-major**
+/// `[nsph(l) × ncart(l)]` buffer, where `T[m * ncart + cart] = c2s_coeff(l, m,
+/// cart)` (the libcint `g_trans_cart2sph` convention, frozen Condon-Shortley).
+///
+/// `nsph(l) = 2l+1`, `ncart(l) = (l+1)(l+2)/2`. This is the SAME matrix the
+/// `eval_gto_sph` path uses for the cartesian→spherical AO transform, exposed so
+/// higher crates can assemble the molecular `cart2sph_coeff` (e.g. the cartesian
+/// init-guess density projection). Returns `NotYetImplemented{phase:4}` for
+/// `l > 6` (k-shells), mirroring [`c2s_coeff`].
+///
+/// PySCF's `Mole.cart2sph_coeff(normalized='sp')` block equals the **transpose**
+/// of this matrix (verified vs PySCF 2.12.1: s/p blocks are identity, d/f/… match
+/// element-for-element), so a caller building `[ncart × nsph]` places `T`ᵀ.
+pub fn cart2sph_l_matrix(l: u32) -> Result<Vec<f64>, PyscfRsError> {
+    let nsph = (2 * l + 1) as usize;
+    let ncart = ((l + 1) * (l + 2) / 2) as usize;
+    let mut m = vec![0.0f64; nsph * ncart];
+    for row in 0..nsph {
+        for col in 0..ncart {
+            m[row * ncart + col] = c2s_coeff(l, row, col)?;
+        }
+    }
+    Ok(m)
+}
+
 // ── s-shell (l=0) device kernel + launcher (quick-260530-ljv) ───────────
 //
 // First real GPU compute path for eval_gto: the l=0 radial slice

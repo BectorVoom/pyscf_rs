@@ -20,5 +20,7 @@ pub mod eval_gto;
 // cubecl::Float bound) and documents the f64 kernel default + f32-future seam.
 pub mod scalar;
 
-pub use eval_gto::{EvalGtoBuffers, eval_gto_cart_deriv1, eval_gto_sph, eval_gto_sph_deriv1};
+pub use eval_gto::{
+    EvalGtoBuffers, cart2sph_l_matrix, eval_gto_cart_deriv1, eval_gto_sph, eval_gto_sph_deriv1,
+};
 pub use scalar::{DeviceScalar, KernelScalar};

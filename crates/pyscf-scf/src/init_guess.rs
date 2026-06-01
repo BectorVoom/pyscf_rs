@@ -354,6 +354,74 @@ fn aoslice_by_atom(mol: &Mole) -> Result<Vec<(usize, usize)>, PyscfRsError> {
     Ok(slices)
 }
 
+/// Cartesian-basis init guess via a spherical sibling + `cart2sph` projection.
+///
+/// Upstream's `cart2sph` branch (`pyscf/scf/hf.py:528-531` / huckel `atcart2sph`)
+/// builds the guess density in spherical space and projects it into the
+/// cartesian molecular basis with `D_cart = C · D_sph · Cᵀ`, where
+/// `C = mol.cart2sph_coeff('sp')`. We reuse the fully-validated spherical guess
+/// by rebuilding a spherical sibling Mole (same atoms + basis, `cart=false`) via
+/// the F-11 `Mole::build()` IoC hook, running `sph_guess` on it, then projecting.
+///
+/// `sph_guess` MUST be the spherical body of the caller (`init_guess_by_atom` /
+/// `init_guess_by_huckel`) — invoked on the `cart=false` sibling it takes the
+/// non-cart path, so this never recurses.
+fn cart_init_guess_via_spherical(
+    mol: &Mole,
+    sph_guess: fn(&Mole) -> Result<Density, PyscfRsError>,
+) -> Result<Density, PyscfRsError> {
+    use pyscf_core::CoreError;
+
+    // Spherical sibling. register_mole_builder() guarantees the F-11 hook is
+    // armed regardless of whether a gto front-door ran earlier this process.
+    pyscf_gto::register_mole_builder();
+    let mut mol_sph = mol.clone();
+    mol_sph.cart = false;
+    mol_sph._built = false;
+    mol_sph.build()?;
+
+    let d_sph = sph_guess(&mol_sph)?;
+    let (c, nao_sph) = pyscf_gto::cart2sph_coeff(mol)?;
+    if d_sph.nao != nao_sph {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cart init guess: spherical density nao {} != cart2sph_coeff nao_sph {}",
+            d_sph.nao, nao_sph
+        ))));
+    }
+    let nao_cart = mol.nao_nr;
+    Ok(project_dm_sph_to_cart(&d_sph.data, nao_sph, &c, nao_cart))
+}
+
+/// `D_cart = C · D_sph · Cᵀ`, with `C` row-major `[nao_cart × nao_sph]`
+/// (`C[a*nao_sph + i]`) and `D_sph` row-major `[nao_sph × nao_sph]`. Reductions
+/// go through `oracle_sum` (T-03-14-NUM).
+fn project_dm_sph_to_cart(d_sph: &[f64], nao_sph: usize, c: &[f64], nao_cart: usize) -> Density {
+    // M[a, j] = Σ_i C[a, i] · D_sph[i, j]   (intermediate [nao_cart × nao_sph]).
+    let mut m = vec![0.0f64; nao_cart * nao_sph];
+    for a in 0..nao_cart {
+        for j in 0..nao_sph {
+            let terms: Vec<f64> = (0..nao_sph)
+                .map(|i| c[a * nao_sph + i] * d_sph[i * nao_sph + j])
+                .collect();
+            m[a * nao_sph + j] = pyscf_algebra::oracle_sum(&terms);
+        }
+    }
+    // D_cart[a, b] = Σ_j M[a, j] · C[b, j].
+    let mut data = vec![0.0f64; nao_cart * nao_cart];
+    for a in 0..nao_cart {
+        for b in 0..nao_cart {
+            let terms: Vec<f64> = (0..nao_sph)
+                .map(|j| m[a * nao_sph + j] * c[b * nao_sph + j])
+                .collect();
+            data[a * nao_cart + b] = pyscf_algebra::oracle_sum(&terms);
+        }
+    }
+    Density {
+        nao: nao_cart,
+        data,
+    }
+}
+
 /// `init_guess_by_atom(mol)` — superposition of spherically-averaged atomic
 /// densities (SCF-05). Port of `pyscf/scf/hf.py:495-535`.
 ///
@@ -376,10 +444,8 @@ pub(crate) fn init_guess_by_atom(mol: &Mole) -> Result<Density, PyscfRsError> {
     use pyscf_core::CoreError;
 
     if mol.cart {
-        return Err(PyscfRsError::NotYetImplemented {
-            phase: 3,
-            what: "init_guess_by_atom cartesian-basis cart2sph branch (spherical basis only)",
-        });
+        // Cartesian branch: build D_sph on a spherical sibling, project to cart.
+        return cart_init_guess_via_spherical(mol, init_guess_by_atom);
     }
 
     let nao = mol.nao_nr;
@@ -455,10 +521,8 @@ pub(crate) fn init_guess_by_huckel(mol: &Mole) -> Result<Density, PyscfRsError> 
     use pyscf_core::{CoreError, MOCoefficients};
 
     if mol.cart {
-        return Err(PyscfRsError::NotYetImplemented {
-            phase: 3,
-            what: "init_guess_by_huckel cartesian-basis atcart2sph branch (spherical basis only)",
-        });
+        // Cartesian branch: build D_sph on a spherical sibling, project to cart.
+        return cart_init_guess_via_spherical(mol, init_guess_by_huckel);
     }
 
     let nao = mol.nao_nr;
