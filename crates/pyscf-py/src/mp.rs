@@ -35,7 +35,8 @@ use pyscf_core::{Density, Mole, PyscfRsError};
 use pyscf_df::{DfIntegrals, cholesky_eri, default_ri};
 use pyscf_mp2::{
     ChemistsEris, Frozen, Mp2OverrideHooks, Mp2Reference, NoMp2Overrides, UmpReference,
-    default_ao2mo, dfrmp2_kernel, rmp2_kernel, scs_energy, ump2_kernel,
+    cross_spin_ao2mo, default_ao2mo, dfrmp2_kernel, dfump2_kernel, rmp2_kernel, scs_energy,
+    ump2_kernel,
 };
 
 use crate::bridge::extract_mole_from_pyany;
@@ -452,10 +453,25 @@ pub struct PyUMP2 {
     pub(crate) ss_factor: f64,
     pub(crate) os_factor: f64,
     pub(crate) e_corr: Option<f64>,
+    /// Whether this UMP2 was built from a density-fitted (`with_df`) UHF
+    /// reference — selects `dfump2_kernel` over the conventional cross-spin
+    /// `int2e` path (F-06).
+    pub(crate) df: bool,
 }
 
 impl PyUMP2 {
     pub(crate) fn from_reference(inner: UmpReference, py_mf: Py<PyAny>, frozen: Frozen) -> Self {
+        Self::from_reference_df(inner, py_mf, frozen, false)
+    }
+
+    /// Construct with an explicit DF flag (the factory sets `df=true` for a
+    /// `with_df` UHF reference).
+    pub(crate) fn from_reference_df(
+        inner: UmpReference,
+        py_mf: Py<PyAny>,
+        frozen: Frozen,
+        df: bool,
+    ) -> Self {
         PyUMP2 {
             inner,
             py_mf,
@@ -463,6 +479,7 @@ impl PyUMP2 {
             ss_factor: 1.0,
             os_factor: 1.0,
             e_corr: None,
+            df,
         }
     }
 }
@@ -527,32 +544,39 @@ impl PyUMP2 {
         self.os_factor = v;
     }
 
-    /// Run the open-shell UMP2 kernel. Builds the per-spin αα/ββ `(ia|jb)` blocks
-    /// via the in-core `default_ao2mo` (cintx#11-gated `int2e` `?`-propagates).
-    /// The opposite-spin αβ block needs a genuine cross-spin ao2mo entry point
-    /// that does not exist yet, so it is gated with `NotYetImplemented` (CR-01 /
-    /// 05-VERIFICATION MP2-02 gap) rather than reusing the α same-spin block,
-    /// which would be silently wrong once `int2e` lands. Never panics.
+    /// Run the open-shell UMP2 kernel.
+    ///
+    /// Conventional (non-DF) path: builds the per-spin αα/ββ `(ia|jb)` blocks
+    /// via the in-core `default_ao2mo` and the opposite-spin αβ `(ia|JB)` block
+    /// via `pyscf_mp2::cross_spin_ao2mo` — the genuine cross-spin
+    /// `(o_α v_α | o_β v_β)` transform with the explicit F-order→C-order repack
+    /// (F-06). The αβ term is the dominant MP2 correlation contribution; it is
+    /// no longer gated. Errors from `int2e`/`ao2mo` `?`-propagate; never panics.
+    ///
+    /// DF path (when this UMP2 was built from a `with_df` UHF reference): routes
+    /// through `pyscf_mp2::dfump2_kernel`, which assembles all three spin blocks
+    /// (αα/ββ same-spin DF ao2mo + the αβ cross-spin Q-contraction) and returns
+    /// the correct C-order αβ block via `assemble_cross_spin`.
     #[pyo3(signature = (with_t2=false))]
     fn kernel(slf: Bound<'_, Self>, _py: Python<'_>, with_t2: bool) -> PyResult<f64> {
-        let (refr, frozen) = {
+        let (refr, frozen, df_mode) = {
             let me = slf.borrow();
-            (me.inner.clone(), me.frozen.clone())
+            (me.inner.clone(), me.frozen.clone(), me.df)
         };
-        // Build the per-spin αα/ββ blocks (cintx#11-gated int2e `?`-propagates).
-        let eris_aa = default_ao2mo(&refr.alpha, &frozen).map_err(pyscf_to_py)?;
-        let eris_bb = default_ao2mo(&refr.beta, &frozen).map_err(pyscf_to_py)?;
-        // CR-01 / 05-VERIFICATION gap (MP2-02): the opposite-spin αβ block requires
-        // the genuine cross-spin (o_α v_α | o_β v_β) ao2mo entry point, which does
-        // not exist yet. Reusing the α same-spin transform as αβ would silently
-        // yield a WRONG open-shell energy once cintx#11 lands arity-4 int2e (the
-        // opposite-spin term is the dominant MP2 contribution). Refuse explicitly
-        // with NotYetImplemented — consistent with the int2e / make_rdm2(ao_repr)
-        // gating — instead of contracting the αα block as if it were αβ.
-        let eris_ab: ChemistsEris = Err(pyscf_mp2::Mp2Error::NotYetImplemented { plan: 4 })
-            .map_err(|e| pyscf_to_py(PyscfRsError::from(e)))?;
-        let result = ump2_kernel(&refr, &frozen, &eris_aa, &eris_ab, &eris_bb, with_t2)
-            .map_err(pyscf_to_py)?;
+        let result = if df_mode {
+            // DF-unrestricted: dfump2_kernel owns all three spin blocks (the αβ
+            // block via assemble_cross_spin) — NOT the RHF dfrmp2_kernel.
+            let df = build_df_integrals(&refr.alpha).map_err(pyscf_to_py)?;
+            dfump2_kernel(&refr, &frozen, &df, with_t2).map_err(pyscf_to_py)?
+        } else {
+            // Conventional: per-spin αα/ββ + cross-spin αβ (F-06).
+            let eris_aa = default_ao2mo(&refr.alpha, &frozen).map_err(pyscf_to_py)?;
+            let eris_bb = default_ao2mo(&refr.beta, &frozen).map_err(pyscf_to_py)?;
+            let eris_ab =
+                cross_spin_ao2mo(&refr.alpha, &refr.beta, &frozen).map_err(pyscf_to_py)?;
+            ump2_kernel(&refr, &frozen, &eris_aa, &eris_ab, &eris_bb, with_t2)
+                .map_err(pyscf_to_py)?
+        };
         {
             let mut me = slf.borrow_mut();
             me.e_corr = Some(result.e_corr);
@@ -576,7 +600,11 @@ impl PyUMP2 {
             frozen: me.frozen.clone(),
             ss_factor: me.ss_factor,
             os_factor: me.os_factor,
-            kind: Mp2Kind::Unrestricted,
+            kind: if me.df {
+                Mp2Kind::DensityFittedUnrestricted
+            } else {
+                Mp2Kind::Unrestricted
+            },
         })
     }
 }
@@ -767,6 +795,9 @@ enum Mp2Kind {
     Restricted,
     Unrestricted,
     DensityFitted,
+    /// Open-shell density-fitted: re-run UHF, snapshot the α/β pair, route
+    /// through `dfump2_kernel` (NOT the RHF `dfrmp2_kernel`).
+    DensityFittedUnrestricted,
 }
 
 #[pyclass(name = "Scanner", module = "pyscf._native.mp")]
@@ -809,11 +840,10 @@ impl PyMp2Scanner {
                     .detach(|| -> Result<_, PyscfRsError> {
                         let aa = default_ao2mo(&refr.alpha, &self.frozen)?;
                         let bb = default_ao2mo(&refr.beta, &self.frozen)?;
-                        // CR-01 (MP2-02): αβ cross-spin ao2mo not yet available —
-                        // refuse rather than reuse the α same-spin block, which
-                        // would be silently wrong once int2e lands.
-                        let ab: ChemistsEris =
-                            Err(pyscf_mp2::Mp2Error::NotYetImplemented { plan: 4 })?;
+                        // αβ via the genuine cross-spin (o_α v_α | o_β v_β)
+                        // transform with the explicit F→C repack (F-06) — NOT a
+                        // reuse of the α same-spin block.
+                        let ab = cross_spin_ao2mo(&refr.alpha, &refr.beta, &self.frozen)?;
                         Ok((aa, ab, bb))
                     })
                     .map_err(pyscf_to_py)?;
@@ -834,6 +864,19 @@ impl PyMp2Scanner {
                     .map_err(pyscf_to_py)?;
                 let e_corr = scs_energy(result.e_ss, result.e_os, self.ss_factor, self.os_factor);
                 Ok(refr.e_hf + e_corr)
+            }
+            Mp2Kind::DensityFittedUnrestricted => {
+                // Open-shell DF: route the αα/ββ + αβ cross-spin assembly through
+                // dfump2_kernel (NOT the RHF dfrmp2_kernel, which would silently
+                // drop the opposite-spin cross block on a UHF reference).
+                let refr = snapshot_ump_reference(py, &self.py_mf)?;
+                let result = py
+                    .detach(|| -> Result<_, PyscfRsError> {
+                        let df = build_df_integrals(&refr.alpha)?;
+                        dfump2_kernel(&refr, &self.frozen, &df, false)
+                    })
+                    .map_err(pyscf_to_py)?;
+                Ok(refr.alpha.e_hf + result.e_corr)
             }
         }
     }
@@ -888,8 +931,13 @@ fn mf_has_df(py: Python<'_>, mf: &Py<PyAny>) -> bool {
 fn mp2_factory(py: Python<'_>, mf: Py<PyAny>, frozen: Option<Py<PyAny>>) -> PyResult<Py<PyAny>> {
     let frozen_spec = parse_frozen(py, frozen)?;
     if mf_is_uhf(py, &mf) {
+        // UHF → UMP2; a `with_df` UHF reference selects the DF-unrestricted
+        // path (dfump2_kernel), NOT the RHF DFMP2 (which would drop the αβ
+        // cross-spin block). UHF is checked before with_df so an open-shell DF
+        // reference never misroutes through dfrmp2_kernel.
+        let df = mf_has_df(py, &mf);
         let inner = snapshot_ump_reference(py, &mf)?;
-        let obj = PyUMP2::from_reference(inner, mf, frozen_spec);
+        let obj = PyUMP2::from_reference_df(inner, mf, frozen_spec, df);
         return Ok(Py::new(py, obj)?.into_any());
     }
     if mf_has_df(py, &mf) {
