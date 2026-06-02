@@ -167,7 +167,50 @@ fn build_atoms_and_shells(
     basis: &HashMap<String, ParsedBasis>,
     cart: bool,
 ) -> Result<(Vec<CintxAtom>, Vec<Arc<CintxShell>>), PyscfRsError> {
-    build_atoms_and_shells_with_base(atoms, basis, cart, 0)
+    build_atoms_and_shells_with_base(atoms, basis, representation_of(cart), 0)
+}
+
+/// Map the `cart` flag to the scalar cintx representation. Spinor shells are
+/// built via [`build_cintx_spinor_basis_set`] (which passes
+/// `Representation::Spinor` directly), not through this helper.
+fn representation_of(cart: bool) -> Representation {
+    if cart {
+        Representation::Cart
+    } else {
+        Representation::Spheric
+    }
+}
+
+/// F-03 (route-through-cintx): build a **Spinor**-tagged `Arc<BasisSet>` for
+/// `intor_spinor`. Identical AO-shell + atom construction to
+/// [`build_cintx_basis_set`] (same spherical contraction normalisation), but
+/// each shell is tagged `Representation::Spinor` with `kappa = 0` (both
+/// `j = l ± 1/2` blocks). cintx's `Shell::ao_per_shell` then reports the
+/// 2-component `spinor_len = 2·(2l+1)·nctr`, so the resulting `BasisMeta`
+/// offsets/counts are in `n2c` units and the cintx kernel applies its
+/// libcint-parity-validated cart→spinor transform (vendor-gated oracle:
+/// `cintx-oracle/tests/one_electron_scalar_spinor_parity.rs`).
+///
+/// Spinors are inherently spherical-harmonic based, so this path does not
+/// consult `mol.cart` — the cart→spinor transform consumes cartesian gaussians
+/// directly regardless.
+pub fn build_cintx_spinor_basis_set(
+    atoms: &[ParsedAtom],
+    basis: &HashMap<String, ParsedBasis>,
+) -> Result<Arc<BasisSet>, PyscfRsError> {
+    let (cintx_atoms, cintx_shells) =
+        build_atoms_and_shells_with_base(atoms, basis, Representation::Spinor, 0)?;
+
+    let atoms_arc: Arc<[CintxAtom]> = Arc::from(cintx_atoms.into_boxed_slice());
+    let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(cintx_shells.into_boxed_slice());
+
+    let basis_set = BasisSet::try_new(atoms_arc, shells_arc).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx spinor BasisSet::try_new failed: {e}"
+        )))
+    })?;
+
+    Ok(Arc::new(basis_set))
 }
 
 /// Combined two-basis `BasisSet` (the PySCF `conc_mol`/fakemol pattern,
@@ -189,10 +232,11 @@ pub(crate) fn build_combined_basis(
     b_basis: &HashMap<String, ParsedBasis>,
     b_cart: bool,
 ) -> Result<(Arc<BasisSet>, usize, usize), PyscfRsError> {
-    let (mut atoms, a_shells) = build_atoms_and_shells_with_base(a_atoms, a_basis, a_cart, 0)?;
+    let (mut atoms, a_shells) =
+        build_atoms_and_shells_with_base(a_atoms, a_basis, representation_of(a_cart), 0)?;
     let n_a_atoms = atoms.len() as u32;
     let (b_atoms_cintx, b_shells) =
-        build_atoms_and_shells_with_base(b_atoms, b_basis, b_cart, n_a_atoms)?;
+        build_atoms_and_shells_with_base(b_atoms, b_basis, representation_of(b_cart), n_a_atoms)?;
 
     atoms.extend(b_atoms_cintx);
     let n_a_shells = a_shells.len();
@@ -218,15 +262,9 @@ pub(crate) fn build_combined_basis(
 fn build_atoms_and_shells_with_base(
     atoms: &[ParsedAtom],
     basis: &HashMap<String, ParsedBasis>,
-    cart: bool,
+    representation: Representation,
     atom_id_base: u32,
 ) -> Result<(Vec<CintxAtom>, Vec<Arc<CintxShell>>), PyscfRsError> {
-    let representation = if cart {
-        Representation::Cart
-    } else {
-        Representation::Spheric
-    };
-
     // Build cintx Atoms (typed, validated).
     let mut cintx_atoms: Vec<CintxAtom> = Vec::with_capacity(atoms.len());
     for (sym, xyz) in atoms {

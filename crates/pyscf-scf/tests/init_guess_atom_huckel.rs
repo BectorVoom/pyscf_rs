@@ -149,3 +149,62 @@ fn atom_and_huckel_seed_rhf_converging_to_1e_energy() {
         one_e.e_tot.0
     );
 }
+
+// ── Cartesian-basis branch (NYI removed, quick 260602-b62) ──────────────────
+//
+// Running the `atom`/`huckel` guesses on a `cart=true` molecule previously
+// returned `NotYetImplemented`. The cart branch now builds the guess on a
+// spherical sibling and projects `D_cart = C·D_sph·Cᵀ` (C = cart2sph_coeff).
+// H2O/cc-pVDZ carries a d shell on O (the first place cart≠sph: ncart_d=6 >
+// nsph_d=5 → nao_cart=25 > nao_sph=24), so this genuinely exercises the d-block
+// projection. The upstream-faithful correctness invariant is
+// `Tr(D_cart·S_cart) = nelec`.
+
+fn h2o_ccpvdz_cart() -> pyscf_core::Mole {
+    M(MoleBuildArgs {
+        atom: AtomInput::String(
+            "O 0 0 0.117; H 0 0.757 -0.467; H 0 -0.757 -0.467".into(),
+        ),
+        basis: BasisInput::Name("cc-pvdz".into()),
+        unit: Unit::Ang,
+        cart: true,
+        ..Default::default()
+    })
+    .expect("build H2O/cc-pVDZ cartesian")
+}
+
+#[test]
+fn atom_guess_cart_h2o_trace_ds_is_nelec() {
+    let mol = h2o_ccpvdz_cart();
+    assert!(mol.cart, "molecule must be cartesian for this test");
+    assert!(
+        mol.nao_nr >= 25,
+        "cc-pVDZ cart H2O should have a d shell (nao_cart=25 > nao_sph=24), got {}",
+        mol.nao_nr
+    );
+    let dm = default_get_init_guess(&mol, &InitGuessMode::Atom).expect("cart atom init guess");
+    assert_eq!(dm.nao, mol.nao_nr, "density is in the cartesian AO basis");
+    assert_symmetric(&dm);
+    let s = default_get_ovlp(&mol).expect("cart overlap");
+    let tr = trace_ds(&dm, &s);
+    assert!(
+        (tr - mol.nelectron as f64).abs() < 1e-9,
+        "cart atom guess Tr(D·S) = {tr} must equal nelec = {}",
+        mol.nelectron
+    );
+}
+
+#[test]
+fn huckel_guess_cart_h2o_trace_ds_is_nelec() {
+    let mol = h2o_ccpvdz_cart();
+    let dm = default_get_init_guess(&mol, &InitGuessMode::Huckel).expect("cart huckel init guess");
+    assert_eq!(dm.nao, mol.nao_nr);
+    assert_symmetric(&dm);
+    let s = default_get_ovlp(&mol).expect("cart overlap");
+    let tr = trace_ds(&dm, &s);
+    assert!(
+        (tr - mol.nelectron as f64).abs() < 1e-9,
+        "cart huckel guess Tr(D·S) = {tr} must equal nelec = {}",
+        mol.nelectron
+    );
+}

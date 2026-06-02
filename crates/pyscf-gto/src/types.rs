@@ -4,14 +4,31 @@
 //! Phase 3 PyO3 binding wraps these with `#[pyfunction]` + `From<PyAny>`
 //! impls; Phase 2 plan 02-02 ships the Rust-native typed kwargs path.
 
-use pyscf_core::{ParsedBasis, ParsedEcp, Unit};
+use pyscf_core::{ParsedBasis, ParsedEcp, PyscfRsError, Unit};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-/// Atom-input form. Phase 2 ships forms 1-4; form 5 (callable) is Phase 3.
+/// A callable atom source: a closure that, when invoked, produces the atom
+/// specification to parse.
+///
+/// Mirrors upstream PySCF's callable `atom=` form (`pyscf/gto/mole.py`), where
+/// `atom` may be any object whose call returns the atom list/string — used for
+/// geometry that is generated at build time (geomopt / `as_scanner`). The
+/// closure returns another [`AtomInput`] (typically `String`/`Tuples`), which
+/// [`crate::format_atom::format_atom`] resolves recursively — **one level
+/// only**: a callable that returns another callable is rejected, both to bound
+/// the recursion and to keep the "callable produces a concrete spec" contract.
+///
+/// `Arc` (not `Box`) keeps [`AtomInput`] `Clone` — `MoleBuildArgs` and the
+/// built `Mole` clone freely; `Send + Sync` lets them cross threads.
+pub type AtomCallable = Arc<dyn Fn() -> Result<AtomInput, PyscfRsError> + Send + Sync>;
+
+/// Atom-input form. All five upstream forms are supported; form 5 (callable)
+/// resolves entirely in Rust via a closure (see [`AtomCallable`]).
 ///
 /// Source: `pyscf/gto/mole.py:320-415` `format_atom`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AtomInput {
     /// Form 1 — `"H 0 0 0; O 0 0 1; H 0 0 2"` (semicolon or newline separated).
     String(String),
@@ -22,10 +39,40 @@ pub enum AtomInput {
     TupleVec(Vec<(String, Vec<f64>)>),
     /// Form 4 — file path to `.xyz` / `.raw` atom listing.
     FilePath(PathBuf),
-    /// Form 5 — Python callable. Deferred to Phase 3 BIND-02. Constructing
-    /// this variant in Phase 2 returns `NotYetImplemented{phase:3}` at
-    /// `format_atom` time.
-    Callable,
+    /// Form 5 — callable atom source (see [`AtomCallable`]). The closure is
+    /// invoked at `format_atom` time and its produced spec resolved (one
+    /// level). Build with [`AtomInput::callable`].
+    Callable(AtomCallable),
+}
+
+// Manual `Debug`: the `Callable` closure is not `Debug`, so the enum cannot
+// derive it. Every other variant forwards to its inner value's `Debug`.
+impl std::fmt::Debug for AtomInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::String(s) => f.debug_tuple("String").field(s).finish(),
+            Self::Tuples(t) => f.debug_tuple("Tuples").field(t).finish(),
+            Self::TupleVec(t) => f.debug_tuple("TupleVec").field(t).finish(),
+            Self::FilePath(p) => f.debug_tuple("FilePath").field(p).finish(),
+            Self::Callable(_) => f.write_str("Callable(<closure>)"),
+        }
+    }
+}
+
+impl AtomInput {
+    /// Build an [`AtomInput::Callable`] from any closure that produces an atom
+    /// spec. The closure is invoked once, at `format_atom` time.
+    ///
+    /// ```
+    /// use pyscf_gto::AtomInput;
+    /// let atom = AtomInput::callable(|| Ok(AtomInput::String("H 0 0 0; H 0 0 1.4".into())));
+    /// ```
+    pub fn callable<F>(f: F) -> Self
+    where
+        F: Fn() -> Result<AtomInput, PyscfRsError> + Send + Sync + 'static,
+    {
+        Self::Callable(Arc::new(f))
+    }
 }
 
 impl Default for AtomInput {

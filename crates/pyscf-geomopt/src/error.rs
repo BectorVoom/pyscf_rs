@@ -27,7 +27,9 @@ pub enum GeomError {
     /// A `constraints` kwarg was supplied — full shim parity lands in 07-06
     /// (D-07 / GEOMOPT-EXT-01 deferred). Raised as a clear error, never a
     /// silent no-op (T-07-11).
-    #[error("constraints are not yet supported (GEOMOPT-EXT-01, lands in 07-06); pass constraints=None")]
+    #[error(
+        "constraints are not yet supported (GEOMOPT-EXT-01, lands in 07-06); pass constraints=None"
+    )]
     ConstraintsUnsupported,
 
     /// A user-supplied `maxsteps` failed validation (T-07-10: must be a

@@ -163,11 +163,7 @@ mod tests {
 
     #[test]
     fn zero_displacement_is_identity() {
-        let coords = [
-            [0.0, 0.0, 0.0],
-            [1.43, 1.11, 0.0],
-            [-1.43, 1.11, 0.0],
-        ];
+        let coords = [[0.0, 0.0, 0.0], [1.43, 1.11, 0.0], [-1.43, 1.11, 0.0]];
         let prims = crate::internals::generate(&coords, &[8, 1, 1]);
         let dq = vec![0.0_f64; prims.len()];
         let new = to_cartesian(&prims, &coords, &dq).expect("backtransform");

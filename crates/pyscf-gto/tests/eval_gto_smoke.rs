@@ -5,7 +5,8 @@
 //!     pyscf-kernels host CPU implementation (Phase 4 DFT extends with
 //!     l ≥ 1 cart2sph + the deriv1/deriv2/ip/ig variants);
 //!   - returns clean `NotYetImplemented{phase:4}` errors for the deriv
-//!     variants and `phase:7` for the ip/ig variants;
+//!     variants; `GTOval_ip_sph` evaluates (= deriv1[1:4]); `GTOval_ig`
+//!     stays `phase:7`;
 //!   - the alias `GTOval` routes by `mol.cart` (false → sph, true → cart);
 //!   - unbuilt Mole / unknown variant produce typed errors;
 //!   - the algebra-wall surface holds — `pyscf-gto::eval_gto` imports
@@ -109,16 +110,21 @@ fn deriv1_sph_returns_four_component_result() {
 }
 
 #[test]
-fn deriv1_cart_returns_not_yet_implemented_phase_4() {
-    // Cartesian deriv1 stays deferred (needs cart ao_loc).
+fn deriv1_cart_returns_four_component_result() {
+    // F-02: cartesian deriv1 is now live (replaces the stale phase-4
+    // NotYetImplemented assertion). For the single s-shell H/STO-3G fixture
+    // ncart(0)=nsph(0)=1, so the cart layout equals the spherical one. The
+    // (s,p,d) congruence-vs-sph oracle lives in
+    // tests/eval_gto_cart_deriv1_oracle.rs.
     let mol = h_at_origin_sto3g();
-    let r = eval_gto(&mol, "GTOval_cart_deriv1", &[[0.0, 0.0, 0.0]]);
-    match r {
-        Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 4, what }) => {
-            assert!(what.contains("deriv1"), "what = {}", what);
-        }
-        other => panic!("expected NotYetImplemented{{phase: 4}}, got {:?}", other),
-    }
+    let r = eval_gto(&mol, "GTOval_cart_deriv1", &[[0.1, 0.2, 0.3]]);
+    assert!(
+        r.is_ok(),
+        "GTOval_cart_deriv1 must return a real result, got {r:?}"
+    );
+    let out = r.unwrap();
+    assert_eq!(out.shape, vec![4, 1, mol.nao_nr]); // s-shell: cart nao == sph nao
+    assert_eq!(out.values.len(), 4 * mol.nao_nr);
 }
 
 #[test]
@@ -134,13 +140,52 @@ fn deriv2_returns_not_yet_implemented_phase_4() {
 }
 
 #[test]
-fn ip_returns_not_yet_implemented_phase_7() {
-    let mol = h_at_origin_sto3g();
-    let r = eval_gto(&mol, "GTOval_ip", &[[0.0, 0.0, 0.0]]);
-    assert!(matches!(
-        r,
-        Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 7, .. })
-    ));
+fn ip_sph_equals_deriv1_gradient_block() {
+    // F-01: GTOval_ip_sph = nabla|AO> (3 comp). Verified byte-identical to the
+    // gradient block GTOval_sph_deriv1[1:4] against upstream PySCF
+    // (`mol.eval_gto('GTOval_ip_sph') == mol.eval_gto('GTOval_sph_deriv1')[1:4]`,
+    // max diff 0.0, no sign flip). The deriv1 kernel is the Phase-4 byte-verified
+    // anchor, so this in-tree congruence pins the ip path to the same numbers.
+    // Use a multi-grid, multi-AO molecule so the slice exercises real geometry.
+    let mol = M(MoleBuildArgs {
+        atom: AtomInput::String("H 0 0 0; H 0 0 1.4".into()),
+        basis: BasisInput::Name("sto-3g".into()),
+        unit: Unit::Bohr,
+        ..Default::default()
+    })
+    .unwrap();
+    let coords = vec![[0.1, 0.2, 0.3], [0.5, -0.4, 0.9], [0.0, 0.0, 0.7]];
+    let ngrids = coords.len();
+    let nao = mol.nao_nr;
+
+    let ip = eval_gto(&mol, "GTOval_ip_sph", &coords).expect("GTOval_ip_sph must evaluate (F-01)");
+    assert_eq!(
+        ip.shape,
+        vec![3, ngrids, nao],
+        "ip shape is [3, ngrids, nao]"
+    );
+    assert_eq!(ip.values.len(), 3 * ngrids * nao);
+    assert!(ip.values.iter().all(|v| v.is_finite()));
+
+    let d1 = eval_gto(&mol, "GTOval_sph_deriv1", &coords).unwrap();
+    assert_eq!(d1.shape, vec![4, ngrids, nao]);
+    // ip == deriv1 components [1..4] (drop the value block).
+    let block = ngrids * nao;
+    for (idx, (a, b)) in ip
+        .values
+        .iter()
+        .zip(d1.values[block..4 * block].iter())
+        .enumerate()
+    {
+        assert!(
+            (a - b).abs() < 1e-14,
+            "GTOval_ip_sph diverges from deriv1[1:4] at [{idx}]: {a} vs {b}"
+        );
+    }
+
+    // Bare `GTOval_ip` (no suffix) routes to the spherical path for a sph mol.
+    let bare = eval_gto(&mol, "GTOval_ip", &coords).expect("bare GTOval_ip routes to sph");
+    assert_eq!(bare.values, ip.values, "bare GTOval_ip == GTOval_ip_sph");
 }
 
 #[test]

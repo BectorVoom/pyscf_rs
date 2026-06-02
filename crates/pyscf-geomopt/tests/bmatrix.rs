@@ -7,7 +7,7 @@
 //! the cintx grad-integral workstream).
 
 use approx::assert_relative_eq;
-use pyscf_geomopt::{Primitive, build_bmatrix, generate_internals, g_inverse, g_matrix, wilson_b};
+use pyscf_geomopt::{Primitive, build_bmatrix, g_inverse, g_matrix, generate_internals, wilson_b};
 
 /// Finite-difference the internal-coordinate value to validate the analytic
 /// B-matrix row.
@@ -78,11 +78,7 @@ fn g_matrix_is_b_bt() {
 #[test]
 fn g_inverse_satisfies_pseudoinverse_identity() {
     // G G⁻ G == G for the H2O redundant set (3 internals, full rank).
-    let coords = [
-        [0.0, 0.0, 0.0],
-        [1.43, 1.11, 0.0],
-        [-1.43, 1.11, 0.0],
-    ];
+    let coords = [[0.0, 0.0, 0.0], [1.43, 1.11, 0.0], [-1.43, 1.11, 0.0]];
     let prims = generate_internals(&coords, &[8, 1, 1]);
     let nint = prims.len();
     assert!(nint >= 3, "H2O yields ≥3 redundant internals");
@@ -120,11 +116,7 @@ fn g_inverse_satisfies_pseudoinverse_identity() {
 #[test]
 fn g_inverse_via_pyscf_algebra_is_symmetric() {
     // G⁻ must be symmetric (it routes through pyscf_algebra::eigh_gen).
-    let coords = [
-        [0.0, 0.0, 0.0],
-        [1.4, 0.0, 0.0],
-        [1.9, 1.1, 0.0],
-    ];
+    let coords = [[0.0, 0.0, 0.0], [1.4, 0.0, 0.0], [1.9, 1.1, 0.0]];
     let prims = generate_internals(&coords, &[6, 1, 1]);
     let nint = prims.len();
     let g = {

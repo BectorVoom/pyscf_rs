@@ -35,7 +35,10 @@ fn rhf_ccpvdz_etot(atom: &str) -> (f64, bool) {
 fn he_ccpvdz_rhf_matches_upstream_uhartree() {
     // Upstream PySCF 2.12.1: He / cc-pVDZ RHF = -2.8551604772 Hartree.
     let (e, conv) = rhf_ccpvdz_etot("He 0 0 0");
-    assert!(conv, "He/cc-pVDZ RHF must converge (generally-contracted s-block)");
+    assert!(
+        conv,
+        "He/cc-pVDZ RHF must converge (generally-contracted s-block)"
+    );
     assert!(
         (e - (-2.855_160_477_2)).abs() < 1e-6,
         "He/cc-pVDZ RHF = {e:.10} must match upstream -2.8551604772 to < 1 µHartree \
@@ -47,7 +50,10 @@ fn he_ccpvdz_rhf_matches_upstream_uhartree() {
 fn h2_ccpvdz_rhf_matches_upstream_uhartree() {
     // Upstream PySCF 2.12.1: H2 (0.74 Å) / cc-pVDZ RHF = -1.1287000936 Hartree.
     let (e, conv) = rhf_ccpvdz_etot("H 0 0 0; H 0 0 0.74");
-    assert!(conv, "H2/cc-pVDZ RHF must converge (generally-contracted s-block)");
+    assert!(
+        conv,
+        "H2/cc-pVDZ RHF must converge (generally-contracted s-block)"
+    );
     assert!(
         (e - (-1.128_700_093_6)).abs() < 1e-6,
         "H2/cc-pVDZ RHF = {e:.10} must match upstream -1.1287000936 to < 1 µHartree \

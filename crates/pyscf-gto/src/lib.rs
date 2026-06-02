@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod basis; // Plan 02-03 — GTO-03 (basis loading).
+pub mod cart2sph; // Molecular cart→sph coeff (Mole.cart2sph_coeff analog).
 pub mod dumps_loads; // Plan 02-08 — GTO-09 (semantic JSON round-trip).
 pub mod ecp_engine_cintx; // Plan 02-10 — GTO-05 (eval half: cintx-backed engine).
 pub mod ecp_engine_stub; // Plan 02-07 — GTO-05 (engine half: stub trait impl).
@@ -21,6 +22,7 @@ pub mod make_env; // Plan 02-04 — GTO-04 (flat-array projection, D-03).
 pub mod projection; // Plan 02-04 — GTO-11 (zero-copy cintx_core::BasisSet build).
 pub mod range_coulomb; // Plan 04-07 — DFT-05 (range-coulomb env[8] set/restore for RSH).
 pub mod set_geom; // Plan 02-08 — GTO-10 (in-place geometry mutation, Pattern 5).
+pub mod spinor; // F-03 SCAFFOLD — spinor (2-component) integral representation.
 pub mod types;
 
 // GTO-10 cont'd: `mol.copy()` is satisfied by `#[derive(Clone)]` on Mole
@@ -29,17 +31,22 @@ pub mod types;
 // the copy. Tests in `tests/mole_copy.rs` verify both halves.
 
 pub use basis::{load_basis, parse as parse_basis};
+pub use cart2sph::cart2sph_coeff;
 pub use dumps_loads::{dumps, loads};
 pub use ecp_engine_cintx::CintxEcpEngine;
 pub use ecp_engine_stub::EcpEngineNotAvailable;
 pub use eval_gto::{EvalGtoOutput, eval_gto};
 pub use format_basis::format_basis;
 pub use format_ecp::{format_ecp, make_ecp_env};
-pub use intor::{IntorOutput, intor, intor_cross, intor_with_auxmol};
+pub use intor::{
+    IntorOutput, intor, intor_cross, intor_with_auxmol, intor_with_rinv_at_nucleus,
+    intor_with_rinv_origin,
+};
 pub use pyscf_core::{Mole, Unit};
 pub use range_coulomb::{PTR_RANGE_OMEGA, get_k_with_omega, intor_with_omega};
 pub use set_geom::set_geom_;
-pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
+pub use spinor::{IntorOutputComplex, intor_spinor};
+pub use types::{AtomCallable, AtomInput, BasisInput, EcpInput, MoleBuildArgs};
 
 /// Returns the active ECP engine. Gap-closure plan 02-10 swapped this from
 /// the Phase 2 `EcpEngineNotAvailable` stub to the cintx-backed
@@ -54,6 +61,82 @@ pub use types::{AtomInput, BasisInput, EcpInput, MoleBuildArgs};
 /// error path stays testable (instantiate it directly).
 pub fn ecp_engine() -> ecp_engine_cintx::CintxEcpEngine {
     ecp_engine_cintx::CintxEcpEngine
+}
+
+/// F-11 — register `pyscf-gto`'s builder as the `pyscf-core` IoC hook so a
+/// direct `pyscf_core::Mole::build()` call works without `pyscf-core` ever
+/// depending on `pyscf-gto` (FOUND-02 intact).
+///
+/// Idempotent (the underlying `OnceLock` ignores re-registration). Armed
+/// automatically by [`M`] / [`build_from`] (so the canonical
+/// `mol.copy(); mol.basis = aux; mol.build()` pattern always works) and by the
+/// PyO3 module init; pure-Rust cold-start callers who construct a `Mole`
+/// without any gto front-door call can invoke this once to enable
+/// `Mole::build()`.
+pub fn register_mole_builder() {
+    pyscf_core::register_mole_builder(build_in_place);
+}
+
+/// F-11 IoC builder hook body: complete an unbuilt (or rebuild a mutated)
+/// [`Mole`] in place by reconstructing [`MoleBuildArgs`] from the Mole's own
+/// fields and delegating to [`build_from`].
+///
+/// Inputs are re-derived **losslessly for the canonical case**:
+/// - **atom** from the structured `mol._atom` (already in Bohr) via
+///   [`AtomInput::Tuples`] with `unit = Bohr` — no double unit conversion.
+/// - **basis** from `mol.basis`: the raw name a caller assigned
+///   (`mol.basis = "weigend".into()`) *or* the `{:?}` echo `build_from` stores
+///   (`Name("sto-3g")`), both reduced to the bare name via
+///   [`strip_name_echo`] → [`BasisInput::Name`].
+/// - **ecp** from `mol.ecp` (`"None"` → [`EcpInput::None`], else a `Name`).
+/// - scalars (`charge`, `spin`, `cart`, `verbose`, `max_memory`, `output`).
+///
+/// Limitation (documented, not a regression): only the `Name` basis/ecp form
+/// round-trips through the direct-build path — the dominant case and exactly
+/// what the upstream `auxmol` pattern uses. `PerElement`/`NwchemText`/text
+/// forms are not reconstructible from the echo; those callers use [`M`].
+/// After a rebuild `mol.unit` reads `Bohr` (the coordinates are Bohr).
+pub fn build_in_place(mol: &mut Mole) -> Result<(), pyscf_core::PyscfRsError> {
+    // Clone the structured atom list out BEFORE build_from overwrites mol._atom.
+    let atom = AtomInput::Tuples(mol._atom.clone());
+
+    let basis = BasisInput::Name(strip_name_echo(&mol.basis));
+
+    let ecp = match strip_name_echo(&mol.ecp) {
+        // EcpInput::None echoes as the bare string "None".
+        s if s == "None" || s.is_empty() => EcpInput::None,
+        s => EcpInput::Name(s),
+    };
+
+    let args = MoleBuildArgs {
+        atom,
+        basis,
+        ecp,
+        charge: mol.charge,
+        spin: mol.spin,
+        cart: mol.cart,
+        // mol._atom is stored in Bohr; feed Bohr so Tuples isn't re-converted.
+        unit: Unit::Bohr,
+        verbose: mol.verbose,
+        max_memory: mol.max_memory,
+        output: mol.output.clone(),
+        ..Default::default()
+    };
+
+    build_from(mol, args)
+}
+
+/// Reduce a possibly-`{:?}`-echoed input string to its bare name.
+/// `Name("cc-pvdz")` → `cc-pvdz`; any other string is returned verbatim
+/// (covers the raw name a caller assigns directly). Mirrors
+/// `pyscf-scf::df_scf::extract_basis_name`.
+fn strip_name_echo(s: &str) -> String {
+    if let Some(rest) = s.strip_prefix("Name(\"")
+        && let Some(name) = rest.strip_suffix("\")")
+    {
+        return name.to_string();
+    }
+    s.to_string()
 }
 
 /// Shortcut to build a Mole. Equivalent to `pyscf.M(...)` upstream.
@@ -76,6 +159,8 @@ pub fn ecp_engine() -> ecp_engine_cintx::CintxEcpEngine {
 /// ```
 #[allow(non_snake_case)]
 pub fn M(args: MoleBuildArgs) -> Result<Mole, pyscf_core::PyscfRsError> {
+    // F-11: arm the IoC hook so a later `clone().build()` works (FOUND-02).
+    register_mole_builder();
     let mut mol = Mole::default();
     build_from(&mut mol, args)?;
     Ok(mol)
@@ -92,6 +177,10 @@ pub fn M(args: MoleBuildArgs) -> Result<Mole, pyscf_core::PyscfRsError> {
 /// (the cintx flat-array projection). Plan 02-07 will extend with
 /// `format_ecp` + `make_ecp_env`.
 pub fn build_from(mol: &mut Mole, args: MoleBuildArgs) -> Result<(), pyscf_core::PyscfRsError> {
+    // F-11: arm the IoC builder hook so a Mole cloned from this one can be
+    // rebuilt via a direct `Mole::build()` (FOUND-02 intact — runtime registration).
+    register_mole_builder();
+
     // Echo user input for `dumps()` round-trip later.
     mol.atom = format!("{:?}", args.atom);
     mol.basis = format!("{:?}", args.basis);
@@ -146,7 +235,22 @@ pub fn build_from(mol: &mut Mole, args: MoleBuildArgs) -> Result<(), pyscf_core:
     mol.ao_loc_nr = env_out.ao_loc_nr;
     mol.nao_nr = env_out.nao_nr;
     mol.nbas = mol._bas.len() / pyscf_core::raw_layout::BAS_SLOTS;
-    mol.nao_2c = 0; // Phase 2 stub — spinor not in scope; Phase 3 may extend.
+
+    // F-03 T1: 2-component spinor AO count = Σ over shells of 2·(2l+1)·nctr.
+    // Spinors are inherently spherical-harmonic based, so this count is
+    // independent of `mol.cart` (cf. PySCF `Mole.nao_2c`). Walks the libcint
+    // `_bas` table (ANG_OF/NCTR_OF) and sums the unit-tested `n2c_per_shell`
+    // formula, giving `nao_2c == 2·nao_nr` for spherical bases.
+    mol.nao_2c = {
+        use pyscf_core::raw_layout::{ANG_OF, BAS_SLOTS, NCTR_OF};
+        (0..mol.nbas)
+            .map(|i| {
+                let l = mol._bas[i * BAS_SLOTS + ANG_OF] as u32;
+                let nctr = mol._bas[i * BAS_SLOTS + NCTR_OF] as usize;
+                spinor::n2c_per_shell(l, nctr)
+            })
+            .sum()
+    };
 
     // GTO-11: zero-copy Arc<BasisSet>. Stored in mol.basis_set; consumers
     // (02-05 intor, 02-06 eval_gto, SCF, DFT, ...) clone the Arc rather than

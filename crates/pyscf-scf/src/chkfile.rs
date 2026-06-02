@@ -120,3 +120,12 @@ pub fn load_scf_from_file(path: &std::path::Path) -> Result<ScfResult, ChkfileEr
     let scf = primitives::read_group(&f, "scf")?;
     ScfResult::load(&scf)
 }
+
+/// Read just the serialized `mol` JSON (written by `dump_scf_to_file` via
+/// `mol.dumps()`) back from a chkfile. Used by the cross-basis init-guess
+/// projection (`init_guess_by_chkfile`) to reconstruct the *prior*
+/// molecule/basis so the cross-overlap `<current|prior>` can be formed.
+pub fn load_mol_json_from_file(path: &std::path::Path) -> Result<String, ChkfileError> {
+    let f = primitives::open_for_read(path)?;
+    primitives::read_mol(&f)
+}

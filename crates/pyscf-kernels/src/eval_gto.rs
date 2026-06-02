@@ -104,11 +104,13 @@ use pyscf_core::raw_layout::{
 //
 // Source: libcint `cart2sph.c g_trans_cart2sph[]` (the matrices
 // `CINTc2s_ket_sph` applies; `pyscf/gto/mole.py cart2sph` uses the same
-// routine). FROZEN f64 — byte-identical to cintx-cubecl
-// `transform::c2s::C2S_L{0..4}`. Rows = m = -l..+l, cols = libcint
-// cartesian order (the `GTOshell_eval_grid_cart` monomial order:
-// lx=l..0, ly=l-lx..0, lz=l-lx-ly). Changing any value breaks bit-exact
-// agreement with upstream PySCF.
+// routine). FROZEN f64 — L0..L4 are byte-identical to cintx-cubecl
+// `transform::c2s::C2S_L{0..4}`; L5 (h) and L6 (i) are extracted verbatim
+// from the same libcint array (offsets 245/476) and additionally
+// cross-checked against the Schlegel–Frisch analytical formula. Rows =
+// m = -l..+l, cols = libcint cartesian order (the `GTOshell_eval_grid_cart`
+// monomial order: lx=l..0, ly=l-lx..0, lz=l-lx-ly). Changing any value
+// breaks bit-exact agreement with upstream PySCF.
 
 /// libcint `CINTcommon_fac_sp` (g1e.c:566). l=0,1 carry the angular
 /// prefactor in the radial part; l≥2 fold it into the c2s matrix.
@@ -153,13 +155,14 @@ fn cart_powers(l: u32) -> Vec<(u32, u32, u32)> {
 }
 
 /// libcint `g_trans_cart2sph` coefficient `T[l][m_row][cart_col]`.
-/// Returns the FROZEN Condon-Shortley value. `l ≤ 4` supported (g-shells);
-/// higher `l` is not in the v1 corpus (max cc-pVTZ f = l 3). For `l > 4`
-/// (h-shells and above — cc-pV5Z, ANO) this returns
+/// Returns the FROZEN Condon-Shortley value. `l ≤ 6` supported (g-shells g,
+/// h-shells, i-shells — covers cc-pV5Z h and cc-pV6Z i). For `l > 6`
+/// (k-shells and above) this returns
 /// `Err(PyscfRsError::NotYetImplemented{phase:4,..})` rather than panicking,
 /// so a user-supplied basis fails loudly through the PyO3 boundary with a
 /// Python exception instead of aborting the process (BLOCKER CR-03 /
-/// FOUND-07 never-panic policy).
+/// FOUND-07 never-panic policy). The l=5/l=6 tables are libcint-verbatim and
+/// independently cross-checked against the Schlegel–Frisch analytical formula.
 fn c2s_coeff(l: u32, m_row: usize, cart_col: usize) -> Result<f64, PyscfRsError> {
     // s (l=0): 1×1 identity.
     const L0: [[f64; 1]; 1] = [[1.0]];
@@ -431,18 +434,709 @@ fn c2s_coeff(l: u32, m_row: usize, cart_col: usize) -> Result<f64, PyscfRsError>
             0.0,
         ],
     ];
+    // h (l=5): 11×21 and i (l=6): 13×28. Same FROZEN libcint provenance as
+    // L0..L4 (`g_trans_cart2sph` offsets 245 and 476). Extracted verbatim from
+    // the libcint source array and independently cross-validated against the
+    // Schlegel–Frisch `xyz2sph_real` analytical formula (libcint
+    // `scripts/cart2sph.py`) to a ratio of exactly 1.0 — see the
+    // `c2s_coeff_l5_l6_*` regression tests. These cover cc-pV5Z (h) and
+    // cc-pV6Z (i) basis sets through the generic CPU eval path; the device
+    // (`#[cube]`) path still routes l>4 shells to the CPU.
+    // L5 (l=5): 11×21. rows m=-5..+5; libcint `g_trans_cart2sph` offset 245.
+    // cols (lx=l..0, ly=l-lx..0): xxxxx xxxxy xxxxz xxxyy xxxyz xxxzz xxyyy
+    // xxyyz xxyzz xxzzz xyyyy xyyyz xyyzz xyzzz xzzzz yyyyy yyyyz yyyzz yyzzz
+    // yzzzz zzzzz.
+    const L5: [[f64; 21]; 11] = [
+        [
+            0.0,
+            3.281_910_284_200_850_7,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -6.563_820_568_401_701,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.656_382_056_840_170_1,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            8.302_649_259_524_165,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -8.302_649_259_524_165,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            -1.467_714_898_305_751,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.978_476_598_870_500_8,
+            0.0,
+            11.741_719_186_446_009,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.489_238_299_435_250_4,
+            0.0,
+            -3.913_906_395_482_003,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -4.793_536_784_973_324,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -4.793_536_784_973_324,
+            0.0,
+            9.587_073_569_946_648,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.452_946_651_195_696_94,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.905_893_302_391_393_9,
+            0.0,
+            -5.435_359_814_348_363,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.452_946_651_195_696_94,
+            0.0,
+            -5.435_359_814_348_363,
+            0.0,
+            3.623_573_209_565_575_5,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            1.754_254_836_801_354,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            3.508_509_673_602_708,
+            0.0,
+            -4.678_012_898_136_944,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.754_254_836_801_354,
+            0.0,
+            -4.678_012_898_136_944,
+            0.0,
+            0.935_602_579_627_388_8,
+        ],
+        [
+            0.452_946_651_195_696_94,
+            0.0,
+            0.0,
+            0.905_893_302_391_393_9,
+            0.0,
+            -5.435_359_814_348_363,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.452_946_651_195_696_94,
+            0.0,
+            -5.435_359_814_348_363,
+            0.0,
+            3.623_573_209_565_575_5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            -2.396_768_392_486_662,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            4.793_536_784_973_324,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.396_768_392_486_662,
+            0.0,
+            -4.793_536_784_973_324,
+            0.0,
+            0.0,
+        ],
+        [
+            -0.489_238_299_435_250_4,
+            0.0,
+            0.0,
+            0.978_476_598_870_500_8,
+            0.0,
+            3.913_906_395_482_003,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.467_714_898_305_751,
+            0.0,
+            -11.741_719_186_446_009,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            2.075_662_314_881_041,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -12.453_973_889_286_248,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.075_662_314_881_041,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.656_382_056_840_170_1,
+            0.0,
+            0.0,
+            -6.563_820_568_401_701,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            3.281_910_284_200_850_7,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+    ];
+    // L6 (l=6): 13×28. rows m=-6..+6; libcint `g_trans_cart2sph` offset 476.
+    // cols (lx=l..0, ly=l-lx..0): xxxxxx xxxxxy xxxxxz xxxxyy xxxxyz xxxxzz
+    // xxxyyy xxxyyz xxxyzz xxxzzz xxyyyy xxyyyz xxyyzz xxyzzz xxzzzz xyyyyy
+    // xyyyyz xyyyzz xyyzzz xyzzzz xzzzzz yyyyyy yyyyyz yyyyzz yyyzzz yyzzzz
+    // yzzzzz zzzzzz.
+    const L6: [[f64; 28]; 13] = [
+        [
+            0.0,
+            4.099_104_631_151_486,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -13.663_682_103_838_289,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            4.099_104_631_151_486,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            11.833_095_811_158_763,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -23.666_191_622_317_527,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.366_619_162_231_752_5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            -2.018_259_602_914_896_3,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            20.182_596_029_148_968,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.018_259_602_914_896_3,
+            0.0,
+            -20.182_596_029_148_968,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -8.290_847_335_634_31,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -5.527_231_557_089_541,
+            0.0,
+            22.108_926_228_358_165,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.763_615_778_544_770_6,
+            0.0,
+            -7.369_642_076_119_389,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.921_205_259_514_923_6,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.842_410_519_029_847_2,
+            0.0,
+            -14.739_284_152_238_778,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.921_205_259_514_923_6,
+            0.0,
+            -14.739_284_152_238_778,
+            0.0,
+            14.739_284_152_238_778,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.913_106_812_593_657,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            5.826_213_625_187_314,
+            0.0,
+            -11.652_427_250_374_627,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.913_106_812_593_657,
+            0.0,
+            -11.652_427_250_374_627,
+            0.0,
+            4.660_970_900_149_850_5,
+            0.0,
+        ],
+        [
+            -0.317_846_011_338_142_1,
+            0.0,
+            0.0,
+            -0.953_538_034_014_426_4,
+            0.0,
+            5.721_228_204_086_558,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.953_538_034_014_426_4,
+            0.0,
+            11.442_456_408_173_117,
+            0.0,
+            -7.628_304_272_115_411,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.317_846_011_338_142_1,
+            0.0,
+            5.721_228_204_086_558,
+            0.0,
+            -7.628_304_272_115_411,
+            0.0,
+            1.017_107_236_282_054_8,
+        ],
+        [
+            0.0,
+            0.0,
+            2.913_106_812_593_657,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            5.826_213_625_187_314,
+            0.0,
+            -11.652_427_250_374_627,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.913_106_812_593_657,
+            0.0,
+            -11.652_427_250_374_627,
+            0.0,
+            4.660_970_900_149_850_5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.460_602_629_757_461_8,
+            0.0,
+            0.0,
+            0.460_602_629_757_461_8,
+            0.0,
+            -7.369_642_076_119_389,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.460_602_629_757_461_8,
+            0.0,
+            0.0,
+            0.0,
+            7.369_642_076_119_389,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.460_602_629_757_461_8,
+            0.0,
+            7.369_642_076_119_389,
+            0.0,
+            -7.369_642_076_119_389,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            -2.763_615_778_544_770_6,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            5.527_231_557_089_541,
+            0.0,
+            7.369_642_076_119_389,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            8.290_847_335_634_31,
+            0.0,
+            -22.108_926_228_358_165,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            -0.504_564_900_728_724_1,
+            0.0,
+            0.0,
+            2.522_824_503_643_62,
+            0.0,
+            5.045_649_007_287_242,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.522_824_503_643_62,
+            0.0,
+            -30.273_894_043_723_452,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.504_564_900_728_724_1,
+            0.0,
+            5.045_649_007_287_242,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.0,
+            0.0,
+            2.366_619_162_231_752_5,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -23.666_191_622_317_527,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            11.833_095_811_158_763,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+        [
+            0.683_184_105_191_914_4,
+            0.0,
+            0.0,
+            -10.247_761_577_878_716,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            10.247_761_577_878_716,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            -0.683_184_105_191_914_4,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ],
+    ];
     match l {
         0 => Ok(L0[m_row][cart_col]),
         1 => Ok(L1[m_row][cart_col]),
         2 => Ok(L2[m_row][cart_col]),
         3 => Ok(L3[m_row][cart_col]),
         4 => Ok(L4[m_row][cart_col]),
+        5 => Ok(L5[m_row][cart_col]),
+        6 => Ok(L6[m_row][cart_col]),
         _ => Err(PyscfRsError::NotYetImplemented {
             phase: 4,
-            what: "cart→sph transform for l>4 (h-shells and above) not yet implemented — \
+            what: "cart→sph transform for l>6 (k-shells and above) not yet implemented — \
                    add c2s_coeff table for the required l",
         }),
     }
+}
+
+/// Public per-`l` cart→sph coefficient matrix `T[l]` as a flat **row-major**
+/// `[nsph(l) × ncart(l)]` buffer, where `T[m * ncart + cart] = c2s_coeff(l, m,
+/// cart)` (the libcint `g_trans_cart2sph` convention, frozen Condon-Shortley).
+///
+/// `nsph(l) = 2l+1`, `ncart(l) = (l+1)(l+2)/2`. This is the SAME matrix the
+/// `eval_gto_sph` path uses for the cartesian→spherical AO transform, exposed so
+/// higher crates can assemble the molecular `cart2sph_coeff` (e.g. the cartesian
+/// init-guess density projection). Returns `NotYetImplemented{phase:4}` for
+/// `l > 6` (k-shells), mirroring [`c2s_coeff`].
+///
+/// PySCF's `Mole.cart2sph_coeff(normalized='sp')` block equals the **transpose**
+/// of this matrix (verified vs PySCF 2.12.1: s/p blocks are identity, d/f/… match
+/// element-for-element), so a caller building `[ncart × nsph]` places `T`ᵀ.
+pub fn cart2sph_l_matrix(l: u32) -> Result<Vec<f64>, PyscfRsError> {
+    let nsph = (2 * l + 1) as usize;
+    let ncart = ((l + 1) * (l + 2) / 2) as usize;
+    let mut m = vec![0.0f64; nsph * ncart];
+    for row in 0..nsph {
+        for col in 0..ncart {
+            m[row * ncart + col] = c2s_coeff(l, row, col)?;
+        }
+    }
+    Ok(m)
 }
 
 // ── s-shell (l=0) device kernel + launcher (quick-260530-ljv) ───────────
@@ -1213,10 +1907,7 @@ pub fn eval_gto_sph(
     // via the exported `dispatch_backend!`. ANY basis with an l>=1 shell — or an
     // empty grid / empty basis — falls back to the UNCHANGED `eval_gto_sph_cpu`,
     // so all l>=1 numerics stay byte-for-byte identical (behavior-preserving).
-    let all_s = !bas.is_empty()
-        && bas
-            .chunks_exact(BAS_SLOTS)
-            .all(|row| row[ANG_OF] == 0);
+    let all_s = !bas.is_empty() && bas.chunks_exact(BAS_SLOTS).all(|row| row[ANG_OF] == 0);
 
     if all_s && ngrids * nao > 0 {
         // Device path: pure-s-shell. y00 is folded inside the launcher; the
@@ -1237,11 +1928,12 @@ pub fn eval_gto_sph(
 
     // quick-260530-mlg: route any non-empty basis whose max angular momentum is
     // <= 4 (p/d/f/g — which subsumes l=0 too) to the GENERAL device kernel, fanned
-    // out over every backend via `dispatch_backend!`. l>4 (h-shells and above),
-    // empty basis, and empty grid fall through to the UNCHANGED `eval_gto_sph_cpu`
-    // (preserving the NotYetImplemented{phase:4} error for l>4 and the
-    // out_len==0 early-return). The host tables are built only for l in 0..=maxl
-    // with maxl<=4, so `c2s_coeff` is never called with l>4 on the device path.
+    // out over every backend via `dispatch_backend!`. l>4 (h/i-shells and above),
+    // empty basis, and empty grid fall through to the UNCHANGED `eval_gto_sph_cpu`,
+    // which now evaluates l=5 (h) and l=6 (i) generically via `c2s_coeff`; only
+    // l>6 there returns NotYetImplemented{phase:4}. Plus the out_len==0
+    // early-return. The host device tables are built only for l in 0..=maxl with
+    // maxl<=4, so `c2s_coeff` is never called with l>4 on the device path.
     let maxl = bas
         .chunks_exact(BAS_SLOTS)
         .map(|row| row[ANG_OF])
@@ -1479,10 +2171,11 @@ pub fn eval_gto_sph_deriv1(
 ) -> Result<EvalGtoBuffers, PyscfRsError> {
     // quick-260530-oms: route any non-empty basis whose max angular momentum is
     // <= 4 (p/d/f/g, subsuming l=0) to the general deriv1 device kernel, fanned
-    // out over every backend via `dispatch_backend!`. l>4 (h-shells+), empty
+    // out over every backend via `dispatch_backend!`. l>4 (h/i-shells+), empty
     // basis, and empty grid fall through to the UNCHANGED
-    // `eval_gto_sph_deriv1_cpu` (preserving NotYetImplemented{phase:4} for l>4
-    // and the comp_stride==0 early-return). Host tables are built only for l in
+    // `eval_gto_sph_deriv1_cpu`, which now evaluates l=5/l=6 generically via
+    // `c2s_coeff` (only l>6 returns NotYetImplemented{phase:4}), plus the
+    // comp_stride==0 early-return. Host device tables are built only for l in
     // 0..=maxl with maxl<=4, so `c2s_coeff` is never called with l>4 on device.
     let maxl = bas
         .chunks_exact(BAS_SLOTS)
@@ -1505,9 +2198,41 @@ pub fn eval_gto_sph_deriv1(
     }
 
     // Fallback: l>4 shell, empty basis, or empty grid → the unchanged host
-    // deriv1 path (which handles the comp_stride==0 early-return and the l>4
-    // NotYetImplemented{phase:4} error).
-    eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc, nao)
+    // deriv1 path (which handles the comp_stride==0 early-return, evaluates
+    // l=5/l=6 generically, and returns NotYetImplemented{phase:4} for l>6).
+    eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc, nao, true)
+}
+
+/// Evaluate `GTOval_cart_deriv1` on the grid: the *cartesian* AO value plus
+/// the three Cartesian gradient components (∂/∂x, ∂/∂y, ∂/∂z) per cartesian
+/// AO per grid point. Output layout matches `eval_gto_sph_deriv1`
+/// (`[4, ngrids, nao]`, component-leading) but `nao`/`ao_loc` are the
+/// **cartesian** counts/offsets (`ncart(l)·nctr` per shell, not `2l+1`).
+///
+/// Cartesian output is exactly the pre-`c2s` value the spherical kernel
+/// transforms: `GTOval_sph_deriv1 = c2s · GTOval_cart_deriv1` per shell/
+/// component (the libcint relationship — `GTOshell_eval_grid_cart` produces
+/// these, `GTOval_sph` applies `CINTc2s_ket_sph` on top). So this shares the
+/// byte-verified deriv1 stencil and only skips the final transform.
+///
+/// **Host-only** (F-02): the device deriv1 launcher emits spherical AOs; the
+/// cartesian path runs on the CPU host kernel directly. `client` is accepted
+/// for API symmetry with the spherical entry point. Unlike the spherical
+/// path there is no `l` ceiling — cartesian output never calls `c2s_coeff`,
+/// so it is well-defined for every angular momentum the basis supplies.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_gto_cart_deriv1(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc_cart: &[i32],
+    nao_cart: usize,
+) -> Result<EvalGtoBuffers, PyscfRsError> {
+    let _ = client; // host-only; no device cartesian deriv1 kernel yet.
+    eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc_cart, nao_cart, false)
 }
 
 /// CPU-host deriv1 kernel. Mirrors `eval_gto_sph_cpu` for the value and
@@ -1517,7 +2242,16 @@ pub fn eval_gto_sph_deriv1(
 ///                        + R · lq · q^(lq−1) · (other two monomials)
 /// where the first term is the radial-derivative chain rule
 /// (`exps_2a = Σ −2α c exp`) and the second is the monomial-power
-/// derivative. The c2s transform is applied to each of the 4 components.
+/// derivative.
+///
+/// `spherical = true` applies the libcint `c2s` transform to each of the 4
+/// components and writes `2l+1` spherical AOs per contraction (the
+/// `GTOval_sph_deriv1` surface — `ao_loc`/`nao` must be spherical).
+/// `spherical = false` skips the transform and writes the `ncart(l)`
+/// cartesian components directly (the `GTOval_cart_deriv1` surface —
+/// `ao_loc`/`nao` must be cartesian). The two share every numeric stencil up
+/// to the final write, so the cartesian output is exactly the pre-transform
+/// value the spherical path consumes.
 #[allow(clippy::too_many_arguments)]
 fn eval_gto_sph_deriv1_cpu(
     coords_host: &[f64],
@@ -1527,6 +2261,7 @@ fn eval_gto_sph_deriv1_cpu(
     env_host: &[f64],
     ao_loc_host: &[i32],
     nao: usize,
+    spherical: bool,
 ) -> Result<EvalGtoBuffers, PyscfRsError> {
     debug_assert_eq!(
         coords_host.len(),
@@ -1646,25 +2381,40 @@ fn eval_gto_sph_deriv1_cpu(
                         + radial * dx.powi(lx as i32) * dy.powi(ly as i32) * dpow(dz, lz);
                 }
 
-                // cart → sph per component, written into the 4 component blocks.
-                for m_idx in 0..nsph_l {
-                    let ao_idx = ao_off + c_idx * nsph_l + m_idx;
-                    let off = g + ao_idx * ngrids;
-                    let mut v = 0.0_f64;
-                    let mut vx = 0.0_f64;
-                    let mut vy = 0.0_f64;
-                    let mut vz = 0.0_f64;
-                    for ci in 0..ncart_l {
-                        let t = c2s_coeff(l, m_idx, ci)?;
-                        v += t * cval[ci];
-                        vx += t * cdx[ci];
-                        vy += t * cdy[ci];
-                        vz += t * cdz[ci];
+                if spherical {
+                    // cart → sph per component, written into the 4 component blocks.
+                    for m_idx in 0..nsph_l {
+                        let ao_idx = ao_off + c_idx * nsph_l + m_idx;
+                        let off = g + ao_idx * ngrids;
+                        let mut v = 0.0_f64;
+                        let mut vx = 0.0_f64;
+                        let mut vy = 0.0_f64;
+                        let mut vz = 0.0_f64;
+                        for ci in 0..ncart_l {
+                            let t = c2s_coeff(l, m_idx, ci)?;
+                            v += t * cval[ci];
+                            vx += t * cdx[ci];
+                            vy += t * cdy[ci];
+                            vz += t * cdz[ci];
+                        }
+                        out[off] = v;
+                        out[comp_stride + off] = vx;
+                        out[2 * comp_stride + off] = vy;
+                        out[3 * comp_stride + off] = vz;
                     }
-                    out[off] = v;
-                    out[comp_stride + off] = vx;
-                    out[2 * comp_stride + off] = vy;
-                    out[3 * comp_stride + off] = vz;
+                } else {
+                    // Cartesian output: write the ncart_l cartesian components
+                    // directly (no c2s), at ao_off + c_idx*ncart_l + ci.
+                    // `ao_loc`/`nao` are the cartesian counts so this stays in
+                    // bounds; never calls c2s_coeff → no `l` ceiling.
+                    for ci in 0..ncart_l {
+                        let ao_idx = ao_off + c_idx * ncart_l + ci;
+                        let off = g + ao_idx * ngrids;
+                        out[off] = cval[ci];
+                        out[comp_stride + off] = cdx[ci];
+                        out[2 * comp_stride + off] = cdy[ci];
+                        out[3 * comp_stride + off] = cdz[ci];
+                    }
                 }
             }
         }
@@ -1682,23 +2432,119 @@ mod tests {
     use pyscf_core::PyscfRsError;
 
     /// BLOCKER CR-03 (FOUND-07 never-panic): `c2s_coeff` must return
-    /// `Err(NotYetImplemented{phase:4,..})` for l>4 (h-shells and above)
-    /// instead of `panic!`-ing. A user supplying cc-pV5Z / ANO through the
-    /// PyO3 boundary would otherwise abort the Python process.
+    /// `Err(NotYetImplemented{phase:4,..})` for l>6 (k-shells and above)
+    /// instead of `panic!`-ing. A user supplying a k-shell basis through the
+    /// PyO3 boundary would otherwise abort the Python process. l=5 (h) and
+    /// l=6 (i) are now supported and must NOT error.
     #[test]
-    fn c2s_coeff_l5_returns_err_not_panic() {
-        // l = 5 (h-shell) is not in the v1 c2s table → Err, no panic.
-        let r = c2s_coeff(5, 0, 0);
+    fn c2s_coeff_l7_returns_err_not_panic() {
+        // l = 7 (k-shell) is not in the c2s table → Err, no panic.
+        let r = c2s_coeff(7, 0, 0);
         assert!(
             matches!(r, Err(PyscfRsError::NotYetImplemented { phase: 4, .. })),
-            "c2s_coeff(5,..) must return Err(NotYetImplemented{{phase:4}}), got {r:?}"
+            "c2s_coeff(7,..) must return Err(NotYetImplemented{{phase:4}}), got {r:?}"
         );
-
-        // l = 6 too — the wildcard arm covers every l>4.
+        // l = 8 too — the wildcard arm covers every l>6.
         assert!(matches!(
-            c2s_coeff(6, 0, 0),
+            c2s_coeff(8, 0, 0),
             Err(PyscfRsError::NotYetImplemented { phase: 4, .. })
         ));
+        // l = 5 and l = 6 are now in-table — must succeed.
+        assert!(c2s_coeff(5, 0, 1).is_ok());
+        assert!(c2s_coeff(6, 0, 1).is_ok());
+    }
+
+    /// INDEPENDENT ORACLE for the l=5 (h) and l=6 (i) tables: re-derive every
+    /// `g_trans_cart2sph` entry from the Schlegel–Frisch `xyz2sph_real`
+    /// analytical formula (libcint `scripts/cart2sph.py`, IJQC 54(1995) 83)
+    /// and assert the in-source table agrees. The L5/L6 constants were
+    /// extracted verbatim from the libcint C array; this test guards against
+    /// transcription error by checking them against a from-scratch derivation.
+    #[test]
+    fn c2s_coeff_l5_l6_match_schlegel_frisch_formula() {
+        fn fact(n: i64) -> f64 {
+            (1..=n.max(0)).map(|x| x as f64).product::<f64>()
+        }
+        fn binom(n: i64, k: i64) -> f64 {
+            if k < 0 || k > n {
+                0.0
+            } else {
+                fact(n) / fact(k) / fact(n - k)
+            }
+        }
+        // Real spherical-harmonic cart→sph factor (Condon-Shortley phase).
+        fn xyz2sph_real(lx: i64, ly: i64, lz: i64, m: i64) -> f64 {
+            if (lx + ly + m).rem_euclid(2) != 0 {
+                return 0.0;
+            }
+            let l = lx + ly + lz;
+            let am = m.abs();
+            let j = (lx + ly - am).div_euclid(2);
+            let c0_num = (2 * l + 1) as f64 * fact(l - am);
+            let c0_div = fact(l + am) * 4.0 * std::f64::consts::PI;
+            let mut c0 = (c0_num / c0_div).sqrt() * 0.5f64.powi(l as i32) / fact(l);
+            let mut cp = 0.0;
+            let mut i = j.max(0);
+            while i <= (l - am).div_euclid(2) {
+                let cp0 = binom(l, i) * binom(i, j) * fact(2 * l - 2 * i) / fact(l - am - 2 * i);
+                if i.rem_euclid(2) != 0 {
+                    cp -= cp0;
+                } else {
+                    cp += cp0;
+                }
+                i += 1;
+            }
+            c0 *= cp;
+            let mut cp = 0.0;
+            let k_lo = ((lx - am + 1).div_euclid(2)).max(0);
+            let k_hi = j.min(lx / 2);
+            if m >= 0 {
+                let mut k = k_lo;
+                while k <= k_hi {
+                    let cp0 = binom(j, k) * binom(am, lx - 2 * k);
+                    match (am - lx + 2 * k).rem_euclid(4) {
+                        0 => cp += cp0,
+                        2 => cp -= cp0,
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                if m == 0 {
+                    c0 * cp
+                } else {
+                    2.0f64.sqrt() * c0 * cp
+                }
+            } else {
+                let mut k = k_lo;
+                while k <= k_hi {
+                    let cp0 = binom(j, k) * binom(am, lx - 2 * k);
+                    match (am - lx + 2 * k).rem_euclid(4) {
+                        1 => cp -= cp0,
+                        3 => cp += cp0,
+                        _ => {}
+                    }
+                    k += 1;
+                }
+                -(2.0f64.sqrt()) * c0 * cp
+            }
+        }
+
+        for l in [5u32, 6u32] {
+            let powers = cart_powers(l);
+            for m_row in 0..nsph(l) {
+                let m = m_row as i64 - l as i64;
+                for (cart_col, &(lx, ly, lz)) in powers.iter().enumerate() {
+                    let got = c2s_coeff(l, m_row, cart_col).unwrap();
+                    let want = xyz2sph_real(lx as i64, ly as i64, lz as i64, m);
+                    assert!(
+                        (got - want).abs() < 1e-9,
+                        "c2s_coeff(l={l}, m_row={m_row}, cart_col={cart_col}) = {got}, \
+                         Schlegel-Frisch formula = {want}, diff = {}",
+                        (got - want).abs()
+                    );
+                }
+            }
+        }
     }
 
     /// No behavioral regression: l<=4 still returns the FROZEN libcint

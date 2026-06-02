@@ -36,7 +36,21 @@
 //! `+=`, no gemm) → bit-exact + RAYON-1==8 invariant.
 #![allow(clippy::needless_range_loop)]
 
-use crate::ccsd::{CONV_TOL, CONV_TOL_NORMT, MAX_CYCLE};
+// Open-shell-path convergence (F-07). The shared closed-shell `CONV_TOL_NORMT`
+// = 1e-5 is calibrated for the DIIS-accelerated RCCSD path, where a step norm of
+// 1e-5 coincides with a genuinely converged fixed point. The spin-orbital UCCSD
+// kernel here runs a PLAIN Jacobi iteration (NO amplitude DIIS), so a step norm
+// of 1e-5 leaves the amplitudes ~1e-5 AWAY from the fixed point — second-order-
+// stationary in the energy (~2e-7 e_corr error) but FIRST-order in the 1-RDM
+// (~2e-7 dm1 error), which fails the 1e-7 open-shell make_rdm1 byte-identity
+// gate. Tightening the open-shell amplitude+Λ step norm to 1e-8 (with a higher
+// cycle cap, since no DIIS accelerates the tail) drives a genuinely converged
+// solution: e_corr → 6e-9 and dm1 → <5e-8 vs live PySCF. This is NOT a gate
+// loosening — it converges the open-shell problem to the same accuracy PySCF's
+// DIIS reaches. The closed-shell RCCSD constants are untouched.
+const UCONV_TOL: f64 = 1e-9;
+const UCONV_TOL_NORMT: f64 = 1e-8;
+const UMAX_CYCLE: usize = 300;
 use crate::error::CcsdError;
 use crate::reference::{CcsdReference, UccsdReference};
 use crate::uintermediates::{self as imd, SpinOrbitalEris};
@@ -113,6 +127,27 @@ pub struct UccsdResult {
     pub emp2: f64,
     /// Converged spin-resolved amplitudes.
     pub amplitudes: UccsdAmplitudes,
+    /// Converged spin-orbital `t1`, flat `[no,nv]` C-order (occ = [α-occ, β-occ],
+    /// vir = [α-vir, β-vir]). Consumed by the open-shell λ/RDM surface
+    /// (`solve_ulambda`/`umake_rdm1`/`umake_rdm2`); the spin-block
+    /// [`UccsdAmplitudes`] carries NO t1.
+    pub so_t1: Vec<f64>,
+    /// Converged spin-orbital `t2`, flat `[no,no,nv,nv]` C-order. The single
+    /// spin-orbital tensor the spin-block triple is sliced from.
+    pub so_t2: Vec<f64>,
+    /// The converged spin-orbital antisymmetrized ERIs + Fock the kernel built
+    /// (the λ/RDM read these directly — rebuilding them would re-run the
+    /// `int2e`+`ao2mo` transform).
+    pub so_eris: SpinOrbitalEris,
+    /// Number of (active) α-occupied spin-orbitals (= `0..no_a` of the spin-
+    /// orbital occupied range).
+    pub no_a: usize,
+    /// Number of (active) α-virtual spin-orbitals (= `0..nv_a` of the vir range).
+    pub nv_a: usize,
+    /// Number of (active) β-occupied spin-orbitals (= `no_a..no`).
+    pub no_b: usize,
+    /// Number of (active) β-virtual spin-orbitals (= `nv_a..nv`).
+    pub nv_b: usize,
 }
 
 /// Per-channel active occupied / virtual columns: returns the AO×nmo MO
@@ -946,8 +981,10 @@ pub fn uccsd_kernel(
     let mut converged = false;
     let mut niter = 0usize;
 
-    // (5) Amplitude iteration.
-    for istep in 0..MAX_CYCLE {
+    // (5) Amplitude iteration. Uses the open-shell-path convergence (no DIIS →
+    // tighter step-norm threshold so the converged amplitudes are accurate
+    // enough for the 1e-7 make_rdm1 gate, F-07).
+    for istep in 0..UMAX_CYCLE {
         niter = istep + 1;
         let (t1new, t2new) = pool
             .with_mut_slice(&wid, |w| update_amps_so(&t1_cur, &t2_cur, &eris, w))
@@ -957,7 +994,7 @@ pub fn uccsd_kernel(
         t2_cur = t2new;
         let eold = e_corr;
         e_corr = energy_so(&t1_cur, &t2_cur, &eris)?;
-        if (e_corr - eold).abs() < CONV_TOL && normt < CONV_TOL_NORMT {
+        if (e_corr - eold).abs() < UCONV_TOL && normt < UCONV_TOL_NORMT {
             converged = true;
             break;
         }
@@ -967,6 +1004,7 @@ pub fn uccsd_kernel(
     pool.release(wid);
 
     // Decompose the energy by spin channel + pack the spin-resolved amplitudes.
+    // pack_amplitudes BORROWS &t2_cur before t2_cur is moved into so_t2 below.
     let (e_aa, e_bb, e_ab) = decompose_energy(&t1_cur, &t2_cur, &eris, no, nv, no_a, nv_a);
     let amplitudes = pack_amplitudes(&t2_cur, no, nv, no_a, nv_a, no_b, nv_b);
 
@@ -979,6 +1017,15 @@ pub fn uccsd_kernel(
         niter,
         emp2,
         amplitudes,
+        // Surface the converged spin-orbital amps + eris (otherwise dropped here)
+        // so the open-shell λ/RDM surface can consume them without a re-transform.
+        so_t1: t1_cur,
+        so_t2: t2_cur,
+        so_eris: eris,
+        no_a,
+        nv_a,
+        no_b,
+        nv_b,
     })
 }
 

@@ -10,6 +10,26 @@ A pure-Rust rewrite of PySCF (the Python-based quantum chemistry package) that s
 
 If everything else fails, this must work: a Python user does `pip install pyscf-rs`, runs an existing PySCF script unchanged, gets the same numbers, faster.
 
+## Current Milestone: v2.0 — Periodic Boundary Conditions (PBC)
+
+**Goal:** Deliver the full periodic stack — a drop-in `pyscf.pbc.*` import surface — so existing PySCF solid-state scripts run unchanged on the pure-Rust core: build a crystal `Cell`, sample k-points, and run periodic SCF/DFT/correlation/response with bit-exact agreement to upstream.
+
+**Target features (full `pyscf/pbc/*` parity, per user scoping 2026-06-01):**
+- **pbc.gto** — `Cell` construction, lattice vectors, real-space/reciprocal-space lattice sums, GTH pseudopotential consumption (parser already landed), k-point meshes
+- **pbc.scf** — gamma-point + k-point HF: KRHF / KUHF / KROHF / KGHF (+ k-point symmetry, smearing, stability, newton)
+- **pbc.dft** — KRKS / KUKS / KROKS with periodic grids + XC; multigrid
+- **pbc.df** — density fitting: FFTDF, AFTDF, GDF (gdf_builder), MDF, RSDF; AO Fourier transforms (ft_ao)
+- **pbc.mp / pbc.cc / pbc.ci / pbc.ao2mo** — periodic KMP2, KCCSD, k-point CI, periodic MO transforms
+- **pbc.grad / pbc.geomopt** — periodic nuclear gradients + lattice/cell optimization
+- **pbc.tools / pbc.lib / pbc.symm** — k-point sampling, supercell builders, Ewald, k-point symmetry
+- **Periodic response & relativistic (per user "everything in pbc/")** — pbc.tdscf / pbc.tddft / pbc.gw / pbc.adc / pbc.eph / pbc.x2c
+- **MPI periodic paths** — pbc.mpicc / pbc.mpitools
+
+**Key context / constraints:**
+- PBC is, per this project's own prior framing, "essentially a parallel project" — expect a large multi-phase roadmap; v1.0 Phase 8 (perf + distribution) remains incomplete and is being branched away from to start this milestone.
+- Periodic integrals require new infrastructure absent from the molecular core: Bloch phase factors, real/reciprocal lattice sums, Ewald summation, and periodic density fitting (FFT/AFT/GDF) — `cintx` is currently molecular-only.
+- The molecular Out-of-Scope exclusions for relativistic / response / MPI methods are scoped to *molecular* code; their **periodic variants are in-scope for v2.0** because the user chose full `pbc/` parity.
+
 ## Requirements
 
 ### Validated
@@ -38,12 +58,12 @@ If everything else fails, this must work: a Python user does `pip install pyscf-
 
 <!-- Explicit boundaries. Includes reasoning to prevent re-adding. -->
 
-- **Periodic boundary conditions (`pyscf/pbc/*`)** — Solid-state with k-points is essentially a parallel project; defer to a future milestone
-- **Relativistic methods (`x2c`, `dhf`)** — Two-/four-component relativistic SCF; needed only for heavy-element work
+- **Periodic boundary conditions (`pyscf/pbc/*`)** — ⬆ **PROMOTED to active milestone v2.0** (2026-06-01). Full periodic stack now in scope; see "Current Milestone" above.
+- **Molecular relativistic methods (`x2c`, `dhf`)** — Two-/four-component relativistic SCF for *molecules*; needed only for heavy-element work. (Periodic `pbc.x2c` is in v2.0 scope.)
 - **Multi-reference methods (`mcscf`, `mcpdft`, `mrpt`)** — CASSCF, NEVPT2, etc.; niche and high implementation cost
-- **Excited-state / response methods (`tdscf`, `tddft`, `adc`, `gw`, EOM-CC)** — Entire response-theory layer; treat as a separate milestone
+- **Molecular excited-state / response methods (`tdscf`, `tddft`, `adc`, `gw`, EOM-CC)** — Entire *molecular* response-theory layer; treat as a separate milestone. (Periodic `pbc.tdscf/tddft/gw/adc` are in v2.0 scope.)
 - **Higher-order post-SCF beyond CCSD (CCSD(T), CC3, full-CI, AGF2)** — Defer; CCSD covers the bulk of practical use
-- **MPI / multi-node distribution** — cubecl + shared-memory parallelism only in v1; multi-node is a separate concern
+- **MPI / multi-node distribution for molecular paths** — cubecl + shared-memory parallelism only for the molecular core; multi-node molecular is a separate concern. (Periodic `pbc.mpicc/mpitools` are in v2.0 scope per full-`pbc/` parity.)
 - **Conda channel publishing** — crates.io and PyPI wheels cover v1 distribution; conda-forge can come later
 - **Solvent models, QM/MM, NAC, EPH, localized orbitals** — All defer with the rest of the specialty modules
 
@@ -107,3 +127,5 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 *Last updated: 2026-05-26 after Phase 7 (gradients + geomopt) completion — grad+geomopt moved Active → Validated (GRAD-01..10, GEOMOPT-01..07; 10/10 plans, verified 5/5 must-haves). 3 Key Decisions logged (one CPHF; geomeTRIC re-derived not vendored under its Non-AI license; structural-complete/numeric-gated posture). Upstream-byte-identity analytical-grad numeric is workflow_dispatch-gated on the unscheduled cintx grad-intor workstream (6/8 families missing, 07-01); GRAD-01..07 + GEOMOPT-07 carry `[~]` in REQUIREMENTS.md. Advisory code-review (07-REVIEW.md) reachable BLOCKERs CR-01/CR-02 fixed; WR-01..07 are cintx-gated follow-ups. NOTE: dft (Phase 4) + mp2 (Phase 5) Active→Validated move still not recorded (pre-existing drift, flagged inline). Next: Phase 8 (GPU enable + oracle hardening + distribution).*
+
+*2026-06-01: Milestone **v2.0 — Periodic Boundary Conditions (PBC)** started. Scope = full `pyscf/pbc/*` parity (all 21 subpackages incl. periodic response/relativistic/MPI variants), per explicit user scoping. PBC moved from Out of Scope → Current Milestone; molecular relativistic/response/MPI exclusions re-scoped to molecular-only. v1.0 Phase 8 remains incomplete (branched away from to start v2.0).*

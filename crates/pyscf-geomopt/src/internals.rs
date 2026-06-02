@@ -247,9 +247,9 @@ mod tests {
     fn h2o_generates_two_bonds_and_one_angle() {
         // H2O near equilibrium (Bohr): O at origin, two O–H ~1.81 Bohr.
         let coords = [
-            [0.0, 0.0, 0.0],         // O
-            [1.43, 1.11, 0.0],       // H
-            [-1.43, 1.11, 0.0],      // H
+            [0.0, 0.0, 0.0],    // O
+            [1.43, 1.11, 0.0],  // H
+            [-1.43, 1.11, 0.0], // H
         ];
         let charges = [8, 1, 1];
         let prims = generate(&coords, &charges);

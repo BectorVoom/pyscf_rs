@@ -32,16 +32,18 @@
 // PyO3 boundary: hook methods marshal NumPy arrays + multi-field results.
 #![allow(clippy::type_complexity)]
 
-use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{
+    PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
 use pyscf_ccsd::{
-    CcsdOverrideHooks, CcsdReference, ChemistsEris, UccsdReference, ccsd_kernel, default_ao2mo,
-    default_energy, default_update_amps, df_ao2mo, make_rdm1 as ccsd_make_rdm1,
-    make_rdm2 as ccsd_make_rdm2, solve_lambda, uccsd_kernel,
+    CcsdOverrideHooks, CcsdReference, ChemistsEris, SpinOrbitalEris, UccsdReference, ccsd_kernel,
+    default_ao2mo, default_energy, default_update_amps, df_ao2mo, make_rdm1 as ccsd_make_rdm1,
+    make_rdm2 as ccsd_make_rdm2, solve_lambda, solve_ulambda, uccsd_kernel, umake_rdm1, umake_rdm2,
 };
-use pyscf_core::{Amplitudes, Density, Energy, PyscfRsError};
+use pyscf_core::{Amplitudes, Density, Energy, MOCoefficients, Mole, PyscfRsError};
 use pyscf_df::{DfIntegrals, cholesky_eri, default_ri};
 use pyscf_mp2::Frozen;
 use pyscf_runtime::WorkspacePool;
@@ -114,13 +116,92 @@ fn snapshot_reference(py: Python<'_>, mf: &Py<PyAny>) -> PyResult<CcsdReference>
     })
 }
 
-/// Snapshot an unrestricted `mf` into a `UccsdReference`. Upstream UHF carries
-/// `mo_coeff[0/1]` (α/β); a fully-wired UHF snapshot reads the α/β slices. When
-/// the mf has a single (restricted-shaped) MO set, both channels share it (a
-/// self-consistent closed-shell-as-open-shell reference) — the structural
-/// contract is the two-channel `UccsdReference` shape consumed by `uccsd_kernel`
-/// (mirrors `mp.rs::snapshot_ump_reference`).
+/// Build a per-spin `CcsdReference` from spin index `s` of a UHF `mf`, where
+/// `mf.mo_coeff` is the 3-D `[2,nao,nmo]` array and `mf.mo_energy`/`mf.mo_occ`
+/// are 2-D `[2,n*]` arrays. Both spins share `mf.mol` and `mf.e_tot`. Verbatim
+/// the `mp.rs::ump_channel_from_3d` shape, renamed Mp2→Ccsd.
+fn uccsd_channel_from_3d(
+    py: Python<'_>,
+    mf: &Py<PyAny>,
+    mol: &Mole,
+    e_hf: f64,
+    converged: bool,
+    s: usize,
+) -> PyResult<CcsdReference> {
+    let bound = mf.bind(py);
+
+    let mo3: PyReadonlyArray3<f64> = bound.getattr("mo_coeff")?.extract()?;
+    let shape = mo3.shape();
+    if shape.len() != 3 || shape[0] < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "UHF mf.mo_coeff must be [2,nao,nmo], got shape {shape:?}"
+        )));
+    }
+    let (nao, nmo) = (shape[1], shape[2]);
+    let view = mo3.as_array();
+    // Column-major [nao,nmo]: C[ao,mo] at ao + mo*nao.
+    let mut data = Vec::with_capacity(nao * nmo);
+    for mo in 0..nmo {
+        for ao in 0..nao {
+            data.push(view[[s, ao, mo]]);
+        }
+    }
+
+    let e2: PyReadonlyArray2<f64> = bound.getattr("mo_energy")?.extract()?;
+    let o2: PyReadonlyArray2<f64> = bound.getattr("mo_occ")?.extract()?;
+    let ev = e2.as_array();
+    let ov = o2.as_array();
+    let mo_energy: Vec<f64> = (0..nmo).map(|m| ev[[s, m]]).collect();
+    let mo_occ: Vec<f64> = (0..nmo).map(|m| ov[[s, m]]).collect();
+
+    let mo_coeff = MOCoefficients {
+        nao,
+        nmo,
+        data,
+        energies: mo_energy.clone(),
+        occupations: mo_occ.clone(),
+    };
+
+    Ok(CcsdReference {
+        mo_coeff,
+        mo_energy,
+        mo_occ,
+        e_hf,
+        converged,
+        mol: mol.clone(),
+    })
+}
+
+/// Snapshot an unrestricted `mf` into a `UccsdReference`. When `mf.mo_coeff` is
+/// the 3-D `[2,nao,nmo]` UHF array the α/β channels are read from the spin-0/1
+/// slices (the genuine open-shell reference — REQUIRED for nocc_α≠nocc_β, e.g.
+/// the OH oracle); when the mf carries a single restricted-shaped MO set (2-D
+/// `mo_coeff`), both channels share it (closed-shell-as-open-shell). Mirrors
+/// `mp.rs::snapshot_ump_reference`.
 fn snapshot_uccsd_reference(py: Python<'_>, mf: &Py<PyAny>) -> PyResult<UccsdReference> {
+    let bound = mf.bind(py);
+    let mol: Mole = extract_mole_from_pyany(py, mf)?;
+    let e_hf: f64 = bound.getattr("e_tot")?.extract()?;
+    let converged: bool = bound
+        .getattr("converged")
+        .and_then(|c| c.extract())
+        .unwrap_or(true);
+
+    let is_uhf_shaped = bound
+        .getattr("mo_coeff")
+        .ok()
+        .and_then(|o| o.getattr("ndim").ok())
+        .and_then(|n| n.extract::<usize>().ok())
+        .map(|ndim| ndim == 3)
+        .unwrap_or(false);
+
+    if is_uhf_shaped {
+        let alpha = uccsd_channel_from_3d(py, mf, &mol, e_hf, converged, 0)?;
+        let beta = uccsd_channel_from_3d(py, mf, &mol, e_hf, converged, 1)?;
+        return Ok(UccsdReference { alpha, beta });
+    }
+
+    // Restricted-shaped fallback (closed-shell treated as α==β).
     let alpha = snapshot_reference(py, mf)?;
     let beta = alpha.clone();
     Ok(UccsdReference { alpha, beta })
@@ -133,6 +214,36 @@ fn snapshot_uccsd_reference(py: Python<'_>, mf: &Py<PyAny>) -> PyResult<UccsdRef
 fn build_df_integrals(refr: &CcsdReference) -> Result<DfIntegrals, PyscfRsError> {
     let aux = default_ri(&refr.mol.basis);
     cholesky_eri(&refr.mol, aux)
+}
+
+/// Reshape a flat `[side*side]` row-major `Vec<f64>` into a `[side, side]` NumPy
+/// 2-D array (the open-shell spin-block marshalling helper, F-07).
+fn vec_to_pyarray2<'py>(
+    py: Python<'py>,
+    data: &[f64],
+    side: usize,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let arr = ndarray::Array2::from_shape_vec((side, side), data.to_vec())
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(PyArray2::from_owned_array(py, arr))
+}
+
+/// Reshape a flat row-major `Vec<f64>` into a `[d0,d1,d2,d3]` NumPy 4-D array
+/// (the open-shell dm2 spin-block marshalling helper, F-07). PySCF returns the
+/// CCSD 2-RDM spin blocks as rank-4 tensors (`dm2aa`/`dm2bb` are
+/// `[nmo,nmo,nmo,nmo]`; `dm2ab` is `[nmo_a,nmo_a,nmo_b,nmo_b]`), so the bridge
+/// must hand back rank-4, not a flattened `[side²,side²]`.
+fn vec_to_pyarray4<'py>(
+    py: Python<'py>,
+    data: &[f64],
+    d0: usize,
+    d1: usize,
+    d2: usize,
+    d3: usize,
+) -> PyResult<Bound<'py, numpy::PyArray4<f64>>> {
+    let arr = ndarray::Array4::from_shape_vec((d0, d1, d2, d3), data.to_vec())
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(numpy::PyArray4::from_owned_array(py, arr))
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -565,6 +676,20 @@ impl PyRCCSD {
 // PyUCCSD — open-shell Unrestricted CCSD.
 // ═══════════════════════════════════════════════════════════════════════
 
+/// The converged spin-orbital amplitudes + eris + per-spin counts the open-shell
+/// λ/RDM surface consumes (cached after `kernel()`). Mirrors the closed-shell
+/// `PyRCCSD::amps` cache but carries the full spin-orbital `(t1,t2,eris)` (the
+/// spin-block triple has no t1 and cannot drive λ/RDM).
+struct SoCache {
+    t1: Vec<f64>,
+    t2: Vec<f64>,
+    eris: SpinOrbitalEris,
+    no_a: usize,
+    nv_a: usize,
+    no_b: usize,
+    nv_b: usize,
+}
+
 #[pyclass(subclass, name = "UCCSD", module = "pyscf._native.cc")]
 pub struct PyUCCSD {
     /// Eagerly-snapshotted α/β reference pair (D-09).
@@ -572,6 +697,9 @@ pub struct PyUCCSD {
     pub(crate) py_mf: Py<PyAny>,
     pub(crate) frozen: Frozen,
     pub(crate) e_corr: Option<f64>,
+    /// Converged spin-orbital amps+eris cache (None until `kernel()`) — consumed
+    /// by `solve_lambda`/`make_rdm1`/`make_rdm2`.
+    so: Option<SoCache>,
 }
 
 impl PyUCCSD {
@@ -581,6 +709,7 @@ impl PyUCCSD {
             py_mf,
             frozen,
             e_corr: None,
+            so: None,
         }
     }
 }
@@ -628,6 +757,17 @@ impl PyUCCSD {
         {
             let mut me = slf.borrow_mut();
             me.e_corr = Some(result.e_corr);
+            // Cache the converged spin-orbital amps+eris (otherwise dropped) so
+            // the open-shell λ/RDM surface can consume them (Task 4).
+            me.so = Some(SoCache {
+                t1: result.so_t1,
+                t2: result.so_t2,
+                eris: result.so_eris,
+                no_a: result.no_a,
+                nv_a: result.nv_a,
+                no_b: result.no_b,
+                nv_b: result.nv_b,
+            });
         }
         Ok(result.e_corr)
     }
@@ -635,6 +775,120 @@ impl PyUCCSD {
     fn run<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, Self>> {
         let _ = PyUCCSD::kernel(slf.clone(), py)?;
         Ok(slf)
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // solve_lambda / make_rdm1 / make_rdm2 (F-07 — open-shell λ/RDM surface).
+    // DIRECT-IN-BRIDGE (RESEARCH Open Question 1): open-shell λ/RDM does NOT
+    // route through CcsdOverrideHooks (that trait is RHF-shaped on
+    // CcsdReference and cannot carry UccsdReference). The wave-3 closure is
+    // these entry points being live, not the hooks.rs trait default body.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// `uccsd.solve_lambda()` — solve the open-shell (spin-orbital GCCSD)
+    /// Λ-equations on the cached converged spin-orbital amplitudes (requires
+    /// `kernel()` first). Returns the convergence flag.
+    fn solve_lambda(slf: Bound<'_, Self>, py: Python<'_>) -> PyResult<bool> {
+        let me = slf.borrow();
+        let so = me.so.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "solve_lambda requires kernel() first (no converged amplitudes)",
+            )
+        })?;
+        let lam = py
+            .detach(|| {
+                let pool = WorkspacePool::from_env();
+                solve_ulambda(&so.t1, &so.t2, &so.eris, &pool)
+            })
+            .map_err(pyscf_to_py)?;
+        Ok(lam.converged)
+    }
+
+    /// `uccsd.make_rdm1(ao_repr=False)` — open-shell CCSD 1-RDM (requires
+    /// `kernel()`). Solves Λ then builds the spin-block `(dm1a, dm1b)` tuple,
+    /// returned as a pair of NumPy 2-D arrays. Subclass overrides route through
+    /// `call_method1` (Pitfall 7).
+    #[pyo3(signature = (ao_repr=false))]
+    fn make_rdm1<'py>(
+        slf: Bound<'py, Self>,
+        py: Python<'py>,
+        ao_repr: bool,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let bridge_slf: Py<PyAny> = slf.clone().into_any().unbind();
+        if is_overridden(&bridge_slf, py, "make_rdm1", &["UCCSD"]) {
+            let args = PyTuple::new(py, Vec::<Bound<'_, PyAny>>::new())?;
+            let result = bridge_slf.bind(py).call_method1("make_rdm1", args)?;
+            return result
+                .downcast_into::<PyTuple>()
+                .map_err(PyErr::from);
+        }
+        let me = slf.borrow();
+        let so = me.so.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "make_rdm1 requires kernel() first (no converged amplitudes)",
+            )
+        })?;
+        let mo_a = me.inner.alpha.mo_coeff.clone();
+        let mo_b = me.inner.beta.mo_coeff.clone();
+        let r = py
+            .detach(|| -> Result<_, PyscfRsError> {
+                let pool = WorkspacePool::from_env();
+                let lam = solve_ulambda(&so.t1, &so.t2, &so.eris, &pool)?;
+                umake_rdm1(
+                    &so.t1, &so.t2, &lam.l1, &lam.l2, &so.eris, ao_repr, so.no_a, so.nv_a, so.no_b,
+                    so.nv_b, &mo_a, &mo_b,
+                )
+            })
+            .map_err(pyscf_to_py)?;
+        let dm1a = vec_to_pyarray2(py, &r.dm1a, r.nmo_a)?;
+        let dm1b = vec_to_pyarray2(py, &r.dm1b, r.nmo_b)?;
+        PyTuple::new(py, [dm1a.into_any(), dm1b.into_any()])
+    }
+
+    /// `uccsd.make_rdm2(ao_repr=False)` — open-shell CCSD 2-RDM (requires
+    /// `kernel()`). Returns the spin-block `(dm2aa, dm2ab, dm2bb)` tuple, each
+    /// reshaped to a square 2-D NumPy array. Subclass overrides route through
+    /// call_method1.
+    #[pyo3(signature = (ao_repr=false))]
+    fn make_rdm2<'py>(
+        slf: Bound<'py, Self>,
+        py: Python<'py>,
+        ao_repr: bool,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let bridge_slf: Py<PyAny> = slf.clone().into_any().unbind();
+        if is_overridden(&bridge_slf, py, "make_rdm2", &["UCCSD"]) {
+            let args = PyTuple::new(py, Vec::<Bound<'_, PyAny>>::new())?;
+            let result = bridge_slf.bind(py).call_method1("make_rdm2", args)?;
+            return result
+                .downcast_into::<PyTuple>()
+                .map_err(PyErr::from);
+        }
+        let me = slf.borrow();
+        let so = me.so.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err(
+                "make_rdm2 requires kernel() first (no converged amplitudes)",
+            )
+        })?;
+        let mo_a = me.inner.alpha.mo_coeff.clone();
+        let mo_b = me.inner.beta.mo_coeff.clone();
+        let r = py
+            .detach(|| -> Result<_, PyscfRsError> {
+                let pool = WorkspacePool::from_env();
+                let lam = solve_ulambda(&so.t1, &so.t2, &so.eris, &pool)?;
+                umake_rdm2(
+                    &so.t1, &so.t2, &lam.l1, &lam.l2, &so.eris, ao_repr, so.no_a, so.nv_a, so.no_b,
+                    so.nv_b, &mo_a, &mo_b, &pool,
+                )
+            })
+            .map_err(pyscf_to_py)?;
+        // PySCF-shaped rank-4 spin blocks: dm2aa=[na,na,na,na],
+        // dm2ab=[na,na,nb,nb], dm2bb=[nb,nb,nb,nb] (F-07; not a flattened
+        // [side²,side²] — the open-shell make_rdm2 bonus comparison is shape-
+        // sensitive and PySCF returns rank-4).
+        let aa = vec_to_pyarray4(py, &r.dm2aa, r.na, r.na, r.na, r.na)?;
+        let ab = vec_to_pyarray4(py, &r.dm2ab, r.na, r.na, r.nb, r.nb)?;
+        let bb = vec_to_pyarray4(py, &r.dm2bb, r.nb, r.nb, r.nb, r.nb)?;
+        PyTuple::new(py, [aa.into_any(), ab.into_any(), bb.into_any()])
     }
 
     /// `uccsd.as_scanner()` — Mole→energy callable (CCSD-07).

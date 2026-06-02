@@ -13,12 +13,15 @@
 //! (`mol._ecp.is_empty()`). Derivative ECP names (`int1e_ecp_iprinv`,
 //! `int1e_ecp_ipnuc`) routed through the SCALAR `intor()` entry-point are
 //! rejected up front — independent of ECP presence — per 02-10 code-review
-//! WR-01. As of GRAD-07 (plan 07-01) that rejection is a clean
-//! cintx-availability error (NOT `NotYetImplemented{phase:7}`, which is
-//! closed); the real ECP gradient lands through the dedicated
-//! `ecp_int1e_ipnuc` trait method. The stub's DEFAULT `ecp_int1e_ipnuc`
-//! (called directly, not via the cintx engine) still returns the trait
-//! default `NotYetImplemented{phase:7}`.
+//! WR-01. That rejection is a clean `InvalidMolecule` error: the scalar path
+//! rejects derivative names because they are GRADIENT names, NOT because cintx
+//! lacks the family. As of F-05 (cintx workstream 21-07) BOTH the `ipnuc`
+//! (GRAD-07) and the per-atom `iprinv` families are cintx-ready, each served by
+//! its own dedicated trait method (`ecp_int1e_ipnuc` / `ecp_int1e_iprinv`); a
+//! gradient name must still never silently resolve to the SCALAR operator, so
+//! the scalar-path rejection stays correct (the WR-01 invariant). The stub's
+//! DEFAULT `ecp_int1e_ipnuc` (called directly, not via the cintx engine) still
+//! returns the trait default `NotYetImplemented{phase:7}`.
 
 use pyscf_core::{EcpEngine, PyscfRsError, Unit};
 use pyscf_gto::{AtomInput, BasisInput, EcpEngineNotAvailable, M, MoleBuildArgs, intor};
@@ -51,15 +54,18 @@ fn int1e_ecp_on_ecpless_mol_returns_engine_not_available() {
 
 #[test]
 fn int1e_ecp_iprinv_via_scalar_intor_is_clean_cintx_availability_error() {
-    // WR-01 (02-10 code review) + GRAD-07 (plan 07-01): `int1e_ecp_iprinv` is
-    // an ECP *gradient* (derivative) name. The scalar `intor()`/`ecp_int1e`
-    // path rejects derivative ECP names up front — INDEPENDENT of whether the
-    // molecule carries an ECP — so it can never silently resolve to the scalar
-    // operator. As of GRAD-07 that rejection is a clean cintx-availability
-    // `InvalidMolecule` error (NOT `NotYetImplemented{phase:7}`, which is
-    // closed). `int1e_ecp_iprinv`/`ECPscalar_iprinv` is MISSING from every
-    // cintx branch today; numeric un-gates when a future cintx workstream
-    // ships the family.
+    // WR-01 (02-10 code review): `int1e_ecp_iprinv` is an ECP *gradient*
+    // (derivative) name. The scalar `intor()`/`ecp_int1e` path rejects
+    // derivative ECP names up front — INDEPENDENT of whether the molecule
+    // carries an ECP — so a gradient name can NEVER silently resolve to the
+    // SCALAR operator. That rejection is a clean `InvalidMolecule` error.
+    //
+    // F-05 (cintx workstream 21-07): `int1e_ecp_iprinv`/`ECPscalar_iprinv` is no
+    // longer "MISSING from every cintx branch" — the DEDICATED `ecp_int1e_iprinv`
+    // trait method now serves it (per-atom rinv origin). This SCALAR path still
+    // rejects it because iprinv is a GRADIENT name, NOT because cintx lacks the
+    // family — so the assertion below is RETAINED unchanged (the WR-01 invariant
+    // guard; do NOT weaken it).
     let mol = h_mol();
     let r = intor(&mol, "int1e_ecp_iprinv");
     assert!(

@@ -34,11 +34,11 @@
 //! PROVEN by the always-on CpuRuntime arm regardless of rocm availability).
 
 use cubecl::Runtime; // brings `::client` into scope for the concrete runtimes
+use pyscf_algebra::AlgebraClient;
 use pyscf_core::raw_layout::{
     ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, NCTR_OF, NPRIM_OF, PTR_COEFF, PTR_COORD, PTR_EXP,
 };
 use pyscf_kernels::{eval_gto_sph, eval_gto_sph_deriv1};
-use pyscf_algebra::AlgebraClient;
 
 /// Deterministic LCG (Knuth/MMIX constants) → reproducible "random" values
 /// without pulling in the `rand` crate. (Same generator as gemm_oracle.rs.)
@@ -100,7 +100,12 @@ struct SShellFixture {
 /// PTR_COEFF, _]; ATM_SLOTS row carries PTR_COORD into env. Coefficients are
 /// packed F-order at PTR_COEFF (`ptr_coeff + c_idx*nprim + p_idx`). ao_loc is
 /// the running sum of nctr per shell.
-fn build_fixture(rng: &mut Lcg, n_atoms: usize, shells_per_atom: usize, ngrids: usize) -> SShellFixture {
+fn build_fixture(
+    rng: &mut Lcg,
+    n_atoms: usize,
+    shells_per_atom: usize,
+    ngrids: usize,
+) -> SShellFixture {
     let n_shells = n_atoms * shells_per_atom;
 
     // env layout: [ atom coords (3 per atom) | per-shell (exps then coeffs) ].
@@ -256,7 +261,11 @@ fn check_case(
         f.ngrids * f.nao,
         "device output length must be ngrids*nao"
     );
-    assert_eq!(device.shape, vec![f.ngrids, f.nao], "device shape descriptor");
+    assert_eq!(
+        device.shape,
+        vec![f.ngrids, f.nao],
+        "device shape descriptor"
+    );
     assert_eq!(reference.len(), f.ngrids * f.nao, "oracle output length");
 
     max_abs_diff(&device.values, &reference)
@@ -405,7 +414,16 @@ mod lge1_reference {
                 0.0,
             ],
             [
-                0.0, 0.0, 0.0, 0.0, 2.890_611_442_640_554_3, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                2.890_611_442_640_554_3,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
             ],
             [
                 0.0,
@@ -809,7 +827,11 @@ fn check_mixed_case(
         f.ngrids * f.nao,
         "device output length must be ngrids*nao"
     );
-    assert_eq!(device.shape, vec![f.ngrids, f.nao], "device shape descriptor");
+    assert_eq!(
+        device.shape,
+        vec![f.ngrids, f.nao],
+        "device shape descriptor"
+    );
     assert_eq!(reference.len(), f.ngrids * f.nao, "oracle output length");
 
     max_abs_diff(&device.values, &reference)
@@ -953,8 +975,7 @@ fn oracle_eval_deriv1(f: &MixedFixture) -> Vec<f64> {
                 let mut cdy = vec![0.0_f64; ncart];
                 let mut cdz = vec![0.0_f64; ncart];
                 for (ci, &(lx, ly, lz)) in powers.iter().enumerate() {
-                    let mono =
-                        dx.powi(lx as i32) * dy.powi(ly as i32) * dz.powi(lz as i32);
+                    let mono = dx.powi(lx as i32) * dy.powi(ly as i32) * dz.powi(lz as i32);
                     cval[ci] = mono * radial;
                     // operand order IDENTICAL to host eval_gto.rs ~1382-1387.
                     cdx[ci] = radial_2a * dx * mono
@@ -1020,7 +1041,11 @@ fn check_deriv1_case(
         4 * f.ngrids * f.nao,
         "deriv1 device output length must be 4*ngrids*nao"
     );
-    assert_eq!(reference.len(), 4 * f.ngrids * f.nao, "oracle output length");
+    assert_eq!(
+        reference.len(),
+        4 * f.ngrids * f.nao,
+        "oracle output length"
+    );
 
     // Diff the full flat buffer — all 4 components (value + ∂x/∂y/∂z) at once.
     max_abs_diff(&device.values, &reference)
@@ -1052,9 +1077,7 @@ fn eval_gto_deriv1_matches_oracle_on_cpu() {
              shells/atom={spa}, ngrids={ng}): max abs diff {diff:e} >= tol {TOL:e}"
         );
     }
-    eprintln!(
-        "[eval_gto_oracle] CPU deriv1 (4-comp p/d/f/g) worst max_abs_diff = {worst:e}"
-    );
+    eprintln!("[eval_gto_oracle] CPU deriv1 (4-comp p/d/f/g) worst max_abs_diff = {worst:e}");
 }
 
 #[cfg(feature = "rocm")]
@@ -1077,7 +1100,5 @@ fn eval_gto_deriv1_matches_oracle_on_rocm() {
              shells/atom={spa}, ngrids={ng}): max abs diff {diff:e} >= tol {TOL:e}"
         );
     }
-    eprintln!(
-        "[eval_gto_oracle] ROCm deriv1 (4-comp p/d/f/g) worst max_abs_diff = {worst:e}"
-    );
+    eprintln!("[eval_gto_oracle] ROCm deriv1 (4-comp p/d/f/g) worst max_abs_diff = {worst:e}");
 }

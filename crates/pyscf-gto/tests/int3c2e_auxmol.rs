@@ -9,7 +9,7 @@
 //! PySCF is the CI-gated/human-verify arm (no numpy/PySCF in the sandbox).
 
 use pyscf_core::Unit;
-use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor_with_auxmol};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor, intor_with_auxmol};
 
 fn h2_mole(basis: &str) -> pyscf_core::Mole {
     M(MoleBuildArgs {
@@ -66,6 +66,52 @@ fn int3c2e_h2_real_finite_nonzero_bra_symmetric() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn int3c2e_single_mol_equals_self_auxmol() {
+    // F-04: `intor(mol, "int3c2e_sph")` (single-mol arity-3, all three centers
+    // over mol's own basis) is the `auxmol == mol` specialisation of
+    // `intor_with_auxmol`. With mol as its own auxmol, the byte-verified DF
+    // wrapper produces an [nao,nao,naux=nao] tensor that must be bit-for-bit
+    // identical to the single-mol path. This is the rigorous in-tree oracle:
+    // the DF wrapper is libcint-byte-identical at the cintx source, so equality
+    // here pins the single-mol path to the same numbers — no live PySCF needed.
+    let mol = h2_mole("sto-3g");
+    let nao = mol.nao_nr;
+
+    let single = intor(&mol, "int3c2e_sph").expect("single-mol int3c2e_sph must evaluate (F-04)");
+
+    // Shape contract: [nao, nao, nao].
+    assert_eq!(
+        single.shape,
+        vec![nao, nao, nao],
+        "single-mol int3c2e shape is [nao,nao,nao]"
+    );
+    assert_eq!(single.values.len(), nao * nao * nao);
+    assert!(
+        single.values.iter().all(|v| v.is_finite()),
+        "single-mol int3c2e values must all be finite"
+    );
+    assert!(
+        single.values.iter().any(|&v| v.abs() > 1e-12),
+        "single-mol int3c2e must be non-zero"
+    );
+
+    // Oracle: identical to the byte-verified DF wrapper with auxmol == mol.
+    let auxmol = h2_mole("sto-3g");
+    let viaaux = intor_with_auxmol(&mol, "int3c2e_sph", &auxmol)
+        .expect("int3c2e_sph via auxmol==mol must evaluate");
+    assert_eq!(
+        single.shape, viaaux.shape,
+        "single-mol and auxmol==mol shapes must match"
+    );
+    for (idx, (a, b)) in single.values.iter().zip(viaaux.values.iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-12,
+            "single-mol int3c2e diverges from auxmol==mol at [{idx}]: {a} vs {b}"
+        );
     }
 }
 

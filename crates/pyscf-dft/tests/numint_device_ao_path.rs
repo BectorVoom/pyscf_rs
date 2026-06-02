@@ -56,14 +56,14 @@ fn h2o_ccpvdz() -> pyscf_core::Mole {
 /// values are nonzero (a non-degenerate lock).
 fn grid_coords() -> Vec<[f64; 3]> {
     vec![
-        [0.05, 0.05, 0.05],   // near O
-        [0.0, 0.0, 0.96],     // on H1
-        [0.0, 0.93, -0.24],   // on H2
-        [0.1, -0.1, 0.2],     // off-center
-        [0.0, 0.0, 0.5],      // O–H1 midpoint-ish
-        [0.0, 0.45, -0.1],    // O–H2 midpoint-ish
-        [-0.2, 0.3, 0.4],     // generic point
-        [0.3, 0.3, 0.3],      // generic point
+        [0.05, 0.05, 0.05], // near O
+        [0.0, 0.0, 0.96],   // on H1
+        [0.0, 0.93, -0.24], // on H2
+        [0.1, -0.1, 0.2],   // off-center
+        [0.0, 0.0, 0.5],    // O–H1 midpoint-ish
+        [0.0, 0.45, -0.1],  // O–H2 midpoint-ish
+        [-0.2, 0.3, 0.4],   // generic point
+        [0.3, 0.3, 0.3],    // generic point
     ]
 }
 
@@ -77,8 +77,7 @@ fn fixed_symmetric_dm(nao: usize) -> Density {
     // and avoids large magnitudes that would dwarf the tolerance.
     for mu in 0..nao {
         for nu in 0..nao {
-            let raw = 0.5
-                + 0.3 * (((mu * 7 + nu * 3) % 11) as f64 / 11.0)
+            let raw = 0.5 + 0.3 * (((mu * 7 + nu * 3) % 11) as f64 / 11.0)
                 - 0.15 * (((mu * 5 + nu) % 13) as f64 / 13.0);
             data[mu * nao + nu] = raw;
         }

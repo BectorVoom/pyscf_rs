@@ -247,13 +247,7 @@ fn mp2_fvind(refr: &Mp2Reference, x: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
 
     // 2. v = get_veff(mol, dm + dmᵀ). The SCF ENERGY J/K (int2e — cintx-ready);
     //    a clean availability error `?`-propagates if int2e is unavailable.
-    let veff = pyscf_scf::fock::default_get_veff(
-        &refr.mol,
-        &Density {
-            nao,
-            data: dm_sym,
-        },
-    )?;
+    let veff = pyscf_scf::fock::default_get_veff(&refr.mol, &Density { nao, data: dm_sym })?;
     if veff.data.len() != nao * nao {
         return Err(GradError::ShapeMismatch {
             expected: nao * nao,
@@ -359,7 +353,10 @@ pub fn response_dm1(refr: &Mp2Reference, xvo: &[f64]) -> Result<Vec<f64>, PyscfR
 /// the RHF `get_veff`/`get_ovlp`/`hcore_deriv`; those `?`-route to a clean
 /// cintx-availability error (D-02) until the cintx workstream lands them. The
 /// relaxed-density + Z-vector machinery above is the always-on STRUCTURAL form.
-pub fn grad_elec(refr: &Mp2Reference, atmlst: Option<&[usize]>) -> Result<Vec<[f64; 3]>, PyscfRsError> {
+pub fn grad_elec(
+    refr: &Mp2Reference,
+    atmlst: Option<&[usize]>,
+) -> Result<Vec<[f64; 3]>, PyscfRsError> {
     let mol = &refr.mol;
     let nocc = refr.nocc();
     let nvir = refr.nvir();

@@ -208,7 +208,9 @@ fn make_rdm1(refr: &RhfReference) -> Result<Vec<f64>, PyscfRsError> {
     for mu in 0..nao {
         for nu in 0..nao {
             for i in 0..nmo {
-                terms[i] = refr.mo_occ[i] * refr.mo_coeff.data[mu + i * nao] * refr.mo_coeff.data[nu + i * nao];
+                terms[i] = refr.mo_occ[i]
+                    * refr.mo_coeff.data[mu + i * nao]
+                    * refr.mo_coeff.data[nu + i * nao];
             }
             dm0[mu * nao + nu] = oracle_sum(&terms);
         }
@@ -361,7 +363,8 @@ fn get_vxc(refr: &RksReference, dm0: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
 
     // vmat[x,μ,ν] = -Σ_g w_g · vxc_pp_g · (∇_x AO_μ)_g · AO_ν,g.
     // AO F-order index: ao.values[comp*ngrids*nao + (g + mu*ngrids)].
-    let ao_at = |comp: usize, g: usize, mu: usize| ao.values[comp * ngrids * nao + (g + mu * ngrids)];
+    let ao_at =
+        |comp: usize, g: usize, mu: usize| ao.values[comp * ngrids * nao + (g + mu * ngrids)];
     let n2 = nao * nao;
     let mut vmat = vec![0.0_f64; NCOMP * n2];
     let mut terms = vec![0.0_f64; ngrids];
@@ -399,7 +402,8 @@ fn get_jk(mol: &Mole, dm0: &[f64]) -> Result<(Vec<f64>, Vec<f64>), PyscfRsError>
     let n2 = nao * nao;
     let n3 = n2 * nao;
     let n4 = n3 * nao;
-    let idx = |x: usize, i: usize, j: usize, k: usize, l: usize| x * n4 + i + j * nao + k * n2 + l * n3;
+    let idx =
+        |x: usize, i: usize, j: usize, k: usize, l: usize| x * n4 + i + j * nao + k * n2 + l * n3;
     let dval = |a: usize, b: usize| dm0[a * nao + b];
 
     let mut vj = vec![0.0_f64; NCOMP * n2];
@@ -486,7 +490,10 @@ fn grid_weight_derivative_force(refr: &RksReference, ia: usize) -> Result<[f64; 
 /// The RKS electronic gradient (`rks.py` + `rhf.py:59-76`). Reuses the RHF
 /// Hellmann-Feynman + Pulay assembly with the KS `get_veff`, plus the
 /// `grid_response` `extra_force` per atom when enabled.
-pub fn grad_elec(g: &RksGradients, atmlst: Option<&[usize]>) -> Result<Vec<[f64; 3]>, PyscfRsError> {
+pub fn grad_elec(
+    g: &RksGradients,
+    atmlst: Option<&[usize]>,
+) -> Result<Vec<[f64; 3]>, PyscfRsError> {
     let refr = &g.reference;
     let mol = refr.mol();
     let nao = mol.nao_nr;
@@ -546,7 +553,9 @@ pub fn grad_elec(g: &RksGradients, atmlst: Option<&[usize]>) -> Result<Vec<[f64;
 fn ni_eval_vrho(xc: &str, rho: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
     let ni = NumInt::new(); // default Xcfun backend; libxc only under --features libxc
     let rb = RhoBlock::Lda { rho };
-    let out = ni.eval_xc(xc, &rb, DerivOrder::Vxc).map_err(PyscfRsError::from)?;
+    let out = ni
+        .eval_xc(xc, &rb, DerivOrder::Vxc)
+        .map_err(PyscfRsError::from)?;
     Ok(out.vrho)
 }
 
@@ -555,7 +564,9 @@ fn ni_eval_vrho(xc: &str, rho: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
 fn ni_eval_exc(xc: &str, rho: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
     let ni = NumInt::new();
     let rb = RhoBlock::Lda { rho };
-    let out = ni.eval_xc(xc, &rb, DerivOrder::Exc).map_err(PyscfRsError::from)?;
+    let out = ni
+        .eval_xc(xc, &rb, DerivOrder::Exc)
+        .map_err(PyscfRsError::from)?;
     Ok(out.exc)
 }
 
@@ -575,7 +586,10 @@ fn assert_component_leading(
     }
     if out.shape.first().copied() != Some(NCOMP) {
         return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-            format!("{name} must be component-leading [3, nao, nao] (Pitfall 4); got {:?}", out.shape),
+            format!(
+                "{name} must be component-leading [3, nao, nao] (Pitfall 4); got {:?}",
+                out.shape
+            ),
         )));
     }
     Ok(())

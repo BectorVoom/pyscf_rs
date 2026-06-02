@@ -77,14 +77,71 @@ fn h2_file_form() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// Form 5 — callable: a closure returning a `String` spec must build the exact
+/// same molecule as passing that `String` directly (congruence oracle).
 #[test]
-fn callable_form_returns_not_yet_implemented_phase_3() {
-    let r = M(h2_args(AtomInput::Callable, Unit::Bohr));
+fn callable_form_returning_string_matches_direct() {
+    let direct = M(h2_args(
+        AtomInput::String("H 0 0 0; H 0 0 1.4".into()),
+        Unit::Bohr,
+    ))
+    .unwrap();
+    let via_callable = M(h2_args(
+        AtomInput::callable(|| Ok(AtomInput::String("H 0 0 0; H 0 0 1.4".into()))),
+        Unit::Bohr,
+    ))
+    .unwrap();
+    assert_eq!(via_callable.natm, direct.natm);
+    assert_eq!(via_callable.nelectron, direct.nelectron);
+    assert_eq!(via_callable._atom, direct._atom);
+}
+
+/// The callable's produced form is resolved through the full `format_atom`
+/// path, so unit conversion (Angstrom → Bohr) applies to its output.
+#[test]
+fn callable_form_honours_unit_conversion() {
+    let mol = M(h2_args(
+        AtomInput::callable(|| Ok(AtomInput::Tuples(vec![("H".into(), [0.0, 0.0, 1.4])]))),
+        Unit::Ang,
+    ))
+    .unwrap();
+    approx::assert_abs_diff_eq!(mol._atom[0].1[2], 1.4 * 1.8897261339213, epsilon = 1e-9);
+}
+
+/// One-level recursion guard: a callable that returns another callable is
+/// rejected (not silently re-entered or infinitely recursed).
+#[test]
+fn callable_returning_callable_is_rejected() {
+    let r = M(h2_args(
+        AtomInput::callable(|| {
+            Ok(AtomInput::callable(|| {
+                Ok(AtomInput::String("H 0 0 0".into()))
+            }))
+        }),
+        Unit::Bohr,
+    ));
     match r {
-        Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 3, what }) => {
-            assert!(what.contains("callable"), "what = {}", what);
+        Err(pyscf_core::PyscfRsError::Core(_)) => {}
+        _ => panic!("expected Core error for nested callable, got {:?}", r),
+    }
+}
+
+/// An error returned by the closure propagates out of `format_atom` unchanged.
+#[test]
+fn callable_error_propagates() {
+    let r = M(h2_args(
+        AtomInput::callable(|| {
+            Err(pyscf_core::PyscfRsError::Core(
+                pyscf_core::CoreError::InvalidMolecule("boom".into()),
+            ))
+        }),
+        Unit::Bohr,
+    ));
+    match r {
+        Err(pyscf_core::PyscfRsError::Core(e)) => {
+            assert!(format!("{e}").contains("boom"), "got {e}");
         }
-        _ => panic!("expected NotYetImplemented{{phase: 3}}, got {:?}", r),
+        _ => panic!("expected propagated Core error, got {:?}", r),
     }
 }
 

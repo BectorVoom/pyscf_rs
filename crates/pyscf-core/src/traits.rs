@@ -96,4 +96,26 @@ pub trait EcpEngine: Send + Sync {
             what: "int1e_ecp_ipnuc (ECP gradient — Phase 7 GRAD-07)",
         })
     }
+
+    /// F-05: per-atom ECP force term `int1e_ecp_iprinv` / `ECPscalar_iprinv`
+    /// (`pyscf/grad/rhf.py:139-140` — `vrinv += mol.intor('ECPscalar_iprinv',
+    /// comp=3)` under `with_rinv_at_nucleus(atm_id)`). Distinct from
+    /// `ecp_int1e_ipnuc`'s all-slot accumulation: this selects ONLY the ECP
+    /// nucleus whose coordinate matches `rinv_origin`, returning a per-atom
+    /// component-leading `[3, nao, nao]` buffer.
+    ///
+    /// `rinv_origin` is the differentiated nucleus coordinate **in Bohr**
+    /// (`Mole` storage is always Bohr). cintx workstream 21-07 ships the
+    /// native `ecp_iprinv` kernel; the cintx-backed `CintxEcpEngine` overrides
+    /// this. The Phase-2 default returns `EcpEngineNotAvailable` so the stub
+    /// impl (and any other) stays valid without change.
+    fn ecp_int1e_iprinv(
+        &self,
+        mol: &Mole,
+        name: &str,
+        rinv_origin: [f64; 3],
+    ) -> Result<Density, PyscfRsError> {
+        let _ = (mol, name, rinv_origin);
+        Err(PyscfRsError::EcpEngineNotAvailable)
+    }
 }

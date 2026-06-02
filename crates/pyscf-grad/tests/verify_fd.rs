@@ -89,7 +89,10 @@ fn fd_flags_a_wrong_analytical_gradient() {
     )
     .expect("verify_fd should still run");
 
-    assert!(!report.passed, "a wrong analytical gradient must fail the gate");
+    assert!(
+        !report.passed,
+        "a wrong analytical gradient must fail the gate"
+    );
     assert!(report.max_abs_diff >= 1e-3);
 }
 

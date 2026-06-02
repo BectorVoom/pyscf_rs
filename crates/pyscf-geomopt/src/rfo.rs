@@ -331,7 +331,11 @@ mod tests {
         let params = ConvParams::gau();
         let (dq, _pred, _trust) = rfo_step(&hess, &g, 10.0, &params, None, None);
         assert_eq!(dq.len(), 1);
-        assert!(dq[0] < 0.0, "step must go downhill (negative), got {}", dq[0]);
+        assert!(
+            dq[0] < 0.0,
+            "step must go downhill (negative), got {}",
+            dq[0]
+        );
         // RFO is a DAMPED descent (the augmented-Hessian eigenvalue shortens
         // the step vs Newton's −2): dq = −g/(H−λ) ∈ (−2, 0).
         assert!(
@@ -421,7 +425,10 @@ mod tests {
         let dg = [-0.2, 0.0]; // dgᵀdq = −0.02 < 0 → must skip
         let before = hess.h.clone();
         hess.bfgs_update(&dq, &dg);
-        assert_eq!(hess.n_updates, 0, "negative-curvature update must be skipped");
+        assert_eq!(
+            hess.n_updates, 0,
+            "negative-curvature update must be skipped"
+        );
         assert_eq!(hess.h, before);
     }
 }

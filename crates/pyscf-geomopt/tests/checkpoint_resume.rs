@@ -43,10 +43,12 @@ fn harmonic_scanner(kb: f64, ka: f64) -> GradScanner {
         let r1 = dist(coords, 0, 1);
         let r2 = dist(coords, 0, 2);
         let th = angle_at(coords, 1, 0, 2);
-        0.5 * kb * ((r1 - EQ_ROH).powi(2) + (r2 - EQ_ROH).powi(2)) + 0.5 * ka * (th - theta_eq).powi(2)
+        0.5 * kb * ((r1 - EQ_ROH).powi(2) + (r2 - EQ_ROH).powi(2))
+            + 0.5 * ka * (th - theta_eq).powi(2)
     };
     let e_energy = e_of;
-    let energy: EnergyClosure = Box::new(move |mol: &Mole| Ok(Energy(e_energy(&mol.atom_coords()))));
+    let energy: EnergyClosure =
+        Box::new(move |mol: &Mole| Ok(Energy(e_energy(&mol.atom_coords()))));
     let grad: GradClosure = Box::new(move |mol: &Mole, _atmlst: Option<&[usize]>| {
         let coords = mol.atom_coords();
         let h = 1e-6;
@@ -167,15 +169,27 @@ fn checkpoint_state_round_trips_byte_for_byte() {
     assert_eq!(loaded.e_tot.to_bits(), state.e_tot.to_bits());
     assert_eq!(loaded.hessian.len(), state.hessian.len());
     for (a, b) in loaded.hessian.iter().zip(state.hessian.iter()) {
-        assert_eq!(a.to_bits(), b.to_bits(), "Hessian must round-trip bit-exactly");
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "Hessian must round-trip bit-exactly"
+        );
     }
     let lq = loaded.prev_q.expect("prev_q present");
     for (a, b) in lq.iter().zip(q.iter()) {
-        assert_eq!(a.to_bits(), b.to_bits(), "prev_q must round-trip bit-exactly");
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "prev_q must round-trip bit-exactly"
+        );
     }
     let lg = loaded.prev_g_int.expect("prev_g_int present");
     for (a, b) in lg.iter().zip(g_int.iter()) {
-        assert_eq!(a.to_bits(), b.to_bits(), "prev_g_int must round-trip bit-exactly");
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "prev_g_int must round-trip bit-exactly"
+        );
     }
     assert_eq!(
         loaded.prev_e.expect("prev_e present").to_bits(),

@@ -40,9 +40,9 @@ fn h2o_equilibrium() -> [[f64; 3]; 3] {
     let roh = 1.81_f64;
     let half = 52.25_f64.to_radians();
     [
-        [0.0, 0.0, 0.0],                                   // O
-        [roh * half.sin(), roh * half.cos(), 0.0],         // H
-        [-roh * half.sin(), roh * half.cos(), 0.0],        // H
+        [0.0, 0.0, 0.0],                            // O
+        [roh * half.sin(), roh * half.cos(), 0.0],  // H
+        [-roh * half.sin(), roh * half.cos(), 0.0], // H
     ]
 }
 
@@ -52,9 +52,7 @@ fn h2o_equilibrium() -> [[f64; 3]; 3] {
 fn perturbed_h2o() -> Mole {
     // O–H stretched to ~2.0 Bohr, angle widened — clearly off equilibrium.
     M(MoleBuildArgs {
-        atom: AtomInput::String(
-            "O 0.0 0.0 0.0; H 1.30 1.30 0.0; H -1.30 1.30 0.0".into(),
-        ),
+        atom: AtomInput::String("O 0.0 0.0 0.0; H 1.30 1.30 0.0; H -1.30 1.30 0.0".into()),
         basis: BasisInput::Name("sto-3g".into()),
         unit: pyscf_core::Unit::Bohr,
         ..Default::default()

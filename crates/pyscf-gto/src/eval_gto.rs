@@ -29,14 +29,24 @@
 //!   - `GTOval_sph_deriv1` — Phase 4 plan 04-03: value + 3 Cartesian
 //!     gradient components `[value, ∂x, ∂y, ∂z]` (the GGA ∇ρ input).
 //!     Output layout `[4, ngrids, nao]` (component-leading).
+//!   - `GTOval_ip_sph` / `GTOval_ip` (spherical) — `nabla |AO>`, 3 components
+//!     `[3, ngrids, nao]`. Byte-identical to `GTOval_sph_deriv1[1:4]`
+//!     (no sign flip; verified vs upstream), so it reuses the deriv1 kernel
+//!     and slices off the value block (F-01).
+//!
+//!   - `GTOval_cart_deriv1` (F-02) — value + 3 Cartesian gradient components
+//!     over the *cartesian* AO set `[4, ngrids, nao_cart]`. Reuses the
+//!     deriv1 stencil and skips the `c2s` transform; `nao_cart`/`ao_loc_cart`
+//!     are built fresh from `_bas` (independent of `mol.cart`, mirroring
+//!     upstream `make_loc(bas, 'GTOval_cart_deriv1')`). Host-only.
+//!   - `GTOval_ip_cart` / `GTOval_ip` (cartesian) — `nabla |AO>`, 3
+//!     components `[3, ngrids, nao_cart]` = `GTOval_cart_deriv1[1:4]`.
 //!
 //! Deferred:
-//!   - `GTOval_cart_deriv1` → `NotYetImplemented{phase: 4}` (needs
-//!     cartesian `ao_loc`; v1 DFT uses the spherical deriv1).
 //!   - `GTOval_sph_deriv2` / `GTOval_cart_deriv2` → `NotYetImplemented
-//!     {phase: 4}` (deriv2 not needed for v1 DFT energy).
-//!   - `GTOval_ip*` / `GTOval_ig*` / `GTOval_ip` / `GTOval_ig` →
-//!     `NotYetImplemented{phase: 7}` (Phase 7 grad).
+//!     {phase: 4}` (no deriv2 kernel; not needed for v1 DFT energy).
+//!   - `GTOval_ig*` (magnetic-gauge) → `NotYetImplemented{phase: 7}` — a distinct
+//!     GIAO kernel, not derivable from deriv1.
 //!
 //! Unknown variants return `CoreError::InvalidMolecule` (consistent
 //! with `mol.intor("foo")` per 02-05). Unbuilt Mole returns
@@ -87,6 +97,22 @@ pub fn eval_gto(
                 "GTOval_cart"
             } else {
                 "GTOval_sph"
+            }
+        }
+        // Bare derivative aliases get the rep suffix per mol.cart, mirroring
+        // upstream `_get_intor_and_comp` (`pyscf/gto/eval_gto.py`).
+        "GTOval_ip" => {
+            if mol.cart {
+                "GTOval_ip_cart"
+            } else {
+                "GTOval_ip_sph"
+            }
+        }
+        "GTOval_ig" => {
+            if mol.cart {
+                "GTOval_ig_cart"
+            } else {
+                "GTOval_ig_sph"
             }
         }
         other => other,
@@ -157,21 +183,147 @@ pub fn eval_gto(
                 shape: buffers.shape,
             })
         }
-        // Cartesian deriv1 needs the cartesian `ao_loc`/`nao` (more AOs
-        // than spherical) which the kernel surface does not take; it
-        // stays deferred. v1 DFT uses the spherical path.
-        "GTOval_cart_deriv1" => Err(PyscfRsError::NotYetImplemented {
-            phase: 4,
-            what: "GTOval_cart_deriv1 (cartesian deriv1 needs cart ao_loc; v1 DFT uses GTOval_sph_deriv1)",
-        }),
+        // Cartesian deriv1 (F-02): value + 3 gradient components over the
+        // cartesian AO set. The cart `ao_loc`/`nao` are built fresh from
+        // `_bas` (independent of `mol.cart`, mirroring upstream
+        // `make_loc(bas, 'GTOval_cart_deriv1')`). The kernel reuses the
+        // byte-verified deriv1 stencil and skips the c2s transform.
+        "GTOval_cart_deriv1" => {
+            let ngrids = coords.len();
+            let mut coords_flat = Vec::with_capacity(ngrids * 3);
+            coords_flat.extend(coords.iter().map(|c| c[0]));
+            coords_flat.extend(coords.iter().map(|c| c[1]));
+            coords_flat.extend(coords.iter().map(|c| c[2]));
+
+            let (ao_loc_cart, nao_cart) = cart_ao_loc_nao(&mol._bas);
+
+            let selection = select_backend().map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_gto: backend selection failed: {e}"
+                )))
+            })?;
+
+            let buffers = pyscf_kernels::eval_gto_cart_deriv1(
+                &selection.client,
+                &coords_flat,
+                ngrids,
+                &mol._atm,
+                &mol._bas,
+                &mol._env,
+                &ao_loc_cart,
+                nao_cart,
+            )?;
+            Ok(EvalGtoOutput {
+                values: buffers.values,
+                shape: buffers.shape,
+            })
+        }
         "GTOval_sph_deriv2" | "GTOval_cart_deriv2" => Err(PyscfRsError::NotYetImplemented {
             phase: 4,
             what: "GTOval_sph_deriv2 (Phase 4 DFT grid integration extends the kernel)",
         }),
-        "GTOval_ip_sph" | "GTOval_ip_cart" | "GTOval_ip" => Err(PyscfRsError::NotYetImplemented {
-            phase: 7,
-            what: "GTOval_ip (gradient variant; Phase 7 grad)",
-        }),
+        // `GTOval_ip_sph` = `nabla |AO>` (3 components) — verified byte-identical
+        // to the gradient block `GTOval_sph_deriv1[1:4]` of the Phase-4 deriv1
+        // kernel (upstream `pyscf/gto/eval_gto.py`: `GTOval_ip_sph` ≡
+        // `+GTOval_sph_deriv1[1:4]`, no sign flip). So we evaluate deriv1 and
+        // drop the value component, yielding `[3, ngrids, nao]`.
+        "GTOval_ip_sph" => {
+            let ngrids = coords.len();
+            let mut coords_flat = Vec::with_capacity(ngrids * 3);
+            coords_flat.extend(coords.iter().map(|c| c[0]));
+            coords_flat.extend(coords.iter().map(|c| c[1]));
+            coords_flat.extend(coords.iter().map(|c| c[2]));
+
+            let selection = select_backend().map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_gto: backend selection failed: {e}"
+                )))
+            })?;
+
+            let buffers = pyscf_kernels::eval_gto_sph_deriv1(
+                &selection.client,
+                &coords_flat,
+                ngrids,
+                &mol._atm,
+                &mol._bas,
+                &mol._env,
+                &mol.ao_loc_nr,
+                mol.nao_nr,
+            )?;
+
+            // deriv1 layout: component-leading `[4, ngrids, nao]`, component c
+            // at `values[c*block..]` with `block = ngrids*nao`. The 3 gradient
+            // components (c=1,2,3) are already contiguous in order — slice off
+            // the leading value block (c=0).
+            let block = ngrids.checked_mul(mol.nao_nr).ok_or_else(|| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "GTOval_ip_sph: size overflow ngrids={ngrids} nao={}",
+                    mol.nao_nr
+                )))
+            })?;
+            // Defensive: the deriv1 kernel must return exactly 4 blocks.
+            if buffers.values.len() != 4 * block {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "GTOval_ip_sph: deriv1 returned {} values, expected {} (4*ngrids*nao)",
+                    buffers.values.len(),
+                    4 * block
+                ))));
+            }
+            let grad = buffers.values[block..4 * block].to_vec();
+            Ok(EvalGtoOutput {
+                values: grad,
+                shape: vec![3, ngrids, mol.nao_nr],
+            })
+        }
+        // Cartesian gradient (F-02): `nabla |AO>` over the cartesian AO set =
+        // `GTOval_cart_deriv1[1:4]`. Evaluate cart deriv1 and slice off the
+        // leading value block, mirroring the `GTOval_ip_sph` path.
+        "GTOval_ip_cart" => {
+            let ngrids = coords.len();
+            let mut coords_flat = Vec::with_capacity(ngrids * 3);
+            coords_flat.extend(coords.iter().map(|c| c[0]));
+            coords_flat.extend(coords.iter().map(|c| c[1]));
+            coords_flat.extend(coords.iter().map(|c| c[2]));
+
+            let (ao_loc_cart, nao_cart) = cart_ao_loc_nao(&mol._bas);
+
+            let selection = select_backend().map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_gto: backend selection failed: {e}"
+                )))
+            })?;
+
+            let buffers = pyscf_kernels::eval_gto_cart_deriv1(
+                &selection.client,
+                &coords_flat,
+                ngrids,
+                &mol._atm,
+                &mol._bas,
+                &mol._env,
+                &ao_loc_cart,
+                nao_cart,
+            )?;
+
+            // deriv1 layout: component-leading `[4, ngrids, nao_cart]`, value
+            // block first. Slice off c=0; the 3 gradient blocks are contiguous.
+            let block = ngrids.checked_mul(nao_cart).ok_or_else(|| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "GTOval_ip_cart: size overflow ngrids={ngrids} nao_cart={nao_cart}"
+                )))
+            })?;
+            if buffers.values.len() != 4 * block {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "GTOval_ip_cart: deriv1 returned {} values, expected {} (4*ngrids*nao_cart)",
+                    buffers.values.len(),
+                    4 * block
+                ))));
+            }
+            let grad = buffers.values[block..4 * block].to_vec();
+            Ok(EvalGtoOutput {
+                values: grad,
+                shape: vec![3, ngrids, nao_cart],
+            })
+        }
         "GTOval_ig_sph" | "GTOval_ig_cart" | "GTOval_ig" => Err(PyscfRsError::NotYetImplemented {
             phase: 7,
             what: "GTOval_ig (magnetic-gauge variant; Phase 7 grad)",
@@ -182,4 +334,28 @@ pub fn eval_gto(
             other
         )))),
     }
+}
+
+/// Cartesian `(ao_loc, nao)` for the `_bas` table, independent of `mol.cart`.
+///
+/// Mirrors upstream `make_loc(bas, 'cart')`: each shell contributes
+/// `ncart(l)·nctr = ((l+1)(l+2)/2)·nctr` cartesian AOs. The per-shell cumulative
+/// offsets feed the cartesian deriv1 kernel; `nao` is the final running total.
+/// This is the spherical `make_env` formula (`crates/pyscf-gto/src/make_env.rs`)
+/// with the cartesian branch forced on, so it matches `mol.ao_loc_nr`/`mol.nao_nr`
+/// exactly when `mol.cart == true` and supplies the cartesian layout otherwise.
+fn cart_ao_loc_nao(bas: &[i32]) -> (Vec<i32>, usize) {
+    use pyscf_core::raw_layout::{ANG_OF, BAS_SLOTS, NCTR_OF};
+    let nbas = bas.len() / BAS_SLOTS;
+    let mut ao_loc = Vec::with_capacity(nbas + 1);
+    let mut acc: i32 = 0;
+    ao_loc.push(0);
+    for i in 0..nbas {
+        let l = bas[i * BAS_SLOTS + ANG_OF];
+        let nctr = bas[i * BAS_SLOTS + NCTR_OF];
+        let ncart = ((l + 1) * (l + 2)) / 2;
+        acc += ncart * nctr;
+        ao_loc.push(acc);
+    }
+    (ao_loc, acc as usize)
 }

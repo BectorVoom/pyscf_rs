@@ -1,11 +1,14 @@
 //! `InitGuessMode::Chkfile(path)` integration test — plan 03-06 wires the
 //! 5th init_guess mode that plan 03-03 left as NotYetImplemented.
 //!
-//! Strategy: dump an ScfResult to a chkfile (Rust ↔ Rust round-trip),
-//! then load via `default_get_init_guess` and assert it returns a Density
-//! (not a NotYetImplemented error). The full SCF restart path is plan
-//! 03-08's ORACLE-08 territory.
-use pyscf_core::{Energy, MOCoefficients, Mole};
+//! Strategy: dump an ScfResult to a chkfile (Rust ↔ Rust round-trip), then
+//! load via `default_get_init_guess` and assert it returns a Density. Covers
+//! the same-basis fast path, the cross-basis projection path (F-10 —
+//! `project_mo_nr2nr`, reconstructing the prior Mole from the stored JSON),
+//! and the graceful-error path when the prior Mole cannot be reconstructed.
+//! The full SCF restart path is plan 03-08's ORACLE-08 territory.
+use pyscf_core::{Energy, MOCoefficients, Mole, Unit};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, dumps};
 use pyscf_scf::{InitGuessMode, ScfResult, chkfile::dump_scf_to_file, default_get_init_guess};
 
 fn sample_result(nao: usize) -> ScfResult {
@@ -66,27 +69,75 @@ fn init_guess_by_chkfile_reads_prior_density() {
     assert!(dens.data[3].abs() < 1e-12, "D[1,1] expected 0.0");
 }
 
+fn h2(basis: &str) -> Mole {
+    M(MoleBuildArgs {
+        atom: AtomInput::String("H 0 0 0; H 0 0 0.74".into()),
+        basis: BasisInput::Name(basis.into()),
+        unit: Unit::Ang,
+        ..Default::default()
+    })
+    .expect("build H2")
+}
+
 #[test]
-fn init_guess_by_chkfile_rejects_nao_mismatch() {
+fn init_guess_by_chkfile_projects_across_basis() {
+    // Prior SCF was in sto-3g (nao=2); the current run uses 6-31g (nao=4).
+    // The cross-basis branch reconstructs the prior Mole from the chkfile JSON
+    // and projects the prior MOs onto the current basis (project_mo_nr2nr).
+    let prior_mol = h2("sto-3g");
+    let cur_mol = h2("6-31g");
+    assert_eq!(prior_mol.nao_nr, 2);
+    assert!(cur_mol.nao_nr > prior_mol.nao_nr);
+
+    let prior_json = dumps(&prior_mol).expect("serialize prior mol");
+    let prior = sample_result(prior_mol.nao_nr); // nao=2, occ=[2,0]
+
+    let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = tmp.path().to_path_buf();
+    dump_scf_to_file(&path, &prior_json, &prior).expect("dump");
+
+    let dens = default_get_init_guess(&cur_mol, &InitGuessMode::Chkfile(path))
+        .expect("cross-basis chkfile projection must succeed");
+
+    // Seed is shaped to the CURRENT basis, finite, and symmetric.
+    assert_eq!(dens.nao, cur_mol.nao_nr);
+    assert!(
+        dens.data.iter().all(|x| x.is_finite()),
+        "non-finite density"
+    );
+    let n = dens.nao;
+    for i in 0..n {
+        for j in 0..n {
+            assert!(
+                (dens.data[i * n + j] - dens.data[j * n + i]).abs() < 1e-10,
+                "asymmetry at ({i},{j})"
+            );
+        }
+    }
+}
+
+#[test]
+fn init_guess_by_chkfile_cross_basis_errors_on_unreconstructable_prior() {
+    // nao mismatch forces the projection path; an empty/invalid stored mol
+    // JSON cannot be reconstructed, so the guess must error gracefully
+    // (never panic, never silently return a wrong-shaped density).
     let mol = Mole {
         atom: "H 0 0 0".into(),
         basis: "cc-pvdz".into(),
         nelectron: 1,
-        nao_nr: 5, // current basis is bigger than prior chkfile
+        nao_nr: 5,
         _built: true,
         ..Default::default()
     };
 
     let tmp = tempfile::NamedTempFile::new().expect("tempfile");
     let path = tmp.path().to_path_buf();
-    let prior = sample_result(2); // prior had nao=2
+    let prior = sample_result(2);
     dump_scf_to_file(&path, "{}", &prior).expect("dump");
 
-    let mode = InitGuessMode::Chkfile(path);
-    let result = default_get_init_guess(&mol, &mode);
-    // Phase 3 ships the simple same-basis case; basis-projection is deferred.
+    let result = default_get_init_guess(&mol, &InitGuessMode::Chkfile(path));
     assert!(
         result.is_err(),
-        "expected error on nao mismatch (basis projection deferred)"
+        "expected graceful error when the prior mol cannot be reconstructed"
     );
 }

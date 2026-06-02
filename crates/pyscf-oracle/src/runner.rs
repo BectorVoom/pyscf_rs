@@ -220,14 +220,8 @@ mod python_impl {
             // the honest, actionable reason. The live `arm_nuc_grad_*` /
             // `arm_geomopt_h2o` tests in grad_oracle.rs are `#[ignore]`'d on the
             // `workflow_dispatch` arm, so this gated error is never hit on push.
-            "nuc_grad_rhf"
-            | "nuc_grad_uhf"
-            | "nuc_grad_rks"
-            | "nuc_grad_uks"
-            | "nuc_grad_mp2"
-            | "nuc_grad_ccsd"
-            | "nuc_grad_ecp"
-            | "geomopt_h2o" => {
+            "nuc_grad_rhf" | "nuc_grad_uhf" | "nuc_grad_rks" | "nuc_grad_uks" | "nuc_grad_mp2"
+            | "nuc_grad_ccsd" | "nuc_grad_ecp" | "geomopt_h2o" => {
                 let _ = (py, fixture, tol);
                 Err(OracleError::Upstream(format!(
                     "grad/geomopt oracle arm '{method}' is registered but its live \

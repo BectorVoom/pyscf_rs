@@ -136,9 +136,16 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
     } else if full_name.ends_with("_sph") {
         Representation::Spheric
     } else if full_name.ends_with("_spinor") {
+        // Spinor integrals are complex-valued, so they do NOT route through the
+        // real-valued `intor`/`IntorOutput` path — use `intor_spinor` (returns
+        // `IntorOutputComplex`). It is implemented for the 1e families
+        // (F-03, route-through-cintx); see
+        // `.planning/features/F-03-spinor-integrals-PLAN.md`.
         return Err(PyscfRsError::NotYetImplemented {
             phase: 3,
-            what: "spinor representation (out of v1 scope)",
+            what: "spinor representation is complex-valued: call \
+                   pyscf_gto::intor_spinor(mol, name) instead (returns \
+                   IntorOutputComplex). See F-03 plan.",
         });
     } else {
         // add_suffix guarantees one of _sph / _cart / _spinor; falling
@@ -184,6 +191,7 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
             nao,
             layout,
             &full_name,
+            ExecutionOptions::default(),
         ),
         4 => evaluate_arity4(
             descriptor,
@@ -195,18 +203,174 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
             layout,
             &full_name,
         ),
-        // Plain arity-3 through `intor(mol, name)` is not an MP2/DF path:
-        // `int3c2e_sph` (μν|P) needs the auxiliary basis as its third center
-        // and is dispatched via `intor_with_auxmol` (see `evaluate_int3c2e_with_auxmol`).
-        3 => Err(PyscfRsError::NotYetImplemented {
-            phase: 3,
-            what: "single-mol arity-3 intors — int3c2e_sph (μν|P) uses \
-                   intor_with_auxmol(mol, name, auxmol) for the orbital×aux 3-center",
-        }),
+        // Single-mol arity-3 through `intor(mol, name)`: `int3c2e_sph` (μν|P)
+        // with all three centers drawn from `mol`'s own basis — the
+        // `auxmol == mol` specialisation of `intor_with_auxmol`. (The DF path
+        // with a distinct auxiliary basis still goes through
+        // `intor_with_auxmol(mol, name, auxmol)`.) Scalar arity-3 only;
+        // component-leading arity-3 derivatives (int3c2e_ip1 …) are grad-path
+        // families — cintx-gated (F-01/F-08), still deferred.
+        3 => match layout {
+            IntorLayout::ScalarFOrder => evaluate_arity3_single_mol(
+                operator,
+                representation,
+                basis_ref,
+                nbas,
+                nao,
+                &full_name,
+            ),
+            IntorLayout::ComponentLeadingFOrder { .. } => Err(PyscfRsError::NotYetImplemented {
+                phase: 3,
+                what: "component-leading arity-3 intors (int3c2e_ip1 …) are grad-path \
+                       derivatives — cintx-gated; the scalar (μν|P) single-mol path is live",
+            }),
+        },
         n => Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
             "unsupported arity {n} for intor '{full_name}' (libcint maxes at 4)",
         )))),
     }
+}
+
+/// Compute the per-atom nuclear-attraction derivative `int1e_iprinv` with a
+/// caller-supplied `rinv` origin (in **Bohr**). Mirrors upstream
+/// `pyscf/gto/mole.py::with_rinv_origin` wrapping `mol.intor('int1e_iprinv')`.
+///
+/// Plain `intor(mol, "int1e_iprinv")` passes `ExecutionOptions::default()`
+/// (`rinv_orig: None`); cintx's validator REQUIRES `rinv_orig: Some(..)` for any
+/// operator whose name contains `"iprinv"` and rejects `None` with
+/// `InvalidEnvParam{PTR_RINV_ORIG}`. This entry point threads `origin` into the
+/// options so the integral EVALUATES, returning the component-leading
+/// `[3, nao, nao]` F-order buffer (element `(comp, i, j)` at
+/// `comp*nao*nao + i + j*nao`).
+///
+/// Scoped to the `int1e_iprinv` family: a non-iprinv name (suffix-stripped core
+/// ≠ `"int1e_iprinv"`) errors cleanly, since the `rinv` origin is only
+/// meaningful/validated for `iprinv` operators.
+///
+/// F-08 / quick 260601-sln. Precedent: the F-05 `ecp_int1e_iprinv` options idiom.
+///
+/// # Errors
+///   - `Core(InvalidMolecule)` — unbuilt Mole, non-iprinv name, unknown layout,
+///     cintx workspace/evaluate failure.
+///   - `NotYetImplemented{ phase: 3 }` — spinor representation.
+pub fn intor_with_rinv_origin(
+    mol: &Mole,
+    name: &str,
+    rinv_origin: [f64; 3],
+) -> Result<IntorOutput, PyscfRsError> {
+    // ── Built check (same as `intor`) ─────────────────────────────────
+    if !mol._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "intor_with_rinv_origin: Mole not built — call pyscf_gto::M(args) or mol.build() first"
+                .into(),
+        )));
+    }
+
+    // ── Suffix normalisation, then scope to the iprinv family ──────────
+    let full_name = add_suffix(name, mol.cart);
+    let core = full_name
+        .strip_suffix("_sph")
+        .or_else(|| full_name.strip_suffix("_cart"))
+        .or_else(|| full_name.strip_suffix("_spinor"))
+        .unwrap_or(&full_name);
+    if core != "int1e_iprinv" {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_with_rinv_origin is scoped to the int1e_iprinv family; '{full_name}' has \
+             core '{core}'. The rinv origin is only meaningful/validated for iprinv — use \
+             plain pyscf_gto::intor(mol, name) for non-iprinv integrals."
+        ))));
+    }
+
+    // ── Layout (must be component-leading [3, nao, nao]) ───────────────
+    let layout = layout_table::lookup(&full_name).ok_or_else(|| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "unknown intor: {} (not in INTOR_LAYOUTS — extend \
+             crates/pyscf-gto/src/layout_table.rs)",
+            full_name,
+        )))
+    })?;
+
+    // ── Representation per suffix (spinor → Phase 3) ───────────────────
+    let representation = if full_name.ends_with("_cart") {
+        Representation::Cart
+    } else if full_name.ends_with("_sph") {
+        Representation::Spheric
+    } else if full_name.ends_with("_spinor") {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 3,
+            what: "spinor int1e_iprinv is complex-valued: see F-03 plan (intor_spinor)",
+        });
+    } else {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_with_rinv_origin name lacks _sph/_cart/_spinor suffix after normalisation: \
+             {full_name}",
+        ))));
+    };
+
+    // ── cintx OperatorId resolution (NO iprinv const — by symbol, F-05) ─
+    let descriptor = Resolver::descriptor_by_symbol(&full_name).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx-ops resolver does not know symbol '{full_name}': {e}."
+        )))
+    })?;
+    let operator = descriptor.id;
+
+    // ── Typed cintx BasisSet (zero-copy Arc clone) ─────────────────────
+    let basis_arc: Arc<CintxBasisSet> = mol.cintx_basis()?;
+    let basis_ref: &CintxBasisSet = &basis_arc;
+    let nbas = basis_ref.shells().len();
+    let nao = basis_ref.meta().total_ao;
+    if mol.nao_nr != nao {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "internal inconsistency: mol.nao_nr={} but basis_set.meta().total_ao={}",
+            mol.nao_nr, nao
+        ))));
+    }
+
+    // The cintx validator REQUIRES rinv_orig: Some(..) for any iprinv operator;
+    // passing None errors InvalidEnvParam{PTR_RINV_ORIG}. Kept on one line
+    // (rustfmt::skip) so the grep gate sees the LIVE constructor, not a comment
+    // (the F-05 idiom).
+    #[rustfmt::skip]
+    let opts = ExecutionOptions { rinv_orig: Some(rinv_origin), ..Default::default() };
+
+    // Reuse the single-source arity-2 stitch loop with the origin-bearing opts.
+    evaluate_arity2(
+        descriptor,
+        operator,
+        representation,
+        basis_ref,
+        nbas,
+        nao,
+        layout,
+        &full_name,
+        opts,
+    )
+}
+
+/// Compute `int1e_iprinv` with the `rinv` origin pinned to nucleus `atm_id`'s
+/// coordinate. Mirrors `pyscf/grad/rhf.py:121-143` `with_rinv_at_nucleus(atm_id)`
+/// — resolves the origin from `mol.atom_coord(atm_id)` (Bohr) and delegates to
+/// [`intor_with_rinv_origin`].
+///
+/// F-08 / quick 260601-sln.
+///
+/// # Errors
+///   - `Core(InvalidMolecule)` — `atm_id >= mol.natm` (bounds-checked before
+///     `atom_coord`, never an OOB panic), plus every error
+///     [`intor_with_rinv_origin`] can raise.
+pub fn intor_with_rinv_at_nucleus(
+    mol: &Mole,
+    name: &str,
+    atm_id: usize,
+) -> Result<IntorOutput, PyscfRsError> {
+    if atm_id >= mol.natm {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "intor_with_rinv_at_nucleus: atm_id={atm_id} out of range (mol.natm={})",
+            mol.natm,
+        ))));
+    }
+    intor_with_rinv_origin(mol, name, mol.atom_coord(atm_id))
 }
 
 /// Arity-2 dispatch: iterate (i, j) shell pairs, evaluate per pair, stitch
@@ -216,6 +380,14 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
 /// F-order layout: `out[i + j * nao]` is `M[i, j]`. For component-leading
 /// the caller treats axis 0 as the component and the inner two axes are
 /// F-order on (i, j).
+///
+/// `opts` is the per-request [`ExecutionOptions`]; the plain `intor` arity-2
+/// call site passes `ExecutionOptions::default()` (`rinv_orig: None`), while the
+/// `intor_with_rinv_origin` entry point passes an origin-bearing
+/// `ExecutionOptions { rinv_orig: Some(..), .. }` so the cintx validator accepts
+/// the `int1e_iprinv` family (it rejects `None` with
+/// `InvalidEnvParam{PTR_RINV_ORIG}`). Keeping `opts` a parameter keeps this
+/// stitch body single-source across both callers.
 #[allow(clippy::too_many_arguments)]
 fn evaluate_arity2(
     descriptor: &'static OperatorDescriptor,
@@ -226,6 +398,7 @@ fn evaluate_arity2(
     nao: usize,
     layout: IntorLayout,
     intor_name: &str,
+    opts: ExecutionOptions,
 ) -> Result<IntorOutput, PyscfRsError> {
     let _ = descriptor; // descriptor read for arity above; future-proof.
 
@@ -256,13 +429,8 @@ fn evaluate_arity2(
                 )))
             })?;
 
-            let request = SessionRequest::new(
-                operator,
-                representation,
-                basis,
-                shells,
-                ExecutionOptions::default(),
-            );
+            let request =
+                SessionRequest::new(operator, representation, basis, shells, opts.clone());
             let outcome = request
                 .query_workspace()
                 .map_err(|e| {
@@ -639,6 +807,122 @@ fn evaluate_arity4(
     })
 }
 
+/// Single-mol arity-3 *scalar* intors — `(μ ν | P)` with all three centers
+/// drawn from `mol`'s own basis. Equivalent to upstream
+/// `mol.intor('int3c2e_sph')` called with no auxiliary basis (the third center
+/// ranges over the same shells as μ, ν). Returns shape `[nao, nao, nao]` in
+/// F-order.
+///
+/// This is the `auxmol == mol` specialisation of
+/// `evaluate_int3c2e_with_auxmol`: the combined orbital+aux basis collapses to
+/// the single `mol` basis, so we iterate every shell triple `(i, j, k)`
+/// directly over `basis` and stitch the per-triple F-order block `[ni,nj,nk]`
+/// into the global `[nao,nao,nao]` buffer. The same cintx `OperatorId` /
+/// `SessionRequest` path the DF wrapper uses evaluates each triple, so this
+/// inherits its libcint byte-identity at the cintx source. In-tree oracle:
+/// the result must equal `intor_with_auxmol(mol, name, mol)` (mol as its own
+/// auxmol) — exercised by `tests/int3c2e_auxmol.rs`.
+#[allow(clippy::too_many_arguments)]
+fn evaluate_arity3_single_mol(
+    operator: OperatorId,
+    representation: Representation,
+    basis: &CintxBasisSet,
+    nbas: usize,
+    nao: usize,
+    intor_name: &str,
+) -> Result<IntorOutput, PyscfRsError> {
+    let total = nao
+        .checked_mul(nao)
+        .and_then(|n| n.checked_mul(nao))
+        .ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "single-mol arity-3 '{intor_name}': shape overflow nao={nao}",
+            )))
+        })?;
+
+    let meta = basis.meta();
+    let shell_offsets: Vec<usize> = (0..nbas)
+        .map(|s| meta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let shell_counts: Vec<usize> = (0..nbas).map(|s| meta.ao_count(s).unwrap_or(0)).collect();
+
+    let mut out = vec![0.0f64; total];
+    let nao2 = nao * nao;
+
+    // (μ ν | P): all three indices range over every shell of `mol`.
+    for i in 0..nbas {
+        for j in 0..nbas {
+            for k in 0..nbas {
+                let shells = basis.shell_tuple_for_indices([i, j, k]).map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "shell_tuple_for_indices(i={i}, j={j}, k={k}) failed for \
+                         '{intor_name}': {e}",
+                    )))
+                })?;
+                let request = SessionRequest::new(
+                    operator,
+                    representation,
+                    basis,
+                    shells,
+                    ExecutionOptions::default(),
+                );
+                let outcome = request
+                    .query_workspace()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx workspace query failed for '{intor_name}' triple ({i},{j},{k}): {e}",
+                        )))
+                    })?
+                    .evaluate()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx evaluate failed for '{intor_name}' triple ({i},{j},{k}): {e}",
+                        )))
+                    })?;
+
+                let ni = shell_counts[i];
+                let nj = shell_counts[j];
+                let nk = shell_counts[k];
+                let oi = shell_offsets[i];
+                let oj = shell_offsets[j];
+                let ok = shell_offsets[k];
+
+                let block = &outcome.tensor.owned_values;
+                let expected = ni * nj * nk;
+                // Never panic / never zero-substitute on a shape surprise
+                // (T-05-08-FFI; the Phase-4 CR-02 lesson).
+                if block.len() != expected {
+                    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx returned {} elements for '{intor_name}' triple ({i},{j},{k}), \
+                         expected {} (ni={ni}, nj={nj}, nk={nk}, extents={:?})",
+                        block.len(),
+                        expected,
+                        outcome.tensor.extents,
+                    ))));
+                }
+
+                // Per-triple block F-order [ni,nj,nk] (i fastest) → global
+                // F-order [nao,nao,nao]: out[(oi+ii)+(oj+jj)*nao+(ok+kk)*nao^2].
+                for kk in 0..nk {
+                    for jj in 0..nj {
+                        for ii in 0..ni {
+                            let b = ii + jj * ni + kk * ni * nj;
+                            let o = (oi + ii) + (oj + jj) * nao + (ok + kk) * nao2;
+                            out[o] = block[b];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(IntorOutput {
+        values: out,
+        shape: vec![nao, nao, nao],
+        layout: IntorLayout::ScalarFOrder,
+    })
+}
+
 /// Compute the named integral over `mol` using `auxmol` as the auxiliary
 /// basis for the third index. Equivalent to upstream
 /// `mol.intor('int3c2e_sph', auxmol=auxmol)` or the explicit shls_slice over a
@@ -874,9 +1158,13 @@ pub fn intor_cross(mol_a: &Mole, mol_b: &Mole, name: &str) -> Result<IntorOutput
     } else if full_name.ends_with("_sph") {
         Representation::Spheric
     } else if full_name.ends_with("_spinor") {
+        // Cross-mol spinor integrals are complex; the real-valued intor_cross
+        // path cannot carry them. F-03 scaffold tracks the dedicated surface;
+        // see `.planning/features/F-03-spinor-integrals-PLAN.md`.
         return Err(PyscfRsError::NotYetImplemented {
             phase: 3,
-            what: "spinor representation (out of v1 scope)",
+            what: "spinor representation (complex output): F-03 scaffold — \
+                   see .planning/features/F-03-spinor-integrals-PLAN.md",
         });
     } else {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(

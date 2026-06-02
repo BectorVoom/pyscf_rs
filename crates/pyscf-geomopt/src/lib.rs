@@ -327,8 +327,14 @@ fn run_loop(
 
         // 5. RFO step (internal displacement) + trust-radius update.
         let de_energy = prev.as_ref().map(|(ep, _, _)| e_tot - ep);
-        let (dq, predicted_de, new_trust) =
-            rfo::rfo_step(&hessian, &g_int, trust, &opt.conv_params, de_energy, prev.as_ref());
+        let (dq, predicted_de, new_trust) = rfo::rfo_step(
+            &hessian,
+            &g_int,
+            trust,
+            &opt.conv_params,
+            de_energy,
+            prev.as_ref(),
+        );
         trust = new_trust;
 
         // 6. back-transform to Cartesians.
@@ -357,8 +363,12 @@ fn run_loop(
         if std::env::var("GEOMOPT_DEBUG").is_ok() {
             eprintln!(
                 "step {step} E={e_tot:.8} dE={e_change:.2e}({}) grms={grad_rms:.2e}({}) gmax={grad_max:.2e}({}) drms={disp_rms:.2e}({}) dmax={disp_max:.2e}({}) trust={trust:.4} |dq|={:.4}",
-                report.energy_ok, report.grms_ok, report.gmax_ok, report.drms_ok, report.dmax_ok,
-                dq.iter().map(|x| x*x).sum::<f64>().sqrt()
+                report.energy_ok,
+                report.grms_ok,
+                report.gmax_ok,
+                report.drms_ok,
+                report.dmax_ok,
+                dq.iter().map(|x| x * x).sum::<f64>().sqrt()
             );
         }
 

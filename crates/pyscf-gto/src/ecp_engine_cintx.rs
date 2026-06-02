@@ -47,12 +47,17 @@
 //! grad term consumed by `pyscf/grad/rhf.py:116-117` (`get_hcore`).
 //!
 //! `int1e_ecp_iprinv` / `ECPscalar_iprinv` (the per-atom `hcore_deriv` term,
-//! `pyscf/grad/rhf.py:139-140`) is **MISSING from every cintx branch today**
-//! and is not yet on any scheduled cintx workstream — it routes to a clean
-//! cintx-availability error (NOT `NotYetImplemented{phase:7}`); numeric
-//! un-gating waits on a future cintx workstream landing the family.
+//! `pyscf/grad/rhf.py:139-140`) is now LANDED in cintx (workstream 21-07) and
+//! routes through the dedicated [`CintxEcpEngine::ecp_int1e_iprinv`] method
+//! (F-05). It resolves `INT1E_ECP_IPRINV_{CART,SPH}` via
+//! `Resolver::descriptor_by_symbol(..).id` (cintx_core has no iprinv core
+//! const) and sets `ExecutionOptions.rinv_orig` to the differentiated nucleus
+//! so cintx selects only that ECP slot. The scalar `ecp_int1e` and the
+//! `ecp_int1e_ipnuc` paths still reject iprinv names (they have their own
+//! dedicated method).
 
 use cintx_core::{BasisSet as CintxBasisSet, OperatorId, Representation};
+use cintx_ops::resolver::Resolver;
 use cintx_rs::SessionRequest;
 use cintx_runtime::ExecutionOptions;
 use pyscf_core::{CoreError, Density, EcpEngine, Mole, PyscfRsError};
@@ -91,9 +96,10 @@ impl EcpEngine for CintxEcpEngine {
         if core != "int1e_ecp" && core != "ECPscalar" {
             return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                 "ECP derivative/gradient name '{name}' is not a scalar ECP integral; \
-                 ECP gradients route through `ecp_int1e_ipnuc` (GRAD-07). The `ipnuc` \
-                 family is cintx-ready; `iprinv`/ECPscalar_iprinv is MISSING from cintx \
-                 today (no scheduled cintx workstream) — un-gates when that family lands."
+                 ECP gradients route through the dedicated `ecp_int1e_ipnuc` (GRAD-07) \
+                 and `ecp_int1e_iprinv` (F-05) methods. Both the `ipnuc` and the per-atom \
+                 `iprinv` families are cintx-ready; this scalar path rejects them because \
+                 they are gradient names, not because cintx lacks the family."
             ))));
         }
 
@@ -251,10 +257,12 @@ impl EcpEngine for CintxEcpEngine {
     /// `3 * nao * nao` flat buffer laid out component-leading F-order:
     /// `data[comp + p*3 + q*3*nao]` is `∂/∂R_comp ⟨p|V_ECP|q⟩`.
     ///
-    /// D-02: `int1e_ecp_iprinv` / `ECPscalar_iprinv` (the per-atom
+    /// D-02 / F-05: `int1e_ecp_iprinv` / `ECPscalar_iprinv` (the per-atom
     /// `with_rinv_at_nucleus` `hcore_deriv` term, `pyscf/grad/rhf.py:139-140`)
-    /// is MISSING from cintx and routes to a clean cintx-availability error
-    /// (never `NotYetImplemented{phase:7}`).
+    /// is NO LONGER routed here — it has its own dedicated
+    /// [`CintxEcpEngine::ecp_int1e_iprinv`] method (cintx 21-07, F-05). This
+    /// `ipnuc` method still rejects iprinv names (a wrong-method call) with a
+    /// clean error pointing at the iprinv method.
     fn ecp_int1e_ipnuc(&self, mol: &Mole, name: &str) -> Result<Density, PyscfRsError> {
         if !mol._built {
             return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
@@ -264,9 +272,11 @@ impl EcpEngine for CintxEcpEngine {
             )));
         }
 
-        // Reject the still-missing iprinv family with a clean cintx-availability
-        // error (NOT NotYetImplemented{phase:7}). The suffix-stripped core must
-        // be exactly the ipnuc gradient name.
+        // This method serves ONLY the ipnuc (all-slot) family. The per-atom
+        // iprinv family has its own dedicated `ecp_int1e_iprinv` method (F-05),
+        // so reject iprinv names here with a clean error that points at it (a
+        // wrong-method call), NOT a cintx-availability claim. The suffix-stripped
+        // core must be exactly the ipnuc gradient name.
         let core = name
             .strip_suffix("_sph")
             .or_else(|| name.strip_suffix("_cart"))
@@ -274,10 +284,10 @@ impl EcpEngine for CintxEcpEngine {
             .unwrap_or(name);
         if core != "int1e_ecp_ipnuc" && core != "ECPscalar_ipnuc" {
             return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                "ECP gradient name '{name}' is not the cintx-ready ipnuc family. \
-                 `ECPscalar_iprinv`/`int1e_ecp_iprinv` is MISSING from every cintx branch \
-                 today (no scheduled cintx workstream) — numeric un-gates when that family \
-                 lands; only `ECPscalar_ipnuc`/`int1e_ecp_ipnuc` is ready."
+                "ECP gradient name '{name}' is not the ipnuc family. The per-atom \
+                 `ECPscalar_iprinv`/`int1e_ecp_iprinv` term routes through the dedicated \
+                 `ecp_int1e_iprinv` method (cintx 21-07, F-05); only \
+                 `ECPscalar_ipnuc`/`int1e_ecp_ipnuc` is served here."
             ))));
         }
 
@@ -403,6 +413,205 @@ impl EcpEngine for CintxEcpEngine {
                 //   component-leading  : block[comp + ii*c + jj*c*ni]
                 //   component-trailing : block[(ii*nj + jj) + comp*ni*nj]
                 // (the scalar path uses row-major ii*nj+jj per the ECP collector).
+                for ii in 0..ni {
+                    for jj in 0..nj {
+                        for comp in 0..COMPONENTS {
+                            let b = if block_component_leading {
+                                comp + ii * COMPONENTS + jj * COMPONENTS * ni
+                            } else {
+                                (ii * nj + jj) + comp * expected_inner
+                            };
+                            let o = comp + (oi + ii) * COMPONENTS + (oj + jj) * nao_c;
+                            out[o] = block[b];
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Density::from_flat(nao, out))
+    }
+
+    /// F-05: per-atom ECP gradient `int1e_ecp_iprinv` / `ECPscalar_iprinv`
+    /// (`pyscf/grad/rhf.py:139-140` — `vrinv += mol.intor('ECPscalar_iprinv',
+    /// comp=3)` under `with_rinv_at_nucleus(atm_id)`), un-gated by cintx
+    /// workstream 21-07.
+    ///
+    /// `cintx_core::OperatorId` has NO iprinv core const, so the operator is
+    /// resolved from the manifest via `Resolver::descriptor_by_symbol(
+    /// "int1e_ecp_iprinv_{cart,sph}").id`. `rinv_origin` is the differentiated
+    /// nucleus coordinate **in Bohr**; it is threaded into
+    /// `ExecutionOptions.rinv_orig = Some(rinv_origin)`, which the cintx
+    /// validator REQUIRES for any `ecp_iprinv` operator (it rejects `None` with
+    /// `InvalidEnvParam{PTR_RINV_ORIG}`). The native `launch_ecp` branch then
+    /// selects ONLY the ECP slot whose coordinate matches `rinv_origin` within
+    /// `IPRINV_ORIGIN_MATCH_TOL = 1e-10`; an origin matching no atom yields a
+    /// zero-filled output (never a panic, never a wrong-atom selection).
+    ///
+    /// Returns the same component-leading `[3, nao, nao]` F-order buffer as
+    /// `ecp_int1e_ipnuc` (`data[comp + p*3 + q*3*nao]`). Spinor iprinv fails
+    /// closed (`NotYetImplemented{phase:3}`); the legacy libcint-FFI resolver
+    /// path is untouched.
+    fn ecp_int1e_iprinv(
+        &self,
+        mol: &Mole,
+        name: &str,
+        rinv_origin: [f64; 3],
+    ) -> Result<Density, PyscfRsError> {
+        if !mol._built {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+                "CintxEcpEngine::ecp_int1e_iprinv: Mole not built — call \
+                 pyscf_gto::M(args) or mol.build() first"
+                    .into(),
+            )));
+        }
+
+        // This method serves ONLY the per-atom iprinv family. The suffix-stripped
+        // core must be exactly the iprinv gradient name (so the ipnuc / scalar
+        // names can never silently resolve to the iprinv operator).
+        let core = name
+            .strip_suffix("_sph")
+            .or_else(|| name.strip_suffix("_cart"))
+            .or_else(|| name.strip_suffix("_spinor"))
+            .unwrap_or(name);
+        if core != "int1e_ecp_iprinv" && core != "ECPscalar_iprinv" {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "ECP gradient name '{name}' is not the per-atom iprinv family; \
+                 `ecp_int1e_iprinv` serves only `ECPscalar_iprinv`/`int1e_ecp_iprinv`."
+            ))));
+        }
+
+        if mol._ecp.is_empty() {
+            return Err(PyscfRsError::EcpEngineNotAvailable);
+        }
+
+        // Representation per the (already suffix-normalised) name; ECPscalar_*
+        // aliases fall back to the Mole's cart flag (matches `ecp_int1e_ipnuc`).
+        let representation = if name.ends_with("_cart") {
+            Representation::Cart
+        } else if name.ends_with("_sph") {
+            Representation::Spheric
+        } else if mol.cart {
+            Representation::Cart
+        } else {
+            Representation::Spheric
+        };
+
+        // cintx_core::OperatorId has NO iprinv const — resolve via the manifest
+        // (the grad_intor_smoke.rs descriptor_by_symbol(..).id pattern). Spinor
+        // iprinv fails closed.
+        let symbol = match representation {
+            Representation::Cart => "int1e_ecp_iprinv_cart",
+            Representation::Spheric => "int1e_ecp_iprinv_sph",
+            Representation::Spinor => {
+                return Err(PyscfRsError::NotYetImplemented {
+                    phase: 3,
+                    what: "spinor ECP gradient integrals (out of v1 scope)",
+                });
+            }
+        };
+        let operator: OperatorId = Resolver::descriptor_by_symbol(symbol)
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx iprinv operator '{symbol}' not in manifest for '{name}': {e}"
+                )))
+            })?
+            .id;
+
+        // ECP-augmented typed BasisSet (same build as the ipnuc path).
+        let basis_arc = crate::projection::build_cintx_basis_set_with_ecp(
+            &mol._atom,
+            &mol._basis,
+            &mol._ecp,
+            mol.cart,
+        )?;
+        let basis_ref: &CintxBasisSet = &basis_arc;
+
+        if basis_ref.ecp_shells().is_empty() {
+            return Err(PyscfRsError::EcpEngineNotAvailable);
+        }
+
+        let nbas = basis_ref.shells().len();
+        let nao = basis_ref.meta().total_ao;
+        const COMPONENTS: usize = 3; // x/y/z derivative components.
+
+        let meta = basis_ref.meta();
+        let shell_offsets: Vec<usize> = (0..nbas)
+            .map(|s| {
+                meta.shell_offset(s).ok_or_else(|| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "ECP basis meta missing shell_offset for shell {s} of {nbas}"
+                    )))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let shell_counts: Vec<usize> = (0..nbas)
+            .map(|s| {
+                meta.ao_count(s).ok_or_else(|| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "ECP basis meta missing ao_count for shell {s} of {nbas}"
+                    )))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        // Component-leading F-order `[3, nao, nao]` buffer:
+        // out[comp + p*3 + q*3*nao] = ∂/∂R_comp ⟨p|V_ECP|q⟩ (per-atom rinv).
+        let nao_c = nao * COMPONENTS;
+        let mut out = vec![0.0_f64; COMPONENTS * nao * nao];
+
+        // The cintx validator REQUIRES rinv_orig: Some(..) for ecp_iprinv; passing
+        // None would error InvalidEnvParam{PTR_RINV_ORIG}. Built once (rep-stable).
+        // Kept on one line (rustfmt::skip) so the F-05 gate greps the LIVE
+        // constructor, not a comment.
+        #[rustfmt::skip]
+        let opts = ExecutionOptions { rinv_orig: Some(rinv_origin), ..Default::default() };
+
+        for i in 0..nbas {
+            for j in 0..nbas {
+                let shells = basis_ref.shell_tuple_for_indices([i, j]).map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "ECP-iprinv shell_tuple_for_indices(i={i}, j={j}) failed for '{name}': {e}",
+                    )))
+                })?;
+
+                let request =
+                    SessionRequest::new(operator, representation, basis_ref, shells, opts.clone());
+                let outcome = request
+                    .query_workspace()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx ECP-iprinv workspace query failed for '{name}' shell pair ({i},{j}): {e}",
+                        )))
+                    })?
+                    .evaluate()
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "cintx ECP-iprinv evaluate failed for '{name}' shell pair ({i},{j}): {e}",
+                        )))
+                    })?;
+
+                let ni = shell_counts[i];
+                let nj = shell_counts[j];
+                let oi = shell_offsets[i];
+                let oj = shell_offsets[j];
+
+                let block = &outcome.tensor.owned_values;
+                let block_component_leading = outcome.tensor.component_axis_leading;
+                let expected_inner = ni * nj;
+                let expected_total = expected_inner * COMPONENTS;
+                if block.len() != expected_total {
+                    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "cintx ECP-iprinv returned block of {} elements for shell pair ({i},{j}) of \
+                         '{name}', expected components*ni*nj = {expected_total} \
+                         (components={COMPONENTS}, ni={ni}, nj={nj}, extents={:?})",
+                        block.len(),
+                        outcome.tensor.extents,
+                    ))));
+                }
+
+                // Stitch into the component-leading global buffer (byte-identical
+                // to the ipnuc stitch — a pure copy, no accumulation).
                 for ii in 0..ni {
                     for jj in 0..nj {
                         for comp in 0..COMPONENTS {

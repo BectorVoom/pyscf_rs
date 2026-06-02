@@ -5,26 +5,29 @@
 //! central-difference the SCF `as_scanner` energy at `disp = 1e-4` Bohr and
 //! compare to the analytical `RhfGradients::kernel()` at `≤ 1e-6` Ha/Bohr (D-01).
 //!
-//! ## Two arms (the 07-01 cintx-availability split, D-02)
+//! ## Status (F-08, quick "fix f8", 2026-06-02)
 //!
-//! Per 07-01-SUMMARY the six gradient-integral families this gradient needs —
-//! `int2e_ip1` (2e Pulay), `int1e_ip{ovlp,kin,nuc}` (overlap + hcore Pulay), and
-//! `int1e_iprinv` + `with_rinv_at_nucleus` (the per-atom Hellmann-Feynman shift)
-//! — are **MISSING from every cintx branch with no scheduled workstream**.
+//! The grad-integral families now EVALUATE in cintx, and the RHF `grad_elec`
+//! assembly is correct: the s-shell numeric gate (H2/STO-3G,
+//! `rhf_verify_fd_numeric`) is **un-gated and PASSES to ~2.6e-9 Ha/Bohr**. Three
+//! real assembly bugs were fixed to get there (component-fastest F-order layout;
+//! `hcore_deriv` axis-1 slice; the `int2e_ip1` K-contraction l-output index).
 //!
 //!   * **STRUCTURAL arm (always-on):** builds an RHF reference, exercises the
 //!     cintx-independent pieces (`make_rdm1e`, `grad_nuc`, `aoslice_by_atom`) at
 //!     the right shapes, and asserts `RhfGradients::kernel()` EITHER returns the
-//!     `(natm, 3)` analytical gradient (if a future cintx ships the families) OR
-//!     surfaces a CLEAN cintx-availability error — never
-//!     `NotYetImplemented{phase:7}` (GRAD-07 closed that disposition).
+//!     `(natm, 3)` analytical gradient OR surfaces a CLEAN cintx-availability
+//!     error — never `NotYetImplemented{phase:7}` (GRAD-07 closed that).
 //!
-//!   * **NUMERIC arm (`#[ignore]`'d):** the full `verify_fd` FD-vs-analytical
-//!     comparison. `#[ignore]`'d today because `RhfGradients::kernel()` cannot
-//!     produce a numeric gradient while the six families are absent; it
-//!     un-gates (drop the `#[ignore]`) the moment the cintx grad-integral
-//!     workstream lands them. Run on demand:
-//!     `cargo test -p pyscf-grad --locked -- --ignored rhf_verify_fd_numeric`
+//!   * **NUMERIC s-shell arm (`rhf_verify_fd_numeric`, un-gated):** the full
+//!     `verify_fd` FD-vs-analytical comparison on H2/STO-3G — passes.
+//!
+//!   * **NUMERIC p-shell arm (`rhf_verify_fd_numeric_pshell`, `#[ignore]`'d):**
+//!     blocked by an EXTERNAL cintx kernel bug — `int1e_ipnuc`, `int1e_iprinv`
+//!     (off-origin nuclei) and `int2e_ip1` are numerically WRONG for l≥1 shells
+//!     (verified element-wise vs PySCF 2.12.1 while `int1e_ovlp`/`int2e`/
+//!     `int1e_ipovlp`/`int1e_ipkin` are all correct to ~7e-9). Un-gate when
+//!     cintx fixes its p-shell gradient kernels.
 //!
 //! Run scoped + single-threaded (user-memory + CI discipline, NO libxc):
 //!   cargo test -p pyscf-grad --locked -- --test-threads=1 rhf_verify_fd
@@ -135,9 +138,15 @@ fn rhf_grad_nuc_returns_natm_by_3() {
     // H2 aligned on z: the x/y nuclear-repulsion force is zero, z is non-zero
     // and equal-and-opposite on the two H.
     for r in &gn {
-        assert!(r[0].abs() < 1e-12 && r[1].abs() < 1e-12, "off-axis force must vanish");
+        assert!(
+            r[0].abs() < 1e-12 && r[1].abs() < 1e-12,
+            "off-axis force must vanish"
+        );
     }
-    assert!(gn[0][2].abs() > 1e-6, "on-axis nuclear force must be non-zero");
+    assert!(
+        gn[0][2].abs() > 1e-6,
+        "on-axis nuclear force must be non-zero"
+    );
     assert!(
         (gn[0][2] + gn[1][2]).abs() < 1e-12,
         "Newton's third law: z-forces are equal and opposite"
@@ -214,14 +223,10 @@ fn rhf_grad_elec_routes_missing_intor_to_clean_error() {
 /// energy at `disp = 1e-4` Bohr and compare to the analytical
 /// `RhfGradients::kernel()` at `≤ 1e-6` Ha/Bohr (D-01).
 ///
-/// **`#[ignore]`'d (07-01 cintx-availability gate):** the analytical gradient
-/// cannot be produced while `int2e_ip1` + `int1e_ip{ovlp,kin,nuc,rinv}` +
-/// `with_rinv_at_nucleus` are MISSING from cintx (no scheduled workstream).
-/// Drop the `#[ignore]` the moment that cintx grad-integral workstream lands —
-/// the wiring below is complete and the FD harness is always-on.
+/// Un-gated (F-08, 2026-06-02): the grad integrals evaluate and the assembly is
+/// correct; H2/STO-3G (s-shells only) agrees with the central difference to
+/// ~2.6e-9 Ha/Bohr.
 #[test]
-#[ignore = "GRAD-01 numeric: int2e_ip1 + int1e_ip{ovlp,kin,nuc,rinv} + with_rinv_at_nucleus \
-            MISSING from cintx (07-01-SUMMARY, no scheduled workstream); un-gate when they land"]
 fn rhf_verify_fd_numeric() {
     use pyscf_scf::{RHF, as_scanner};
 
@@ -230,7 +235,8 @@ fn rhf_verify_fd_numeric() {
     let mut rhf = RHF::new(mol.clone());
     rhf.conv_tol = 1e-12;
     rhf.max_cycle = 100;
-    rhf.kernel().expect("RHF SCF must converge for the FD reference");
+    rhf.kernel()
+        .expect("RHF SCF must converge for the FD reference");
 
     let mo_coeff = rhf.mo_coeff.clone().expect("converged mo_coeff");
     let mo_energy = rhf.mo_energy.clone().expect("converged mo_energy");
@@ -271,6 +277,64 @@ fn rhf_verify_fd_numeric() {
         report.passed,
         "RHF analytical gradient must agree with the central difference within \
          {FD_TOL} Ha/Bohr (D-01); got max|fd - analytical| = {:e}",
+        report.max_abs_diff
+    );
+}
+
+/// The p-shell numeric gate: bent H2O/STO-3G (O carries a 2p shell). The RHF
+/// assembly is correct (s-shells pass above), but this is **`#[ignore]`'d on an
+/// EXTERNAL cintx kernel bug**: `int1e_ipnuc`, `int1e_iprinv` (off-origin
+/// nuclei) and `int2e_ip1` are numerically WRONG for l≥1 shells. Verified
+/// 2026-06-02 by element-wise comparison vs PySCF 2.12.1: cintx
+/// `int1e_ovlp`/`int2e`/`int1e_ipovlp`/`int1e_ipkin`/`int1e_iprinv@first-atom`
+/// are all correct (~7e-9), but the families above diverge by 0.2–1.1 on bent
+/// H2O. Drop the `#[ignore]` when cintx fixes its p-shell gradient kernels.
+#[test]
+#[ignore = "F-08: cintx int1e_ipnuc / int1e_iprinv(off-origin) / int2e_ip1 are numerically \
+            WRONG for l>=1 shells (external cintx kernel bug; ipovlp/ipkin/int2e are correct). \
+            Un-gate when cintx fixes its p-shell gradient kernels."]
+fn rhf_verify_fd_numeric_pshell() {
+    use pyscf_scf::{RHF, as_scanner};
+
+    let mol = M(MoleBuildArgs {
+        atom: AtomInput::String("O 0.0 0.0 0.12; H 0.0 0.75 -0.48; H 0.1 -0.75 -0.46".into()),
+        basis: BasisInput::Name("sto-3g".into()),
+        ..Default::default()
+    })
+    .expect("build H2O/sto-3g mol");
+    let mut rhf = RHF::new(mol.clone());
+    rhf.conv_tol = 1e-12;
+    rhf.max_cycle = 100;
+    rhf.kernel()
+        .expect("RHF SCF must converge for the FD reference");
+
+    let reference = RhfReference {
+        mo_coeff: rhf.mo_coeff.clone().expect("converged mo_coeff"),
+        mo_energy: rhf.mo_energy.clone().expect("converged mo_energy"),
+        mo_occ: rhf.mo_occ.clone().expect("converged mo_occ"),
+        mol: mol.clone(),
+    };
+    let grad = RhfGradients::new(reference);
+    let analytical = grad.kernel(None).expect("analytical RHF gradient");
+
+    let scanner = as_scanner(&rhf);
+    let base_coords: Vec<[f64; 3]> = mol.atom_coords();
+    let symbols: Vec<String> = mol_atom_symbols(&mol);
+    let energy = |coords: &[[f64; 3]]| -> Result<f64, PyscfRsError> {
+        let new_mol = M(MoleBuildArgs {
+            atom: AtomInput::String(geometry_string(&symbols, coords)),
+            basis: BasisInput::Name("sto-3g".into()),
+            unit: pyscf_core::Unit::Bohr,
+            ..Default::default()
+        })?;
+        scanner(&new_mol).map(|e| e.0)
+    };
+    let report = pyscf_grad::verify_fd(&base_coords, &analytical, energy, DEFAULT_DISP, FD_TOL)
+        .expect("verify_fd must run on the RHF reference");
+    assert!(
+        report.passed,
+        "RHF analytical gradient (p-shell) must agree with the central difference within \
+         {FD_TOL} Ha/Bohr; got max|fd - analytical| = {:e}",
         report.max_abs_diff
     );
 }

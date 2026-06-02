@@ -3,8 +3,8 @@
 //! 07-04). Always-on, no SCF/cintx dependency (the optimizer STRUCTURE is
 //! provable on analytic model Hessians).
 
-use pyscf_geomopt::rfo::{BfgsHessian, EPSILON_NEG_EIG, rfo_step};
 use pyscf_geomopt::ConvParams;
+use pyscf_geomopt::rfo::{BfgsHessian, EPSILON_NEG_EIG, rfo_step};
 
 fn norm(v: &[f64]) -> f64 {
     v.iter().map(|x| x * x).sum::<f64>().sqrt()
@@ -42,7 +42,10 @@ fn rfo_step_descends_on_2d_quadratic() {
     };
     let g = [2.0, 4.0];
     let (dq, _pred, _trust) = rfo_step(&hess, &g, 10.0, &ConvParams::gau(), None, None);
-    assert!(dq[0] < 0.0 && dq[1] < 0.0, "both components downhill: {dq:?}");
+    assert!(
+        dq[0] < 0.0 && dq[1] < 0.0,
+        "both components downhill: {dq:?}"
+    );
 }
 
 #[test]
@@ -95,5 +98,8 @@ fn bfgs_update_builds_curvature() {
     let mut hess = BfgsHessian::identity(2);
     hess.bfgs_update(&[0.1, 0.05], &[0.2, 0.1]);
     assert_eq!(hess.n_updates, 1);
-    assert!((hess.h[1] - hess.h[2]).abs() < 1e-12, "Hessian stays symmetric");
+    assert!(
+        (hess.h[1] - hess.h[2]).abs() < 1e-12,
+        "Hessian stays symmetric"
+    );
 }

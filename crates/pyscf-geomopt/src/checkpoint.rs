@@ -152,7 +152,10 @@ impl OptimizerState {
         if has_prev {
             // validate() guarantees the trio is all-present + length nint.
             let q = self.prev_q.as_ref().expect("prev_q present (validated)");
-            let g = self.prev_g_int.as_ref().expect("prev_g_int present (validated)");
+            let g = self
+                .prev_g_int
+                .as_ref()
+                .expect("prev_g_int present (validated)");
             let e = self.prev_e.expect("prev_e present (validated)");
             primitives::write_dataset_1d(group, "prev_q", q)?;
             primitives::write_dataset_1d(group, "prev_g_int", g)?;
@@ -188,7 +191,11 @@ impl OptimizerState {
         let coords_flat = primitives::read_dataset_1d(group, "coords")?;
         if coords_flat.len() != 3 * natm {
             return Err(GeomError::CheckpointCorrupt {
-                what: format!("coords length {} ≠ 3·natm = {}", coords_flat.len(), 3 * natm),
+                what: format!(
+                    "coords length {} ≠ 3·natm = {}",
+                    coords_flat.len(),
+                    3 * natm
+                ),
             });
         }
         let coords: Vec<[f64; 3]> = coords_flat

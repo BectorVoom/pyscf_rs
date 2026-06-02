@@ -149,11 +149,123 @@ pub fn default_ao2mo(refr: &Mp2Reference, frozen: &Frozen) -> Result<ChemistsEri
     // substitute zeros (D-05/T-05-03-FFI).
     let eri = pyscf_gto::intor(&refr.mol, "int2e")?;
 
-    // ao2mo.general expects the (o,v,o,v) ordering → (ia|jb) block.
-    let ovov = pyscf_ao2mo::general(&eri.values, nao, [&co, &cv, &co, &cv])
+    // ao2mo.general returns FLAT F-ORDER [nocc,nvir,nocc,nvir] (incore.rs:29):
+    //   element (i,a,j,b) at  i + a*nocc + j*nocc*nvir + b*nocc*nvir*nocc.
+    let f_order = pyscf_ao2mo::general(&eri.values, nao, [&co, &cv, &co, &cv])
         .map_err(crate::error::Mp2Error::from)?;
 
+    // rmp2_kernel reads `ovov` in C-ORDER (mp2.rs `idx`):
+    //   (ia|jb) at ((i*nvir+a)*nocc+j)*nvir+b.
+    // The two layouts only coincide when nvir==1 (the F↔C difference reduces to
+    // an i↔j swap that the (ia|ja)==(ja|ia) symmetry absorbs); for nvir>1 the
+    // raw F-order buffer is the WRONG element at every (i,a,j,b) with a≠b. So the
+    // explicit F→C repack is MANDATORY — the same re-stride cross_spin_ao2mo does
+    // (this is the αα/ββ special case n0=n2=nocc, n1=n3=nvir).
+    let mut ovov = vec![0.0f64; nocc * nvir * nocc * nvir];
+    for i in 0..nocc {
+        for a in 0..nvir {
+            for j in 0..nocc {
+                for b in 0..nvir {
+                    let f_idx = i + a * nocc + j * nocc * nvir + b * nocc * nvir * nocc;
+                    let c_idx = ((i * nvir + a) * nocc + j) * nvir + b;
+                    ovov[c_idx] = f_order[f_idx];
+                }
+            }
+        }
+    }
+
     Ok(ChemistsEris { ovov, nocc, nvir })
+}
+
+/// Cross-spin `(o_α v_α | o_β v_β)` ao2mo: the opposite-spin (αβ) `(ia|JB)`
+/// block consumed by [`crate::ump2::ump2_kernel`]'s opposite-spin channel.
+///
+/// Builds the α occupied/virtual column subsets (`co_a`/`cv_a`) from `alpha`
+/// and the β subsets (`co_b`/`cv_b`) from `beta` (frozen-aware, mirroring
+/// [`default_ao2mo`]'s `reference_elements` + `frozen_mask` + `mo_subset`
+/// idiom). α and β share the SAME molecule (identical geometry + basis), so the
+/// AO `int2e` tensor is computed once from `alpha.mol`. It then calls
+/// `pyscf_ao2mo::general(&eri, nao, [&co_a,&cv_a,&co_b,&cv_b])`.
+///
+/// # The F-order → C-order repack (the delicate part)
+/// `ao2mo::general` returns a FLAT **F-order** `[n0=nocc_a, n1=nvir_a,
+/// n2=nocc_b, n3=nvir_b]` buffer: element `(i,a,J,B)` lives at
+/// `i + a*nocc_a + J*nocc_a*nvir_a + B*nocc_a*nvir_a*nocc_b`.
+/// The [`crate::ump2::ump2_kernel`] opposite-spin channel reads the SAME axis
+/// order `(i,a,J,B)` but in **C-order**: element `(i,a,J,B)` at
+/// `((i*nvir_a + a)*nocc_b + J)*nvir_b + B`. The two layouts have identical
+/// axis ORDER but opposite contiguity, so an explicit per-`(i,a,J,B)` index
+/// repack is MANDATORY here.
+///
+/// ⚠ The same-spin [`default_ao2mo`] path skips this repack and is still
+/// correct ONLY because its αα palindromic shape (`n0==n2`, `n1==n3`) plus the
+/// `(ia|jb)==(jb|ia)` permutation symmetry absorb the F↔C swap. That symmetry
+/// does NOT hold cross-spin (`nocc_a != nocc_b`, distinct α/β orbitals), so the
+/// shortcut would silently corrupt the αβ energy — hence the explicit repack.
+///
+/// Returns a [`ChemistsEris`] whose `ovov` is the C-order αβ block in the
+/// `[nocc_a, nvir_a, nocc_b, nvir_b]` layout, with `nocc`/`nvir` set from the α
+/// side (matching the convention `ump2_kernel`'s αβ block check expects).
+///
+/// # Errors
+/// `?`-propagates any error from `intor("int2e")`, `ao2mo::general`, or the
+/// frozen-mask resolution. This function NEVER panics and NEVER substitutes a
+/// zero buffer (F-06 / T-nfb-02): a genuine integral/shape error propagates.
+pub fn cross_spin_ao2mo(
+    alpha: &Mp2Reference,
+    beta: &Mp2Reference,
+    frozen: &Frozen,
+) -> Result<ChemistsEris, PyscfRsError> {
+    // α/β column subsets (frozen-aware), mirroring default_ao2mo's idiom.
+    let elements_a = reference_elements(alpha);
+    let mask_a = frozen::frozen_mask(frozen, &alpha.mo_occ, &alpha.mo_energy, &elements_a)?;
+    let co_a = mo_subset(alpha, &mask_a, true)?;
+    let cv_a = mo_subset(alpha, &mask_a, false)?;
+
+    let elements_b = reference_elements(beta);
+    let mask_b = frozen::frozen_mask(frozen, &beta.mo_occ, &beta.mo_energy, &elements_b)?;
+    let co_b = mo_subset(beta, &mask_b, true)?;
+    let cv_b = mo_subset(beta, &mask_b, false)?;
+
+    let nocc_a = co_a.nmo;
+    let nvir_a = cv_a.nmo;
+    let nocc_b = co_b.nmo;
+    let nvir_b = cv_b.nmo;
+    let nao = alpha.mol.nao_nr;
+
+    // α and β share geometry + basis: one AO int2e tensor drives both spins.
+    // Any error (e.g. a cintx shape surprise) `?`-propagates — never panic,
+    // never substitute zeros (F-06 / T-nfb-02).
+    let eri = pyscf_gto::intor(&alpha.mol, "int2e")?;
+
+    // F-order [nocc_a, nvir_a, nocc_b, nvir_b]: element (i,a,J,B) at
+    //   i + a*nocc_a + J*nocc_a*nvir_a + B*nocc_a*nvir_a*nocc_b.
+    let f_order = pyscf_ao2mo::general(&eri.values, nao, [&co_a, &cv_a, &co_b, &cv_b])
+        .map_err(crate::error::Mp2Error::from)?;
+
+    // EXPLICIT F-order → C-order repack (MANDATORY for cross-spin; see doc).
+    // C-order target: element (i,a,J,B) at ((i*nvir_a+a)*nocc_b+J)*nvir_b+B.
+    let mut ovov = vec![0.0f64; nocc_a * nvir_a * nocc_b * nvir_b];
+    for i in 0..nocc_a {
+        for a in 0..nvir_a {
+            for jj in 0..nocc_b {
+                for bb in 0..nvir_b {
+                    let f_idx = i
+                        + a * nocc_a
+                        + jj * nocc_a * nvir_a
+                        + bb * nocc_a * nvir_a * nocc_b;
+                    let c_idx = ((i * nvir_a + a) * nocc_b + jj) * nvir_b + bb;
+                    ovov[c_idx] = f_order[f_idx];
+                }
+            }
+        }
+    }
+
+    Ok(ChemistsEris {
+        ovov,
+        nocc: nocc_a,
+        nvir: nvir_a,
+    })
 }
 
 /// Closed-form RMP2 correlation energy (`pyscf/mp/mp2.py:kernel`, 47-76).

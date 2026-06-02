@@ -194,7 +194,9 @@ fn make_rdm1_spin(refr: &crate::rhf::RhfReference) -> Result<Vec<f64>, PyscfRsEr
     for mu in 0..nao {
         for nu in 0..nao {
             for i in 0..nmo {
-                terms[i] = refr.mo_occ[i] * refr.mo_coeff.data[mu + i * nao] * refr.mo_coeff.data[nu + i * nao];
+                terms[i] = refr.mo_occ[i]
+                    * refr.mo_coeff.data[mu + i * nao]
+                    * refr.mo_coeff.data[nu + i * nao];
             }
             dm[mu * nao + nu] = oracle_sum(&terms);
         }
@@ -341,7 +343,8 @@ fn get_vxc_uks(
     // Per-spin XC potentials ∂f/∂ρ_a, ∂f/∂ρ_b (genuine open-shell xcfun path).
     let (vrho_a, vrho_b) = ni_eval_uks_vrho(&refr.xc, &rho_a, &rho_b)?;
 
-    let ao_at = |comp: usize, g: usize, mu: usize| ao.values[comp * ngrids * nao + (g + mu * ngrids)];
+    let ao_at =
+        |comp: usize, g: usize, mu: usize| ao.values[comp * ngrids * nao + (g + mu * ngrids)];
     let n2 = nao * nao;
     let mut vmat_a = vec![0.0_f64; NCOMP * n2];
     let mut vmat_b = vec![0.0_f64; NCOMP * n2];
@@ -389,7 +392,8 @@ fn get_jk_uks(
     let n2 = nao * nao;
     let n3 = n2 * nao;
     let n4 = n3 * nao;
-    let idx = |x: usize, i: usize, j: usize, k: usize, l: usize| x * n4 + i + j * nao + k * n2 + l * n3;
+    let idx =
+        |x: usize, i: usize, j: usize, k: usize, l: usize| x * n4 + i + j * nao + k * n2 + l * n3;
     let dval = |dm: &[f64], a: usize, b: usize| dm[a * nao + b];
 
     let mut vj = vec![0.0_f64; NCOMP * n2];
@@ -422,7 +426,10 @@ fn get_jk_uks(
 /// The UKS spin-resolved electronic gradient (`uks.py`). Reuses the UHF
 /// spin-resolved Hellmann-Feynman + Pulay assembly with the per-spin KS veff,
 /// plus the `grid_response` `extra_force` per atom when enabled.
-pub fn grad_elec(g: &UksGradients, atmlst: Option<&[usize]>) -> Result<Vec<[f64; 3]>, PyscfRsError> {
+pub fn grad_elec(
+    g: &UksGradients,
+    atmlst: Option<&[usize]>,
+) -> Result<Vec<[f64; 3]>, PyscfRsError> {
     let refr = &g.reference;
     let mol = refr.mol();
     let nao = mol.nao_nr;
@@ -511,7 +518,10 @@ fn assert_component_leading(
     }
     if out.shape.first().copied() != Some(NCOMP) {
         return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-            format!("{name} must be component-leading [3, nao, nao] (Pitfall 4); got {:?}", out.shape),
+            format!(
+                "{name} must be component-leading [3, nao, nao] (Pitfall 4); got {:?}",
+                out.shape
+            ),
         )));
     }
     Ok(())

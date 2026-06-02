@@ -15,12 +15,16 @@
 //!     component-leading `[3, nao, nao]` contribution for an ECP-bearing
 //!     molecule (and a zero buffer for a non-ECP molecule — never a panic).
 //!   * `hcore_deriv` (`rhf.py:139-140`): `vrinv += mol.intor('ECPscalar_iprinv',
-//!     comp=3)` — `ECPscalar_iprinv` (= `int1e_ecp_iprinv`) is MISSING from cintx
-//!     (07-01, no scheduled workstream). [`hcore_deriv_ecp`] routes to a clean
-//!     cintx-availability error (NEVER a panic, NEVER a silent zero — T-07-27).
+//!     comp=3)` under `with_rinv_at_nucleus(atm_id)` — `ECPscalar_iprinv`
+//!     (= `int1e_ecp_iprinv`) is now cintx-READY (F-05 / cintx workstream 21-07).
+//!     [`hcore_deriv_ecp`] returns the REAL per-atom component-leading
+//!     `[3, nao, nao]` buffer for an ECP-bearing atom (and an all-zero buffer for
+//!     a non-ECP atom / molecule — never a panic). Consuming this per-atom buffer
+//!     into total nuclear forces is F-08 (still out of scope here — this returns
+//!     the integral only).
 //!
-//! Both dispatch through the Phase-2 [`pyscf_gto::CintxEcpEngine`] (the
-//! `ecp_int1e_ipnuc` method un-gated in 07-01).
+//! Both dispatch through the Phase-2 [`pyscf_gto::CintxEcpEngine`]: the
+//! `ecp_int1e_ipnuc` (07-01) and the `ecp_int1e_iprinv` (F-05) methods.
 //!
 //! ## Layout normalisation
 //!
@@ -105,38 +109,78 @@ pub fn get_hcore_ecp(mol: &Mole) -> Result<Vec<f64>, PyscfRsError> {
 }
 
 /// The `hcore_deriv` per-atom ECP-gradient term `+ ECPscalar_iprinv`
-/// (`pyscf/grad/rhf.py:139-140`) — MISSING from cintx (07-01, no scheduled
-/// workstream).
+/// (`pyscf/grad/rhf.py:139-140`) — now cintx-READY (F-05 / cintx workstream
+/// 21-07).
 ///
 /// `ECPscalar_iprinv` is the per-atom (`with_rinv_at_nucleus(atm_id)`) ECP
 /// derivative the RHF `hcore_deriv` adds for the atom whose ECP origin is being
-/// differentiated. cintx ships NO `int1e_ecp_iprinv` family on any branch
-/// (07-01), so this routes to a CLEAN cintx-availability error
-/// (`Core(InvalidMolecule(..))`) — NEVER a panic, NEVER a silent zero, NEVER
-/// `NotYetImplemented{phase:7}` (T-07-27). The numeric arm un-gates by dropping
-/// the gate once the cintx workstream lands `ECPscalar_iprinv`.
+/// differentiated. The cintx native `ecp_iprinv` kernel selects ONLY the ECP
+/// slot whose coordinate matches the rinv origin; this returns the real per-atom
+/// component-leading `[3, nao, nao]` buffer (normalised to the RHF
+/// component-leading F-order, mirroring [`get_hcore_ecp`]).
 ///
-/// `atm_id` is the atom whose ECP origin is differentiated (validated `< natm`).
+/// `atm_id` is the atom whose ECP origin is differentiated (validated `< natm`);
+/// its coordinate (Bohr — `Mole` storage is always Bohr) is the rinv origin.
+/// For a non-ECP atom (or a molecule with no ECP) the iprinv term contributes
+/// nothing → an all-zero `[3, nao, nao]` buffer (PySCF adds `ECPscalar_iprinv`
+/// ONLY when `atm_id in ecp_atoms`; the cintx kernel likewise zero-fills when
+/// the origin matches no ECP atom). Other engine errors propagate.
+///
+/// Consuming this per-atom buffer into total nuclear forces is F-08 (still out
+/// of scope — this returns the integral only).
 pub fn hcore_deriv_ecp(mol: &Mole, atm_id: usize) -> Result<Vec<f64>, PyscfRsError> {
     if atm_id >= mol.natm {
         return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-            format!("hcore_deriv_ecp: atm_id {atm_id} out of range (natm={})", mol.natm),
+            format!(
+                "hcore_deriv_ecp: atm_id {atm_id} out of range (natm={})",
+                mol.natm
+            ),
         )));
     }
+    let nao = mol.nao_nr;
+    // The rinv origin is the differentiated nucleus coordinate (Bohr); cintx's
+    // ecp_iprinv selector matches ECP slots against it.
+    let rinv_origin = mol.atom_coord(atm_id);
     let engine = pyscf_gto::ecp_engine();
-    // Route the iprinv family through the engine; cintx is MISSING it (07-01) so
-    // the engine returns a clean cintx-availability error. We DELIBERATELY surface
-    // that error rather than substituting a zero or a panic (T-07-27). If a future
-    // cintx ships ECPscalar_iprinv this returns the per-atom [3, nao, nao] buffer.
-    let _ = engine.ecp_int1e_ipnuc(mol, "ECPscalar_iprinv")?;
-    // Unreachable until cintx ships iprinv: when it does, normalise + return the
-    // per-atom contribution here (mirroring get_hcore_ecp's layout normalisation).
-    Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-        "ECPscalar_iprinv (the per-atom hcore_deriv ECP-gradient term) is MISSING from \
-         every cintx branch (07-01, no scheduled workstream) — the iprinv numeric arm \
-         un-gates when that family lands."
-            .into(),
-    )))
+
+    // F-05: route the per-atom iprinv family through the dedicated engine method
+    // (cintx 21-07). The component-leading buffer is `data[comp + p*3 + q*3*nao]`.
+    match engine.ecp_int1e_iprinv(mol, "ECPscalar_iprinv", rinv_origin) {
+        Ok(density) => {
+            let expect = NCOMP * nao * nao;
+            if density.nao != nao || density.data.len() != expect {
+                return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+                    format!(
+                        "ECPscalar_iprinv returned a buffer of {} elements (nao={}); \
+                         expected components*nao*nao = {expect} (nao={nao})",
+                        density.data.len(),
+                        density.nao
+                    ),
+                )));
+            }
+            // Normalise the engine's component-INNER layout
+            // (`data[comp + p*3 + q*3*nao]`) to the RHF component-leading F-order
+            // (`out[comp*nao*nao + p + q*nao]`) — same pure copy as get_hcore_ecp
+            // (no accumulation, so no oracle_sum required).
+            let mut out = vec![0.0_f64; expect];
+            for comp in 0..NCOMP {
+                let base = comp * nao * nao;
+                for q in 0..nao {
+                    for p in 0..nao {
+                        out[base + p + q * nao] = density.data[comp + p * NCOMP + q * NCOMP * nao];
+                    }
+                }
+            }
+            Ok(out)
+        }
+        // A non-ECP atom (or a molecule with no ECP) contributes nothing to the
+        // per-atom iprinv term → an all-zero [3, nao, nao] buffer (NOT an error,
+        // NOT a panic). Matches PySCF: vrinv += ECPscalar_iprinv ONLY when
+        // atm_id in ecp_atoms.
+        Err(PyscfRsError::EcpEngineNotAvailable) => Ok(vec![0.0_f64; NCOMP * nao * nao]),
+        // Any OTHER error (malformed ECP, workspace failure) propagates as-is.
+        Err(e) => Err(e),
+    }
 }
 
 /// ECP gradient seam preserved for the 07-02 module stub. The real bodies are
