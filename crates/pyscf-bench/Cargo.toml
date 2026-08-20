@@ -4,9 +4,29 @@ version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
-description = "Criterion-based benchmark suite. Implemented in Phase 8."
+description = "Performance benchmark suite for PySCF-RS and CubeCL GPU ROCm kernels."
 
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "bench_rocm"
+path = "src/main.rs"
+
+[features]
+default = ["cpu", "rocm"]
+cpu = ["pyscf-algebra/cpu", "pyscf-kernels/cpu", "dep:cubecl-cpu"]
+rocm = ["pyscf-algebra/rocm", "pyscf-kernels/rocm", "dep:cubecl-hip"]
+
 [dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra", default-features = false }
+pyscf-kernels = { path = "../pyscf-kernels", default-features = false }
+pyscf-gto     = { path = "../pyscf-gto" }
+pyscf-scf     = { path = "../pyscf-scf" }
+pyscf-mp2     = { path = "../pyscf-mp2" }
+pyscf-ccsd    = { path = "../pyscf-ccsd" }
+pyscf-df      = { path = "../pyscf-df" }
+cubecl        = { workspace = true }
+cubecl-cpu    = { workspace = true, optional = true }
+cubecl-hip    = { workspace = true, optional = true }

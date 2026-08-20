@@ -28,63 +28,80 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Naive one-thread-per-element products kernel: `out[i] = x[i] * y[i]`.
-/// Generic over the device float so the same kernel monomorphizes for f32
-/// (GPU speed path) and f64 (chemistry precision path) — see
-/// `Cubecl_generics.md`. The final sum is performed on the host (see
-/// [`launch_dot`]); this kernel does only the multiply.
-#[cube(launch)]
-fn dot_kernel<F: Float>(x: &Array<F>, y: &Array<F>, out: &mut Array<F>, n: usize) {
+/// Partial-sum dot kernel: thread `tid` multiplies and accumulates elements
+/// `[tid*chunk, (tid+1)*chunk)` (clamped to `n`) into one partial in `F`,
+/// writing it to `out[tid]`. Generic over the device float so the same kernel
+/// monomorphizes for f32 (GPU speed path) and f64 (chemistry precision path) —
+/// see `Cubecl_generics.md`. The final sum of the `groups` partials runs on the
+/// host (see [`launch_dot`]).
+#[cube(launch_unchecked)]
+fn dot_kernel<F: Float>(x: &Array<F>, y: &Array<F>, out: &mut Array<F>, n: usize, chunk: usize) {
     // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
     // dimension scalar is `usize` too — no casts.
     let tid = ABSOLUTE_POS;
+    let start = tid * chunk;
     // Bounds guard: the launch rounds the thread count up to a whole number of
-    // blocks, so the tail threads must not write out of range.
-    if tid < n {
-        out[tid] = x[tid] * y[tid];
+    // blocks, so tail threads (start >= n) write the identity and never index
+    // out of range.
+    let mut acc = F::from_int(0);
+    if start < n {
+        let mut end = start + chunk;
+        if end > n {
+            end = n;
+        }
+        let mut i = start;
+        while i < end {
+            acc += x[i] * y[i];
+            i += 1;
+        }
     }
+    out[tid] = acc;
 }
 
-/// Threads per block for the dot launch. One thread computes one product; the
-/// grid is sized to cover `n` threads.
+/// Threads per block for the dot launch. One thread computes one partial sum; the
+/// grid is sized to cover all partials.
 const BLOCK: u32 = 256;
 
-/// Core launch on resident device handles: compute the per-element products of
-/// `x`/`y` (length `n`) into a temporary device buffer, read them back, and sum
-/// in `F`. No re-upload of `x`/`y` — both the host-slice path ([`launch_dot`])
-/// and the registry-backed `Tensor` path ([`dot`]) drive this. The products
-/// read-back is inherent to the host-sum reduction; the win is that the resident
-/// operands are not copied to the device again per op.
+/// Elements summed sequentially per thread (per partial).
+const CHUNK: usize = 256;
+
+/// Core launch on resident device handles: compute the per-element products and
+/// partial sums of `x`/`y` (length `n`) into a temporary device buffer, read them
+/// back, and sum in `F`. No re-upload of `x`/`y` — both the host-slice path
+/// ([`launch_dot`]) and the registry-backed `Tensor` path ([`dot`]) drive this.
 fn launch_dot_on_handles<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
     x: &Handle,
     y: &Handle,
     n: usize,
 ) -> F {
-    let out_handle = client.empty(n * core::mem::size_of::<F>());
+    if n == 0 {
+        return F::from_int(0);
+    }
+    let partials = n.div_ceil(CHUNK);
+    let out_handle = client.empty(partials * core::mem::size_of::<F>());
 
-    let groups = n.div_ceil(BLOCK as usize) as u32;
+    let groups = (partials as u32).div_ceil(BLOCK);
 
-    dot_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: `n` matches the operand buffers and the just-allocated output.
-        // `from_raw_parts` consumes the handle by value; clone the caller's
-        // handles and the output handle (which must survive for the read-back).
-        unsafe { ArrayArg::from_raw_parts(x.clone(), n) },
-        unsafe { ArrayArg::from_raw_parts(y.clone(), n) },
-        unsafe { ArrayArg::from_raw_parts(out_handle.clone(), n) },
-        // Scalar kernel args are passed as bare values (LaunchArg for T = T).
-        n,
-    );
+    unsafe {
+        dot_kernel::launch_unchecked::<F, R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(BLOCK),
+            // SAFETY: `n` matches the operand buffers and `partials` matches out_handle.
+            ArrayArg::from_raw_parts(x.clone(), n),
+            ArrayArg::from_raw_parts(y.clone(), n),
+            ArrayArg::from_raw_parts(out_handle.clone(), partials),
+            // Scalar kernel args are passed as bare values (LaunchArg for T = T).
+            n,
+            CHUNK,
+        );
+    }
 
     let bytes = client.read(vec![out_handle]);
     let products: Vec<F> = bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec();
 
-    // Host-sum in `F`. A plain `acc += p` add is NOT an FMA (check-no-fma only
-    // flags FMA in pyscf_* symbols anyway) — the products kernel is the only
-    // multiply.
+    // Host-sum the partials in `F`.
     let mut acc = F::from_int(0);
     for &p in &products {
         acc += p;

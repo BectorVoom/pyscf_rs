@@ -39,7 +39,7 @@ use cubecl::server::Handle;
 /// monomorphizes for f32 (GPU speed path) and f64 (chemistry precision path) —
 /// see `Cubecl_generics.md`. The final sum of the `groups` partials runs on the
 /// host (see [`launch_reduce_sum`]).
-#[cube(launch)]
+#[cube(launch_unchecked)]
 fn reduce_kernel<F: Float>(x: &Array<F>, out: &mut Array<F>, n: usize, chunk: usize) {
     // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
     // dimension scalars are `usize` too — no casts.
@@ -92,19 +92,21 @@ fn launch_reduce_sum<R: Runtime, F: DeviceScalar>(client: &ComputeClient<R>, x: 
 
     let groups = (partials as u32).div_ceil(BLOCK);
 
-    reduce_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: lengths match the buffers just allocated above. `from_raw_parts`
-        // consumes the handle by value; clone the output handle so it survives
-        // for the read-back below.
-        unsafe { ArrayArg::from_raw_parts(x_handle, n) },
-        unsafe { ArrayArg::from_raw_parts(out_handle.clone(), partials) },
-        // Scalar kernel args are passed as bare values (LaunchArg for T = T).
-        n,
-        CHUNK,
-    );
+    unsafe {
+        reduce_kernel::launch_unchecked::<F, R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(BLOCK),
+            // SAFETY: lengths match the buffers just allocated above. `from_raw_parts`
+            // consumes the handle by value; clone the output handle so it survives
+            // for the read-back below.
+            ArrayArg::from_raw_parts(x_handle, n),
+            ArrayArg::from_raw_parts(out_handle.clone(), partials),
+            // Scalar kernel args are passed as bare values (LaunchArg for T = T).
+            n,
+            CHUNK,
+        );
+    }
 
     let bytes = client.read(vec![out_handle]);
     let parts: Vec<F> = bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec();
@@ -139,7 +141,7 @@ pub fn reduce_sum_dense<F: DeviceScalar>(
 /// `x[o*axis_len*inner + i + a*inner]` for `a in 0..axis_len`. Generic over the
 /// device float so the same kernel monomorphizes for f32 (GPU speed path) and
 /// f64 (chemistry precision path) — see `Cubecl_generics.md`.
-#[cube(launch)]
+#[cube(launch_unchecked)]
 fn reduce_axis_kernel<F: Float>(
     x: &Array<F>,
     out: &mut Array<F>,
@@ -184,20 +186,22 @@ fn launch_reduce_axis_on_handles<R: Runtime, F: DeviceScalar>(
     let n_out = outer * inner;
     let groups = (n_out as u32).div_ceil(BLOCK);
 
-    reduce_axis_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: `x_len == outer*axis_len*inner` and `out` holds `n_out`.
-        // `from_raw_parts` consumes the handle by value, so clone the caller's
-        // handles (clones share the binding).
-        unsafe { ArrayArg::from_raw_parts(x.clone(), x_len) },
-        unsafe { ArrayArg::from_raw_parts(out.clone(), n_out) },
-        // Scalar dimension args are passed as bare values (LaunchArg for usize).
-        outer,
-        axis_len,
-        inner,
-    );
+    unsafe {
+        reduce_axis_kernel::launch_unchecked::<F, R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(BLOCK),
+            // SAFETY: `x_len == outer*axis_len*inner` and `out` holds `n_out`.
+            // `from_raw_parts` consumes the handle by value, so clone the caller's
+            // handles (clones share the binding).
+            ArrayArg::from_raw_parts(x.clone(), x_len),
+            ArrayArg::from_raw_parts(out.clone(), n_out),
+            // Scalar dimension args are passed as bare values (LaunchArg for usize).
+            outer,
+            axis_len,
+            inner,
+        );
+    }
 }
 
 /// Host-slice launcher: upload `x`, allocate the `outer*inner` output, run the

@@ -27,7 +27,7 @@ use cubecl::server::Handle;
 /// `lhs` is `M×K`, `rhs` is `K×N`, `out` is `M×N`. Generic over the device
 /// float so the same kernel monomorphizes for f32 (GPU speed path) and f64
 /// (chemistry precision path) — see `Cubecl_generics.md`.
-#[cube(launch)]
+#[cube(launch_unchecked)]
 fn gemm_kernel<F: Float>(
     lhs: &Array<F>,
     rhs: &Array<F>,
@@ -45,9 +45,10 @@ fn gemm_kernel<F: Float>(
         let row = tid / n;
         let col = tid % n;
         let mut acc = F::from_int(0);
+        let row_k = row * k;
         // Runtime-bounded contraction over the shared K dimension.
         for j in 0..k {
-            acc += lhs[row * k + j] * rhs[j * n + col];
+            acc += lhs[row_k + j] * rhs[j * n + col];
         }
         out[tid] = acc;
     }
@@ -73,21 +74,23 @@ pub(crate) fn launch_gemm_on_handles<R: Runtime, F: DeviceScalar>(
 ) {
     let groups = (m * n).div_ceil(BLOCK as usize) as u32;
 
-    gemm_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: lengths match the buffers (lhs m*k, rhs k*n, out m*n).
-        // `from_raw_parts` consumes the handle by value, so clone the caller's
-        // handles (clones share the binding).
-        unsafe { ArrayArg::from_raw_parts(lhs.clone(), m * k) },
-        unsafe { ArrayArg::from_raw_parts(rhs.clone(), k * n) },
-        unsafe { ArrayArg::from_raw_parts(out.clone(), m * n) },
-        // Scalar kernel args are passed as bare values (LaunchArg for T = T).
-        m,
-        k,
-        n,
-    );
+    unsafe {
+        gemm_kernel::launch_unchecked::<F, R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(BLOCK),
+            // SAFETY: lengths match the buffers (lhs m*k, rhs k*n, out m*n).
+            // `from_raw_parts` consumes the handle by value, so clone the caller's
+            // handles (clones share the binding).
+            ArrayArg::from_raw_parts(lhs.clone(), m * k),
+            ArrayArg::from_raw_parts(rhs.clone(), k * n),
+            ArrayArg::from_raw_parts(out.clone(), m * n),
+            // Scalar kernel args are passed as bare values (LaunchArg for T = T).
+            m,
+            k,
+            n,
+        );
+    }
 }
 
 /// Host-slice launcher: upload `lhs`/`rhs`, allocate the result, run the kernel,

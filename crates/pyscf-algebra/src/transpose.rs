@@ -35,7 +35,7 @@ use cubecl::server::Handle;
 /// and writes it to the `N×M` output slot `col*m + row`. Generic over the
 /// device float so the same kernel monomorphizes for f32 (GPU speed path) and
 /// f64 (chemistry precision path) — see `Cubecl_generics.md`.
-#[cube(launch)]
+#[cube(launch_unchecked)]
 fn transpose_kernel<F: Float>(x: &Array<F>, out: &mut Array<F>, m: usize, n: usize) {
     // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
     // dimension scalars are `usize` too — no casts.
@@ -67,18 +67,20 @@ fn launch_transpose_on_handles<R: Runtime, F: DeviceScalar>(
 ) {
     let groups = (m * n).div_ceil(BLOCK as usize) as u32;
 
-    transpose_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: `m*n` matches both buffers. `from_raw_parts` consumes the handle
-        // by value, so clone the caller's handles (clones share the binding).
-        unsafe { ArrayArg::from_raw_parts(x.clone(), m * n) },
-        unsafe { ArrayArg::from_raw_parts(out.clone(), m * n) },
-        // Scalar dimension args are passed as bare values (LaunchArg for usize).
-        m,
-        n,
-    );
+    unsafe {
+        transpose_kernel::launch_unchecked::<F, R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(BLOCK),
+            // SAFETY: `m*n` matches both buffers. `from_raw_parts` consumes the handle
+            // by value, so clone the caller's handles (clones share the binding).
+            ArrayArg::from_raw_parts(x.clone(), m * n),
+            ArrayArg::from_raw_parts(out.clone(), m * n),
+            // Scalar dimension args are passed as bare values (LaunchArg for usize).
+            m,
+            n,
+        );
+    }
 }
 
 /// Host-slice launcher: upload `x`, allocate the result, run the kernel, read it

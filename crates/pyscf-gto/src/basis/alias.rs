@@ -72,16 +72,26 @@ fn build_alias() -> HashMap<&'static str, &'static str> {
     // === Pople-style (in pople-basis/ subdirectory; case-sensitive G/Gs/Gss) ===
     m.insert("321g", "pople-basis/3-21G.dat");
     m.insert("321gs", "pople-basis/3-21Gs.dat");
+    m.insert("321g*", "pople-basis/3-21Gs.dat");
     m.insert("431g", "pople-basis/4-31G.dat");
     m.insert("631g", "pople-basis/6-31G.dat");
     m.insert("631gs", "pople-basis/6-31Gs.dat");
+    m.insert("631g*", "pople-basis/6-31Gs.dat");
     m.insert("631gss", "pople-basis/6-31Gss.dat");
+    m.insert("631g**", "pople-basis/6-31Gss.dat");
     m.insert("6311g", "pople-basis/6-311G.dat");
     m.insert("6311gs", "pople-basis/6-311Gs.dat");
+    m.insert("6311g*", "pople-basis/6-311Gs.dat");
     m.insert("6311gss", "pople-basis/6-311Gss.dat");
+    m.insert("6311g**", "pople-basis/6-311Gss.dat");
     m.insert("631plusg", "pople-basis/6-31+G.dat"); // alt-key for upstream "6-31+G"; user typically writes "6-31+g"
+    m.insert("631+g", "pople-basis/6-31+G.dat");
     m.insert("631plusgs", "pople-basis/6-31+Gs.dat");
+    m.insert("631+gs", "pople-basis/6-31+Gs.dat");
+    m.insert("631+g*", "pople-basis/6-31+Gs.dat");
     m.insert("631plusgss", "pople-basis/6-31+Gss.dat");
+    m.insert("631+gss", "pople-basis/6-31+Gss.dat");
+    m.insert("631+g**", "pople-basis/6-31+Gss.dat");
 
     // === STO ===
     m.insert("sto3g", "sto-3g.dat");

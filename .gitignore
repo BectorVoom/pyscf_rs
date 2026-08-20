@@ -121,3 +121,5 @@ python/pyscf/**/*.pyd
 # Windows "mark of the web" alternate-data-stream artifacts
 *:Zone.Identifier
 
+# CodeGraph local index
+.codegraph/

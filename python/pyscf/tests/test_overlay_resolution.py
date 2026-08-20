@@ -9,9 +9,11 @@ chain in `python/pyscf/scf/__init__.py` did not accidentally wrap or
 re-create the class).
 """
 from pyscf import scf
-from pyscf._native.scf import RHF as RHF_native
-from pyscf._native.scf import UHF as UHF_native
-from pyscf._native.scf import GHF as GHF_native
+from pyscf._native import scf as _native_scf
+
+RHF_native = _native_scf.RHF
+UHF_native = _native_scf.UHF
+GHF_native = _native_scf.GHF
 
 
 def test_overlay_pyscf_scf_resolves_to_native():

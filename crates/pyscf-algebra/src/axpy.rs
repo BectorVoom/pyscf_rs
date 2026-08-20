@@ -43,7 +43,7 @@ use cubecl::server::Handle;
 /// `ScalarArgSettings` bounds that `DeviceScalar` (sealed to f32/f64) does not
 /// carry, so `F` only ever appears here as an `Array` element type — the same
 /// shape that the `dot`/`reduce`/`scal` siblings rely on.
-#[cube(launch)]
+#[cube(launch_unchecked)]
 fn axpy_kernel<F: Float>(x: &Array<F>, y: &mut Array<F>, alpha: &Array<F>, n: usize) {
     // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
     // dimension scalar is `usize` too — no casts.
@@ -77,18 +77,20 @@ fn launch_axpy_on_handles<R: Runtime, F: DeviceScalar>(
     let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
     let groups = n.div_ceil(BLOCK as usize) as u32;
 
-    axpy_kernel::launch::<F, R>(
-        client,
-        CubeCount::Static(groups, 1, 1),
-        CubeDim::new_1d(BLOCK),
-        // SAFETY: `n` matches both buffers. `from_raw_parts` consumes the handle
-        // by value, so clone the caller's handles (clones share the binding).
-        unsafe { ArrayArg::from_raw_parts(x.clone(), n) },
-        unsafe { ArrayArg::from_raw_parts(y.clone(), n) },
-        unsafe { ArrayArg::from_raw_parts(alpha_handle, 1) },
-        // Scalar dimension arg is passed as a bare value (LaunchArg for usize).
-        n,
-    );
+    unsafe {
+        axpy_kernel::launch_unchecked::<F, R>(
+            client,
+            CubeCount::Static(groups, 1, 1),
+            CubeDim::new_1d(BLOCK),
+            // SAFETY: `n` matches both buffers. `from_raw_parts` consumes the handle
+            // by value, so clone the caller's handles (clones share the binding).
+            ArrayArg::from_raw_parts(x.clone(), n),
+            ArrayArg::from_raw_parts(y.clone(), n),
+            ArrayArg::from_raw_parts(alpha_handle, 1),
+            // Scalar dimension arg is passed as a bare value (LaunchArg for usize).
+            n,
+        );
+    }
 }
 
 /// Host-slice launcher: upload `x`/`y`, run the kernel in place on `y`, read the

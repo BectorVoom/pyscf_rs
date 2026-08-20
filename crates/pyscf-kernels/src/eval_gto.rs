@@ -1424,8 +1424,8 @@ fn eval_gto_sph_kernel_general(
 ) {
     let tid = ABSOLUTE_POS;
     if tid < ngrids * nbas {
-        let g = tid / nbas;
-        let shell = tid % nbas;
+        let g = tid % ngrids;
+        let shell = tid / ngrids;
 
         let gx = coords[g];
         let gy = coords[g + ngrids];
@@ -1528,8 +1528,8 @@ fn eval_gto_sph_deriv1_kernel(
 ) {
     let tid = ABSOLUTE_POS;
     if tid < ngrids * nbas {
-        let g = tid / nbas;
-        let shell = tid % nbas;
+        let g = tid % ngrids;
+        let shell = tid / ngrids;
 
         let gx = coords[g];
         let gy = coords[g + ngrids];

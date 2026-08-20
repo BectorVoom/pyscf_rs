@@ -92,12 +92,16 @@ impl OverrideHooks for PyOverrideBridge {
         })
     }
 
-    fn get_init_guess(&self, _mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
+    fn get_init_guess(&self, mol: &Mole, mode: &InitGuessMode) -> Result<Density, PyscfRsError> {
         // BIND-07 / Pitfall 7: dispatch through `slf.call_method1` so
         // a Python subclass override of `get_init_guess(mol, key)` is
-        // invoked transparently via MRO resolution. The pyscf upstream
-        // surface is `SCF.get_init_guess(mol, key='minao')`.
+        // invoked transparently via MRO resolution. If the Python object
+        // doesn't define `get_init_guess`, fall back to the Rust default.
         Python::attach(|py| {
+            let bound_slf = self.slf.bind(py);
+            if !bound_slf.hasattr("get_init_guess").unwrap_or(false) {
+                return pyscf_scf::default_get_init_guess(mol, mode);
+            }
             let mode_str = match mode {
                 InitGuessMode::Minao => "minao",
                 InitGuessMode::Atom => "atom",
@@ -337,6 +341,13 @@ impl KsOverrideHooks for PyOverrideBridge {
 /// Phase 2 D-08: `dumps()` / `loads()` is the canonical Mole interop seam.
 pub fn extract_mole_from_pyany(py: Python<'_>, mol: &Py<PyAny>) -> PyResult<Mole> {
     let bound = mol.bind(py);
+    if bound.hasattr("mol")? {
+        if let Ok(inner) = bound.getattr("mol") {
+            if let Ok(m) = extract_mole_from_pyany(py, &inner.unbind()) {
+                return Ok(m);
+            }
+        }
+    }
     if bound.hasattr("dumps")? {
         let json: String = bound.call_method0("dumps")?.extract()?;
         match pyscf_gto::loads(&json) {

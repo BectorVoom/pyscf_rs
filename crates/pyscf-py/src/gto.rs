@@ -123,6 +123,30 @@ impl PyMole {
         Ok(arr.into_pyarray(py))
     }
 
+    fn eval_gto<'py>(
+        &self,
+        py: Python<'py>,
+        eval_name: &str,
+        coords: numpy::PyReadonlyArray2<'py, f64>,
+    ) -> PyResult<Bound<'py, PyArrayDyn<f64>>> {
+        let coords_slice = coords.as_slice()?;
+        let coords_vec: Vec<[f64; 3]> = coords_slice
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect();
+        let out = pyscf_gto::eval_gto(&self.inner, eval_name, &coords_vec).map_err(pyscf_to_py)?;
+        let n_vals = out.values.len();
+        let shape = out.shape;
+        let arr = ArrayD::from_shape_vec(IxDyn(&shape).f(), out.values).map_err(|e| {
+            PyValueError::new_err(format!(
+                "eval_gto('{eval_name}'): cannot shape {} elements as {:?} (F-order): {e}",
+                n_vals,
+                shape,
+            ))
+        })?;
+        Ok(arr.into_pyarray(py))
+    }
+
     fn dumps(&self) -> PyResult<String> {
         pyscf_gto::dumps(&self.inner).map_err(pyscf_to_py)
     }
