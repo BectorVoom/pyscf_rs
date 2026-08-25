@@ -1,0 +1,18 @@
+[package]
+name = "pyscf-pbc-symm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "space group, Symmetry, k-point symmetry adapters"
+
+[dependencies]
+pyscf-core      = { path = "../pyscf-core" }
+pyscf-algebra   = { path = "../pyscf-algebra" }
+pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }

@@ -20,12 +20,28 @@ fn main() -> ExitCode {
         "check-dependency-wall",
         "check-cubecl-pin",
     ];
+    let current_exe = std::env::current_exe().ok();
+    let bin_dir = current_exe.as_ref().and_then(|p| p.parent());
+
     let mut all_passed = true;
     for check in &checks {
         eprintln!("--- xtask: running {check} ---");
-        let status = Command::new("cargo")
-            .args(["run", "--quiet", "-p", "xtask", "--bin", check])
-            .status();
+        let mut cmd = if let Some(dir) = bin_dir {
+            let bin_path = dir.join(check);
+            if bin_path.exists() {
+                Command::new(bin_path)
+            } else {
+                let mut c = Command::new("cargo");
+                c.args(["run", "--quiet", "-p", "xtask", "--bin", check]);
+                c
+            }
+        } else {
+            let mut c = Command::new("cargo");
+            c.args(["run", "--quiet", "-p", "xtask", "--bin", check]);
+            c
+        };
+
+        let status = cmd.status();
         let ok = matches!(status, Ok(s) if s.success());
         if !ok {
             eprintln!("--- xtask: {check} FAILED ---");

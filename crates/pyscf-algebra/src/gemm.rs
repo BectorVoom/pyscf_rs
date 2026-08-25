@@ -23,10 +23,16 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Naive one-thread-per-output-element GEMM, `out = lhs @ rhs` (row-major).
-/// `lhs` is `M×K`, `rhs` is `K×N`, `out` is `M×N`. Generic over the device
-/// float so the same kernel monomorphizes for f32 (GPU speed path) and f64
-/// (chemistry precision path) — see `Cubecl_generics.md`.
+/// 2D Tiled GEMM kernel with shared memory staging and unrolled loop accumulation:
+/// `out = lhs @ rhs` (row-major). `lhs` is `M×K`, `rhs` is `K×N`, `out` is `M×N`.
+///
+/// Threads within a 16×16 workgroup collaborate to load 16×16 tiles of `lhs` and
+/// `rhs` into on-chip shared memory, synchronizing with `sync_cube()`, and accumulating
+/// the matrix product with unrolled registers before writing back to global memory.
+/// This reduces global memory traffic by 16× and ensures fully coalesced accesses.
+const TILE_DIM: usize = 16;
+const TILE_SIZE: usize = 256;
+
 #[cube(launch_unchecked)]
 fn gemm_kernel<F: Float>(
     lhs: &Array<F>,
@@ -36,27 +42,54 @@ fn gemm_kernel<F: Float>(
     k: usize,
     n: usize,
 ) {
-    // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
-    // dimension scalars are `usize` too — no casts inside the hot loop.
-    let tid = ABSOLUTE_POS;
-    // Bounds guard: the launch rounds the thread count up to a whole number of
-    // blocks, so the tail threads must not write out of range.
-    if tid < m * n {
-        let row = tid / n;
-        let col = tid % n;
-        let mut acc = F::from_int(0);
-        let row_k = row * k;
-        // Runtime-bounded contraction over the shared K dimension.
-        for j in 0..k {
-            acc += lhs[row_k + j] * rhs[j * n + col];
+    let mut lhs_shared = SharedMemory::<F>::new(TILE_SIZE);
+    let mut rhs_shared = SharedMemory::<F>::new(TILE_SIZE);
+
+    let tx = UNIT_POS_X as usize;
+    let ty = UNIT_POS_Y as usize;
+    let bx = CUBE_POS_X as usize;
+    let by = CUBE_POS_Y as usize;
+
+    let row = by * TILE_DIM + ty;
+    let col = bx * TILE_DIM + tx;
+
+    let mut acc = F::from_int(0);
+
+    let num_tiles = k.div_ceil(TILE_DIM);
+
+    for t in 0..num_tiles {
+        let t_k = t * TILE_DIM;
+
+        // Load LHS tile into shared memory
+        let lhs_col = t_k + tx;
+        if row < m && lhs_col < k {
+            lhs_shared[ty * TILE_DIM + tx] = lhs[row * k + lhs_col];
+        } else {
+            lhs_shared[ty * TILE_DIM + tx] = F::from_int(0);
         }
-        out[tid] = acc;
+
+        // Load RHS tile into shared memory
+        let rhs_row = t_k + ty;
+        if rhs_row < k && col < n {
+            rhs_shared[ty * TILE_DIM + tx] = rhs[rhs_row * n + col];
+        } else {
+            rhs_shared[ty * TILE_DIM + tx] = F::from_int(0);
+        }
+
+        sync_cube();
+
+        #[unroll]
+        for p in 0..TILE_DIM {
+            acc += lhs_shared[ty * TILE_DIM + p] * rhs_shared[p * TILE_DIM + tx];
+        }
+
+        sync_cube();
+    }
+
+    if row < m && col < n {
+        out[row * n + col] = acc;
     }
 }
-
-/// Threads per block for the GEMM launch. One thread computes one output
-/// element; the grid is sized to cover `M*N` threads.
-const BLOCK: u32 = 256;
 
 /// Core launch on resident device handles: `out = lhs @ rhs` into the `out`
 /// handle (`M×N`), with NO host transfer. Both the host-slice path
@@ -72,13 +105,18 @@ pub(crate) fn launch_gemm_on_handles<R: Runtime, F: DeviceScalar>(
     k: usize,
     n: usize,
 ) {
-    let groups = (m * n).div_ceil(BLOCK as usize) as u32;
+    let grid_x = (n as u32).div_ceil(TILE_DIM as u32);
+    let grid_y = (m as u32).div_ceil(TILE_DIM as u32);
 
     unsafe {
         gemm_kernel::launch_unchecked::<F, R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(BLOCK),
+            CubeCount::Static(grid_x, grid_y, 1),
+            CubeDim {
+                x: TILE_DIM as u32,
+                y: TILE_DIM as u32,
+                z: 1,
+            },
             // SAFETY: lengths match the buffers (lhs m*k, rhs k*n, out m*n).
             // `from_raw_parts` consumes the handle by value, so clone the caller's
             // handles (clones share the binding).

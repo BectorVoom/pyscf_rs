@@ -1,0 +1,16 @@
+[package]
+name = "pyscf-pbc-tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "fft/ifft, get_coulG, madelung, lattice_Ls, super_cell, k2gamma"
+
+[dependencies]
+pyscf-core      = { path = "../pyscf-core" }
+pyscf-algebra   = { path = "../pyscf-algebra" }
+pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }

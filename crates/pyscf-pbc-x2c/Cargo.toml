@@ -1,0 +1,20 @@
+[package]
+name = "pyscf-pbc-x2c"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "periodic sfx2c1e, x2c1e"
+
+[dependencies]
+pyscf-core      = { path = "../pyscf-core" }
+pyscf-algebra   = { path = "../pyscf-algebra" }
+pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
+pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
+pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }

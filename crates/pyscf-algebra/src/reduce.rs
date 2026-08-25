@@ -33,45 +33,26 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Partial-sum kernel: thread `tid` sequentially sums input indices
-/// `[tid*chunk, (tid+1)*chunk)` (clamped to `n`) into one partial in `F`,
-/// writing it to `out[tid]`. Generic over the device float so the same kernel
-/// monomorphizes for f32 (GPU speed path) and f64 (chemistry precision path) —
-/// see `Cubecl_generics.md`. The final sum of the `groups` partials runs on the
-/// host (see [`launch_reduce_sum`]).
+/// Grid-stride coalesced reduce sum kernel: thread `tid` accumulates
+/// elements `x[tid + k*stride]` into `out[tid]`.
+///
+/// Adjacent threads in each warp/wavefront read consecutive addresses (unit stride),
+/// maximizing global memory bandwidth efficiency via full transaction coalescing.
 #[cube(launch_unchecked)]
-fn reduce_kernel<F: Float>(x: &Array<F>, out: &mut Array<F>, n: usize, chunk: usize) {
-    // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
-    // dimension scalars are `usize` too — no casts.
+fn reduce_kernel<F: Float>(x: &Array<F>, out: &mut Array<F>, n: usize) {
     let tid = ABSOLUTE_POS;
-    let start = tid * chunk;
-    // Bounds guard: the launch rounds the thread count up to a whole number of
-    // blocks, so tail threads (start >= n) write the identity and never index
-    // out of range.
+    let stride = CUBE_COUNT_X as usize * CUBE_DIM_X as usize;
     let mut acc = F::from_int(0);
-    if start < n {
-        let mut end = start + chunk;
-        if end > n {
-            end = n;
-        }
-        // Sequential accumulation over this thread's contiguous slice.
-        let mut i = start;
-        while i < end {
-            acc += x[i];
-            i += 1;
-        }
+    let mut i = tid;
+    while i < n {
+        acc += x[i];
+        i += stride;
     }
     out[tid] = acc;
 }
 
-/// Threads per block for the reduce launch. One thread produces one partial; the
-/// grid is sized to cover all partials.
+/// Threads per block for the reduce launch.
 const BLOCK: u32 = 256;
-
-/// Elements summed sequentially per thread (per partial). `n.div_ceil(CHUNK)`
-/// gives the number of partials; the grid covers them. Kept naive and
-/// obviously-correct.
-const CHUNK: usize = 256;
 
 /// Runtime-generic launcher: upload `x`, allocate the partials buffer, launch
 /// `reduce_kernel`, read the partials back to host, then sum them in `F`. `R` is
@@ -85,12 +66,11 @@ fn launch_reduce_sum<R: Runtime, F: DeviceScalar>(client: &ComputeClient<R>, x: 
     }
 
     let n = x.len();
-    let partials = n.div_ceil(CHUNK);
+    let groups = ((n as u32).div_ceil(BLOCK * 16)).clamp(1, 64);
+    let num_threads = (groups * BLOCK) as usize;
 
     let x_handle = client.create(Bytes::from_elems(x.to_vec()));
-    let out_handle = client.empty(partials * core::mem::size_of::<F>());
-
-    let groups = (partials as u32).div_ceil(BLOCK);
+    let out_handle = client.empty(num_threads * core::mem::size_of::<F>());
 
     unsafe {
         reduce_kernel::launch_unchecked::<F, R>(
@@ -101,10 +81,9 @@ fn launch_reduce_sum<R: Runtime, F: DeviceScalar>(client: &ComputeClient<R>, x: 
             // consumes the handle by value; clone the output handle so it survives
             // for the read-back below.
             ArrayArg::from_raw_parts(x_handle, n),
-            ArrayArg::from_raw_parts(out_handle.clone(), partials),
+            ArrayArg::from_raw_parts(out_handle.clone(), num_threads),
             // Scalar kernel args are passed as bare values (LaunchArg for T = T).
             n,
-            CHUNK,
         );
     }
 

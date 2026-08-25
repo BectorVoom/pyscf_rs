@@ -33,7 +33,8 @@ fn bench_algebra(client: &AlgebraClient, backend_name: &str) {
     println!("{}", "-".repeat(80));
 
     // 1. GEMM
-    for &n in &[256, 512, 1024, 2048] {
+    let gemm_sizes = if matches!(client, AlgebraClient::Cpu(_)) { vec![256] } else { vec![256, 512, 1024, 2048] };
+    for &n in &gemm_sizes {
         let a = vec![1.001_f64; n * n];
         let b = vec![0.999_f64; n * n];
         let (med, min) = time_op(|| {
@@ -43,8 +44,10 @@ fn bench_algebra(client: &AlgebraClient, backend_name: &str) {
         println!("{:<24} | {:<16} | {:<16.2?} | {:<10.2?} ({:.1} GFLOPS)", "GEMM (f64)", format!("{n}x{n}"), med, min, gflops);
     }
 
+    let vec_sizes = if matches!(client, AlgebraClient::Cpu(_)) { vec![100_000] } else { vec![100_000, 1_000_000, 10_000_000] };
+
     // 2. DOT
-    for &n in &[100_000, 1_000_000, 10_000_000] {
+    for &n in &vec_sizes {
         let x = vec![1.001_f64; n];
         let y = vec![0.999_f64; n];
         let (med, min) = time_op(|| {
@@ -55,7 +58,7 @@ fn bench_algebra(client: &AlgebraClient, backend_name: &str) {
     }
 
     // 3. AXPY
-    for &n in &[100_000, 1_000_000, 10_000_000] {
+    for &n in &vec_sizes {
         let x = vec![1.001_f64; n];
         let mut y = vec![0.999_f64; n];
         let (med, min) = time_op(|| {
@@ -66,7 +69,7 @@ fn bench_algebra(client: &AlgebraClient, backend_name: &str) {
     }
 
     // 4. SCAL
-    for &n in &[100_000, 1_000_000, 10_000_000] {
+    for &n in &vec_sizes {
         let mut x = vec![1.001_f64; n];
         let (med, min) = time_op(|| {
             scal_dense(client, 1.01, &mut x).unwrap();
@@ -76,7 +79,7 @@ fn bench_algebra(client: &AlgebraClient, backend_name: &str) {
     }
 
     // 5. REDUCE SUM
-    for &n in &[100_000, 1_000_000, 10_000_000] {
+    for &n in &vec_sizes {
         let x = vec![1.001_f64; n];
         let (med, min) = time_op(|| {
             let _ = reduce_sum_dense(client, &x).unwrap();
@@ -86,7 +89,8 @@ fn bench_algebra(client: &AlgebraClient, backend_name: &str) {
     }
 
     // 6. TRANSPOSE
-    for &n in &[512, 1024, 2048, 4096] {
+    let transpose_sizes = if matches!(client, AlgebraClient::Cpu(_)) { vec![512] } else { vec![512, 1024, 2048, 4096] };
+    for &n in &transpose_sizes {
         let x = vec![1.001_f64; n * n];
         let (med, min) = time_op(|| {
             let _ = transpose_dense(client, &x, n, n).unwrap();
@@ -159,7 +163,7 @@ fn main() {
         bench_algebra(&rocm_client, "ROCm GPU (AMD HIP)");
     }
 
-    #[cfg(feature = "cpu")]
+    #[cfg(all(feature = "cpu", not(feature = "rocm")))]
     {
         let cpu_client = AlgebraClient::Cpu(cubecl_cpu::CpuRuntime::client(&cubecl_cpu::CpuDevice::default()));
         bench_algebra(&cpu_client, "CPU (CubeCL / Multi-core)");

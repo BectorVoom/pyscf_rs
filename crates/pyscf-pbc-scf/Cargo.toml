@@ -1,0 +1,20 @@
+[package]
+name = "pyscf-pbc-scf"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "SCF (gamma) + KSCF/KRHF/KUHF/KROHF/KGHF, smearing, addons, stability, newton"
+
+[dependencies]
+pyscf-core      = { path = "../pyscf-core" }
+pyscf-algebra   = { path = "../pyscf-algebra" }
+pyscf-scf       = { path = "../pyscf-scf" }
+pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
+pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }

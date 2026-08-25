@@ -1,0 +1,15 @@
+[package]
+name = "pyscf-pbc-lib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "kpts_helper, KPoints, ktensor, linalg_helper, arnoldi"
+
+[dependencies]
+pyscf-core    = { path = "../pyscf-core" }
+pyscf-algebra = { path = "../pyscf-algebra" }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }

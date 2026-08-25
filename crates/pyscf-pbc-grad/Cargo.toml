@@ -1,0 +1,21 @@
+[package]
+name = "pyscf-pbc-grad"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "periodic gradients + stress tensor"
+
+[dependencies]
+pyscf-core      = { path = "../pyscf-core" }
+pyscf-algebra   = { path = "../pyscf-algebra" }
+pyscf-grad      = { path = "../pyscf-grad" }
+pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
+pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
+pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }

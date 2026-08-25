@@ -355,6 +355,9 @@ dependencies = [
  "cintx-runtime",
  "cubecl",
  "cubecl-runtime 0.10.0",
+ "rayon",
+ "serde",
+ "serde_json",
  "smallvec",
  "tracing",
 ]
@@ -3668,6 +3671,308 @@ dependencies = [
  "pyscf-scf",
  "tempfile",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "pyscf-pbc-adc"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-df",
+ "pyscf-pbc-dft",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-ao2mo"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-ao2mo",
+ "pyscf-core",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-cc"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-ccsd",
+ "pyscf-core",
+ "pyscf-pbc-ao2mo",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-mp",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-ci"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-ao2mo",
+ "pyscf-pbc-cc",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-mp",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-df"
+version = "0.1.0"
+dependencies = [
+ "hdf5-metno",
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-df",
+ "pyscf-gto",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-dft"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-dft",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-eph"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-df",
+ "pyscf-pbc-dft",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-geomopt"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-geomopt",
+ "pyscf-pbc-df",
+ "pyscf-pbc-grad",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-grad"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-grad",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-gto"
+version = "0.1.0"
+dependencies = [
+ "cintx-core",
+ "cintx-ops",
+ "cintx-rs",
+ "cintx-runtime",
+ "libm",
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-gto",
+ "pyscf-kernels",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-tools",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-gw"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-df",
+ "pyscf-pbc-dft",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-lib"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-mp"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-mp2",
+ "pyscf-pbc-ao2mo",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-mpi"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-ao2mo",
+ "pyscf-pbc-cc",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-mp",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-scf"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-tools",
+ "pyscf-scf",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-symm"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-tdscf"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-df",
+ "pyscf-pbc-dft",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-tools"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-lib",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pyscf-pbc-x2c"
+version = "0.1.0"
+dependencies = [
+ "pyscf-algebra",
+ "pyscf-core",
+ "pyscf-pbc-df",
+ "pyscf-pbc-gto",
+ "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
+ "pyscf-pbc-tools",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

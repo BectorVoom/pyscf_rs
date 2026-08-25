@@ -5,7 +5,11 @@ edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
 publish = false
+default-run = "xtask"
 description = "Internal build/lint automation for pyscf-rs (not published)"
+
+[lib]
+path = "src/lib.rs"
 
 [[bin]]
 name = "xtask"

@@ -42,6 +42,7 @@ pub use intor::{
     IntorOutput, intor, intor_cross, intor_with_auxmol, intor_with_rinv_at_nucleus,
     intor_with_rinv_origin,
 };
+pub use projection::{build_cintx_basis_set, build_combined_basis, build_combined_basis_raw};
 pub use pyscf_core::{Mole, Unit};
 pub use range_coulomb::{PTR_RANGE_OMEGA, get_k_with_omega, intor_with_omega};
 pub use set_geom::set_geom_;

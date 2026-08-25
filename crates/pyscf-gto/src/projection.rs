@@ -217,14 +217,36 @@ pub fn build_cintx_spinor_basis_set(
 /// `pyscf/df/incore.py` + `gto.mole.intor_cross`): the "A" shells occupy the
 /// leading shell range and the "B" shells follow, with B shells re-based onto
 /// the appended B atoms so the combined `BasisSet` owns one contiguous atom +
-/// shell table.
+use pyscf_core::Mole;
+
+/// Build a combined `BasisSet` from two `Mole` instances.
+///
+/// Shells of `mol_a` lead, shells of `mol_b` follow, with atom indices in B
+/// shells offset by `mol_a.natm`.
+///
+/// Returns `(basis, n_a_shells, n_b_shells)`.
+pub fn build_combined_basis(
+    mol_a: &Mole,
+    mol_b: &Mole,
+) -> Result<(Arc<BasisSet>, usize, usize), PyscfRsError> {
+    build_combined_basis_raw(
+        &mol_a._atom,
+        &mol_a._basis,
+        mol_a.cart,
+        &mol_b._atom,
+        &mol_b._basis,
+        mol_b.cart,
+    )
+}
+
+/// Raw form taking atom and basis slices/maps directly.
 ///
 /// Returns `(basis, n_a_shells, n_b_shells)`. The caller iterates the A range
 /// `0..n_a_shells` and the B range `n_a_shells..`; A AOs occupy combined AO
 /// range `[0, nao_a)` and B AOs `[nao_a, nao_a+nao_b)`, so a B shell's AO offset
 /// within the B block is `shell_offset(j) - nao_a`. Used by int3c2e (orbital×aux,
 /// the third center) and by `intor_cross` (cross-basis arity-2, e.g. overlap).
-pub(crate) fn build_combined_basis(
+pub fn build_combined_basis_raw(
     a_atoms: &[ParsedAtom],
     a_basis: &HashMap<String, ParsedBasis>,
     a_cart: bool,

@@ -40,20 +40,30 @@ use cubecl::server::Handle;
 /// `ScalarArgSettings` bounds that `DeviceScalar` (sealed to f32/f64) does not
 /// carry, so `F` only ever appears here as an `Array` element type — the same
 /// shape that the `dot`/`reduce` siblings rely on.
+/// Grid-stride 4x unrolled scaling kernel: `x[i] *= alpha`.
+///
+/// Threads iterate across the array in grid strides, scaling 4 elements per step
+/// to maximize memory bandwidth and instruction-level parallelism (ILP).
 #[cube(launch_unchecked)]
 fn scal_kernel<F: Float>(x: &mut Array<F>, alpha: &Array<F>, n: usize) {
-    // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
-    // dimension scalar is `usize` too — no casts.
-    let tid = ABSOLUTE_POS;
-    // Bounds guard: the launch rounds the thread count up to a whole number of
-    // blocks, so the tail threads must not write out of range.
-    if tid < n {
-        x[tid] = x[tid] * alpha[0];
+    let a = alpha[0];
+    let stride = CUBE_COUNT_X as usize * CUBE_DIM_X as usize * 4;
+    let mut base = ABSOLUTE_POS * 4;
+    while base + 3 < n {
+        x[base] = x[base] * a;
+        x[base + 1] = x[base + 1] * a;
+        x[base + 2] = x[base + 2] * a;
+        x[base + 3] = x[base + 3] * a;
+        base += stride;
+    }
+    let mut rem = base;
+    while rem < n {
+        x[rem] = x[rem] * a;
+        rem += 1;
     }
 }
 
-/// Threads per block for the scal launch. One thread scales one element; the
-/// grid is sized to cover `n` threads.
+/// Threads per block for the scal launch.
 const BLOCK: u32 = 256;
 
 /// Core launch on a resident device handle: `x[i] *= alpha`, in place on the `x`
@@ -69,7 +79,7 @@ fn launch_scal_on_handle<R: Runtime, F: DeviceScalar>(
 ) {
     // `alpha` rides as a single-element device buffer (see `scal_kernel`).
     let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
-    let groups = n.div_ceil(BLOCK as usize) as u32;
+    let groups = ((n as u32).div_ceil(BLOCK * 4)).clamp(1, 128);
 
     unsafe {
         scal_kernel::launch_unchecked::<F, R>(

@@ -1,0 +1,21 @@
+[package]
+name = "pyscf-pbc-df"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "FFTDF, AFTDF, GDF, MDF, RSDF, ft_ao, jk builders"
+
+[dependencies]
+pyscf-core      = { path = "../pyscf-core" }
+pyscf-algebra   = { path = "../pyscf-algebra" }
+pyscf-gto       = { path = "../pyscf-gto" }
+pyscf-df        = { path = "../pyscf-df" }
+pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
+hdf5-metno      = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }

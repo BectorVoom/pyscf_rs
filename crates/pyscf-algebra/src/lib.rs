@@ -57,6 +57,17 @@ pub mod solve_linear;
 // without naming Tensor/AlgebraClient. Mirrors solve_linear's wrapper
 // shape from plan 03-01.
 pub mod eigh_gen;
+// ---------------------------------------------------------------------------
+// v2.0 PBC milestone (Phase 9, plan 09-02) — the complex-algebra contract of
+// PBC-MASTER-PLAN §5. Complex quantities are carried as the PLANAR `CTensor`
+// (D-PBC-02 / RULE 8) so every complex operation reduces to the existing REAL
+// cubecl primitives above and no new numeric type crosses the ALG-06 wall.
+// ---------------------------------------------------------------------------
+pub mod complex;
+pub mod zblas;
+pub mod zeigh;
+pub mod zgemm;
+pub mod zoracle;
 // Phase 5 plan 05-09 — rank-revealing DF/RI 2-center metric fit (eigh route)
 // for ill-conditioned (P|Q) auxiliary metrics that a plain Cholesky rejects.
 pub mod df_metric;
@@ -69,6 +80,7 @@ pub use select::{BackendSelection, select_backend};
 pub use tensor::{BufferId, Tensor};
 
 pub use axpy::{axpy, axpy_dense};
+pub use complex::CTensor;
 pub use device_buffer::{download, release, upload};
 pub use df_metric::{DF_METRIC_LINEAR_DEP, df_metric_fit};
 pub use dot::{dot, dot_dense};
@@ -81,3 +93,13 @@ pub use reduce::{reduce_sum, reduce_sum_axis_dense, reduce_sum_dense, reduced_sh
 pub use scal::{scal, scal_dense};
 pub use solve_linear::solve_linear;
 pub use transpose::{transpose, transpose_dense};
+pub use zblas::{
+    zaxpy_dense, zdotc_dense, zdotu_dense, zhadamard_dense, zreduce_sum_dense, zscal_dense,
+    ztranspose_dense,
+};
+pub use zeigh::{
+    zcholesky, zcholesky_crout, zcholesky_faer, zeigh_gen, zeigh_gen_embedding, zeigh_gen_faer,
+    zsolve_linear, zsolve_linear_embedding, zsolve_linear_faer,
+};
+pub use zgemm::{zgemm_dense, zgemm_h_dense};
+pub use zoracle::{oracle_zdot, oracle_zsum};

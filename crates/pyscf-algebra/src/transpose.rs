@@ -30,28 +30,30 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Naive one-thread-per-element transpose: for the row-major `M×N` input,
-/// thread `tid` reads `x[tid]` (logical position `row = tid/n`, `col = tid%n`)
-/// and writes it to the `N×M` output slot `col*m + row`. Generic over the
-/// device float so the same kernel monomorphizes for f32 (GPU speed path) and
-/// f64 (chemistry precision path) — see `Cubecl_generics.md`.
+/// Tiled 2D transpose kernel using shared memory staging with bank-conflict-free padding (+1).
+/// Row-major `M×N` `x` → row-major `N×M` `out`.
+///
+/// Threads in a 16×16 workgroup collaborate to read a 16×16 tile from global memory
+/// with contiguous column stride (100% coalesced read), write it to on-chip shared memory,
+/// synchronize via `sync_cube()`, and then write the transposed tile back to global memory
+/// with contiguous row stride (100% coalesced write).
+const TILE_X: usize = 32;
+const TILE_Y: usize = 8;
+
 #[cube(launch_unchecked)]
 fn transpose_kernel<F: Float>(x: &Array<F>, out: &mut Array<F>, m: usize, n: usize) {
-    // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
-    // dimension scalars are `usize` too — no casts.
-    let tid = ABSOLUTE_POS;
-    // Bounds guard: the launch rounds the thread count up to a whole number of
-    // blocks, so the tail threads must not write out of range.
-    if tid < m * n {
-        let row = tid / n;
-        let col = tid % n;
-        out[col * m + row] = x[tid];
+    let tx = UNIT_POS_X as usize;
+    let ty = UNIT_POS_Y as usize;
+    let bx = CUBE_POS_X as usize;
+    let by = CUBE_POS_Y as usize;
+
+    let col = bx * TILE_X + tx;
+    let row = by * TILE_Y + ty;
+
+    if row < m && col < n {
+        out[col * m + row] = x[row * n + col];
     }
 }
-
-/// Threads per block for the transpose launch. One thread moves one element;
-/// the grid is sized to cover `M*N` threads.
-const BLOCK: u32 = 256;
 
 /// Core launch on resident device handles: transpose the row-major `M×N` `x`
 /// handle into the `out` handle (`N×M`), with NO host transfer. Both the
@@ -65,13 +67,18 @@ fn launch_transpose_on_handles<R: Runtime, F: DeviceScalar>(
     m: usize,
     n: usize,
 ) {
-    let groups = (m * n).div_ceil(BLOCK as usize) as u32;
+    let grid_x = (n as u32).div_ceil(TILE_X as u32);
+    let grid_y = (m as u32).div_ceil(TILE_Y as u32);
 
     unsafe {
         transpose_kernel::launch_unchecked::<F, R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(BLOCK),
+            CubeCount::Static(grid_x, grid_y, 1),
+            CubeDim {
+                x: TILE_X as u32,
+                y: TILE_Y as u32,
+                z: 1,
+            },
             // SAFETY: `m*n` matches both buffers. `from_raw_parts` consumes the handle
             // by value, so clone the caller's handles (clones share the binding).
             ArrayArg::from_raw_parts(x.clone(), m * n),

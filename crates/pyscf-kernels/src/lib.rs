@@ -16,6 +16,9 @@
 // rather than the `#![forbid(unsafe_code)]` Phase 1 stub had.
 
 pub mod eval_gto;
+// Phase 9 plan 09-02 (v2.0 PBC milestone) — periodic device kernels. Seeded
+// with K-04 `zhadamard`; see PBC-MASTER-PLAN §6 for the full inventory.
+pub mod pbc;
 // quick-260522-b06: precision seam. Re-exports DeviceScalar (the in-wall
 // cubecl::Float bound) and documents the f64 kernel default + f32-future seam.
 pub mod scalar;
@@ -23,4 +26,8 @@ pub mod scalar;
 pub use eval_gto::{
     EvalGtoBuffers, cart2sph_l_matrix, eval_gto_cart_deriv1, eval_gto_sph, eval_gto_sph_deriv1,
 };
+pub use pbc::ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
+pub use pbc::gv::gv;
+pub use pbc::struct_factor::struct_factor;
+pub use pbc::zhadamard::zhadamard;
 pub use scalar::{DeviceScalar, KernelScalar};

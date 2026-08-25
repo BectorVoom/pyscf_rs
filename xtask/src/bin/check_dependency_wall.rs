@@ -44,7 +44,12 @@ const FORBIDDEN_DEPS: &[&str] = &[
 /// Phase 4 (DFT) will land grid loops + libxc/xcfun bridges in the same
 /// crate. Method crates (pyscf-gto, pyscf-scf, pyscf-dft, …) still go
 /// through pyscf-algebra; this carve-out is for the kernel home only.
-const ALLOWED_CRATES: &[&str] = &["pyscf-algebra", "pyscf-runtime", "pyscf-kernels"];
+const ALLOWED_CRATES: &[&str] = &[
+    "pyscf-algebra",
+    "pyscf-runtime",
+    "pyscf-kernels",
+    "pyscf-bench",
+];
 
 fn main() -> Result<ExitCode> {
     let root = workspace_root()?;

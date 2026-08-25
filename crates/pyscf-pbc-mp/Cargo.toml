@@ -1,0 +1,22 @@
+[package]
+name = "pyscf-pbc-mp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "KMP2, KUMP2, kmp2_stagger"
+
+[dependencies]
+pyscf-core       = { path = "../pyscf-core" }
+pyscf-algebra    = { path = "../pyscf-algebra" }
+pyscf-mp2        = { path = "../pyscf-mp2" }
+pyscf-pbc-lib    = { path = "../pyscf-pbc-lib" }
+pyscf-pbc-tools  = { path = "../pyscf-pbc-tools" }
+pyscf-pbc-gto    = { path = "../pyscf-pbc-gto" }
+pyscf-pbc-df     = { path = "../pyscf-pbc-df" }
+pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
+pyscf-pbc-ao2mo  = { path = "../pyscf-pbc-ao2mo" }
+thiserror        = { workspace = true }
+tracing          = { workspace = true }

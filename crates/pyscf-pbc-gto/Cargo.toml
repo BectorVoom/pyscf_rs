@@ -1,0 +1,48 @@
+[package]
+name = "pyscf-pbc-gto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Cell, Gv, SI, ewald, GTH pseudo, pbc_intor, eval_gto periodic, neighborlist"
+
+[dependencies]
+pyscf-core      = { path = "../pyscf-core" }
+pyscf-algebra   = { path = "../pyscf-algebra" }
+pyscf-gto       = { path = "../pyscf-gto" }
+# Phase 9 plan 09-05 — K-01 `gv` / K-02 `struct_factor` device kernels. RULE 6:
+# a pyscf-pbc-* crate consumes `pyscf_algebra::*` and `pyscf_kernels::*` only;
+# it never names `cubecl-*` itself (ALG-06, check_dependency_wall).
+pyscf-kernels   = { path = "../pyscf-kernels" }
+pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
+# Plan 09-08 — `libm::erfc` for the real-space Ewald sum (see the workspace
+# manifest for why std/A&S are not enough).
+libm            = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }
+serde           = { workspace = true, features = ["derive"] }
+# `float_roundtrip`: serde_json's DEFAULT f64 parser is a fast path that can be
+# off by 1 ULP, so `loads(dumps(cell))` would silently perturb the lattice in
+# the last bit (caught by tests/cell_build.rs on the LiF lattice). This feature
+# makes parsing exact, which a bit-reproducibility milestone requires.
+serde_json      = { workspace = true, features = ["float_roundtrip"] }
+
+# PBC-MASTER-PLAN §9.2 — the five shared reference systems live behind this
+# feature so a production build never compiles them. Downstream PBC crates
+# enable it from their `[dev-dependencies]`; this crate's own integration tests
+# get it through the self dev-dependency below.
+[features]
+default = []
+test-systems = []
+
+[dev-dependencies]
+# Self dev-dependency: turns on `test-systems` for this crate's own integration
+# tests without duplicating the system definitions into `tests/`.
+pyscf-pbc-gto = { path = ".", features = ["test-systems"] }
+cintx-core    = { path = "../../../cintx/crates/cintx-core" }
+cintx-ops     = { path = "../../../cintx/crates/cintx-ops" }
+cintx-rs      = { path = "../../../cintx/crates/cintx-rs" }
+cintx-runtime = { path = "../../../cintx/crates/cintx-runtime" }

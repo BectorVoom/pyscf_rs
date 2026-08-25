@@ -25,6 +25,26 @@ members = [
     # Phase 4 addition (D-05): Becke molecular grids crate. Workspace grows 18 → 19.
     "crates/pyscf-grids",
     "xtask",
+    # v2.0 PBC milestone (D-PBC-*). Workspace grows 20 -> 39.
+    "crates/pyscf-pbc-lib",
+    "crates/pyscf-pbc-tools",
+    "crates/pyscf-pbc-gto",
+    "crates/pyscf-pbc-df",
+    "crates/pyscf-pbc-scf",
+    "crates/pyscf-pbc-dft",
+    "crates/pyscf-pbc-ao2mo",
+    "crates/pyscf-pbc-mp",
+    "crates/pyscf-pbc-cc",
+    "crates/pyscf-pbc-ci",
+    "crates/pyscf-pbc-symm",
+    "crates/pyscf-pbc-grad",
+    "crates/pyscf-pbc-geomopt",
+    "crates/pyscf-pbc-tdscf",
+    "crates/pyscf-pbc-gw",
+    "crates/pyscf-pbc-adc",
+    "crates/pyscf-pbc-x2c",
+    "crates/pyscf-pbc-eph",
+    "crates/pyscf-pbc-mpi",
 ]
 exclude = []
 resolver = "2"
@@ -64,6 +84,11 @@ bytemuck        = { version = "1", features = ["derive"] }
 # Host-side numeric abstraction for the precision-generic `Scalar` trait
 # (quick-260522-b06). Small, fast-compiling; does NOT pull cubecl/libxc.
 num-traits      = "0.2"
+# Phase 9 plan 09-08 — `libm::erfc`, the FDLIBM double-precision complementary
+# error function. `std` has no erfc and the Abramowitz-Stegun 7.1.26 rational
+# form tops out near 1.5e-7 absolute, two orders too coarse for the 1e-9 Ha
+# Ewald acceptance gate. No-std, no transitive deps, already in Cargo.lock.
+libm            = "0.2"
 thiserror       = "=2.0.18"
 serde           = { version = "=1.0", features = ["derive"] }
 serde_json      = "=1.0.149"

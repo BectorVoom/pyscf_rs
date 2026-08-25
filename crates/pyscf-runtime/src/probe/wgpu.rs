@@ -24,6 +24,7 @@ fn init_wgpu() -> Option<WgpuClient> {
 /// Per D-09:
 ///   * dtype = F32 → returns `true` if wgpu adapter exists
 ///   * dtype = F64 → returns `true` only if adapter advertises shader-f64
+///
 /// Caller (Plan 04 select_backend) maps this to the hard-error vs
 /// auto-skip rule from D-09.
 pub fn wgpu_available(dtype: DType) -> bool {

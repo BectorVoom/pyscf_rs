@@ -32,31 +32,30 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Naive one-thread-per-element AXPY kernel: `y[i] += alpha * x[i]`. Generic
-/// over the device float so the same kernel monomorphizes for f32 (GPU speed
-/// path) and f64 (chemistry precision path) — see `Cubecl_generics.md`. `x` is
-/// read-only, `y` is updated in place; the launcher reads the `y` buffer back
-/// (see [`launch_axpy`]).
+/// Grid-stride 4x unrolled AXPY kernel: `y[i] += alpha * x[i]`.
 ///
-/// `alpha` is passed as a single-element `Array<F>` rather than a bare scalar:
-/// a generic `F` used as a scalar launch arg would need extra `CubeElement` /
-/// `ScalarArgSettings` bounds that `DeviceScalar` (sealed to f32/f64) does not
-/// carry, so `F` only ever appears here as an `Array` element type — the same
-/// shape that the `dot`/`reduce`/`scal` siblings rely on.
+/// Threads iterate across the array in grid strides, processing 4 elements per step
+/// to maximize memory bandwidth and instruction-level parallelism (ILP).
 #[cube(launch_unchecked)]
 fn axpy_kernel<F: Float>(x: &Array<F>, y: &mut Array<F>, alpha: &Array<F>, n: usize) {
-    // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
-    // dimension scalar is `usize` too — no casts.
-    let tid = ABSOLUTE_POS;
-    // Bounds guard: the launch rounds the thread count up to a whole number of
-    // blocks, so the tail threads must not write out of range.
-    if tid < n {
-        y[tid] = y[tid] + alpha[0] * x[tid];
+    let a = alpha[0];
+    let stride = CUBE_COUNT_X as usize * CUBE_DIM_X as usize * 4;
+    let mut base = ABSOLUTE_POS * 4;
+    while base + 3 < n {
+        y[base] = y[base] + a * x[base];
+        y[base + 1] = y[base + 1] + a * x[base + 1];
+        y[base + 2] = y[base + 2] + a * x[base + 2];
+        y[base + 3] = y[base + 3] + a * x[base + 3];
+        base += stride;
+    }
+    let mut rem = base;
+    while rem < n {
+        y[rem] = y[rem] + a * x[rem];
+        rem += 1;
     }
 }
 
-/// Threads per block for the axpy launch. One thread updates one element; the
-/// grid is sized to cover `n` threads.
+/// Threads per block for the axpy launch.
 const BLOCK: u32 = 256;
 
 /// Core launch on resident device handles: `y[i] += alpha * x[i]`, in place on
@@ -75,7 +74,7 @@ fn launch_axpy_on_handles<R: Runtime, F: DeviceScalar>(
 ) {
     // `alpha` rides as a single-element device buffer (see `axpy_kernel`).
     let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
-    let groups = n.div_ceil(BLOCK as usize) as u32;
+    let groups = ((n as u32).div_ceil(BLOCK * 4)).clamp(1, 128);
 
     unsafe {
         axpy_kernel::launch_unchecked::<F, R>(

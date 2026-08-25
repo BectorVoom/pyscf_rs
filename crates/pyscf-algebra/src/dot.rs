@@ -34,36 +34,26 @@ use cubecl::server::Handle;
 /// monomorphizes for f32 (GPU speed path) and f64 (chemistry precision path) —
 /// see `Cubecl_generics.md`. The final sum of the `groups` partials runs on the
 /// host (see [`launch_dot`]).
+/// Grid-stride coalesced dot product kernel: thread `tid` accumulates
+/// elements `x[tid + k*stride] * y[tid + k*stride]` into `out[tid]`.
+///
+/// Within each warp/wavefront, adjacent threads access adjacent memory addresses
+/// (unit stride), enabling 100% global memory coalescing on both inputs.
 #[cube(launch_unchecked)]
-fn dot_kernel<F: Float>(x: &Array<F>, y: &Array<F>, out: &mut Array<F>, n: usize, chunk: usize) {
-    // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10, so the
-    // dimension scalar is `usize` too — no casts.
+fn dot_kernel<F: Float>(x: &Array<F>, y: &Array<F>, out: &mut Array<F>, n: usize) {
     let tid = ABSOLUTE_POS;
-    let start = tid * chunk;
-    // Bounds guard: the launch rounds the thread count up to a whole number of
-    // blocks, so tail threads (start >= n) write the identity and never index
-    // out of range.
+    let stride = CUBE_COUNT_X as usize * CUBE_DIM_X as usize;
     let mut acc = F::from_int(0);
-    if start < n {
-        let mut end = start + chunk;
-        if end > n {
-            end = n;
-        }
-        let mut i = start;
-        while i < end {
-            acc += x[i] * y[i];
-            i += 1;
-        }
+    let mut i = tid;
+    while i < n {
+        acc += x[i] * y[i];
+        i += stride;
     }
     out[tid] = acc;
 }
 
-/// Threads per block for the dot launch. One thread computes one partial sum; the
-/// grid is sized to cover all partials.
+/// Threads per block for the dot launch.
 const BLOCK: u32 = 256;
-
-/// Elements summed sequentially per thread (per partial).
-const CHUNK: usize = 256;
 
 /// Core launch on resident device handles: compute the per-element products and
 /// partial sums of `x`/`y` (length `n`) into a temporary device buffer, read them
@@ -78,23 +68,22 @@ fn launch_dot_on_handles<R: Runtime, F: DeviceScalar>(
     if n == 0 {
         return F::from_int(0);
     }
-    let partials = n.div_ceil(CHUNK);
-    let out_handle = client.empty(partials * core::mem::size_of::<F>());
-
-    let groups = (partials as u32).div_ceil(BLOCK);
+    // Launch an occupancy-tuned grid (clamped to hardware ceiling)
+    let groups = ((n as u32).div_ceil(BLOCK * 16)).clamp(1, 64);
+    let num_threads = (groups * BLOCK) as usize;
+    let out_handle = client.empty(num_threads * core::mem::size_of::<F>());
 
     unsafe {
         dot_kernel::launch_unchecked::<F, R>(
             client,
             CubeCount::Static(groups, 1, 1),
             CubeDim::new_1d(BLOCK),
-            // SAFETY: `n` matches the operand buffers and `partials` matches out_handle.
+            // SAFETY: `n` matches the operand buffers and `num_threads` matches out_handle.
             ArrayArg::from_raw_parts(x.clone(), n),
             ArrayArg::from_raw_parts(y.clone(), n),
-            ArrayArg::from_raw_parts(out_handle.clone(), partials),
+            ArrayArg::from_raw_parts(out_handle.clone(), num_threads),
             // Scalar kernel args are passed as bare values (LaunchArg for T = T).
             n,
-            CHUNK,
         );
     }
 

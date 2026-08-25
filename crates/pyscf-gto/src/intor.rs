@@ -998,14 +998,8 @@ fn evaluate_int3c2e_with_auxmol(mol: &Mole, auxmol: &Mole) -> Result<IntorOutput
         })?;
 
     // Combined orbital+aux basis (orbital shells lead, aux shells follow).
-    let (combined, n_orb_shells, n_aux_shells) = crate::projection::build_combined_basis(
-        &mol._atom,
-        &mol._basis,
-        mol.cart,
-        &auxmol._atom,
-        &auxmol._basis,
-        auxmol.cart,
-    )?;
+    let (combined, n_orb_shells, n_aux_shells) =
+        crate::projection::build_combined_basis(mol, auxmol)?;
 
     // Resolve the int3c2e_sph operator id through the same cintx resolver the
     // main dispatcher uses (keeps the symbol→OperatorId mapping single-source).
@@ -1186,14 +1180,8 @@ pub fn intor_cross(mol_a: &Mole, mol_b: &Mole, name: &str) -> Result<IntorOutput
     let operator = descriptor.id;
 
     // Combined basis: A shells lead, B shells follow.
-    let (combined, n_a_shells, n_b_shells) = crate::projection::build_combined_basis(
-        &mol_a._atom,
-        &mol_a._basis,
-        mol_a.cart,
-        &mol_b._atom,
-        &mol_b._basis,
-        mol_b.cart,
-    )?;
+    let (combined, n_a_shells, n_b_shells) =
+        crate::projection::build_combined_basis(mol_a, mol_b)?;
 
     let nao_a = mol_a.nao_nr;
     let nao_b = mol_b.nao_nr;
