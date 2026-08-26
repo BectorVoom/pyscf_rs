@@ -158,6 +158,20 @@ fn build_supcell(
     let mut mol = Mole::default();
     pyscf_gto::build_from(&mut mol, args)?;
 
+    // `build_from` is the MOLECULAR build, so it leaves `_atm[CHARGE_OF]` at
+    // the all-electron Z. `Cell::build` normally rewrites it with the GTH
+    // valence charge (plan 10-01, D-PBC-11) and re-derives `nelectron`; that
+    // step is not part of `build_from`, so it has to be repeated here.
+    //
+    // Skipping it is not a cosmetic bug: `atom_charges()` feeds `ewald()`,
+    // `tot_electrons()` and the local pseudopotential, so a supercell built
+    // without it describes a DIFFERENT (all-electron) system than the cell it
+    // came from. `tests/kscf.rs`'s supercell-equivalence identity is what
+    // caught it.
+    if let Some(pseudo) = cell.pseudo.as_ref() {
+        crate::cell::apply_pseudo_charges(&mut mol, pseudo);
+    }
+
     Ok(Cell {
         mol,
         a: a_super,

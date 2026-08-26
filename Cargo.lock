@@ -3753,6 +3753,7 @@ dependencies = [
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
  "pyscf-pbc-tools",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -3910,13 +3911,19 @@ dependencies = [
 name = "pyscf-pbc-scf"
 version = "0.1.0"
 dependencies = [
+ "libm",
+ "ndarray",
  "pyscf-algebra",
+ "pyscf-chkfile",
  "pyscf-core",
+ "pyscf-diis",
+ "pyscf-gto",
  "pyscf-pbc-df",
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
  "pyscf-pbc-tools",
  "pyscf-scf",
+ "serde_json",
  "thiserror 2.0.18",
  "tracing",
 ]

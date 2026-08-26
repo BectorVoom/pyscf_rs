@@ -6,10 +6,10 @@ status: in_progress
 last_updated: "2026-08-26T00:00:00.000Z"
 last_activity: 2026-08-26
 progress:
-  total_phases: 2
-  completed_phases: 2
-  total_plans: 17
-  completed_plans: 17
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 28
+  completed_plans: 28
   percent: 100
 ---
 
@@ -20,59 +20,87 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 11 — FFT + FFTDF + periodic Hartree-Fock (Phases 9 and 10 COMPLETE + verified 2026-08-26)
+**Current focus:** Phase 12 — periodic DFT (Phases 9, 10 and 11 COMPLETE + verified 2026-08-26)
 
 ## Current Position
 
-Phase: 10-periodic-integrals — **COMPLETE**
-Plan: 10-08 COMPLETE (the phase verification rollup)
-Status: **Phase 10 is CLOSED, with no blockers.** The phase gate is met with a 77x margin —
-`pbc_intor('int1e_ovlp', make_kpts([2,2,2]))` matches live upstream PySCF 2.12.1
-to **1.29e-14** on diamond, element-by-element over all 8 k-points, with `nao`,
-`rcut`, `|Ls|`, `atom_charges` and every k-point component asserted equal first.
-`int1e_kin` (2.06e-14) and a 3x2x1 mesh pass the same gate. `get_pp_nl` matches
-upstream to **1.9e-15** (diamond) / **5.6e-16** (silicon), the G-space local
-factors to **3.6e-15**, and `get_pp_loc_part2` to **1.78e-12**. Full results in
-`.planning/phases/10-periodic-integrals/10-VERIFICATION.md`.
-Next: Phase 11 (FFT, FFTDF, KRHF) — it owns the one missing `hcore` term.
-Last activity: 2026-08-26 — Completed plans 10-01 … 10-08.
-  * **10-01:** `pseudo::PseudoData` + `resolve_pseudo`; `Cell::build` rewrites
-    `_atm[CHARGE_OF]` with `Zion` (`mole.py:2591`), so diamond's `atom_charges()`
-    is `[4,4]` and `tot_electrons(8)` is 64. **Fixed an upstream-parity bug in
-    the pre-existing `cp2k_pp` parser**: it took the FIRST block per element,
-    but upstream's default-PP rule (`parse_cp2k_pp.py:151-154`) takes the one
-    whose last alias is not `-q<n>` — sodium was resolving to q1 instead of q9,
-    losing eight electrons. Explicit `-q<n>` suffixes now work too.
-  * **10-02:** `neighborlist.rs`, a verbatim port of `neighbor_list.c:80-128`,
-    decision-for-decision exact against the criterion on all 767x16 triples.
-  * **10-03:** `pbc_intor.rs` + K-07 `bloch_phase` — THE core. Two measured
-    deviations from the plan text, both documented in the verification doc: the
-    image-expanded basis is built PER IMAGE (cintx request cost is O(basis
-    shells): one-shot 498 s vs per-image 0.57 s for the same numbers), and the
-    Bloch contraction is an in-order host fold rather than `gemm_dense` (the
-    cubecl CPU-runtime tiled GEMM takes 17 s for a 64^3 product and accounted
-    for 487 of those 498 s).
-  * **10-04:** `eval_gto.rs` + K-08. Primary gate is oracle-free Bloch
-    periodicity, `ao_k(r+L) == exp(i k.L) ao_k(r)` to < 1e-10. Reuses the
-    existing molecular `eval_gto` on `coords - L` — no new AO evaluator.
-  * **10-05:** `pseudo::vloc` (closed-form G-space factors + `get_coulG` 3D) and
-    `pseudo::vloc_part2` (the 3-centre DOUBLE lattice sum, gamma only). The
-    latter adds a conservative Gaussian-product prescreen at 1e-14 on top of
-    upstream's neighbor-list screen; without it the safe API faces O(nimgs^2)
-    triples per shell pair.
-  * **10-06:** `pseudo::vnl` — `fake_cell_vnl` + `_int_vnl` + `get_pp_nl`, riding
-    straight on `intor_cross(fakecell, cell)`. Essentially bit-exact vs upstream.
-  * **10-07:** `hcore.rs` — `get_ovlp` (exactly Hermitian off-diagonal),
-    `get_t`, and `get_hcore_parts`. `get_hcore` returns
-    `NotYetImplemented{phase:11}` and says why: `get_pp = V_loc,1 + V_loc,2 +
-    V_nl` and upstream's own `pp_int.get_pp_loc_part1` raises
-    `NotImplementedError` — the long-range term is an FFT/AFT quantity (D-PBC-09).
-  * **10-08:** `10-VERIFICATION.md`, the ROADMAP tick, and this entry. The
-    full-workspace sweep caught the one real knock-on of 10-01: `cell.ewald()`
-    reads `atom_charges()`, so a `gth-pade` cell's nuclear repulsion changed
-    (diamond -28.771 Ha -> -12.787 Ha). Phase 9 had parked upstream's pseudised
-    numbers in `PSEUDISED_EWALD` as "plan 10-01's target, not asserted"; that
-    debt is now collected, and BOTH charge conventions are gated side by side.
+Phase: 11-fft-fftdf-periodic-hf — **COMPLETE**
+Plan: 11-12 COMPLETE (the phase verification rollup)
+Status: **Phase 11 is CLOSED.** `KRHF(diamond, 2x2x2, gth-szv/gth-pade)` matches
+live upstream PySCF **2.12.1** to **4.0e-12 Ha** at mesh 31 AND at the default
+mesh 47; the ALL-ELECTRON control (`KRHF`/`KUHF` on He-fcc) meets the 1e-12 gate
+outright at **2.2e-13**. The supercell-equivalence identity holds ORACLE-FREE at
+**1.6e-10**. Full results in
+`.planning/phases/11-fft-fftdf-periodic-hf/11-VERIFICATION.md`.
+Next: Phase 12 (periodic DFT) — it inherits `UniformGrids`, `FFTDF` and the
+`KOverrideHooks` driver unchanged and adds the periodic `NumInt`.
+Last activity: 2026-08-26 — Completed plans 11-01 … 11-12.
+  * **11-01/11-03:** `pyscf-pbc-tools/src/{fft,fft_kernel}.rs`. TWO engines:
+    `fft_blas` is a statement-for-statement port of upstream's `_fftn_blas`
+    (three batched complex GEMMs through `zgemm_dense`, D-PBC-03/05) and is the
+    reference; `fft_stockham` is a HOST mixed radix-2 / direct / Bluestein
+    transform and is the default, licensed by the D-PBC-06 condition (the two
+    agree to **1e-13** over 200 random `(mesh, n_batch)`). Both match live
+    `tools.fft` to 1e-12. The plan asked for a cubecl Stockham kernel; the
+    measured deviation is documented in the module docs — the default mesh 47 is
+    PRIME so radix-2/3/5 never applies, and the CPU runtime sustains only
+    ~5 GFLOP/s on the GEMM engine's `(141376, 47) x (47, 47)` products.
+  * **11-02:** `get_coulG` (all 3D/2D/0D branches + range separation),
+    `madelung` (matches upstream to <1e-9 on four k-meshes), the Ewald exxdiv.
+    **`_Gv_wrap_around` had to reproduce LAPACK, not an explicit inverse:** for
+    an odd mesh and a half-integer k offset the extreme frequency lands on
+    `+/- 0.5` EXACTLY, and whether it folds is decided by the last bit of
+    `np.linalg.solve`. The two representatives differ by a whole box edge —
+    measured, that single decision moved `coulG` by **0.145** at two grid points
+    and `vk` by 5e-8. `gv_wrap_around` is now `dgetf2` + `dgetrs` for n = 3 and
+    reproduces `np.linalg.solve` BIT-FOR-BIT (all 64 k-pairs agree to 2.2e-16).
+  * **11-04:** `UniformGrids` in `pyscf-pbc-gto::grids` (NOT `pyscf-pbc-dft`, or
+    the DAG would cycle). `BeckeDFTGrids` has no FFTDF consumer and moves to
+    Phase 12.
+  * **11-05/11-08:** `FFTDF` + the `PeriodicDf` trait every later builder plugs
+    into. `get_nuc` 2.1e-13, `vj` 1.7e-14, `vk` 5.5e-13, `get_pp` 1.9e-13,
+    `get_hcore` 1.9e-13 vs upstream. `get_pp` takes its NON-LOCAL half from
+    Phase 10's exact real-space `get_pp_nl` rather than `ft_ao` (Phase 13);
+    the two agree once upstream's planewave expansion converges (1.5e-3 at
+    mesh 11 -> 1.1e-13 at mesh 31 and beyond).
+  * **11-06/11-07:** `fft_jk`. `get_k_kpts` is ported statement-by-statement
+    with upstream's variable names kept as identifiers, per the master plan's
+    warning. `_ewald_exxdiv_for_G0` lives ONCE in `df_jk.rs` (plan 14-04's
+    instruction) and is verified to add EXACTLY `madelung * S D S`.
+  * **11-09/11-10:** ONE driver (`kscf::kernel`) generic over `KOverrideHooks`
+    (D-PBC-13); `KRHF`/`KUHF`/`KROHF`/`KGHF` and the gamma-point variants are
+    implementations of the trait. `nfock != nset` exists for ROHF alone.
+  * **11-11:** smearing (Fermi/Gaussian, bisected mu, entropy -> `e_free`,
+    `e_zero`, and the lower-triangle gradient it forces), addons, the periodic
+    chkfile (complex `mo_coeff` in h5py's own `{r, i}` COMPOUND layout, with the
+    primitives added to `pyscf-chkfile`, D-05), and the `_cast_mol_init_guess`
+    reuse of the molecular guesses.
+  * **11-12:** `11-VERIFICATION.md`, the ROADMAP tick, and this entry.
+
+### Two defects found by Phase 11's own tests
+
+1. **`super_cell` silently dropped the pseudopotential** (a Phase-10 bug).
+   `build_supcell` built its `Mole` through `pyscf_gto::build_from` — the
+   MOLECULAR build — so `Cell::build`'s GTH valence-charge rewrite of
+   `_atm[CHARGE_OF]` (plan 10-01, D-PBC-11) was never re-applied. Every
+   supercell of a pseudopotential cell was therefore an ALL-ELECTRON system:
+   diamond's `atom_charges()` came back `[6,6,6,6]` instead of `[4,4,4,4]`,
+   taking `tot_electrons`, `ewald()` and the local pseudopotential with it. The
+   supercell-equivalence identity read -10.53 versus -27.47. Fixed; the whole
+   `pyscf-pbc-gto` suite still passes.
+2. **The oracle was importing the WRONG PySCF.** Two installs are reachable:
+   the vendored 2.12.1 at `<root>/pyscf` (the port target, whose line numbers
+   every `PORT` comment cites) and 2.14.0 in `.venv/.../site-packages`. A script
+   run picks up 2.14 because the script's own directory — not the CWD — lands on
+   `sys.path[0]`. 2.14 **rewrote** `fft_jk.get_k_kpts` to fold the
+   `exxdiv='ewald'` correction into `get_coulG` instead of applying
+   `_ewald_exxdiv_for_G0` analytically, a **1.7e-5** difference in `vk`. Every
+   Phase-11 oracle test now pins `PYTHONPATH` to the workspace root AND asserts
+   `pyscf.__version__ == '2.12.1'` before comparing.
+
+Previous: Phase 10-periodic-integrals — COMPLETE (10-08). `pbc_intor` within
+1.29e-14 of upstream on diamond 2x2x2; GTH pseudopotentials complete bar the
+long-range local term, which Phase 11 has now supplied.
 
 ### cintx status — R-13 fully resolved
 
@@ -307,6 +335,21 @@ Items acknowledged and carried forward:
 | CCSD | FNO-CCSD, GHF/GMP2/GCCSD path | v1.x | Roadmap creation |
 | Geomopt | Constrained geometry optimization | v1.x | Roadmap creation |
 | Distribution | conda-forge channel | v1.x | Roadmap creation |
+
+### Phase 11 deferrals (v2.0)
+
+| item | why | lands in |
+|---|---|---|
+| `exxdiv = 'vcut_sph'` / `'vcut_ws'` (+ `precompute_exx`) | `NotYetImplemented { phase: 12 }` (D-PBC-20) | 12 |
+| `get_coulG` for `dimension == 1` | upstream raises `NotImplementedError` too | 12 |
+| `madelung` for a 2-D cell | propagates `ewald`'s Phase-12 deferral | 12 |
+| `BeckeDFTGrids` (periodic Becke atomic grids) | no FFTDF consumer; it is a DFT quantity | 12 |
+| `ft_ao`-based `get_pp` non-local half | this port uses the exact real-space route; matching upstream's planewave ACCUMULATION is what the last decade of the diamond gate costs | 13 |
+| `project_mo_nr2nr` for periodic orbitals | `NotYetImplemented { phase: 20 }` | 20 |
+| the `pyscf.pbc.scf` PyO3 surface | the whole `pyscf.pbc.*` binding layer is one phase | 20 |
+| periodic `analyze` / `mulliken_meta` / `dip_moment` | they need `pbc/tools/k2gamma`, which the roadmap places with the rest of `pbc.tools` | 20 |
+| `get_j_e1_kpts` / `get_k_e1_kpts` (J/K derivatives) | gradient quantities | 18 |
+| a `#[cube]` Stockham FFT | the host engine is `O(n log n)` and the default mesh is PRIME, so radix-2/3/5 never applies; see 11-01/03 | — |
 
 ## Session Continuity
 

@@ -59,26 +59,20 @@ pub const HALF_SPH_NORM: f64 = 0.28209479177387814;
 /// The `exxdiv` corrections (`vcut_sph`, `vcut_ws`, `ewald`) belong to the
 /// periodic-HF driver and are Phase 11's, not this function's.
 pub fn get_coulg(cell: &Cell, kg: &[[f64; 3]]) -> Result<Vec<f64>, PyscfRsError> {
-    use crate::types::LowDimFtType;
-    if cell.dimension != 3 && cell.low_dim_ft_type != LowDimFtType::InfVacuum {
-        return Err(PyscfRsError::NotYetImplemented {
-            phase: 12,
-            what: "get_coulG for dimension < 3 (truncated 2D/1D/0D Coulomb kernels)",
-        });
-    }
-    let omega = crate::cutoff::omega(cell);
-    let mut out = Vec::with_capacity(kg.len());
-    for g in kg {
-        let g2 = g[0] * g[0] + g[1] * g[1] + g[2] * g[2];
-        let mut v = if g2 == 0.0 { 0.0 } else { 4.0 * PI / g2 };
-        if omega > 0.0 {
-            v *= (-0.25 / (omega * omega) * g2).exp();
-        } else if omega < 0.0 {
-            v *= 1.0 - (-0.25 / (omega * omega) * g2).exp();
-        }
-        out.push(v);
-    }
-    Ok(out)
+    // Plan 11-02 landed the full `get_coulG` (every dimension, every exxdiv) in
+    // `crate::coulg`. This entry point stays because the pseudopotential path
+    // wants exactly one shape of it — `k` already folded into `kg`, no exxdiv —
+    // but it must NOT keep its own copy of the kernel, or the two would drift.
+    crate::coulg::get_coulg(
+        cell,
+        crate::coulg::CoulGArgs {
+            gv: Some(kg),
+            // `kg` is already `k + G`; re-adding `k` (or folding again) would be
+            // wrong, so the driver is entered at `k = 0` with wrapping off.
+            wrap_around: false,
+            ..crate::coulg::CoulGArgs::new()
+        },
+    )
 }
 
 /// `get_gth_vlocG_part1(cell, Gv)` — `pp_int.py:53-113`, the `dimension == 3`

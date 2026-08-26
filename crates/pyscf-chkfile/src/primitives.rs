@@ -153,3 +153,76 @@ pub fn write_dataset_f_order(
 pub fn read_dataset_2d(group: &hdf5::Group, key: &str) -> Result<Array2<f64>, ChkfileError> {
     Ok(group.dataset(key)?.read_2d()?)
 }
+
+// ---------------------------------------------------------------------------
+// Complex datasets — the periodic schema (v2.0, plan 11-11).
+// ---------------------------------------------------------------------------
+
+/// h5py's on-disk representation of `numpy.complex128`: an HDF5 COMPOUND type
+/// of two doubles named `r` and `i`.
+///
+/// Writing this type means `h5py.File(...)['scf/mo_coeff'][:]` reads back a
+/// NumPy complex array with no conversion step, which is what an upstream
+/// `pbc.scf` chkfile contains (`khf.KSCF.dump_chk`). D-05 keeps the
+/// `hdf5-metno` dependency — and therefore the `H5Type` derive — inside this
+/// crate; `pyscf-pbc-scf` consumes the two helpers below.
+#[derive(hdf5_metno::H5Type, Clone, Copy, Debug, PartialEq, Default)]
+#[repr(C)]
+pub struct H5Complex {
+    /// Real part.
+    pub r: f64,
+    /// Imaginary part.
+    pub i: f64,
+}
+
+/// Write a rank-3 complex dataset in C-order.
+///
+/// # Errors
+/// Propagates every HDF5 operation, and returns
+/// [`ChkfileError::ShapeMismatch`] when `data.len() != shape.product()`.
+pub fn write_dataset_3d_complex(
+    group: &hdf5::Group,
+    key: &str,
+    shape: [usize; 3],
+    data: &[H5Complex],
+) -> Result<(), ChkfileError> {
+    let n = shape[0] * shape[1] * shape[2];
+    if data.len() != n {
+        return Err(ChkfileError::ShapeMismatch {
+            key: key.into(),
+            expected: shape.to_vec(),
+            actual: vec![data.len()],
+        });
+    }
+    if group.link_exists(key) {
+        group.unlink(key)?;
+    }
+    let arr = ndarray::ArrayView3::from_shape(shape, data).map_err(|_| {
+        ChkfileError::ShapeMismatch {
+            key: key.into(),
+            expected: shape.to_vec(),
+            actual: vec![data.len()],
+        }
+    })?;
+    group
+        .new_dataset::<H5Complex>()
+        .shape(shape)
+        .create(key)?
+        .write(&arr)?;
+    Ok(())
+}
+
+/// Read a rank-3 complex dataset written by [`write_dataset_3d_complex`] (or
+/// by h5py as `complex128`).
+///
+/// # Errors
+/// Propagates every HDF5 operation.
+pub fn read_dataset_3d_complex(
+    group: &hdf5::Group,
+    key: &str,
+) -> Result<([usize; 3], Vec<H5Complex>), ChkfileError> {
+    let arr: ndarray::Array3<H5Complex> = group.dataset(key)?.read()?;
+    let s = arr.shape();
+    let shape = [s[0], s[1], s[2]];
+    Ok((shape, arr.into_iter().collect()))
+}

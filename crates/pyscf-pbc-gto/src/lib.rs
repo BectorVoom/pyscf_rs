@@ -10,9 +10,11 @@ pub mod cell;
 pub mod dumps_loads;
 
 // Phase 9 plan 09-04 — cutoff / rcut / mesh estimators.
+pub mod coulg;
 pub mod cutoff;
 
 // Phase 9 plan 09-05 — G-vectors (K-01), structure factors (K-02), uniform grids.
+pub mod grids;
 pub mod gv;
 
 // Phase 9 plan 09-06 — lattice sums and supercells (`tools/pbc.py:587-786`,
@@ -55,6 +57,7 @@ pub mod types;
 pub mod test_systems;
 
 pub use cell::{Cell, M, det3, estimate_mesh, estimate_rcut, inv3, transpose3};
+pub use coulg::{CoulGArgs, ExxDiv, get_coulg, get_coulg_at_gv, madelung};
 pub use cutoff::{
     INTEGRAL_PRECISION, PgtoOp, RCUT_EPS, RCUT_MAX_CYCLE, bas_rcut, error_for_ke_cutoff,
     estimate_ke_cutoff, estimate_ke_cutoff_pgto, estimate_rcut_pgto, extract_pgto_params,
@@ -73,6 +76,7 @@ pub use ewald_pme::{
     Bspline, EWALD_DIRECT_R_MIN, INTERPOLATION_ORDER, bspline, bspline_grad, bspline_value,
     get_ewald_direct, particle_mesh_ewald, pme_charge_mesh,
 };
+pub use grids::UniformGrids;
 pub use gv::{
     GvWeights, fftfreq, fftfreq_scaled, get_gv, get_gv_weights, get_si, get_uniform_grids,
 };

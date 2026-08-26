@@ -25,8 +25,9 @@ pub mod primitives;
 pub use checkpointable::Checkpointable;
 pub use error::ChkfileError;
 pub use primitives::{
-    open_for_read, open_for_write, read_dataset_1d, read_dataset_2d, read_group, read_mol,
-    read_scalar_f64, write_dataset_1d, write_dataset_c_order, write_dataset_f_order, write_mol,
+    H5Complex, open_for_read, open_for_write, read_dataset_1d, read_dataset_2d,
+    read_dataset_3d_complex, read_group, read_mol, read_scalar_f64, write_dataset_1d,
+    write_dataset_3d_complex, write_dataset_c_order, write_dataset_f_order, write_mol,
     write_scalar_f64,
 };
 

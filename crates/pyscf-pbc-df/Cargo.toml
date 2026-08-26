@@ -19,3 +19,8 @@ pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 hdf5-metno      = { workspace = true }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+
+[dev-dependencies]
+# PBC-MASTER-PLAN §9.2 reference cells for the integration tests.
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
+serde_json      = { workspace = true }

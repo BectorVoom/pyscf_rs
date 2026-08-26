@@ -16,5 +16,14 @@ pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
 pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
+pyscf-diis      = { path = "../pyscf-diis" }
+libm            = { workspace = true }
+pyscf-chkfile   = { path = "../pyscf-chkfile" }
+ndarray         = { workspace = true }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+
+[dev-dependencies]
+pyscf-gto        = { path = "../pyscf-gto" }
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
+serde_json      = { workspace = true }

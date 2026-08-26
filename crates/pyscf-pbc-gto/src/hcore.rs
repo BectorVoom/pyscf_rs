@@ -155,21 +155,34 @@ pub fn get_hcore_parts(cell: &Cell, kpts: &[[f64; 3]]) -> Result<HcoreParts, Pys
 
 /// `get_hcore(cell, kpts)` — `scfint.py:37-55`.
 ///
-/// # Errors
-/// ALWAYS [`PyscfRsError::NotYetImplemented`] `{ phase: 11 }` today, for the
-/// reason spelled out in the module docs: the long-range half of the local
-/// pseudopotential (and, for an all-electron cell, `get_nuc`) is an FFT/AFT
-/// quantity that Phase 11 owns. Use [`get_hcore_parts`] for the Phase-10 half.
+/// # This function is a SIGNPOST, not a stub
 ///
-/// The signature is final so plan 11-xx only has to fill the body.
+/// Phase 11 LANDED the missing term, but it cannot land it here: the long-range
+/// local pseudopotential is `ifft(vlocG * SI)` and the all-electron nuclear
+/// attraction is `get_nuc`, both of which need the FFT box and the uniform-grid
+/// AO evaluation — i.e. a density-fitting object. `pyscf-pbc-df` depends on
+/// this crate, so the assembled `hcore` lives THERE:
+///
+/// ```ignore
+/// let df = pyscf_pbc_df::Fftdf::new(cell, &kpts)?;
+/// let h  = pyscf_pbc_df::get_hcore(&df, &kpts)?;   // T + V_pp (or T + V_ne)
+/// ```
+///
+/// which is what `pyscf_pbc_scf::Krhf` and friends call. [`get_hcore_parts`]
+/// remains the way to reach the Phase-10 half (`T + V_nl + V_loc,2`) without a
+/// density-fitting object.
+///
+/// # Errors
+/// ALWAYS [`PyscfRsError::NotYetImplemented`], pointing at the function above.
 pub fn get_hcore(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PyscfRsError> {
     let _ = (cell, kpts);
     Err(PyscfRsError::NotYetImplemented {
         phase: 11,
-        what: "get_hcore needs the long-range term — get_pp_loc_part1 for a \
-               pseudopotential cell (ifft(vlocG_part1 * SI), FFTDF) or get_nuc for an \
-               all-electron one. Everything else is ready: use \
-               pyscf_pbc_gto::hcore::get_hcore_parts",
+        what: "get_hcore is assembled by the density-fitting object, because its \
+               missing term (get_pp_loc_part1 for a pseudopotential cell, get_nuc for \
+               an all-electron one) needs the FFT box: call \
+               pyscf_pbc_df::get_hcore(&Fftdf::new(cell, kpts)?, kpts). Use \
+               pyscf_pbc_gto::hcore::get_hcore_parts for the T + V_nl + V_loc,2 half",
     })
 }
 
