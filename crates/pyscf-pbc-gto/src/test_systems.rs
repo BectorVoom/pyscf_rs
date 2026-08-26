@@ -15,12 +15,11 @@
 //!
 //! # Pseudopotentials
 //!
-//! `pseudo` is recorded as a NAME only ([`Cell::pseudo_name`]) until plan 10-01
-//! lands the GTH parser (D-PBC-11). Everything these systems are used for in
-//! Phase 9 — lattices, volumes, reciprocal vectors, G-vectors, k-meshes, Ewald
-//! geometry — is independent of the pseudopotential, and `nao_nr` comes from the
-//! basis alone. What DOES change in plan 10-01 is the electron count
-//! (`tot_electrons` currently returns the all-electron value).
+//! Since plan 10-01 (D-PBC-11) `pseudo` is PARSED, not merely recorded: these
+//! systems carry real `gth-pade` data, `atom_charges()` returns the valence
+//! charge (diamond: `[4, 4]`, not `[6, 6]`) and `tot_electrons` follows. What
+//! does NOT change is the geometry — lattices, volumes, reciprocal vectors,
+//! G-vectors, k-meshes — nor `nao_nr`, which comes from the basis alone.
 //!
 //! # Reference values
 //!
@@ -156,10 +155,8 @@ pub fn all() -> Vec<(&'static str, Cell)> {
 /// (`.venv/bin/python`, `pyscf.pbc.gto.Cell` with `unit='Angstrom'`,
 /// `basis='gth-szv'`, `pseudo='gth-pade'`) and committed. `vol` is in Bohr^3.
 ///
-/// NOTE `nelectron` is upstream's PSEUDOPOTENTIAL (valence) count and is NOT
-/// asserted here: this port has no pseudopotential until plan 10-01, so
-/// [`Cell::tot_electrons`] returns the all-electron value. The field is
-/// recorded so plan 10-01 has the target to hit.
+/// `nelectron_pp` is upstream's PSEUDOPOTENTIAL (valence) count. Since plan
+/// 10-01 it IS what [`Cell::tot_electrons`] returns for these systems.
 pub struct Reference {
     /// System name, matching the constructor function.
     pub name: &'static str,
@@ -169,7 +166,8 @@ pub struct Reference {
     pub natm: usize,
     /// `cell.nao_nr()`.
     pub nao_nr: usize,
-    /// `cell.nelectron` WITH `gth-pade` — plan 10-01's target, not asserted yet.
+    /// `cell.nelectron` WITH `gth-pade` — what `tot_electrons(1)` returns since
+    /// plan 10-01.
     pub nelectron_pp: usize,
     /// `cell.lattice_vectors()` in Bohr, one row per lattice vector.
     pub a_bohr: [[f64; 3]; 3],

@@ -21,14 +21,14 @@
 //! loosened tolerance the unit gap implies, so the conversion path stays
 //! covered.
 //!
-//! # Why `pseudo` is unset
+//! # Two charge conventions, both gated
 //!
-//! Upstream `cell.atom_charges()` returns the PSEUDOPOTENTIAL valence charge
-//! when `pseudo=` is given. This port records the pseudopotential as a name only
-//! until plan 10-01 (D-PBC-11), so `atom_charges()` is still the all-electron
-//! `Z`. The references are generated WITHOUT `pseudo=` so the two charge vectors
-//! agree; [`PSEUDISED_EWALD`] records the `gth-pade` numbers as plan 10-01's
-//! target.
+//! `cell.atom_charges()` returns the PSEUDOPOTENTIAL valence charge when
+//! `pseudo=` is given, and since plan 10-01 (D-PBC-11) this port does too. The
+//! [`EWALD_REFERENCES`] literals are generated from cells built WITHOUT
+//! `pseudo=`, so they pin the all-electron `Z` path; [`PSEUDISED_EWALD`] holds
+//! the `gth-pade` numbers for the same five systems and pins the valence path.
+//! Both are asserted by `tests/ewald.rs`.
 
 #![allow(dead_code)]
 
@@ -243,10 +243,11 @@ pub const DIAMOND_ETA_SCAN: [EtaScanPoint; 4] = [
 ];
 
 /// `cell.ewald()` for the same five systems built WITH `pseudo='gth-pade'`,
-/// i.e. with upstream's valence charges. NOT asserted here — this port has no
-/// GTH parser before plan 10-01 (D-PBC-11). Recorded so plan 10-01 has the
-/// target, in the order of [`EWALD_REFERENCES`]. `he_fcc` is unchanged because
-/// `gth-pade` leaves He all-electron.
+/// i.e. with upstream's valence charges. ASSERTED since plan 10-01 landed the
+/// GTH parser (D-PBC-11) — see
+/// `tests/ewald.rs::pseudised_ewald_matches_the_recorded_upstream_targets`.
+/// In the order of [`EWALD_REFERENCES`]. `he_fcc` is unchanged because
+/// `gth-pade` leaves He's two electrons in the valence.
 pub const PSEUDISED_EWALD: [(&str, &[i32], f64); 5] = [
     ("diamond", &[4, 4], -12.78712914562424),
     ("si", &[4, 4], -8.398543850884348),

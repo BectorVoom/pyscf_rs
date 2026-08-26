@@ -50,21 +50,13 @@ use std::collections::HashMap;
 /// * [`PyscfRsError::NotYetImplemented`] when `cell.space_group_symmetry` is set
 ///   (Phase 12).
 /// * Anything [`pyscf_gto::build_from`] raises on the enlarged molecule.
-pub fn super_cell(
-    cell: &Cell,
-    ncopy: [usize; 3],
-    wrap_around: bool,
-) -> Result<Cell, PyscfRsError> {
+pub fn super_cell(cell: &Cell, ncopy: [usize; 3], wrap_around: bool) -> Result<Cell, PyscfRsError> {
     let a = cell.lattice_vectors();
     let ls = core::super_cell_translations(&a, &ncopy, wrap_around);
     let mesh = cell.try_mesh()?;
     // pbc.py:715-716
     let a_super = core::scale_lattice(&a, &ncopy);
-    let mesh_super = [
-        ncopy[0] * mesh[0],
-        ncopy[1] * mesh[1],
-        ncopy[2] * mesh[2],
-    ];
+    let mesh_super = [ncopy[0] * mesh[0], ncopy[1] * mesh[1], ncopy[2] * mesh[2]];
     build_supcell(cell, &ls, a_super, mesh_super)
 }
 

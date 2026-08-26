@@ -44,15 +44,15 @@
 //! `get_ewald_params` ships ALL of its branches: they are pure parameter
 //! algebra with no grid behind them.
 //!
-//! # Charges are all-electron until plan 10-01
+//! # Charges follow the pseudopotential
 //!
 //! Upstream `cell.atom_charges()` returns the PSEUDOPOTENTIAL (valence) charge
-//! when `cell.pseudo` is set. This port records the pseudopotential as a NAME
-//! only until plan 10-01 lands the GTH parser (D-PBC-11), so
-//! [`pyscf_core::Mole::atom_charges`] still returns the all-electron `Z`. Every
-//! reference value in `tests/ewald.rs` is therefore generated from an upstream
-//! cell built WITHOUT `pseudo=`, which makes the two charge vectors agree; the
-//! pseudised numbers are recorded alongside as plan 10-01's target.
+//! when `cell.pseudo` is set, and since plan 10-01 (D-PBC-11) so does this port
+//! — [`crate::Cell::build`] rewrites `_atm[CHARGE_OF]` with `Zion`. The nuclear
+//! repulsion of a `gth-pade` cell is therefore MUCH smaller than the
+//! all-electron one (diamond: -12.787 Ha vs -28.771 Ha), and both are gated:
+//! the `EWALD_REFERENCES` numbers come from cells built without `pseudo=`, and
+//! `PSEUDISED_EWALD` from cells built with it.
 
 use crate::cell::Cell;
 use crate::types::LowDimFtType;

@@ -3826,6 +3826,7 @@ dependencies = [
 name = "pyscf-pbc-gto"
 version = "0.1.0"
 dependencies = [
+ "approx",
  "cintx-core",
  "cintx-ops",
  "cintx-rs",

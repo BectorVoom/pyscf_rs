@@ -126,6 +126,38 @@ pub const INTOR_LAYOUTS: &[IntorEntry] = &[
         name: "int3c2e_ip1_sph",
         layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
     },
+    // ── moment-weighted 1e / 3-center families (GTH pseudopotentials,
+    //    PBC Phase 10 plans 10-05 / 10-06) ─────────────────────────────────
+    //
+    // `<i| r^n |j>` with the origin ON CENTRE i (`origi`) and the 3-centre
+    // `origk` analogue with the origin on the auxiliary centre. Consumed by
+    // `pp_int.py:626` `_int_vnl` (`origi`) and `pp_int.py:150`
+    // `get_pp_loc_part2` (`origk`). cintx ships them behind
+    // `unstable-source-api` — see `pyscf-pbc-gto`'s `gth-pp` feature.
+    IntorEntry {
+        name: "int1e_r2_origi_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int1e_r4_origi_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int3c1e_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int3c1e_r2_origk_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int3c1e_r4_origk_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
+    IntorEntry {
+        name: "int3c1e_r6_origk_sph",
+        layout: IntorLayout::ScalarFOrder,
+    },
     // ── 2-center auxiliary (DF metric) ────────────────────────────────────
     IntorEntry {
         name: "int2c2e_sph",

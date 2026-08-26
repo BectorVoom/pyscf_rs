@@ -1,0 +1,289 @@
+//! Periodic AO evaluation — `cell.pbc_eval_gto` / `eval_ao_kpts`.
+//!
+//! Port of `pyscf/pbc/gto/eval_gto.py:32-192` (`eval_gto`, `_estimate_rcut`)
+//! and `cell.py:2043-2053` (the `Cell.eval_gto` dispatch).
+//!
+//! # What it computes
+//!
+//! ```text
+//! ao_k[k][g, mu] = Σ_L exp(i·k·L) · phi_mu(coords[g] − L)
+//! ```
+//!
+//! i.e. the Bloch sum of the molecular AO. Upstream shifts the ATOM by `+L`
+//! (`grid_ao.c`); evaluating the unshifted molecular AO at `coords − L` is the
+//! same function of the same argument, and it lets this port reuse the existing
+//! `pyscf_kernels::eval_gto` (2 564 lines of s/p/d + deriv1 kernels) verbatim.
+//! Plan 10-04 is explicit that no new AO evaluator may be written here.
+//!
+//! # Conventions
+//!
+//! * Phase `exp(+i·k·L)`, `eval_gto.py:139` (`expLk = exp(1j·Ls·kptsᵀ)`),
+//!   the same sign the 1-electron driver uses (K-07).
+//! * A gamma k-point drops its imaginary plane, `eval_gto.py:157-158`.
+//! * Output is F-order per component, `values[c*ngrids*nao + g + mu*ngrids]`,
+//!   the SAME layout [`pyscf_gto::EvalGtoOutput`] uses (upstream transposes to
+//!   `(ngrids, nao)` C-order at the end; the layout note in
+//!   [`crate::pbc_intor`] applies here too).
+//!
+//! # Image list
+//!
+//! `eval_gto.py:137` uses a grid-edge-aware `get_lattice_Ls` that keeps images
+//! able to reach the GRID BOX rather than another atom. This port instead calls
+//! [`crate::lattice::get_lattice_ls`] with `discard = false`, whose raw
+//! `cartesian_prod` box is a SUPERSET of upstream's mask: it can only add
+//! numerically-negligible images, never drop a needed one, so the Bloch sum
+//! stays converged for grid points anywhere in the cell (which
+//! `bloch_periodicity_holds` pins).
+
+use crate::cell::Cell;
+use crate::cutoff::{PgtoOp, extract_pgto_params};
+use crate::pbc_intor::is_gamma;
+use pyscf_algebra::{CTensor, select_backend};
+use pyscf_core::{CoreError, PyscfRsError};
+use std::f64::consts::PI;
+
+/// k-resolved AO values on a grid.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalAoKptsOutput {
+    /// One planar-complex buffer per k-point, each `comp * ngrids * nao` long,
+    /// F-order per component (see the module docs).
+    pub kaos: Vec<CTensor>,
+    /// Grid-point count.
+    pub ngrids: usize,
+    /// AO count.
+    pub nao: usize,
+    /// Component count — 1 for `GTOval_sph`, 4 for `GTOval_sph_deriv1`, …
+    pub comp: usize,
+    /// `true` for every k-point whose imaginary plane was dropped.
+    pub gamma: Vec<bool>,
+}
+
+impl EvalAoKptsOutput {
+    /// The AO block at k-point `k`.
+    pub fn at(&self, k: usize) -> &CTensor {
+        &self.kaos[k]
+    }
+
+    /// Number of k-points.
+    pub fn nkpts(&self) -> usize {
+        self.kaos.len()
+    }
+
+    /// `(re, im)` of component `c` of AO `mu` at grid point `g`, k-point `k`.
+    pub fn element(&self, k: usize, c: usize, g: usize, mu: usize) -> (f64, f64) {
+        let p = c * self.ngrids * self.nao + g + mu * self.ngrids;
+        (self.kaos[k].re[p], self.kaos[k].im[p])
+    }
+}
+
+/// `_estimate_rcut(cell, deriv)` — `eval_gto.py:171-192`.
+///
+/// One radius per shell: how far that shell's most diffuse primitive reaches
+/// before falling under the grid-weighted precision. `deriv` is the number of
+/// `ip` factors in the eval name (upstream counts the substring `'ip'`).
+///
+/// # Errors
+/// [`CoreError::InvalidMolecule`] when `rcut` has to be estimated and cannot.
+pub fn estimate_rcut_for_eval(cell: &Cell, deriv: u32) -> Result<Vec<f64>, PyscfRsError> {
+    let (es, cs) = extract_pgto_params(cell, PgtoOp::Min);
+    let ls: Vec<f64> = (0..cell.mol.nbas)
+        .map(|i| crate::cutoff::bas_angular(cell, i) as f64)
+        .collect();
+
+    let vol = cell.vol();
+    let rcut = cell.try_rcut()?;
+    // eval_gto.py:177-183 — the grid-weight penalty and the lattice-sum surface.
+    let weight_penalty = vol;
+    let rad = vol.powf(-1.0 / 3.0) * rcut + 1.0;
+    let surface = 4.0 * PI * rad * rad;
+    let precision = cell.precision / (weight_penalty * surface).max(1.0);
+
+    let mut out = Vec::with_capacity(es.len());
+    for ((e, c), l) in es.iter().zip(cs.iter()).zip(ls.iter()) {
+        let norm_ang = ((2.0 * l + 1.0) / (4.0 * PI)).sqrt();
+        let fac = 2.0 * PI / vol * c * norm_ang / e / precision;
+        // Two fixed-point sweeps from r = cell.rcut, exactly as upstream.
+        let mut r = rcut;
+        for _ in 0..2 {
+            let t = fac * r.powf(l + 1.0) * (2.0 * e * r).powi(deriv as i32) + 1.0;
+            r = (t.ln() / e).sqrt();
+        }
+        out.push(r);
+    }
+    Ok(out)
+}
+
+/// Number of `ip` derivative factors in an eval name — upstream's
+/// `eval_name.count('ip')` (`eval_gto.py:134`).
+fn deriv_count(eval_name: &str) -> u32 {
+    eval_name.matches("ip").count() as u32
+}
+
+/// `cell.pbc_eval_gto(eval_name, coords, kpts)` — `eval_gto.py:32-167`.
+///
+/// `eval_name` is a MOLECULAR name (`"GTOval_sph"`, `"GTOval_sph_deriv1"`, …);
+/// the `"PBC"` prefix upstream prepends selects its periodic C driver and has no
+/// analogue here. An empty `kpts` means the single gamma point.
+///
+/// # Errors
+/// * [`CoreError::InvalidMolecule`] — unbuilt cell, or an eval name
+///   [`pyscf_gto::eval_gto`] does not know.
+/// * [`PyscfRsError::NotYetImplemented`] — an eval variant the molecular kernel
+///   defers (deriv2, GIAO).
+pub fn eval_ao_kpts(
+    cell: &Cell,
+    eval_name: &str,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+) -> Result<EvalAoKptsOutput, PyscfRsError> {
+    if !cell.mol._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "eval_ao_kpts: the cell must be built first".into(),
+        )));
+    }
+    let rcut = estimate_rcut_for_eval(cell, deriv_count(eval_name))?;
+    let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
+    // `discard = false` — see the module docs on the image list.
+    let ls = crate::lattice::get_lattice_ls(cell, Some(rmax), None, false)?;
+    eval_ao_kpts_with_images(cell, eval_name, coords, kpts, &ls)
+}
+
+/// [`eval_ao_kpts`] against a caller-supplied image list.
+///
+/// Exposed for the same reason [`crate::pbc_intor::intor_cross_with_images`] is:
+/// callers that evaluate several eval names over one grid should build `Ls`
+/// once, and the `rcut`-convergence test needs to vary it deliberately.
+///
+/// # Errors
+/// As [`eval_ao_kpts`].
+pub fn eval_ao_kpts_with_images(
+    cell: &Cell,
+    eval_name: &str,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+    ls: &[[f64; 3]],
+) -> Result<EvalAoKptsOutput, PyscfRsError> {
+    let owned_gamma = [[0.0_f64; 3]];
+    let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
+    let nkpts = kpts.len();
+    let ngrids = coords.len();
+    let nao = cell.mol.nao_nr;
+
+    let client = select_backend()
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts: backend selection failed: {e}"
+            )))
+        })?
+        .client;
+
+    // K-07 — the same `exp(+i k·L)` table the 1-electron driver uses.
+    let kflat: Vec<f64> = kpts.iter().flatten().copied().collect();
+    let lflat: Vec<f64> = ls.iter().flatten().copied().collect();
+    let (expkl_re, expkl_im) =
+        pyscf_kernels::pbc::bloch_phase(&client, &kflat, &lflat).map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts: K-07 bloch_phase failed: {e}"
+            )))
+        })?;
+    let nimgs = ls.len();
+
+    // The component count is whatever the molecular evaluator reports; a zero
+    // grid still has to produce correctly-shaped (empty) output, so probe with
+    // the real grid and accept the cost — `eval_gto` is called nimgs times
+    // anyway.
+    let mut n = 0usize;
+    let mut comp = 1usize;
+    // quick-260826-spd: the k-resolved accumulators live on the DEVICE for the
+    // whole image loop. They used to be host `Vec`s handed to K-08 by value and
+    // returned fresh, which meant both `(nkpts, n)` planes were uploaded and read
+    // back once per lattice image — `4*nkpts*n` reals of round-trip traffic to
+    // fold in `n` reals of new AO data, repeated `nimgs` times. Now only the AO
+    // block and the `2*nkpts` phase factors cross per image, and the planes come
+    // home once, after the loop.
+    let mut acc: Option<pyscf_kernels::pbc::AoKAccumulator> = None;
+
+    for (m, l) in ls.iter().enumerate() {
+        // phi(r − L): shift the GRID, not the atoms — same function, and it
+        // keeps the molecular evaluator and its `Mole` untouched.
+        let shifted: Vec<[f64; 3]> = coords
+            .iter()
+            .map(|r| [r[0] - l[0], r[1] - l[1], r[2] - l[2]])
+            .collect();
+        let ao = pyscf_gto::eval_gto(&cell.mol, eval_name, &shifted)?;
+
+        if m == 0 {
+            n = ao.values.len();
+            // An empty grid or an empty basis leaves no block to divide by;
+            // the component count is then moot, so report the scalar 1.
+            comp = n.checked_div(ngrids * nao).unwrap_or(1);
+        } else if ao.values.len() != n {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts: image {m} produced {} AO values, image 0 produced {n}",
+                ao.values.len()
+            ))));
+        }
+        if n == 0 {
+            continue;
+        }
+
+        // K-08 — one launch per image, folding this image into every k at once,
+        // in place on the device-resident accumulators.
+        let pr: Vec<f64> = (0..nkpts).map(|k| expkl_re[k * nimgs + m]).collect();
+        let pi: Vec<f64> = (0..nkpts).map(|k| expkl_im[k * nimgs + m]).collect();
+        // Built on the first image that actually has AO values, so `n` is known;
+        // `get_or_insert_with` keeps that lazy without an unreachable panic
+        // branch (FOUND-07 — no `unwrap`/`expect` in production code).
+        acc.get_or_insert_with(|| pyscf_kernels::pbc::AoKAccumulator::zeros(&client, nkpts, n))
+            .accumulate(&client, &ao.values, &pr, &pi)
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_ao_kpts: K-08 accumulate failed at image {m}: {e}"
+                )))
+            })?;
+    }
+
+    // One read-back for the whole lattice sum. An empty image list never built
+    // an accumulator, and `n` is then 0, so the split below yields no planes.
+    let (out_re, out_im) = match acc {
+        Some(a) => a.into_planes(&client),
+        None => (Vec::new(), Vec::new()),
+    };
+
+    // Split the flat (nkpts, n) accumulators into one CTensor per k, dropping
+    // the imaginary plane at gamma (eval_gto.py:157-158).
+    let gamma: Vec<bool> = kpts.iter().map(is_gamma).collect();
+    let mut kaos = Vec::with_capacity(nkpts);
+    for (k, is_g) in gamma.iter().enumerate() {
+        let re = out_re[k * n..(k + 1) * n].to_vec();
+        let im = if *is_g {
+            vec![0.0; n]
+        } else {
+            out_im[k * n..(k + 1) * n].to_vec()
+        };
+        kaos.push(CTensor::from_planes(re, im));
+    }
+
+    Ok(EvalAoKptsOutput {
+        kaos,
+        ngrids,
+        nao,
+        comp,
+        gamma,
+    })
+}
+
+impl Cell {
+    /// `cell.pbc_eval_gto(eval_name, coords, kpts)` — `cell.py:2040`.
+    ///
+    /// # Errors
+    /// As [`eval_ao_kpts`].
+    pub fn pbc_eval_gto(
+        &self,
+        eval_name: &str,
+        coords: &[[f64; 3]],
+        kpts: &[[f64; 3]],
+    ) -> Result<EvalAoKptsOutput, PyscfRsError> {
+        eval_ao_kpts(self, eval_name, coords, kpts)
+    }
+}

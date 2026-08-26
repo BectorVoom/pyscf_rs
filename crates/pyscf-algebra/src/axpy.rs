@@ -24,39 +24,44 @@
 //!     ROCm, CUDA, WGPU), and updates `y` in place. Exercised by the random
 //!     oracle differential test (`tests/axpy_oracle.rs`) on ROCm.
 
+use crate::launch::{launch_1d, line_size_for, upload};
 use crate::scalar::DeviceScalar;
 use crate::{AlgebraClient, AlgebraError, Tensor};
 use cubecl::Runtime;
-use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Grid-stride 4x unrolled AXPY kernel: `y[i] += alpha * x[i]`.
+/// Vectorized AXPY kernel: `y[i] += alpha * x[i]`, one unit per `N`-wide vector.
 ///
-/// Threads iterate across the array in grid strides, processing 4 elements per step
-/// to maximize memory bandwidth and instruction-level parallelism (ILP).
+/// quick-260826-spd: this was a grid-stride loop over scalars with a hard-coded
+/// 256-unit cube and a 4x manual unroll, plus `alpha` staged as a one-element
+/// device buffer on every launch. All three are gone:
+///
+///   * operands are read and written as [`Vector<F, N>`], so one unit issues one
+///     SIMD load/store instead of four scalar ones — the manual unroll was
+///     standing in for exactly this, in a form the backend could not widen;
+///   * the launch geometry comes from [`launch_1d`], which sizes the cube from
+///     the device rather than assuming a GPU (see that function for why 256
+///     units is the wrong ask on CubeCL's CPU runtime);
+///   * `alpha` rides as a genuine scalar launch argument, which the widened
+///     `DeviceScalar: CubeElement` bound now permits. The per-launch allocation
+///     and host-to-device copy it used to cost are pure overhead on a BLAS-1 op
+///     that is otherwise memory-bound.
+///
+/// `line_size_for` guarantees the width divides the element count exactly, so
+/// there is no tail to guard beyond the whole-vector bound check.
 #[cube(launch_unchecked)]
-fn axpy_kernel<F: Float>(x: &Array<F>, y: &mut Array<F>, alpha: &Array<F>, n: usize) {
-    let a = alpha[0];
-    let stride = CUBE_COUNT_X as usize * CUBE_DIM_X as usize * 4;
-    let mut base = ABSOLUTE_POS * 4;
-    while base + 3 < n {
-        y[base] = y[base] + a * x[base];
-        y[base + 1] = y[base + 1] + a * x[base + 1];
-        y[base + 2] = y[base + 2] + a * x[base + 2];
-        y[base + 3] = y[base + 3] + a * x[base + 3];
-        base += stride;
-    }
-    let mut rem = base;
-    while rem < n {
-        y[rem] = y[rem] + a * x[rem];
-        rem += 1;
+fn axpy_kernel<F: Float + CubeElement, N: Size>(
+    alpha: F,
+    x: &Array<Vector<F, N>>,
+    y: &mut Array<Vector<F, N>>,
+    n_lines: usize,
+) {
+    if ABSOLUTE_POS < n_lines {
+        y[ABSOLUTE_POS] += x[ABSOLUTE_POS] * Vector::<F, N>::new(alpha);
     }
 }
-
-/// Threads per block for the axpy launch.
-const BLOCK: u32 = 256;
 
 /// Core launch on resident device handles: `y[i] += alpha * x[i]`, in place on
 /// the `y` handle, with NO host transfer. Both the host-slice path
@@ -72,22 +77,24 @@ fn launch_axpy_on_handles<R: Runtime, F: DeviceScalar>(
     y: &Handle,
     n: usize,
 ) {
-    // `alpha` rides as a single-element device buffer (see `axpy_kernel`).
-    let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
-    let groups = ((n as u32).div_ceil(BLOCK * 4)).clamp(1, 128);
+    let line = line_size_for::<R, F>(client, n);
+    let n_lines = n / line;
+    // One multiply-add per element: the per-lane work is exactly the width.
+    let (count, dim) = launch_1d(client, n_lines, line);
 
     unsafe {
         axpy_kernel::launch_unchecked::<F, R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(BLOCK),
+            count,
+            dim,
+            line,
+            alpha,
             // SAFETY: `n` matches both buffers. `from_raw_parts` consumes the handle
             // by value, so clone the caller's handles (clones share the binding).
             ArrayArg::from_raw_parts(x.clone(), n),
             ArrayArg::from_raw_parts(y.clone(), n),
-            ArrayArg::from_raw_parts(alpha_handle, 1),
             // Scalar dimension arg is passed as a bare value (LaunchArg for usize).
-            n,
+            n_lines,
         );
     }
 }
@@ -100,8 +107,8 @@ fn launch_axpy<R: Runtime, F: DeviceScalar>(
     x: &[F],
     y: &[F],
 ) -> Vec<F> {
-    let x_handle = client.create(Bytes::from_elems(x.to_vec()));
-    let y_handle = client.create(Bytes::from_elems(y.to_vec()));
+    let x_handle = upload(client, x);
+    let y_handle = upload(client, y);
     launch_axpy_on_handles::<R, F>(client, alpha, &x_handle, &y_handle, x.len());
     let bytes = client.read(vec![y_handle]);
     bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec()

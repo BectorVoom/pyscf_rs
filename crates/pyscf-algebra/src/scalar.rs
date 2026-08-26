@@ -43,9 +43,20 @@ pub(crate) fn dtype_of<T: Scalar>() -> DType {
 ///
 /// quick-260529-i2x: also bounds `bytemuck::Pod` so the device launchers in
 /// this crate (e.g. `gemm_dense`) can move `&[F]` host data through
-/// `cubecl::bytes::Bytes::from_elems` and read it back via `bytemuck::cast_slice`
-/// without re-stating the byte-copy bound at every call site. f32/f64 are Pod.
-pub trait DeviceScalar: Scalar + cubecl::prelude::Float + bytemuck::Pod {}
+/// `cubecl::client::ComputeClient::create_from_slice` and read it back via
+/// `bytemuck::cast_slice` without re-stating the byte-copy bound at every call
+/// site. f32/f64 are Pod.
+///
+/// quick-260826-spd: and `cubecl::prelude::CubeElement`, which is what lets an
+/// `F` be passed to a kernel as a bare SCALAR launch argument. Without it the
+/// element-wise engines had to stage `alpha` in a one-element device buffer —
+/// an allocation plus a host-to-device copy on every launch of an op that is
+/// otherwise purely memory-bound. It also admits `F` as the element of a
+/// `Vector<F, N>`, which is how those kernels now issue SIMD loads.
+pub trait DeviceScalar:
+    Scalar + cubecl::prelude::Float + cubecl::prelude::CubeElement + bytemuck::Pod
+{
+}
 
 impl DeviceScalar for f32 {}
 impl DeviceScalar for f64 {}

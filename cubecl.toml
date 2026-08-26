@@ -1,0 +1,15 @@
+# CubeCL runtime configuration, picked up from the workspace root.
+#
+# Every `#[cube]` kernel in pyscf-algebra is JIT-compiled on first use, once per
+# (kernel, element type, vectorization factor) triple. The algebra surface alone
+# monomorphizes f32 and f64 across gemm/axpy/scal/dot/reduce/transpose, and the
+# vectorized kernels add one variant per line width the device offers, so a cold
+# process pays that compilation before the first SCF iteration can start.
+#
+# CubeCL can persist the compiled binaries but does not by default. Pointing the
+# cache at `target` means only the first run after a rebuild compiles; every run
+# afterwards deserializes the bytecode straight from disk.
+#
+# (The autotune cache is separate and already defaults to `target`.)
+[compilation]
+cache = "target"

@@ -149,8 +149,9 @@ pub struct CellBuildArgs {
     /// Use the looser per-shell `rcut_by_shells` estimate for `rcut`
     /// (`cell.py:1316`, upstream default `false`).
     pub use_loose_rcut: bool,
-    /// Pseudopotential name (e.g. `"gth-pade"`). Parsed in plan 10-01; recorded
-    /// here so the input round-trips through `dumps`/`loads` today.
+    /// Pseudopotential name (e.g. `"gth-pade"`). [`crate::Cell::build`] resolves
+    /// it into [`crate::Cell::pseudo`] and rewrites the atom charges with the
+    /// valence counts (plan 10-01, D-PBC-11).
     pub pseudo: Option<String>,
 }
 

@@ -37,13 +37,45 @@
 
 use pyscf_core::{EcpLoadError, GthProjector, GthPseudo};
 
-/// Parse CP2K / GTH pseudopotential text for one element `symbol`.
+/// Parse CP2K / GTH pseudopotential text for one element `symbol`, taking that
+/// element's DEFAULT potential.
 ///
-/// Returns the FIRST `#PSEUDOPOTENTIAL` block whose NAME-line element matches
-/// `symbol` (case-insensitive); other elements' blocks are skipped. Returns a
-/// structured [`EcpLoadError::Parse`] when the element is absent or the data is
-/// malformed (never panics).
+/// See [`parse_cp2k_pp_with_suffix`] for what "default" means — a `.dat` file
+/// carries several blocks per element (`Li GTH-PADE-q1 …`, `Li GTH-PADE-q3 …
+/// GTH-PADE GTH-LDA`) and picking the first one silently gives the wrong
+/// valence charge.
 pub fn parse_cp2k_pp(text: &str, symbol: &str, source: &str) -> Result<GthPseudo, EcpLoadError> {
+    parse_cp2k_pp_with_suffix(text, symbol, None, source)
+}
+
+/// Parse CP2K / GTH pseudopotential text for one element `symbol`, selecting
+/// the block by upstream's rule (`parse_cp2k_pp._search_gthpp_block`).
+///
+/// A `.dat` file holds one `#PSEUDOPOTENTIAL` block per (element, valence
+/// configuration), each opened by a NAME line listing the potential's aliases:
+///
+/// ```text
+/// Li GTH-PADE-q1 GTH-LDA-q1                        <- explicit q1 only
+/// Li GTH-PADE-q3 GTH-LDA-q3 GTH-PADE GTH-LDA       <- ALSO the default
+/// ```
+///
+/// * `suffix = None` (the default potential): take the first block whose LAST
+///   alias token does NOT end in `-q<digits>`, i.e. the block that also answers
+///   to the bare potential name. For `Li`/`gth-pade` that is the **q3** block —
+///   taking the first matching block instead yields `Zion = 1` and a cell with
+///   the wrong electron count.
+/// * `suffix = Some("q4")`: take the first block any of whose alias tokens ends
+///   in `-q4`.
+///
+/// Element matching is case-insensitive on the alphabetic prefix of token 0.
+/// Returns a structured [`EcpLoadError::Parse`] when no block matches or the
+/// data is malformed (never panics).
+pub fn parse_cp2k_pp_with_suffix(
+    text: &str,
+    symbol: &str,
+    suffix: Option<&str>,
+    source: &str,
+) -> Result<GthPseudo, EcpLoadError> {
     let symbol_upper = symbol.to_ascii_uppercase();
 
     // Pre-filter: strip `#`-comments (incl. the `#PSEUDOPOTENTIAL` delimiters
@@ -66,21 +98,48 @@ pub fn parse_cp2k_pp(text: &str, symbol: &str, source: &str) -> Result<GthPseudo
     // character is alphabetic, whereas every count / local / projector line
     // begins with a digit, sign, or dot. Take the FIRST block matching `symbol`
     // (the leading-alpha prefix of token 0, uppercased).
-    let seg = find_element_block(&filtered, &symbol_upper).ok_or_else(|| EcpLoadError::Parse {
-        file: source.into(),
-        line: 0,
-        reason: format!("pseudopotential for element '{symbol}' not found in CP2K/GTH text"),
+    let seg = find_element_block(&filtered, &symbol_upper, suffix).ok_or_else(|| {
+        EcpLoadError::Parse {
+            file: source.into(),
+            line: 0,
+            reason: match suffix {
+                None => format!(
+                    "pseudopotential for element '{symbol}' not found in CP2K/GTH text"
+                ),
+                Some(q) => format!(
+                    "pseudopotential for element '{symbol}' with suffix '{q}' \
+                     not found in CP2K/GTH text"
+                ),
+            },
+        }
     })?;
 
     parse_block(seg, source)
 }
 
-/// Return the first element block whose NAME-line element equals `symbol_upper`.
+/// `true` when `tok` (an alias like `GTH-PADE-q4`) carries a `-q<digits>` tail.
+/// Ports the `qsuffix.startswith('q') and qsuffix[1:].isdigit()` test at
+/// `parse_cp2k_pp.py:152-153`.
+fn has_q_suffix(tok: &str) -> bool {
+    let tail = tok.rsplit('-').next().unwrap_or("");
+    let Some(rest) = tail.strip_prefix(['q', 'Q']) else {
+        return false;
+    };
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Select an element block per upstream `_search_gthpp_block`
+/// (`parse_cp2k_pp.py:145-158`).
 fn find_element_block<'a>(
     filtered: &'a [(usize, String)],
     symbol_upper: &str,
+    suffix: Option<&str>,
 ) -> Option<&'a [(usize, String)]> {
     let starts_with_alpha = |s: &str| s.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+
+    // Blocks for this element, in file order, so the fallback below can reach
+    // them after the primary rule finds nothing.
+    let mut candidates: Vec<&'a [(usize, String)]> = Vec::new();
 
     let mut idx = 0;
     while idx < filtered.len() {
@@ -101,8 +160,45 @@ fn find_element_block<'a>(
             idx += 1;
         }
         if elem == symbol_upper {
-            return Some(&filtered[start..idx]);
+            candidates.push(&filtered[start..idx]);
         }
+    }
+
+    let name_line = |seg: &&'a [(usize, String)]| seg[0].1.clone();
+
+    match suffix {
+        // Default potential: the block whose LAST alias is not `-q<n>`.
+        None => {
+            if let Some(seg) = candidates.iter().find(|seg| {
+                name_line(seg)
+                    .split_whitespace()
+                    .next_back()
+                    .is_some_and(|last| !has_q_suffix(last))
+            }) {
+                return Some(seg);
+            }
+        }
+        // Explicit `-q<n>`: any alias on the NAME line may carry it.
+        Some(q) => {
+            if let Some(seg) = candidates.iter().find(|seg| {
+                name_line(seg).split_whitespace().any(|tok| {
+                    tok.rsplit('-')
+                        .next()
+                        .is_some_and(|tail| tail.eq_ignore_ascii_case(q))
+                })
+            }) {
+                return Some(seg);
+            }
+            return None;
+        }
+    }
+
+    // Fallback: a file whose only block for this element IS q-suffixed (upstream
+    // returns None here and the caller raises; several one-block-per-element
+    // files in the tree — e.g. gth-hf-rev.dat — would then be unusable, so the
+    // single unambiguous candidate is accepted).
+    if candidates.len() == 1 {
+        return Some(candidates[0]);
     }
     None
 }

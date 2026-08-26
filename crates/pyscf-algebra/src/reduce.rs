@@ -8,11 +8,12 @@
 //! (quick-260529-iji) exactly.
 //!
 //! `reduce_sum(x) = sum(x[i])` is the axis-free reduction. The device kernel
-//! computes `groups` PARTIAL sums — each thread sequentially accumulates a
-//! contiguous `CHUNK` slice of the input into one partial in `F` (bounds-guarded
-//! against the tail) — and the host sums those `groups` partials in `F`. This
-//! keeps the kernel naive and obviously-correct (no device atomics /
-//! tree-reduction) while doing the bulk of the work on-device.
+//! computes one PARTIAL sum per grid-stride lane — each lane accumulates the
+//! `Vector<F, N>`s it strides over into one vector accumulator, then folds that
+//! horizontally — and the host sums those partials in `F`. The lane count is
+//! capped by `crate::launch::reduction_lanes` rather than derived from the
+//! element count, which is what keeps the read-back small; the kernel stays free
+//! of device atomics and cube-wide tree reductions.
 //!
 //! Surfaces:
 //!   * `reduce_sum_dense()` — the working device path for the axis-free TOTAL
@@ -25,34 +26,40 @@
 //!   * `reduce_sum()` — the opaque `Tensor`-based API, wired through the Phase-2
 //!     `crate::device_buffer` registry onto the strided per-axis kernel.
 
+use crate::launch::{launch_1d, line_size_for, reduction_lanes, total_units, upload};
 use crate::scalar::DeviceScalar;
 use crate::{AlgebraClient, AlgebraError, Tensor};
 use cubecl::Runtime;
-use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Grid-stride coalesced reduce sum kernel: thread `tid` accumulates
-/// elements `x[tid + k*stride]` into `out[tid]`.
+/// Vectorized grid-stride reduce-sum kernel: lane `tid` accumulates the `N`-wide
+/// vectors `x[tid + j*stride]` and writes the horizontal sum of its accumulator
+/// to `out[tid]`.
 ///
-/// Adjacent threads in each warp/wavefront read consecutive addresses (unit stride),
-/// maximizing global memory bandwidth efficiency via full transaction coalescing.
+/// quick-260826-spd: the reduction sibling of [`crate::dot`]'s kernel, and the
+/// same three changes apply — SIMD vector loads, a lane count capped by
+/// [`reduction_lanes`] instead of one unit per element, and the true grid extent
+/// passed in as `stride`. See `dot.rs` for the reasoning on each.
 #[cube(launch_unchecked)]
-fn reduce_kernel<F: Float>(x: &Array<F>, out: &mut Array<F>, n: usize) {
+fn reduce_kernel<F: Float + CubeElement, N: Size>(
+    x: &Array<Vector<F, N>>,
+    out: &mut Array<F>,
+    n_lines: usize,
+    stride: usize,
+) {
     let tid = ABSOLUTE_POS;
-    let stride = CUBE_COUNT_X as usize * CUBE_DIM_X as usize;
-    let mut acc = F::from_int(0);
-    let mut i = tid;
-    while i < n {
-        acc += x[i];
-        i += stride;
+    if tid < stride {
+        let mut acc = Vector::<F, N>::new(F::from_int(0));
+        let mut i = tid;
+        while i < n_lines {
+            acc += x[i];
+            i += stride;
+        }
+        out[tid] = F::cast_from(acc.vector_sum());
     }
-    out[tid] = acc;
 }
-
-/// Threads per block for the reduce launch.
-const BLOCK: u32 = 256;
 
 /// Runtime-generic launcher: upload `x`, allocate the partials buffer, launch
 /// `reduce_kernel`, read the partials back to host, then sum them in `F`. `R` is
@@ -66,34 +73,41 @@ fn launch_reduce_sum<R: Runtime, F: DeviceScalar>(client: &ComputeClient<R>, x: 
     }
 
     let n = x.len();
-    let groups = ((n as u32).div_ceil(BLOCK * 16)).clamp(1, 64);
-    let num_threads = (groups * BLOCK) as usize;
+    let line = line_size_for::<R, F>(client, n);
+    let n_lines = n / line;
+    let lanes = reduction_lanes(client, n_lines, line);
+    let (count, dim) = launch_1d(client, lanes, (n_lines / lanes.max(1)) * line);
+    // The grid may round up past `lanes`; every dispatched unit writes a partial,
+    // so the buffer is sized from the geometry rather than from the request.
+    let stride = total_units(&count, dim);
 
-    let x_handle = client.create(Bytes::from_elems(x.to_vec()));
-    let out_handle = client.empty(num_threads * core::mem::size_of::<F>());
+    let x_handle = upload(client, x);
+    let out_handle = client.empty(stride * core::mem::size_of::<F>());
 
     unsafe {
         reduce_kernel::launch_unchecked::<F, R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(BLOCK),
-            // SAFETY: lengths match the buffers just allocated above. `from_raw_parts`
-            // consumes the handle by value; clone the output handle so it survives
-            // for the read-back below.
+            count,
+            dim,
+            line,
+            // SAFETY: `n` matches the input buffer and `stride` matches out_handle.
+            // `from_raw_parts` consumes the handle by value; clone the output handle
+            // so it survives for the read-back below.
             ArrayArg::from_raw_parts(x_handle, n),
-            ArrayArg::from_raw_parts(out_handle.clone(), num_threads),
+            ArrayArg::from_raw_parts(out_handle.clone(), stride),
             // Scalar kernel args are passed as bare values (LaunchArg for T = T).
-            n,
+            n_lines,
+            stride,
         );
     }
 
     let bytes = client.read(vec![out_handle]);
-    let parts: Vec<F> = bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec();
+    let partials: &[F] = bytemuck::cast_slice::<u8, F>(&bytes[0]);
 
     // Host-sum the partials in `F`. A plain `acc += p` add is NOT an FMA
     // (check-no-fma only flags FMA in pyscf_* symbols anyway).
     let mut acc = F::from_int(0);
-    for &p in &parts {
+    for &p in partials {
         acc += p;
     }
     acc
@@ -113,35 +127,37 @@ pub fn reduce_sum_dense<F: DeviceScalar>(
     Ok(out)
 }
 
-/// Strided per-axis reduction kernel: thread `tid` owns one output element
-/// `(o, i)` and sums the `axis_len` inputs that collapse into it, walking the
-/// reduced axis with stride `inner`. For a row-major tensor flattened as
-/// `((o * axis_len) + a) * inner + i`, the inputs summed for output `(o, i)` are
-/// `x[o*axis_len*inner + i + a*inner]` for `a in 0..axis_len`. Generic over the
-/// device float so the same kernel monomorphizes for f32 (GPU speed path) and
-/// f64 (chemistry precision path) — see `Cubecl_generics.md`.
+/// Strided per-axis reduction kernel: lane `tid` owns one output *vector*
+/// `(o, i_line)` and sums the `axis_len` input vectors that collapse into it,
+/// walking the reduced axis with stride `inner_lines`.
+///
+/// For a row-major tensor flattened as `((o * axis_len) + a) * inner + i`, the
+/// surviving inner axis is contiguous — which is exactly the axis a SIMD vector
+/// can span. quick-260826-spd therefore counts `inner` in [`Vector<F, N>`]s: the
+/// gather along the reduced axis stays strided (it has to), but each step of it
+/// now moves `N` elements per instruction instead of one. When `inner` is 1 (the
+/// last axis) the width falls back to 1 and this is the original scalar kernel.
 #[cube(launch_unchecked)]
-fn reduce_axis_kernel<F: Float>(
-    x: &Array<F>,
-    out: &mut Array<F>,
+fn reduce_axis_kernel<F: Float + CubeElement, N: Size>(
+    x: &Array<Vector<F, N>>,
+    out: &mut Array<Vector<F, N>>,
     outer: usize,
     axis_len: usize,
-    inner: usize,
+    inner_lines: usize,
 ) {
     // `ABSOLUTE_POS` and `Array` indices are `usize` in cubecl 0.10 — no casts.
     let tid = ABSOLUTE_POS;
-    let n_out = outer * inner;
-    // Bounds guard: the launch rounds the thread count up to a whole number of
-    // blocks, so tail threads must not write out of range.
-    if tid < n_out {
-        let o = tid / inner;
-        let i = tid % inner;
-        let base = o * axis_len * inner + i;
+    // Bounds guard: the launch rounds the lane count up to a whole number of
+    // cubes, so tail lanes must not write out of range.
+    if tid < outer * inner_lines {
+        let o = tid / inner_lines;
+        let i = tid % inner_lines;
+        let base = o * axis_len * inner_lines + i;
         // Sequential strided accumulation along the reduced axis, in `F`.
-        let mut acc = F::from_int(0);
+        let mut acc = Vector::<F, N>::new(F::from_int(0));
         let mut a = 0;
         while a < axis_len {
-            acc += x[base + a * inner];
+            acc += x[base + a * inner_lines];
             a += 1;
         }
         out[tid] = acc;
@@ -163,13 +179,19 @@ fn launch_reduce_axis_on_handles<R: Runtime, F: DeviceScalar>(
     inner: usize,
 ) {
     let n_out = outer * inner;
-    let groups = (n_out as u32).div_ceil(BLOCK);
+    // The width must divide `inner` exactly, so no lane's vector straddles two
+    // positions along the reduced axis.
+    let line = line_size_for::<R, F>(client, inner);
+    let inner_lines = inner / line;
+    let lanes = outer * inner_lines;
+    let (count, dim) = launch_1d(client, lanes, axis_len * line);
 
     unsafe {
         reduce_axis_kernel::launch_unchecked::<F, R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(BLOCK),
+            count,
+            dim,
+            line,
             // SAFETY: `x_len == outer*axis_len*inner` and `out` holds `n_out`.
             // `from_raw_parts` consumes the handle by value, so clone the caller's
             // handles (clones share the binding).
@@ -178,7 +200,7 @@ fn launch_reduce_axis_on_handles<R: Runtime, F: DeviceScalar>(
             // Scalar dimension args are passed as bare values (LaunchArg for usize).
             outer,
             axis_len,
-            inner,
+            inner_lines,
         );
     }
 }
@@ -194,7 +216,7 @@ fn launch_reduce_axis<R: Runtime, F: DeviceScalar>(
     inner: usize,
 ) -> Vec<F> {
     let n_out = outer * inner;
-    let x_handle = client.create(Bytes::from_elems(x.to_vec()));
+    let x_handle = upload(client, x);
     let out_handle = client.empty(n_out * core::mem::size_of::<F>());
     launch_reduce_axis_on_handles::<R, F>(
         client,

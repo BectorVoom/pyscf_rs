@@ -9,7 +9,7 @@ use crate::cell::Cell;
 use pyscf_core::PyscfRsError;
 use pyscf_pbc_lib::kpts_helper as kh;
 pub use pyscf_pbc_lib::kpts_helper::{
-    KCONSERV_TOL, KPT_DIFF_TOL, KIdx, Kconserv, Kconserv3, UniqueKpts, gamma_point, intersection,
+    KCONSERV_TOL, KIdx, KPT_DIFF_TOL, Kconserv, Kconserv3, UniqueKpts, gamma_point, intersection,
     is_gamma_point, is_zero, member, round_to_fbz, unique,
 };
 
@@ -55,11 +55,9 @@ pub fn make_kpts(
     scaled_center: Option<[f64; 3]>,
 ) -> Result<Vec<[f64; 3]>, PyscfRsError> {
     if nks.contains(&0) {
-        return Err(PyscfRsError::Core(
-            pyscf_core::CoreError::InvalidMolecule(format!(
-                "make_kpts: nks {nks:?} has a zero axis"
-            )),
-        ));
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+            format!("make_kpts: nks {nks:?} has a zero axis"),
+        )));
     }
     // cell.py:860-868 — one 1-D grid per axis.
     let mut ks_each_axis: [Vec<f64>; 3] = [Vec::new(), Vec::new(), Vec::new()];

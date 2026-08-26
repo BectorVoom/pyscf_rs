@@ -14,7 +14,9 @@
 
 mod common;
 
-use common::ewald_reference::{DIAMOND_ETA_SCAN, EWALD_REFERENCES, EwaldReference};
+use common::ewald_reference::{
+    DIAMOND_ETA_SCAN, EWALD_REFERENCES, EwaldReference, PSEUDISED_EWALD,
+};
 use common::systems;
 use pyscf_core::{PyscfRsError, Unit};
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
@@ -351,7 +353,7 @@ fn ewald_params_match_upstream() {
         assert_eq!(
             cell.mol.atom_charges(),
             r.charges,
-            "{}: atom_charges (all-electron until plan 10-01)",
+            "{}: atom_charges (these cells are built WITHOUT a pseudopotential)",
             r.name
         );
         let (eta, cut) = get_ewald_params(&cell, None, None).expect("params");
@@ -447,12 +449,29 @@ fn ewald_eta_scan_matches_upstream() {
 /// 4.951e-9 relative lattice gap (plan 09-03). Ewald scales as `1/length`, so
 /// the expected deviation is `|E| * 4.951e-9`; the bound below is that with a
 /// 10x margin. The 1e-9 Ha gate lives on the Bohr-specified cells above.
+///
+/// **These are the `test_systems` cells, which carry `pseudo = 'gth-pade'`**, so
+/// since plan 10-01 their charges — and therefore their nuclear repulsion — are
+/// the VALENCE ones. The expectation is [`PSEUDISED_EWALD`], not the
+/// all-electron [`EWALD_REFERENCES`] value; comparing against the latter is a
+/// 16 Ha error, not a unit-conversion one.
 #[test]
 fn angstrom_reference_systems_match_upstream_within_the_unit_gap() {
     const UNIT_GAP: f64 = 4.951e-9;
+    let mut checked = 0;
     for (name, cell) in systems::all() {
         let r = reference(name);
-        let Some(expect) = r.ewald else {
+        assert!(
+            cell.pseudo.is_some(),
+            "{name}: the §9.2 reference systems are gth-pade cells"
+        );
+        let (_, charges, expect) = PSEUDISED_EWALD
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .expect("every reference system has a pseudised ewald target");
+        assert_eq!(cell.atom_charges(), *charges, "{name}: valence charges");
+
+        if r.ewald.is_none() {
             // graphene: dimension = 2 is deferred, and that must stay true for
             // the Angstrom build as well.
             assert!(matches!(
@@ -460,7 +479,7 @@ fn angstrom_reference_systems_match_upstream_within_the_unit_gap() {
                 Err(PyscfRsError::NotYetImplemented { phase: 12, .. })
             ));
             continue;
-        };
+        }
         let got = ewald(&cell, None, None).expect("ewald");
         let bound = expect.abs() * UNIT_GAP * 10.0;
         assert!(
@@ -469,7 +488,9 @@ fn angstrom_reference_systems_match_upstream_within_the_unit_gap() {
              dev {:.3e} exceeds the {bound:.3e} unit-gap allowance",
             (got - expect).abs()
         );
+        checked += 1;
     }
+    assert_eq!(checked, 4, "diamond, si, lif and he_fcc must all be gated");
 }
 
 /// §9.3 — the reduction is `oracle_sum`, so repeated evaluation is
@@ -485,4 +506,61 @@ fn ewald_is_bit_reproducible_across_calls() {
             "ewald() is not bit-reproducible"
         );
     }
+}
+
+/// Plan 10-01 made `atom_charges()` return the GTH VALENCE charge, and
+/// `cell.ewald()` reads those charges — so a `gth-pade` cell now has a
+/// different (much smaller) nuclear repulsion than the all-electron one.
+///
+/// [`PSEUDISED_EWALD`] recorded upstream's pseudised numbers during Phase 9 as
+/// plan 10-01's target. This test collects on that: the same five systems,
+/// rebuilt WITH `pseudo = 'gth-pade'`, must reproduce them.
+#[test]
+fn pseudised_ewald_matches_the_recorded_upstream_targets() {
+    let mut checked = 0;
+    for (name, charges, expect) in PSEUDISED_EWALD.iter() {
+        let r = reference(name);
+        // The `dimension == 2` branch (graphene) is Phase 12 — `ewald` returns
+        // NotYetImplemented there, exactly as it does for the all-electron run.
+        if r.dimension != 3 {
+            continue;
+        }
+        let cell = bohr_cell_with_pseudo(r, "gth-pade");
+        assert_eq!(
+            cell.atom_charges(),
+            *charges,
+            "{name}: gth-pade valence charges"
+        );
+        let got = ewald(&cell, None, None).expect("ewald");
+        assert!(
+            (got - expect).abs() < EWALD_TOL,
+            "{name}: pseudised ewald() = {got:.15} vs upstream {expect:.15}, dev {:.3e}",
+            (got - expect).abs()
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 4, "diamond, si, lif and he_fcc must all be gated");
+}
+
+/// [`bohr_cell`] with a pseudopotential attached.
+fn bohr_cell_with_pseudo(r: &EwaldReference, pseudo: &str) -> Cell {
+    let atoms: Vec<(String, [f64; 3])> = r
+        .symbols
+        .iter()
+        .zip(r.coords_bohr.iter())
+        .map(|(s, xyz)| ((*s).to_string(), *xyz))
+        .collect();
+    Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(atoms),
+            basis: BasisInput::Name("gth-szv".into()),
+            unit: Unit::Bohr,
+            ..Default::default()
+        },
+        a: ALattice::Matrix(r.a_bohr),
+        dimension: r.dimension,
+        pseudo: Some(pseudo.to_string()),
+        ..Default::default()
+    })
+    .expect("pseudised reference cell must build")
 }

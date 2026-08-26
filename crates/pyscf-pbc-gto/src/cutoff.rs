@@ -420,9 +420,9 @@ pub fn rcut_by_shells_with_pgf(cell: &Cell, precision: f64, r0: f64) -> (Vec<f64
 /// `prec ~ exp(-0.436392335*mesh - 2.99944305) * nelec`, rounded UP to an even
 /// number (the `z+`/`z-` symmetry needs it even).
 ///
-/// NOTE `cell.nelectron` here is the ALL-ELECTRON count until plan 10-01 lands
-/// the GTH pseudopotentials (D-PBC-11); upstream would use the valence count
-/// for a pseudopotential cell, giving a slightly smaller `meshz`.
+/// `cell.tot_electrons(1)` is the VALENCE count for a pseudopotential cell
+/// since plan 10-01 (D-PBC-11), matching upstream; an all-electron cell still
+/// gets `Z`.
 pub fn mesh_inf_vacuum(cell: &Cell) -> usize {
     let nelectron = cell.tot_electrons(1) as f64;
     let meshz = ((nelectron / cell.precision).ln() - 2.99944305) / 0.436392335;

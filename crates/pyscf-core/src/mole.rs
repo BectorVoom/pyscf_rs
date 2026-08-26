@@ -155,7 +155,7 @@ pub struct EcpShell {
 /// `h` matrix. Kept DISTINCT from [`ParsedEcp`] — which models the NWChem
 /// `r^n e^{-ζr²}` ECP form consumed by the molecular ECP integral path — since
 /// the two have incompatible radial structure and feed different engines.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GthPseudo {
     /// Valence electron count per angular momentum (`s, p, d, …`); the sum is
     /// the effective core charge `Zion` the pseudopotential represents.
@@ -170,7 +170,7 @@ pub struct GthPseudo {
 }
 
 /// One GTH non-local projector channel (a fixed angular momentum `l`).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GthProjector {
     /// Projector Gaussian radius `r_l`.
     pub r: f64,

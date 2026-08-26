@@ -1279,7 +1279,7 @@ pub fn intor_cross(mol_a: &Mole, mol_b: &Mole, name: &str) -> Result<IntorOutput
 ///         return intor + '_cart'
 ///     return intor + '_sph'
 /// ```
-fn add_suffix(intor: &str, cart: bool) -> String {
+pub fn add_suffix(intor: &str, cart: bool) -> String {
     if intor.ends_with("_sph") || intor.ends_with("_cart") || intor.ends_with("_spinor") {
         return intor.to_string();
     }

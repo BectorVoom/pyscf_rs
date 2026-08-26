@@ -379,3 +379,254 @@ fn build_atoms_and_shells_with_base(
 
     Ok((cintx_atoms, cintx_shells))
 }
+
+/// Build ONE `BasisSet` holding the same set of shells repeated once per
+/// lattice translation in `shifts` — the image-expansion form the periodic
+/// 1-electron driver needs (PBC-MASTER-PLAN D-PBC-07).
+///
+/// This is the typed-`BasisSet` analogue of what upstream's C driver does by
+/// overwriting `env_loc[PTR_COORD]` in place per image
+/// (`pyscf/lib/pbc/fill_ints.c:1281-1286`): an image atom is the SAME shell on a
+/// SHIFTED centre, so no basis is re-parsed and no new shell type appears.
+///
+/// Layout — the whole contract of this function:
+///
+/// ```text
+/// atoms  : shifts[0] block (natm), shifts[1] block (natm), …
+/// shells : shifts[0] block (nbas), shifts[1] block (nbas), …
+/// shell index of (image m, shell jsh) == m * nbas + jsh
+/// ```
+///
+/// The per-image shell count is identical because
+/// [`build_atoms_and_shells_with_base`] emits shells strictly atom-by-atom in
+/// `atoms` order. Pass `[[0.0; 3]]` as the first shift to get cell-0 in front.
+///
+/// # Errors
+/// Anything [`build_cintx_basis_set`] can raise, plus
+/// [`CoreError::InvalidMolecule`] when `shifts` is empty.
+pub fn build_image_expanded_basis(
+    atoms: &[ParsedAtom],
+    basis: &HashMap<String, ParsedBasis>,
+    cart: bool,
+    shifts: &[[f64; 3]],
+) -> Result<(Arc<BasisSet>, usize), PyscfRsError> {
+    if shifts.is_empty() {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "build_image_expanded_basis: `shifts` must hold at least one translation".into(),
+        )));
+    }
+
+    let representation = representation_of(cart);
+    let mut all_atoms: Vec<CintxAtom> = Vec::with_capacity(atoms.len() * shifts.len());
+    let mut all_shells: Vec<Arc<CintxShell>> = Vec::new();
+    let mut nbas_per_image = 0usize;
+
+    for (m, shift) in shifts.iter().enumerate() {
+        let shifted: Vec<ParsedAtom> = atoms
+            .iter()
+            .map(|(sym, xyz)| {
+                (
+                    sym.clone(),
+                    [xyz[0] + shift[0], xyz[1] + shift[1], xyz[2] + shift[2]],
+                )
+            })
+            .collect();
+        let base = (m * atoms.len()) as u32;
+        let (img_atoms, img_shells) =
+            build_atoms_and_shells_with_base(&shifted, basis, representation, base)?;
+        if m == 0 {
+            nbas_per_image = img_shells.len();
+        } else if img_shells.len() != nbas_per_image {
+            // Cannot happen — same atoms, same basis — but a silent mismatch
+            // here would corrupt every `m * nbas + jsh` index downstream.
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "build_image_expanded_basis: image {m} produced {} shells, image 0 produced \
+                 {nbas_per_image}",
+                img_shells.len(),
+            ))));
+        }
+        all_atoms.extend(img_atoms);
+        all_shells.extend(img_shells);
+    }
+
+    let atoms_arc: Arc<[CintxAtom]> = Arc::from(all_atoms.into_boxed_slice());
+    let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(all_shells.into_boxed_slice());
+    let basis_set = BasisSet::try_new(atoms_arc, shells_arc).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx image-expanded BasisSet::try_new failed ({} images): {e}",
+            shifts.len(),
+        )))
+    })?;
+    Ok((Arc::new(basis_set), nbas_per_image))
+}
+
+/// Two-cell image-expanded `BasisSet`: block A once, block B repeated per
+/// lattice translation (PBC-MASTER-PLAN D-PBC-07, cross-basis form).
+///
+/// Layout — the whole contract of this function:
+///
+/// ```text
+/// atoms  : A (natm_a) | B+shifts[0] (natm_b) | B+shifts[1] (natm_b) | …
+/// shells : A (nbas_a) | B+shifts[0] (nbas_b) | B+shifts[1] (nbas_b) | …
+/// shell index of (image m, ket shell jsh) == nbas_a + m * nbas_b + jsh
+/// AO offset of that shell, relative to B's own AO block
+///     == meta.shell_offset(idx) − nao_a − m * nao_b
+/// ```
+///
+/// `A == B` with `shifts[0] == [0,0,0]` is the `pbc_intor` case: the bra half is
+/// cell-0 and the ket half runs over every image, exactly as
+/// `pyscf/lib/pbc/fill_ints.c:1371` shifts only the KET atom.
+///
+/// Returns `(basis, nbas_a, nbas_b)`.
+///
+/// # Errors
+/// Anything [`build_cintx_basis_set`] can raise, plus
+/// [`CoreError::InvalidMolecule`] when `shifts` is empty.
+#[allow(clippy::too_many_arguments)]
+pub fn build_image_expanded_cross_basis(
+    a_atoms: &[ParsedAtom],
+    a_basis: &HashMap<String, ParsedBasis>,
+    a_cart: bool,
+    b_atoms: &[ParsedAtom],
+    b_basis: &HashMap<String, ParsedBasis>,
+    b_cart: bool,
+    shifts: &[[f64; 3]],
+) -> Result<(Arc<BasisSet>, usize, usize), PyscfRsError> {
+    if shifts.is_empty() {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "build_image_expanded_cross_basis: `shifts` must hold at least one translation".into(),
+        )));
+    }
+
+    let (mut atoms, a_shells) =
+        build_atoms_and_shells_with_base(a_atoms, a_basis, representation_of(a_cart), 0)?;
+    let nbas_a = a_shells.len();
+    let mut shells = a_shells;
+
+    let mut nbas_b = 0usize;
+    for (m, shift) in shifts.iter().enumerate() {
+        let shifted: Vec<ParsedAtom> = b_atoms
+            .iter()
+            .map(|(sym, xyz)| {
+                (
+                    sym.clone(),
+                    [xyz[0] + shift[0], xyz[1] + shift[1], xyz[2] + shift[2]],
+                )
+            })
+            .collect();
+        let base = (a_atoms.len() + m * b_atoms.len()) as u32;
+        let (img_atoms, img_shells) =
+            build_atoms_and_shells_with_base(&shifted, b_basis, representation_of(b_cart), base)?;
+        if m == 0 {
+            nbas_b = img_shells.len();
+        } else if img_shells.len() != nbas_b {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "build_image_expanded_cross_basis: image {m} produced {} ket shells, image 0 \
+                 produced {nbas_b}",
+                img_shells.len(),
+            ))));
+        }
+        atoms.extend(img_atoms);
+        shells.extend(img_shells);
+    }
+
+    let atoms_arc: Arc<[CintxAtom]> = Arc::from(atoms.into_boxed_slice());
+    let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(shells.into_boxed_slice());
+    let basis_set = BasisSet::try_new(atoms_arc, shells_arc).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx image-expanded cross BasisSet::try_new failed ({} images): {e}",
+            shifts.len(),
+        )))
+    })?;
+    Ok((Arc::new(basis_set), nbas_a, nbas_b))
+}
+
+/// Image-expanded orbital block plus an UNSHIFTED auxiliary block — the layout
+/// a periodic 3-centre lattice sum needs.
+///
+/// ```text
+/// shells : cell+shifts[0] (nbas) | cell+shifts[1] (nbas) | … | aux (naux)
+/// shell index of (image m, orbital shell s) == m * nbas + s
+/// shell index of auxiliary k              == shifts.len() * nbas + k
+/// ```
+///
+/// The auxiliary centres stay at the origin cell because that is where
+/// `pyscf/lib/pbc/fill_ints_screened.c:266-281` keeps them: the 3-centre driver
+/// shifts the BRA (`iL`) and the KET (`jL`) and never the third centre, which is
+/// what makes the double lattice sum finite.
+///
+/// One auxiliary shell per entry of `aux_atoms` is emitted when every auxiliary
+/// element carries exactly one shell — the `fake_cell_vloc` case — so the
+/// caller can index auxiliaries and atoms interchangeably.
+///
+/// Returns `(basis, nbas_per_image, n_aux_shells)`.
+///
+/// # Errors
+/// Anything [`build_cintx_basis_set`] can raise, plus
+/// [`CoreError::InvalidMolecule`] when `shifts` is empty or an image produces a
+/// different shell count from image 0.
+#[allow(clippy::too_many_arguments)]
+pub fn build_image_expanded_with_aux(
+    atoms: &[ParsedAtom],
+    basis: &HashMap<String, ParsedBasis>,
+    cart: bool,
+    shifts: &[[f64; 3]],
+    aux_atoms: &[ParsedAtom],
+    aux_basis: &HashMap<String, ParsedBasis>,
+    aux_cart: bool,
+) -> Result<(Arc<BasisSet>, usize, usize), PyscfRsError> {
+    if shifts.is_empty() {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "build_image_expanded_with_aux: `shifts` must hold at least one translation".into(),
+        )));
+    }
+
+    let representation = representation_of(cart);
+    let mut all_atoms: Vec<CintxAtom> = Vec::with_capacity(atoms.len() * shifts.len());
+    let mut all_shells: Vec<Arc<CintxShell>> = Vec::new();
+    let mut nbas_per_image = 0usize;
+
+    for (m, shift) in shifts.iter().enumerate() {
+        let shifted: Vec<ParsedAtom> = atoms
+            .iter()
+            .map(|(sym, xyz)| {
+                (
+                    sym.clone(),
+                    [xyz[0] + shift[0], xyz[1] + shift[1], xyz[2] + shift[2]],
+                )
+            })
+            .collect();
+        let base = (m * atoms.len()) as u32;
+        let (img_atoms, img_shells) =
+            build_atoms_and_shells_with_base(&shifted, basis, representation, base)?;
+        if m == 0 {
+            nbas_per_image = img_shells.len();
+        } else if img_shells.len() != nbas_per_image {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "build_image_expanded_with_aux: image {m} produced {} shells, image 0 \
+                 produced {nbas_per_image}",
+                img_shells.len(),
+            ))));
+        }
+        all_atoms.extend(img_atoms);
+        all_shells.extend(img_shells);
+    }
+
+    let aux_base = (atoms.len() * shifts.len()) as u32;
+    let (aux_cintx_atoms, aux_shells) =
+        build_atoms_and_shells_with_base(aux_atoms, aux_basis, representation_of(aux_cart), aux_base)?;
+    let n_aux = aux_shells.len();
+    all_atoms.extend(aux_cintx_atoms);
+    all_shells.extend(aux_shells);
+
+    let atoms_arc: Arc<[CintxAtom]> = Arc::from(all_atoms.into_boxed_slice());
+    let shells_arc: Arc<[Arc<CintxShell>]> = Arc::from(all_shells.into_boxed_slice());
+    let basis_set = BasisSet::try_new(atoms_arc, shells_arc).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx image-expanded 3-centre BasisSet::try_new failed \
+             ({} images, {n_aux} auxiliaries): {e}",
+            shifts.len(),
+        )))
+    })?;
+    Ok((Arc::new(basis_set), nbas_per_image, n_aux))
+}

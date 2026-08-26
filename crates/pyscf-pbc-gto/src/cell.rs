@@ -66,11 +66,13 @@ pub struct Cell {
     pub ew_eta: Option<f64>,
     /// Ewald real-space cutoff. Computed by `get_ewald_params` in plan 09-08.
     pub ew_cut: Option<f64>,
-    /// Parsed GTH pseudopotential. Always `None` until plan 10-01 (D-PBC-11);
-    /// the user's requested NAME lives in [`Cell::pseudo_name`] meanwhile.
+    /// Parsed GTH pseudopotential (D-PBC-11), resolved by [`Cell::build`] from
+    /// [`Cell::pseudo_name`]. `None` for an all-electron cell, and for a
+    /// pseudopotential NAME whose file covers none of this cell's elements.
     pub pseudo: Option<PseudoData>,
     /// The pseudopotential name the user asked for, preserved verbatim so it
-    /// survives `dumps`/`loads` and so plan 10-01 has it to parse.
+    /// survives `dumps`/`loads` and so [`crate::dumps_loads::unpack`] can
+    /// re-resolve [`Cell::pseudo`] from it.
     pub pseudo_name: Option<String>,
     /// Diffuse-primitive cutoff that was applied at build time, if any.
     pub exp_to_discard: Option<f64>,
@@ -287,9 +289,9 @@ impl Cell {
     /// is ported: `sum(atom_charges) * nkpts - charge`, rounded to the nearest
     /// integer exactly as upstream does with `int(nelectron + 0.5)`.
     ///
-    /// NOTE: the charges are all-electron until plan 10-01 lands the GTH
-    /// pseudopotentials, which replace each `Z` with its valence count
-    /// (D-PBC-11). This value will change for pseudopotential cells then.
+    /// Since plan 10-01 the charges are the PSEUDOPOTENTIAL valence counts for
+    /// any atom whose element carries a GTH potential (D-PBC-11), matching
+    /// upstream; an all-electron cell still sums `Z`.
     pub fn tot_electrons(&self, nkpts: usize) -> usize {
         let z: i64 = self.mol.atom_charges().iter().map(|c| *c as i64).sum();
         let n = z * nkpts as i64 - self.mol.charge as i64;
@@ -499,6 +501,29 @@ impl Cell {
         let mut mol = Mole::default();
         pyscf_gto::build_from(&mut mol, mole_args)?;
 
+        // cell.py:1593-1810 delegates to `mole.build`, whose lines 2578-2591
+        // resolve `pseudo` and REWRITE `_atm[ia, CHARGE_OF]` with the
+        // pseudopotential's valence charge `Zion`. That one assignment is what
+        // makes `atom_charges()`, `tot_electrons()`, `ewald()` and every
+        // downstream energy see the PP'd system rather than the all-electron
+        // one, so it happens HERE, before anything reads a charge.
+        let pseudo = match args.pseudo.as_deref() {
+            Some(name) if !name.is_empty() => {
+                let data = crate::pseudo::resolve_pseudo(name, &mol._atom)?;
+                if data.is_empty() {
+                    tracing::warn!(
+                        "cell.pseudo = '{name}' was specified but none of the cell's elements \
+                         were found in it; the cell stays all-electron"
+                    );
+                    None
+                } else {
+                    apply_pseudo_charges(&mut mol, &data);
+                    Some(data)
+                }
+            }
+            _ => None,
+        };
+
         let mut cell = Cell {
             mol,
             a,
@@ -510,7 +535,7 @@ impl Cell {
             rcut: args.rcut.unwrap_or(RCUT_UNSET),
             ew_eta: None,
             ew_cut: None,
-            pseudo: None,
+            pseudo,
             pseudo_name: args.pseudo.clone(),
             exp_to_discard: args.exp_to_discard,
             fractional: args.fractional,
@@ -613,4 +638,65 @@ fn discard_diffuse_primitives(
 #[allow(non_snake_case)]
 pub fn M(args: CellBuildArgs) -> Result<Cell, PyscfRsError> {
     Cell::build(args)
+}
+
+// ---------------------------------------------------------------------------
+// Pseudopotential charge bookkeeping — port of mole.py:2588-2591.
+// ---------------------------------------------------------------------------
+
+/// Rewrite `_atm[ia, CHARGE_OF]` with the GTH valence charge for every atom
+/// whose element carries a pseudopotential, then re-derive `nelectron`.
+///
+/// Ports `pyscf/gto/mole.py:2588-2591`:
+/// ```python
+/// if (symb in _pseudo and ...):
+///     self._atm[ia,0] = sum(_pseudo[symb][0])
+/// ```
+/// and the `tot_electrons` that follows from it. Atoms whose element is absent
+/// from `pseudo` keep their all-electron `Z` (upstream supports mixed cells).
+///
+/// `mol.nao_nr`, `_bas`, `_env` and the cintx `BasisSet` are untouched: the
+/// pseudopotential changes the CHARGE, never the basis. The cintx-side
+/// `Atom::atomic_number` therefore still carries `Z`; that value feeds only the
+/// nuclear-attraction operator (`int1e_nuc`), which a pseudopotential cell never
+/// evaluates — its nuclear term is `get_pp` instead (plans 10-05/10-06), and the
+/// all-electron periodic `get_nuc` is Phase 11.
+pub(crate) fn apply_pseudo_charges(mol: &mut Mole, pseudo: &crate::pseudo::PseudoData) {
+    use pyscf_core::raw_layout::{ATM_SLOTS, CHARGE_OF};
+
+    if mol._atm.len() < mol.natm * ATM_SLOTS {
+        // _atm not projected (a plan-02-02-era Mole). atom_charges() then falls
+        // back to the symbol table and there is nothing to rewrite.
+        return;
+    }
+    for (ia, (label, _)) in mol._atom.iter().enumerate() {
+        if let Some(zion) = pseudo.zion(label) {
+            mol._atm[ia * ATM_SLOTS + CHARGE_OF] = zion;
+        }
+    }
+    let z: i64 = mol.atom_charges().iter().map(|c| *c as i64).sum();
+    mol.nelectron = (z - mol.charge as i64).max(0) as usize;
+}
+
+impl Cell {
+    /// Effective nuclear charges — `Zion` for pseudopotential'd atoms, `Z`
+    /// otherwise.
+    ///
+    /// This is an INHERENT method, so it shadows the `Deref`-reached
+    /// [`Mole::atom_charges`] at every `cell.atom_charges()` call site. The two
+    /// already agree — [`Cell::build`] rewrote `_atm[CHARGE_OF]` — and the
+    /// method exists so the PP contract is visible on `Cell`'s own surface
+    /// rather than being an invisible side effect of `build`.
+    pub fn atom_charges(&self) -> Vec<i32> {
+        self.mol.atom_charges()
+    }
+
+    /// The GTH pseudopotential for atom `ia`, or `None` when that atom is
+    /// all-electron. Mirrors the `cell.atom_symbol(ia) in cell._pseudo` guard
+    /// that every `pp_int.py` loop opens with.
+    pub fn atom_pseudo(&self, ia: usize) -> Option<&pyscf_core::GthPseudo> {
+        let pseudo = self.pseudo.as_ref()?;
+        let (label, _) = self.mol._atom.get(ia)?;
+        pseudo.get(label)
+    }
 }

@@ -17,6 +17,13 @@ pyscf-gto       = { path = "../pyscf-gto" }
 # it never names `cubecl-*` itself (ALG-06, check_dependency_wall).
 pyscf-kernels   = { path = "../pyscf-kernels" }
 pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+# Phase 10 plan 10-03 (D-PBC-07) — the periodic 1e driver evaluates molecular
+# shell-pair blocks over an image-expanded `cintx_core::BasisSet`. Same seam
+# `pyscf-gto` already uses (Phase 2 D-03); still NO `cubecl-*` here (ALG-06).
+cintx-core      = { path = "../../../cintx/crates/cintx-core" }
+cintx-ops       = { path = "../../../cintx/crates/cintx-ops" }
+cintx-rs        = { path = "../../../cintx/crates/cintx-rs" }
+cintx-runtime   = { path = "../../../cintx/crates/cintx-runtime" }
 pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 # Plan 09-08 — `libm::erfc` for the real-space Ewald sum (see the workspace
 # manifest for why std/A&S are not enough).
@@ -35,8 +42,23 @@ serde_json      = { workspace = true, features = ["float_roundtrip"] }
 # enable it from their `[dev-dependencies]`; this crate's own integration tests
 # get it through the self dev-dependency below.
 [features]
-default = []
+default = ["gth-pp"]
 test-systems = []
+# Phase 10 plans 10-05 / 10-06 (R-13) — GTH pseudopotentials need the
+# moment-weighted cintx families `int1e_r{2,4}_origi` and
+# `int3c1e_r{2,4,6}_origk`. cintx ships their kernels
+# (`cintx-cubecl/src/kernels/unstable/{origi,origk}.rs`) behind
+# `unstable-source-api`; without the flag `SessionRequest::evaluate` refuses
+# with "source-only symbol ... requires feature `unstable-source-api`" — it does
+# NOT fall open to the unweighted parent (the R-13 silent-wrong-answer risk),
+# which `tests/cintx_moment_weighted_available.rs` re-checks on every run.
+#
+# DEFAULT-ON: every reference system in PBC-MASTER-PLAN §9.2 uses `gth-pade`,
+# so a pyscf-pbc-gto without this flag cannot build an `hcore` for any of them.
+# The manifest still marks these symbols `oracle_covered: false`, so their
+# numeric gates compare against upstream PySCF rather than against cintx's own
+# oracle.
+gth-pp = ["cintx-rs/unstable-source-api"]
 
 [dev-dependencies]
 # Self dev-dependency: turns on `test-systems` for this crate's own integration
@@ -46,3 +68,4 @@ cintx-core    = { path = "../../../cintx/crates/cintx-core" }
 cintx-ops     = { path = "../../../cintx/crates/cintx-ops" }
 cintx-rs      = { path = "../../../cintx/crates/cintx-rs" }
 cintx-runtime = { path = "../../../cintx/crates/cintx-runtime" }
+approx        = { workspace = true }

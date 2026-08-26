@@ -133,8 +133,15 @@ fn pseudo_cache() -> &'static Mutex<HashMap<(String, String), GthPseudo>> {
 /// [`cp2k_pp::parse_cp2k_pp`] into [`pyscf_core::GthPseudo`]. Mirrors upstream
 /// `pyscf/gto/basis/__init__.py` `load_pseudo`.
 pub fn load_pseudo(name: &str, symbol: &str) -> Result<GthPseudo, EcpLoadError> {
-    let canonical = canonicalise_basis_name(name);
-    let key = (canonical.clone(), symbol.to_ascii_uppercase());
+    // Upstream `_format_pseudo_name` (`gto/basis/__init__.py:834-842`) splits a
+    // trailing `q<digits>` off the canonicalised name: `"gth-pade-q4"` resolves
+    // through the `gthpade` alias but selects the `-q4` block. Without the
+    // split the name would simply miss `PP_ALIAS`.
+    let (canonical, suffix) = split_pseudo_suffix(&canonicalise_basis_name(name));
+    let key = (
+        format!("{canonical}|{}", suffix.as_deref().unwrap_or("")),
+        symbol.to_ascii_uppercase(),
+    );
 
     if let Some(p) = pseudo_cache()
         .lock()
@@ -168,13 +175,33 @@ pub fn load_pseudo(name: &str, symbol: &str) -> Result<GthPseudo, EcpLoadError> 
         reason: format!("io error reading pseudopotential file: {e}"),
     })?;
 
-    let parsed = cp2k_pp::parse_cp2k_pp(&text, &key.1, &full.display().to_string())?;
+    let parsed = cp2k_pp::parse_cp2k_pp_with_suffix(
+        &text,
+        &key.1,
+        suffix.as_deref(),
+        &full.display().to_string(),
+    )?;
     pseudo_cache()
         .lock()
         .expect("PSEUDO_CACHE mutex poisoned")
         .insert(key.clone(), parsed.clone());
     tracing::debug!(name = %canonical, symbol = %key.1, file = %full.display(), "pseudopotential loaded");
     Ok(parsed)
+}
+
+/// Split a canonicalised pseudopotential name into `(alias_key, q_suffix)`.
+/// Ports `_format_pseudo_name` (`pyscf/gto/basis/__init__.py:834-842`) with
+/// upstream's `SUFFIX_PATTERN` = a trailing `q<digits>`.
+fn split_pseudo_suffix(canonical: &str) -> (String, Option<String>) {
+    let bytes = canonical.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 && bytes[i - 1].is_ascii_digit() {
+        i -= 1;
+    }
+    if i < bytes.len() && i > 0 && bytes[i - 1] == b'q' {
+        return (canonical[..i - 1].to_string(), Some(canonical[i - 1..].to_string()));
+    }
+    (canonical.to_string(), None)
 }
 
 /// User entry point — parse CP2K/GTH pseudopotential text directly (no file
@@ -212,21 +239,35 @@ mod tests {
 
     /// End-to-end GTH pseudopotential load: `gth-pade` resolves via PP_ALIAS to
     /// `gth-pade.dat` under the PBC pseudo tree (`pyscf/pbc/gto/pseudo/`) and
-    /// parses into a `GthPseudo`. Na q1 (the first Na block) carries a 2×2
-    /// symmetric h-matrix in its l=0 projector.
+    /// parses into a `GthPseudo`.
+    ///
+    /// Na is the regression case for the DEFAULT-BLOCK rule
+    /// (`parse_cp2k_pp.py:145-158`, ported in `cp2k_pp::find_element_block`):
+    /// the file holds `Na GTH-PADE-q1 GTH-LDA-q1` FIRST and
+    /// `Na GTH-PADE-q9 … GTH-PADE GTH-LDA` second, and the default potential is
+    /// the **q9** one — the block whose last alias is not `-q<n>`. Taking the
+    /// first matching block instead gave `Zion = 1` for sodium and a cell with
+    /// eight electrons too few. Values below are upstream
+    /// `pyscf.gto.basis.load_pseudo('gth-pade', 'Na')`.
     #[test]
     fn load_pseudo_gth_pade_resolves_from_pseudo_tree() {
         let pp = load_pseudo("gth-pade", "Na").expect("gth-pade must resolve from the pseudo tree");
-        assert_eq!(pp.nelec, vec![1]);
-        approx::assert_abs_diff_eq!(pp.rloc, 0.88550938, epsilon = 1e-9);
+        assert_eq!(pp.nelec, vec![3, 6], "Na's DEFAULT gth-pade potential is q9");
+        approx::assert_abs_diff_eq!(pp.rloc, 0.24631780, epsilon = 1e-12);
+        assert_eq!(pp.local_coeffs, vec![-7.54559253, 1.12599671]);
         assert_eq!(pp.projectors.len(), 2);
-        assert_eq!(pp.projectors[0].nproj, 2);
-        // Symmetrised off-diagonal of the l=0 h-matrix.
-        approx::assert_abs_diff_eq!(
-            pp.projectors[0].h[1],
-            pp.projectors[0].h[2],
-            epsilon = 1e-15
-        );
+        assert_eq!(pp.projectors[0].nproj, 1);
+        approx::assert_abs_diff_eq!(pp.projectors[0].r, 0.14125125, epsilon = 1e-12);
+        approx::assert_abs_diff_eq!(pp.projectors[0].h[0], 36.55698653, epsilon = 1e-12);
+        approx::assert_abs_diff_eq!(pp.projectors[1].h[0], -10.39208332, epsilon = 1e-12);
+
+        // An explicit `-q<n>` suffix selects that block instead — here the q1
+        // one, whose l=0 channel does carry a 2x2 symmetric h-matrix.
+        let q1 = load_pseudo("gth-pade-q1", "Na").expect("explicit q1 suffix must resolve");
+        assert_eq!(q1.nelec, vec![1]);
+        approx::assert_abs_diff_eq!(q1.rloc, 0.88550938, epsilon = 1e-12);
+        assert_eq!(q1.projectors[0].nproj, 2);
+        approx::assert_abs_diff_eq!(q1.projectors[0].h[1], q1.projectors[0].h[2], epsilon = 1e-15);
 
         // `gthlda` is an alias for the same PADE file (LDA == PADE).
         let lda = load_pseudo("gth-lda", "H").expect("gthlda alias must resolve");

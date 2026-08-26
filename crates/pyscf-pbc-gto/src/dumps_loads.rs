@@ -41,7 +41,7 @@ pub struct CellPack {
     pub dimension: u8,
     /// Upstream `cldic['low_dim_ft_type']`.
     pub low_dim_ft_type: LowDimFtType,
-    /// The pseudopotential NAME (upstream stores the parsed dict; plan 10-01
+    /// The pseudopotential NAME (upstream stores the parsed dict; [`unpack`]
     /// replaces this with the parsed form — D-PBC-11).
     pub pseudo_name: Option<String>,
     /// Not in upstream's `pack` (it is a class attribute there), but part of
@@ -96,13 +96,30 @@ pub fn pack(cell: &Cell) -> Result<CellPack, PyscfRsError> {
 /// Propagates [`pyscf_gto::loads`] failures, and rejects a lattice that is not
 /// invertible.
 pub fn unpack(p: CellPack) -> Result<Cell, PyscfRsError> {
-    let mol = pyscf_gto::loads(&p.mole_json)?;
+    let mut mol = pyscf_gto::loads(&p.mole_json)?;
     let det = crate::cell::det3(&p.a);
     if det == 0.0 || !det.is_finite() {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
             "unpack: cell.a is singular (det = {det})"
         ))));
     }
+    // Plan 10-01 — `mole_json` round-trips the BASIS, not the PP-adjusted
+    // `_atm[CHARGE_OF]`, so the pseudopotential is re-resolved from the name
+    // that `pack` preserved and its valence charges re-applied. Without this a
+    // `loads(dumps(cell))` cell would silently become all-electron.
+    let pseudo = match p.pseudo_name.as_deref() {
+        Some(name) if !name.is_empty() => {
+            let data = crate::pseudo::resolve_pseudo(name, &mol._atom)?;
+            if data.is_empty() {
+                None
+            } else {
+                crate::cell::apply_pseudo_charges(&mut mol, &data);
+                Some(data)
+            }
+        }
+        _ => None,
+    };
+
     Ok(Cell {
         mol,
         a: p.a,
@@ -114,7 +131,7 @@ pub fn unpack(p: CellPack) -> Result<Cell, PyscfRsError> {
         rcut: p.rcut,
         ew_eta: None,
         ew_cut: None,
-        pseudo: None,
+        pseudo,
         pseudo_name: p.pseudo_name,
         exp_to_discard: p.exp_to_discard,
         fractional: p.fractional,

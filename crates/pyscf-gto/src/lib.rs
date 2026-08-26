@@ -39,10 +39,13 @@ pub use eval_gto::{EvalGtoOutput, eval_gto};
 pub use format_basis::format_basis;
 pub use format_ecp::{format_ecp, make_ecp_env};
 pub use intor::{
-    IntorOutput, intor, intor_cross, intor_with_auxmol, intor_with_rinv_at_nucleus,
+    IntorOutput, add_suffix, intor, intor_cross, intor_with_auxmol, intor_with_rinv_at_nucleus,
     intor_with_rinv_origin,
 };
-pub use projection::{build_cintx_basis_set, build_combined_basis, build_combined_basis_raw};
+pub use projection::{
+    build_cintx_basis_set, build_combined_basis, build_combined_basis_raw, build_image_expanded_basis,
+    build_image_expanded_cross_basis, build_image_expanded_with_aux,
+};
 pub use pyscf_core::{Mole, Unit};
 pub use range_coulomb::{PTR_RANGE_OMEGA, get_k_with_omega, intor_with_omega};
 pub use set_geom::set_geom_;

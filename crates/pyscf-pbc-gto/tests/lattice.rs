@@ -98,7 +98,12 @@ fn lattice_ls_defaults_to_cell_rcut() {
     let explicit = get_lattice_ls(&cell, Some(cell.rcut), None, true).expect("Ls");
     assert_eq!(by_default, explicit);
     // cell.rcut is much larger than 10 Bohr, so the default list is bigger.
-    assert!(by_default.len() > get_lattice_ls(&cell, Some(10.0), None, true).expect("Ls").len());
+    assert!(
+        by_default.len()
+            > get_lattice_ls(&cell, Some(10.0), None, true)
+                .expect("Ls")
+                .len()
+    );
 }
 
 #[test]
@@ -125,7 +130,10 @@ fn super_cell_222_matches_upstream() {
     // upstream: natm 16, vol 612.4390450600976, mesh [94,94,94], nao_nr 64
     assert_eq!(sc.natm, 16);
     assert_eq!(sc.nao_nr, 64);
-    assert_eq!(sc.mesh, [cell.mesh[0] * 2, cell.mesh[1] * 2, cell.mesh[2] * 2]);
+    assert_eq!(
+        sc.mesh,
+        [cell.mesh[0] * 2, cell.mesh[1] * 2, cell.mesh[2] * 2]
+    );
     assert_eq!(cell.mesh, [47, 47, 47]);
 
     let ratio = sc.vol() / cell.vol();
@@ -263,7 +271,10 @@ fn supercell_rejects_space_group_symmetry() {
     cell.space_group_symmetry = true;
     let err = super_cell(&cell, [2, 2, 2], false).expect_err("must not silently drop symmetry");
     assert!(
-        matches!(err, pyscf_core::PyscfRsError::NotYetImplemented { phase: 12, .. }),
+        matches!(
+            err,
+            pyscf_core::PyscfRsError::NotYetImplemented { phase: 12, .. }
+        ),
         "got {err:?}"
     );
     assert!(cell_plus_imgs(&cell, [1, 1, 1]).is_err());
@@ -286,7 +297,10 @@ fn supercell_lattice_sum_is_consistent_with_the_primitive_cell() {
             *tj = d[0] * inv_a[0][j] + d[1] * inv_a[1][j] + d[2] * inv_a[2][j];
         }
         for (j, tj) in t.iter().enumerate() {
-            assert!((tj - tj.round()).abs() < 1e-9, "atom {i} axis {j}: t = {tj}");
+            assert!(
+                (tj - tj.round()).abs() < 1e-9,
+                "atom {i} axis {j}: t = {tj}"
+            );
         }
     }
 }

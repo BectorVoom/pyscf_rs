@@ -6,10 +6,10 @@ status: in_progress
 last_updated: "2026-08-26T00:00:00.000Z"
 last_activity: 2026-08-26
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 9
-  completed_plans: 9
+  total_phases: 2
+  completed_phases: 2
+  total_plans: 17
+  completed_plans: 17
   percent: 100
 ---
 
@@ -20,23 +20,93 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 10 — Periodic integrals + GTH pseudopotentials (Phase 9 PBC Foundation COMPLETE + verified 2026-08-26)
+**Current focus:** Phase 11 — FFT + FFTDF + periodic Hartree-Fock (Phases 9 and 10 COMPLETE + verified 2026-08-26)
 
 ## Current Position
 
-Phase: 09-pbc-foundation — **COMPLETE**
-Plan: 09-09 COMPLETE (the phase verification rollup)
-Status: **Phase 9 is CLOSED.** All nine plans shipped and all seven success criteria in `09-CONTEXT.md` are demonstrated green in `.planning/phases/09-pbc-foundation/09-VERIFICATION.md`. The workspace is 39 `pyscf-*` crates; complex algebra is bit-reproducible; a `Cell` builds and produces its reciprocal lattice, G-vector grid, structure factors, lattice-image list, k-point mesh and Ewald energy, every one of them gated against live upstream PySCF 2.12.1. Next: Phase 10 (`pbc_intor`, GTH pseudopotentials) — but see the cintx Wave 0.5 blocker below, which gates plan 10-05 specifically.
-Last activity: 2026-08-26 — Completed 09-08 (Ewald) and 09-09 (verification rollup).
-  * **09-08:** K-05 `ewald_rlij` + K-06 `ewald_gs_terms` in `pyscf-kernels/src/pbc/ewald.rs`; `pyscf_pbc_gto::{ewald, ewald_pme}` with `get_ewald_params` (ALL four branches), `ewald` (the 3D path), `Cell::energy_nuc`, the full B-spline machinery and the screened `get_ewald_direct`. `cell.ewald()` matches upstream to **< 1e-9 Ha** on diamond/Si/LiF/He-fcc; `ew_eta`-invariance spread **< 1e-13 Ha**. 22 tests green. New workspace dep `libm = "0.2"` for `erfc` (see decisions).
-  * **09-09:** `tests/oracle_phase9.rs` — 7 venv-gated (`#[ignore]` + `PYSCF_ORACLE_VENV`) tests that spawn upstream Python and compare `vol`/`rcut`/`mesh`/`b`, `get_Gv`, `get_SI`, `get_lattice_Ls`, `make_kpts` (5 variants), `get_kconserv` and `ewald()` across all five §9.2 systems. **7 passed against live PySCF 2.12.1.** Plus `09-VERIFICATION.md`, the `python/pyscf/pbc/__init__.py` import-path shim (D-PBC-14 — no bindings before plan 20-05) and the ROADMAP tick.
-Previous: 09-07 — `pyscf_pbc_gto::kpts_mesh` (`make_kpts` + the `Cell`-taking kconserv wrappers) and the full Phase-9 `pyscf_pbc_lib::kpts_helper`. 16 new tests green; every `make_kpts` variant matches upstream to 1e-12 on a Bohr-specified diamond and the 8x8x8 / 6x6x6 / 4x4x4x4 kconserv tables match EXACTLY. TWO PLAN-TEXT ERRORS CORRECTED against the Python (RULE 2): `is_zero`'s threshold is KPT_DIFF_TOL = 1e-6, not 1e-9; and `wrap_around` is a per-axis fold before the cartesian product, not `round_to_fbz` on the product. DEVIATION: `get_kconserv` ports `_get_kconserv_slow` only — the k2gamma shortcut needs a module outside this plan's PORT block, and both paths were verified identical.
+Phase: 10-periodic-integrals — **COMPLETE**
+Plan: 10-08 COMPLETE (the phase verification rollup)
+Status: **Phase 10 is CLOSED, with no blockers.** The phase gate is met with a 77x margin —
+`pbc_intor('int1e_ovlp', make_kpts([2,2,2]))` matches live upstream PySCF 2.12.1
+to **1.29e-14** on diamond, element-by-element over all 8 k-points, with `nao`,
+`rcut`, `|Ls|`, `atom_charges` and every k-point component asserted equal first.
+`int1e_kin` (2.06e-14) and a 3x2x1 mesh pass the same gate. `get_pp_nl` matches
+upstream to **1.9e-15** (diamond) / **5.6e-16** (silicon), the G-space local
+factors to **3.6e-15**, and `get_pp_loc_part2` to **1.78e-12**. Full results in
+`.planning/phases/10-periodic-integrals/10-VERIFICATION.md`.
+Next: Phase 11 (FFT, FFTDF, KRHF) — it owns the one missing `hcore` term.
+Last activity: 2026-08-26 — Completed plans 10-01 … 10-08.
+  * **10-01:** `pseudo::PseudoData` + `resolve_pseudo`; `Cell::build` rewrites
+    `_atm[CHARGE_OF]` with `Zion` (`mole.py:2591`), so diamond's `atom_charges()`
+    is `[4,4]` and `tot_electrons(8)` is 64. **Fixed an upstream-parity bug in
+    the pre-existing `cp2k_pp` parser**: it took the FIRST block per element,
+    but upstream's default-PP rule (`parse_cp2k_pp.py:151-154`) takes the one
+    whose last alias is not `-q<n>` — sodium was resolving to q1 instead of q9,
+    losing eight electrons. Explicit `-q<n>` suffixes now work too.
+  * **10-02:** `neighborlist.rs`, a verbatim port of `neighbor_list.c:80-128`,
+    decision-for-decision exact against the criterion on all 767x16 triples.
+  * **10-03:** `pbc_intor.rs` + K-07 `bloch_phase` — THE core. Two measured
+    deviations from the plan text, both documented in the verification doc: the
+    image-expanded basis is built PER IMAGE (cintx request cost is O(basis
+    shells): one-shot 498 s vs per-image 0.57 s for the same numbers), and the
+    Bloch contraction is an in-order host fold rather than `gemm_dense` (the
+    cubecl CPU-runtime tiled GEMM takes 17 s for a 64^3 product and accounted
+    for 487 of those 498 s).
+  * **10-04:** `eval_gto.rs` + K-08. Primary gate is oracle-free Bloch
+    periodicity, `ao_k(r+L) == exp(i k.L) ao_k(r)` to < 1e-10. Reuses the
+    existing molecular `eval_gto` on `coords - L` — no new AO evaluator.
+  * **10-05:** `pseudo::vloc` (closed-form G-space factors + `get_coulG` 3D) and
+    `pseudo::vloc_part2` (the 3-centre DOUBLE lattice sum, gamma only). The
+    latter adds a conservative Gaussian-product prescreen at 1e-14 on top of
+    upstream's neighbor-list screen; without it the safe API faces O(nimgs^2)
+    triples per shell pair.
+  * **10-06:** `pseudo::vnl` — `fake_cell_vnl` + `_int_vnl` + `get_pp_nl`, riding
+    straight on `intor_cross(fakecell, cell)`. Essentially bit-exact vs upstream.
+  * **10-07:** `hcore.rs` — `get_ovlp` (exactly Hermitian off-diagonal),
+    `get_t`, and `get_hcore_parts`. `get_hcore` returns
+    `NotYetImplemented{phase:11}` and says why: `get_pp = V_loc,1 + V_loc,2 +
+    V_nl` and upstream's own `pp_int.get_pp_loc_part1` raises
+    `NotImplementedError` — the long-range term is an FFT/AFT quantity (D-PBC-09).
+  * **10-08:** `10-VERIFICATION.md`, the ROADMAP tick, and this entry. The
+    full-workspace sweep caught the one real knock-on of 10-01: `cell.ewald()`
+    reads `atom_charges()`, so a `gth-pade` cell's nuclear repulsion changed
+    (diamond -28.771 Ha -> -12.787 Ha). Phase 9 had parked upstream's pseudised
+    numbers in `PSEUDISED_EWALD` as "plan 10-01's target, not asserted"; that
+    debt is now collected, and BOTH charge conventions are gated side by side.
+
+### cintx status — R-13 fully resolved
+
+**Wave 0.5 has LANDED.** `int1e_r{2,4}_origi` and `int3c1e_r{2,4,6}_origk` have
+real kernels (`cintx-cubecl/src/kernels/unstable/{origi,origk}.rs`) behind the
+`unstable-source-api` feature, which `pyscf-pbc-gto`'s default-on `gth-pp`
+feature enables. The §2.4 Task-0 fail-open check passes.
+
+**A second fail-open surface was found on 2026-08-26 and fixed the same day.**
+Both families mishandled shells with `nctr > 1`: `origi` returned silently-wrong
+values (only element (0,0) written, and wrong), `origk` PANICKED in
+`cintx-cubecl/src/transform/c2s.rs:684` — the Cartesian->spherical step sized its
+output from the angular momentum and forgot the contraction axis. cintx fixed
+both (`kernels/unstable/{origi,origk,shared}.rs` + its own `*_genctr_parity`
+oracle tests).
+
+Verified and collected on this side: all seven symbols now match libcint to
+<= 2.72e-15 relative on the `Li`/`gth-szv` general-contraction fixture; the
+interim `pseudo::require_segmented_basis` guard and its two call sites are
+DELETED; the two tests that pinned the broken behaviour are replaced by positive
+libcint regression tests; and `part2_matches_upstream_on_lif` — the only §9.2
+system with a general contraction, and the one system the bug had blocked — is
+un-ignored and passes at **1.532e-10** (gate 1e-9). **No blockers remain in
+Phase 10.**
+
+Previous: Phase 09-pbc-foundation — COMPLETE (09-09, the verification rollup).
+All nine plans shipped; `cell.ewald()` within 1e-9 Ha of upstream on
+diamond/Si/LiF/He-fcc; 39 `pyscf-*` crates; complex algebra bit-reproducible.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 95
+- Total plans completed: 103
 - Average duration: — (no plans run yet)
 - Total execution time: 0 hours
 

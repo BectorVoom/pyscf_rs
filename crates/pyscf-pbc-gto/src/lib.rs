@@ -30,6 +30,20 @@ pub mod kpts_mesh;
 pub mod ewald;
 pub mod ewald_pme;
 
+// Phase 10 plan 10-02 — shell-pair neighbor list + lattice-sum screening
+// (D-PBC-08). Consumed by `pbc_intor`.
+pub mod neighborlist;
+
+// Phase 10 plan 10-03 — `pbc_intor` / `intor_cross`, the lattice-sum driver
+// (D-PBC-07). THE core of Phase 10.
+pub mod pbc_intor;
+
+// Phase 10 plan 10-04 — periodic AO evaluation (`eval_ao_kpts`, K-08).
+pub mod eval_gto;
+
+// Phase 10 plan 10-07 — `get_ovlp` / `get_hcore` assembly.
+pub mod hcore;
+
 pub mod pseudo;
 pub mod types;
 
@@ -48,6 +62,9 @@ pub use cutoff::{
     rcut_by_shells_with_pgf,
 };
 pub use dumps_loads::{CellPack, dumps, loads, pack, unpack};
+pub use eval_gto::{
+    EvalAoKptsOutput, estimate_rcut_for_eval, eval_ao_kpts, eval_ao_kpts_with_images,
+};
 pub use ewald::{
     EWALD_G0_SENTINEL, EWALD_R_MIN, ewald, ewald_g_space, ewald_real_space, ewald_self,
     get_ewald_params,
@@ -59,15 +76,23 @@ pub use ewald_pme::{
 pub use gv::{
     GvWeights, fftfreq, fftfreq_scaled, get_gv, get_gv_weights, get_si, get_uniform_grids,
 };
-pub use lattice::{
-    check_lattice_sum_range, get_lattice_ls, get_lattice_ls_default, get_monkhorst_pack_size,
-    get_monkhorst_pack_size_default, lattice_sum_dimension,
-};
+pub use hcore::{HcoreParts, get_hcore, get_hcore_parts, get_ovlp, get_t};
 pub use kpts_mesh::{
     KCONSERV_TOL, KIdx, KPT_DIFF_TOL, Kconserv, Kconserv3, UniqueKpts, WITH_GAMMA, WRAP_AROUND,
     gamma_point, get_kconserv, get_kconserv3, intersection, is_gamma_point, is_zero, make_kpts,
     make_kpts_default, make_kpts_with_symmetry, member, round_to_fbz, unique,
 };
-pub use pseudo::PseudoData;
+pub use lattice::{
+    check_lattice_sum_range, get_lattice_ls, get_lattice_ls_default, get_monkhorst_pack_size,
+    get_monkhorst_pack_size_default, lattice_sum_dimension,
+};
+pub use neighborlist::{
+    NeighborList, NeighborPair, build_neighbor_list, build_neighbor_list_for_shlpairs,
+};
+pub use pbc_intor::{
+    GAMMA_IMAG_WARN_TOL, KPT_GAMMA_TOL, PBC_INTOR_SHELL_WARN_LIMIT, PbcIntorOpts, PbcIntorOutput,
+    SUPPORTED_INTORS, intor_cross, intor_cross_with_images, is_gamma, lattice_images, pbc_intor,
+};
+pub use pseudo::{PseudoData, resolve_pseudo};
 pub use supercell::{cell_plus_imgs, super_cell};
 pub use types::{ALattice, CellBuildArgs, DEFAULT_PRECISION, LowDimFtType};

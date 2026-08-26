@@ -7,11 +7,18 @@
 //! Phase 9 plan 09-05 adds K-01 (`gv`) and K-02 (`struct_factor`).
 //! Phase 9 plan 09-08 adds K-05 (`ewald_rlij`) and K-06 (`ewald_gs_terms`).
 
+//! Phase 10 plan 10-03 adds K-07 (`bloch_phase`).
+//! Phase 10 plan 10-04 adds K-08 (`eval_ao_k_accumulate`).
+
+pub mod bloch;
+pub mod eval_ao_k;
 pub mod ewald;
 pub mod gv;
 pub mod struct_factor;
 pub mod zhadamard;
 
+pub use bloch::bloch_phase;
+pub use eval_ao_k::{AoKAccumulator, eval_ao_k_accumulate};
 pub use ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use gv::gv;
 pub use struct_factor::struct_factor;

@@ -165,7 +165,10 @@ fn make_kpts_wrap_around_folds_each_axis_into_the_first_bz() {
     let kpts = make_kpts(&cell, [3, 3, 3], true, true, None).expect("make_kpts");
     for s in cell.get_scaled_kpts(&kpts) {
         for x in s {
-            assert!((-0.5..0.5).contains(&(x + 1e-12)), "scaled {x} outside [-0.5, 0.5)");
+            assert!(
+                (-0.5..0.5).contains(&(x + 1e-12)),
+                "scaled {x} outside [-0.5, 0.5)"
+            );
         }
     }
     // wrap_around only shifts a point by a whole reciprocal lattice vector, so
@@ -177,7 +180,13 @@ fn make_kpts_wrap_around_folds_each_axis_into_the_first_bz() {
     let fold = |ks: &[[f64; 3]]| -> Vec<[f64; 3]> {
         cell.get_scaled_kpts(ks)
             .iter()
-            .map(|s| [s[0].rem_euclid(1.0), s[1].rem_euclid(1.0), s[2].rem_euclid(1.0)])
+            .map(|s| {
+                [
+                    s[0].rem_euclid(1.0),
+                    s[1].rem_euclid(1.0),
+                    s[2].rem_euclid(1.0),
+                ]
+            })
             .collect()
     };
     let a = fold(&kpts);
@@ -214,8 +223,8 @@ fn make_kpts_rejects_a_zero_axis_and_kpoint_symmetry() {
     let cell = systems::diamond();
     assert!(make_kpts_default(&cell, [2, 0, 2]).is_err());
     // D-PBC-15 — k-point symmetry is a Phase 17 add-on layer.
-    let err = make_kpts_with_symmetry(&cell, [2, 2, 2], true, false)
-        .expect_err("KPoints is Phase 17");
+    let err =
+        make_kpts_with_symmetry(&cell, [2, 2, 2], true, false).expect_err("KPoints is Phase 17");
     assert!(
         matches!(err, PyscfRsError::NotYetImplemented { phase: 17, .. }),
         "got {err:?}"
@@ -316,7 +325,13 @@ fn kconserv3_satisfies_its_defining_congruence_and_squeezes_pinned_axes() {
     let full = get_kconserv3(
         &cell,
         &kpts,
-        &[all.clone(), all.clone(), all.clone(), all.clone(), all.clone()],
+        &[
+            all.clone(),
+            all.clone(),
+            all.clone(),
+            all.clone(),
+            all.clone(),
+        ],
     );
     assert_eq!(full.shape, vec![nk; 5]);
     assert_eq!(full.data.len(), nk.pow(5));
@@ -340,10 +355,7 @@ fn kconserv3_satisfies_its_defining_congruence_and_squeezes_pinned_axes() {
                         for row in a.iter() {
                             let t = (d[0] * row[0] + d[1] * row[1] + d[2] * row[2])
                                 / (2.0 * std::f64::consts::PI);
-                            assert!(
-                                (t - t.round()).abs() < 1e-9,
-                                "({i},{j},{k},{x},{y}) -> {c}"
-                            );
+                            assert!((t - t.round()).abs() < 1e-9, "({i},{j},{k},{x},{y}) -> {c}");
                         }
                     }
                 }
@@ -404,7 +416,10 @@ fn unique_returns_first_occurrence_order() {
     ];
     let u = unique(&probe);
     // Tier 2 as well: upstream prints exactly these three arrays.
-    assert_eq!(u.kpts, vec![[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.25, 0.25, 0.25]]);
+    assert_eq!(
+        u.kpts,
+        vec![[0.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.25, 0.25, 0.25]]
+    );
     assert_eq!(u.index, vec![0, 1, 4]);
     assert_eq!(u.inverse, vec![0, 1, 0, 1, 2]);
     // The contract: index and inverse reconstruct the input.
@@ -430,7 +445,14 @@ fn make_kpts_matches_upstream() {
     let cell = diamond_bohr();
     let cases: [MakeKptsCase; 7] = [
         ("222", [2, 2, 2], false, true, None, &KPTS_222),
-        ("222_nogamma", [2, 2, 2], false, false, None, &KPTS_222_NOGAMMA),
+        (
+            "222_nogamma",
+            [2, 2, 2],
+            false,
+            false,
+            None,
+            &KPTS_222_NOGAMMA,
+        ),
         ("222_wrap", [2, 2, 2], true, true, None, &KPTS_222_WRAP),
         (
             "222_nogamma_wrap",

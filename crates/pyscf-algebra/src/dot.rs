@@ -20,45 +20,57 @@
 //!     ROCm, CUDA, WGPU), and returns the scalar result. Exercised by the
 //!     random oracle differential test (`tests/dot_oracle.rs`) on ROCm.
 
+use crate::launch::{launch_1d, line_size_for, reduction_lanes, total_units, upload};
 use crate::scalar::DeviceScalar;
 use crate::{AlgebraClient, AlgebraError, Tensor};
 use cubecl::Runtime;
-use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Partial-sum dot kernel: thread `tid` multiplies and accumulates elements
-/// `[tid*chunk, (tid+1)*chunk)` (clamped to `n`) into one partial in `F`,
-/// writing it to `out[tid]`. Generic over the device float so the same kernel
-/// monomorphizes for f32 (GPU speed path) and f64 (chemistry precision path) —
-/// see `Cubecl_generics.md`. The final sum of the `groups` partials runs on the
-/// host (see [`launch_dot`]).
-/// Grid-stride coalesced dot product kernel: thread `tid` accumulates
-/// elements `x[tid + k*stride] * y[tid + k*stride]` into `out[tid]`.
+/// Vectorized grid-stride dot kernel: lane `tid` accumulates the products of the
+/// `N`-wide vectors `x[tid + j*stride] * y[tid + j*stride]` and writes the
+/// horizontal sum of its accumulator to `out[tid]`.
 ///
-/// Within each warp/wavefront, adjacent threads access adjacent memory addresses
-/// (unit stride), enabling 100% global memory coalescing on both inputs.
+/// quick-260826-spd: the operands are now read as [`Vector<F, N>`], so each step
+/// of the stride loop is one SIMD load per operand and one vector FMA rather
+/// than a scalar pair. Adjacent lanes still read adjacent vectors, so the access
+/// pattern stays fully coalesced.
+///
+/// The lane count is capped by [`reduction_lanes`] rather than derived from the
+/// element count: one unit per element would emit one partial per element, which
+/// is not a reduction at all. `stride` is the true total unit count of the grid,
+/// passed in rather than recomputed from `CUBE_COUNT_X * CUBE_DIM_X` — that
+/// product is only the whole grid when the cube count is one-dimensional, and
+/// [`launch_1d`] is free to fold a large count onto the y axis.
+///
+/// The final horizontal fold is one `vector_sum` per lane, not per element, so
+/// its cost is negligible even though float horizontal reduction lowers to a
+/// straight-line chain (it is not associative, so no backend may re-tree it).
 #[cube(launch_unchecked)]
-fn dot_kernel<F: Float>(x: &Array<F>, y: &Array<F>, out: &mut Array<F>, n: usize) {
+fn dot_kernel<F: Float + CubeElement, N: Size>(
+    x: &Array<Vector<F, N>>,
+    y: &Array<Vector<F, N>>,
+    out: &mut Array<F>,
+    n_lines: usize,
+    stride: usize,
+) {
     let tid = ABSOLUTE_POS;
-    let stride = CUBE_COUNT_X as usize * CUBE_DIM_X as usize;
-    let mut acc = F::from_int(0);
-    let mut i = tid;
-    while i < n {
-        acc += x[i] * y[i];
-        i += stride;
+    if tid < stride {
+        let mut acc = Vector::<F, N>::new(F::from_int(0));
+        let mut i = tid;
+        while i < n_lines {
+            acc += x[i] * y[i];
+            i += stride;
+        }
+        out[tid] = F::cast_from(acc.vector_sum());
     }
-    out[tid] = acc;
 }
 
-/// Threads per block for the dot launch.
-const BLOCK: u32 = 256;
-
-/// Core launch on resident device handles: compute the per-element products and
-/// partial sums of `x`/`y` (length `n`) into a temporary device buffer, read them
-/// back, and sum in `F`. No re-upload of `x`/`y` — both the host-slice path
-/// ([`launch_dot`]) and the registry-backed `Tensor` path ([`dot`]) drive this.
+/// Core launch on resident device handles: compute the partial sums of the
+/// element-wise product of `x`/`y` (length `n`) into a temporary device buffer,
+/// read them back, and sum in `F`. No re-upload of `x`/`y` — both the host-slice
+/// path ([`launch_dot`]) and the registry-backed `Tensor` path ([`dot`]) drive this.
 fn launch_dot_on_handles<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
     x: &Handle,
@@ -68,31 +80,38 @@ fn launch_dot_on_handles<R: Runtime, F: DeviceScalar>(
     if n == 0 {
         return F::from_int(0);
     }
-    // Launch an occupancy-tuned grid (clamped to hardware ceiling)
-    let groups = ((n as u32).div_ceil(BLOCK * 16)).clamp(1, 64);
-    let num_threads = (groups * BLOCK) as usize;
-    let out_handle = client.empty(num_threads * core::mem::size_of::<F>());
+    let line = line_size_for::<R, F>(client, n);
+    let n_lines = n / line;
+    let lanes = reduction_lanes(client, n_lines, line);
+    let (count, dim) = launch_1d(client, lanes, (n_lines / lanes.max(1)) * line);
+    // The grid may round up past `lanes`; every dispatched unit writes a partial,
+    // so the buffer is sized from the geometry rather than from the request.
+    let stride = total_units(&count, dim);
+    let out_handle = client.empty(stride * core::mem::size_of::<F>());
 
     unsafe {
         dot_kernel::launch_unchecked::<F, R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(BLOCK),
-            // SAFETY: `n` matches the operand buffers and `num_threads` matches out_handle.
+            count,
+            dim,
+            line,
+            // SAFETY: `n` matches the operand buffers and `stride` matches out_handle.
             ArrayArg::from_raw_parts(x.clone(), n),
             ArrayArg::from_raw_parts(y.clone(), n),
-            ArrayArg::from_raw_parts(out_handle.clone(), num_threads),
+            ArrayArg::from_raw_parts(out_handle.clone(), stride),
             // Scalar kernel args are passed as bare values (LaunchArg for T = T).
-            n,
+            n_lines,
+            stride,
         );
     }
 
     let bytes = client.read(vec![out_handle]);
-    let products: Vec<F> = bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec();
+    let partials: &[F] = bytemuck::cast_slice::<u8, F>(&bytes[0]);
 
-    // Host-sum the partials in `F`.
+    // Host-sum the partials in `F`. A plain `acc += p` add is NOT an FMA
+    // (check-no-fma only flags FMA in pyscf_* symbols anyway).
     let mut acc = F::from_int(0);
-    for &p in &products {
+    for &p in partials {
         acc += p;
     }
     acc
@@ -101,8 +120,11 @@ fn launch_dot_on_handles<R: Runtime, F: DeviceScalar>(
 /// Host-slice launcher: upload `x`/`y`, then reduce on the device. Backs
 /// `dot_dense`; the cubecl `Runtime` bound stays inside.
 fn launch_dot<R: Runtime, F: DeviceScalar>(client: &ComputeClient<R>, x: &[F], y: &[F]) -> F {
-    let x_handle = client.create(Bytes::from_elems(x.to_vec()));
-    let y_handle = client.create(Bytes::from_elems(y.to_vec()));
+    if x.is_empty() {
+        return F::from_int(0);
+    }
+    let x_handle = upload(client, x);
+    let y_handle = upload(client, y);
     launch_dot_on_handles::<R, F>(client, &x_handle, &y_handle, x.len())
 }
 

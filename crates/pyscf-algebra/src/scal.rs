@@ -22,49 +22,31 @@
 //!     ROCm, CUDA, WGPU), and scales the slice in place. Exercised by the random
 //!     oracle differential test (`tests/scal_oracle.rs`) on ROCm.
 
+use crate::launch::{launch_1d, line_size_for, upload};
 use crate::scalar::DeviceScalar;
 use crate::{AlgebraClient, AlgebraError, Tensor};
 use cubecl::Runtime;
-use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Naive one-thread-per-element scale kernel: `x[i] *= alpha`. Generic over the
-/// device float so the same kernel monomorphizes for f32 (GPU speed path) and
-/// f64 (chemistry precision path) — see `Cubecl_generics.md`. Scales in place;
-/// the launcher reads the buffer back (see [`launch_scal`]).
+/// Vectorized scale kernel: `x[i] *= alpha`, one unit per `N`-wide vector.
 ///
-/// `alpha` is passed as a single-element `Array<F>` rather than a bare scalar:
-/// a generic `F` used as a scalar launch arg would need extra `CubeElement` /
-/// `ScalarArgSettings` bounds that `DeviceScalar` (sealed to f32/f64) does not
-/// carry, so `F` only ever appears here as an `Array` element type — the same
-/// shape that the `dot`/`reduce` siblings rely on.
-/// Grid-stride 4x unrolled scaling kernel: `x[i] *= alpha`.
-///
-/// Threads iterate across the array in grid strides, scaling 4 elements per step
-/// to maximize memory bandwidth and instruction-level parallelism (ILP).
+/// quick-260826-spd: the AXPY sibling's rewrite applies verbatim here — SIMD
+/// vectors in place of a manual 4x scalar unroll, device-derived launch geometry
+/// in place of a fixed 256-unit cube, and `alpha` as a real scalar launch
+/// argument in place of a one-element device buffer allocated on every call.
+/// See [`crate::axpy`] for the reasoning behind each.
 #[cube(launch_unchecked)]
-fn scal_kernel<F: Float>(x: &mut Array<F>, alpha: &Array<F>, n: usize) {
-    let a = alpha[0];
-    let stride = CUBE_COUNT_X as usize * CUBE_DIM_X as usize * 4;
-    let mut base = ABSOLUTE_POS * 4;
-    while base + 3 < n {
-        x[base] = x[base] * a;
-        x[base + 1] = x[base + 1] * a;
-        x[base + 2] = x[base + 2] * a;
-        x[base + 3] = x[base + 3] * a;
-        base += stride;
-    }
-    let mut rem = base;
-    while rem < n {
-        x[rem] = x[rem] * a;
-        rem += 1;
+fn scal_kernel<F: Float + CubeElement, N: Size>(
+    alpha: F,
+    x: &mut Array<Vector<F, N>>,
+    n_lines: usize,
+) {
+    if ABSOLUTE_POS < n_lines {
+        x[ABSOLUTE_POS] *= Vector::<F, N>::new(alpha);
     }
 }
-
-/// Threads per block for the scal launch.
-const BLOCK: u32 = 256;
 
 /// Core launch on a resident device handle: `x[i] *= alpha`, in place on the `x`
 /// handle, with NO host transfer. Both the host-slice path ([`launch_scal`]) and
@@ -77,21 +59,23 @@ fn launch_scal_on_handle<R: Runtime, F: DeviceScalar>(
     x: &Handle,
     n: usize,
 ) {
-    // `alpha` rides as a single-element device buffer (see `scal_kernel`).
-    let alpha_handle = client.create(Bytes::from_elems(vec![alpha]));
-    let groups = ((n as u32).div_ceil(BLOCK * 4)).clamp(1, 128);
+    let line = line_size_for::<R, F>(client, n);
+    let n_lines = n / line;
+    // One multiply per element: the per-lane work is exactly the width.
+    let (count, dim) = launch_1d(client, n_lines, line);
 
     unsafe {
         scal_kernel::launch_unchecked::<F, R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(BLOCK),
+            count,
+            dim,
+            line,
+            alpha,
             // SAFETY: `n` matches the buffer. `from_raw_parts` consumes the handle by
             // value, so clone the caller's handle (clones share the binding).
             ArrayArg::from_raw_parts(x.clone(), n),
-            ArrayArg::from_raw_parts(alpha_handle, 1),
             // Scalar dimension arg is passed as a bare value (LaunchArg for usize).
-            n,
+            n_lines,
         );
     }
 }
@@ -103,7 +87,7 @@ fn launch_scal<R: Runtime, F: DeviceScalar>(
     alpha: F,
     x: &[F],
 ) -> Vec<F> {
-    let x_handle = client.create(Bytes::from_elems(x.to_vec()));
+    let x_handle = upload(client, x);
     launch_scal_on_handle::<R, F>(client, alpha, &x_handle, x.len());
     let bytes = client.read(vec![x_handle]);
     bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec()

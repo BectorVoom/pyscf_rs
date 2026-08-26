@@ -7,87 +7,192 @@
 //! stays inside the ALG-06 wall.
 //!
 //! Two surfaces:
-//!   * `gemm()` — the opaque `Tensor`-based API. STILL a stub: `Tensor` carries
-//!     a sentinel `BufferId` (no device allocator until Phase 2), so it cannot
-//!     read device data yet. `backend_matrix.rs` pins this contract.
-//!   * `gemm_dense()` — the working device path: takes host slices + an
+//!   * `gemm()` — the opaque `Tensor`-based API, launching on the operands'
+//!     resident device handles via the Phase-2 [`crate::device_buffer`] registry.
+//!   * `gemm_dense()` — the host-slice path: takes host slices + an
 //!     `AlgebraClient`, runs the generic kernel on the resolved backend (CPU,
 //!     ROCm, CUDA, WGPU), and returns the result. Exercised by the random
 //!     oracle differential test (`tests/gemm_oracle.rs`) on ROCm.
+//!
+//! # Two kernels, and why the barrier one is not the default
+//!
+//! This used to be a single shared-memory tiled kernel: stage a 16x16 tile of
+//! each operand, `sync_cube`, accumulate, `sync_cube`. That is the textbook
+//! shape for a GPU. It is also catastrophically wrong for CubeCL's CPU runtime —
+//! the DEFAULT backend of this crate (`default = ["cpu"]`, ALG-03) — where a
+//! cube barrier is not a hardware instruction and a 16x16 cube is 256 operating
+//! system threads asked to synchronize twice per tile. A 64x64x64 product did
+//! not finish in ten minutes on that path.
+//!
+//! So the kernels here never synchronize and never share:
+//!
+//!   * [`gemm_simple_kernel`] — one unit per output *vector*. A unit owns `N`
+//!     adjacent columns of one output row: the `lhs` element is a scalar splat
+//!     and the `rhs` row and accumulator are [`Vector`]s, so the inner `k` loop
+//!     is one vector FMA per step instead of a scalar one.
+//!   * [`gemm_row_tiled_kernel`] — the same, but one unit owns [`ROWS`] stacked
+//!     output vectors. The `rhs` vector loaded on each `k` step is reused by
+//!     every accumulator, which turns roughly one FLOP per byte into `2 * ROWS`
+//!     FLOPs per byte. That is what a GPU needs to leave memory-bound territory;
+//!     on a CPU it is merely not faster, never pathological.
+//!
+//! [`pick_plan`] chooses between them from the device's own properties. Both
+//! compute the same product to within floating-point associativity.
 
+use crate::launch::{has_planes, launch_1d, line_size_for, upload};
 use crate::scalar::DeviceScalar;
 use crate::{AlgebraClient, AlgebraError, Tensor};
 use cubecl::Runtime;
-use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// 2D Tiled GEMM kernel with shared memory staging and unrolled loop accumulation:
-/// `out = lhs @ rhs` (row-major). `lhs` is `M×K`, `rhs` is `K×N`, `out` is `M×N`.
+/// Output rows one unit accumulates in [`gemm_row_tiled_kernel`].
 ///
-/// Threads within a 16×16 workgroup collaborate to load 16×16 tiles of `lhs` and
-/// `rhs` into on-chip shared memory, synchronizing with `sync_cube()`, and accumulating
-/// the matrix product with unrolled registers before writing back to global memory.
-/// This reduces global memory traffic by 16× and ensures fully coalesced accesses.
-const TILE_DIM: usize = 16;
-const TILE_SIZE: usize = 256;
+/// Every step of the `k` loop is one vector load from `rhs` reused across all
+/// `ROWS` accumulators, so arithmetic per byte read grows with this number until
+/// the register file runs out — and then falls off a cliff. Eight is the knee on
+/// the RDNA3-class hardware this crate targets.
+const ROWS: usize = 8;
 
+/// Which no-barrier kernel a launch should use.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Plan {
+    /// One unit per output vector. Portable and never pathological.
+    Simple,
+    /// One unit per [`ROWS`] stacked output vectors, accumulating in registers.
+    RowTiled,
+}
+
+/// `PYSCF_GEMM_KERNEL`, read once: `simple` or `row_tiled` to override
+/// [`pick_plan`]'s device-derived choice.
+///
+/// A backend tuning knob, not a semantic one — both kernels compute the same
+/// product to within floating-point associativity. It exists because the plan is
+/// otherwise chosen from hardware properties, which makes the row-tiled path
+/// unreachable (and so untestable) on a machine whose only f64-capable backend
+/// is the CPU runtime. `tests/gemm_kernels.rs` uses it to pin both paths against
+/// the same reference.
+fn plan_override() -> Option<Plan> {
+    static OVERRIDE: std::sync::OnceLock<Option<Plan>> = std::sync::OnceLock::new();
+    *OVERRIDE.get_or_init(|| match std::env::var("PYSCF_GEMM_KERNEL").as_deref() {
+        Ok("simple") => Some(Plan::Simple),
+        Ok("row_tiled") => Some(Plan::RowTiled),
+        _ => None,
+    })
+}
+
+/// Lanes the row-tiled kernel must still dispatch for its reuse to be worth the
+/// eight-fold cut in parallelism it costs.
+///
+/// Row-tiling trades lanes for arithmetic intensity: `ROWS` output rows collapse
+/// into one unit. That is the right trade only while there are still enough
+/// units left to fill the device. The degenerate case is GEMV, which reaches
+/// this module as GEMM with a single output column ([`crate::gemv`]): there
+/// `n_lines` is 1, so row-tiling would run a 4096-row product on 512 lanes and
+/// leave most of a GPU idle, with no `rhs` reuse to show for it — one column is
+/// loaded once either way.
+const ROW_TILED_LANES_MIN: usize = 4096;
+
+/// Pick the kernel from the device's own properties and the operand shape.
+///
+/// Register-tiling only pays where a unit is a lane of a wide SIMD engine with a
+/// large register file — i.e. where the device reports real hardware planes. On
+/// CubeCL's CPU runtime a unit is a thread; `ROWS` accumulators per thread buys
+/// nothing there, and the smaller lane count would leave cores idle on the
+/// narrow matrices that dominate an SCF loop. `m < ROWS` cannot fill even one
+/// row tile, and a lane count below [`ROW_TILED_LANES_MIN`] cannot fill a GPU,
+/// so both take the simple path regardless.
+///
+/// The GPU arm of this choice is reasoned from the shape rather than measured:
+/// the only f64-capable backend on the development machine is the CPU runtime,
+/// whose `plane_size_max` is 1. `PYSCF_GEMM_KERNEL` overrides it — see
+/// [`plan_override`] — and `tests/gemm_kernels.rs` pins both kernels' results.
+fn pick_plan<R: Runtime>(client: &ComputeClient<R>, m: usize, n_lines: usize) -> Plan {
+    if let Some(forced) = plan_override() {
+        return forced;
+    }
+    let row_tiled_lanes = m.div_ceil(ROWS) * n_lines;
+    if has_planes(client) && m >= ROWS && row_tiled_lanes >= ROW_TILED_LANES_MIN {
+        Plan::RowTiled
+    } else {
+        Plan::Simple
+    }
+}
+
+/// One unit per output vector: `out = lhs @ rhs` (row-major).
+///
+/// `n_lines` and the `rhs`/`out` indices are counted in vectors of `N` elements;
+/// `lhs` stays scalar because a unit reads one `lhs` value per step and splats it
+/// across the accumulator. No shared memory and no synchronization, so this is
+/// safe and sensible on every backend.
 #[cube(launch_unchecked)]
-fn gemm_kernel<F: Float>(
+fn gemm_simple_kernel<F: Float + CubeElement, N: Size>(
     lhs: &Array<F>,
-    rhs: &Array<F>,
-    out: &mut Array<F>,
+    rhs: &Array<Vector<F, N>>,
+    out: &mut Array<Vector<F, N>>,
     m: usize,
+    n_lines: usize,
     k: usize,
-    n: usize,
 ) {
-    let mut lhs_shared = SharedMemory::<F>::new(TILE_SIZE);
-    let mut rhs_shared = SharedMemory::<F>::new(TILE_SIZE);
+    if ABSOLUTE_POS < m * n_lines {
+        let row = ABSOLUTE_POS / n_lines;
+        let col = ABSOLUTE_POS % n_lines;
+        let lhs_base = row * k;
+        let mut acc = Vector::<F, N>::new(F::from_int(0));
+        for p in 0..k {
+            acc += Vector::<F, N>::new(lhs[lhs_base + p]) * rhs[col + p * n_lines];
+        }
+        out[ABSOLUTE_POS] = acc;
+    }
+}
 
-    let tx = UNIT_POS_X as usize;
-    let ty = UNIT_POS_Y as usize;
-    let bx = CUBE_POS_X as usize;
-    let by = CUBE_POS_Y as usize;
+/// One unit per `ROWS` stacked output vectors.
+///
+/// The `rhs` vector loaded on each `k` step is reused by every accumulator, and
+/// the `lhs` values a unit reads are the same for every unit in the plane — a
+/// broadcast out of cache. Nothing is shared and nothing synchronizes.
+///
+/// The tail guard is hoisted out of the `k` loop: a row past the end reads row 0
+/// instead of running off the buffer, and its result is simply never stored.
+#[cube(launch_unchecked)]
+fn gemm_row_tiled_kernel<F: Float + CubeElement, N: Size>(
+    lhs: &Array<F>,
+    rhs: &Array<Vector<F, N>>,
+    out: &mut Array<Vector<F, N>>,
+    m: usize,
+    n_lines: usize,
+    k: usize,
+    lanes: usize,
+    #[comptime] rows: usize,
+) {
+    if ABSOLUTE_POS < lanes {
+        let row0 = (ABSOLUTE_POS / n_lines) * rows;
+        let col = ABSOLUTE_POS % n_lines;
 
-    let row = by * TILE_DIM + ty;
-    let col = bx * TILE_DIM + tx;
-
-    let mut acc = F::from_int(0);
-
-    let num_tiles = k.div_ceil(TILE_DIM);
-
-    for t in 0..num_tiles {
-        let t_k = t * TILE_DIM;
-
-        // Load LHS tile into shared memory
-        let lhs_col = t_k + tx;
-        if row < m && lhs_col < k {
-            lhs_shared[ty * TILE_DIM + tx] = lhs[row * k + lhs_col];
-        } else {
-            lhs_shared[ty * TILE_DIM + tx] = F::from_int(0);
+        let mut row_offset = Array::<usize>::new(rows);
+        let mut acc = Array::<Vector<F, N>>::new(rows);
+        #[unroll]
+        for i in 0..rows {
+            let row = select(row0 + i < m, row0 + i, 0usize);
+            row_offset[i] = row * k;
+            acc[i] = Vector::<F, N>::new(F::from_int(0));
         }
 
-        // Load RHS tile into shared memory
-        let rhs_row = t_k + ty;
-        if rhs_row < k && col < n {
-            rhs_shared[ty * TILE_DIM + tx] = rhs[rhs_row * n + col];
-        } else {
-            rhs_shared[ty * TILE_DIM + tx] = F::from_int(0);
+        for p in 0..k {
+            let rv = rhs[col + p * n_lines];
+            #[unroll]
+            for i in 0..rows {
+                acc[i] += Vector::<F, N>::new(lhs[row_offset[i] + p]) * rv;
+            }
         }
-
-        sync_cube();
 
         #[unroll]
-        for p in 0..TILE_DIM {
-            acc += lhs_shared[ty * TILE_DIM + p] * rhs_shared[p * TILE_DIM + tx];
+        for i in 0..rows {
+            if row0 + i < m {
+                out[(row0 + i) * n_lines + col] = acc[i];
+            }
         }
-
-        sync_cube();
-    }
-
-    if row < m && col < n {
-        out[row * n + col] = acc;
     }
 }
 
@@ -105,29 +210,55 @@ pub(crate) fn launch_gemm_on_handles<R: Runtime, F: DeviceScalar>(
     k: usize,
     n: usize,
 ) {
-    let grid_x = (n as u32).div_ceil(TILE_DIM as u32);
-    let grid_y = (m as u32).div_ceil(TILE_DIM as u32);
+    // The width has to divide `n` exactly, so no unit's vector straddles two
+    // rows of `rhs` or of `out`.
+    let line = line_size_for::<R, F>(client, n);
+    let n_lines = n / line;
 
-    unsafe {
-        gemm_kernel::launch_unchecked::<F, R>(
-            client,
-            CubeCount::Static(grid_x, grid_y, 1),
-            CubeDim {
-                x: TILE_DIM as u32,
-                y: TILE_DIM as u32,
-                z: 1,
-            },
-            // SAFETY: lengths match the buffers (lhs m*k, rhs k*n, out m*n).
-            // `from_raw_parts` consumes the handle by value, so clone the caller's
-            // handles (clones share the binding).
-            ArrayArg::from_raw_parts(lhs.clone(), m * k),
-            ArrayArg::from_raw_parts(rhs.clone(), k * n),
-            ArrayArg::from_raw_parts(out.clone(), m * n),
-            // Scalar kernel args are passed as bare values (LaunchArg for T = T).
-            m,
-            k,
-            n,
-        );
+    match pick_plan(client, m, n_lines) {
+        Plan::Simple => {
+            let lanes = m * n_lines;
+            let (count, dim) = launch_1d(client, lanes, k * line);
+            unsafe {
+                gemm_simple_kernel::launch_unchecked::<F, R>(
+                    client,
+                    count,
+                    dim,
+                    line,
+                    // SAFETY: lengths match the buffers (lhs m*k, rhs k*n, out m*n).
+                    // `from_raw_parts` consumes the handle by value, so clone the
+                    // caller's handles (clones share the binding).
+                    ArrayArg::from_raw_parts(lhs.clone(), m * k),
+                    ArrayArg::from_raw_parts(rhs.clone(), k * n),
+                    ArrayArg::from_raw_parts(out.clone(), m * n),
+                    // Scalar kernel args are passed as bare values (LaunchArg for T = T).
+                    m,
+                    n_lines,
+                    k,
+                );
+            }
+        }
+        Plan::RowTiled => {
+            let lanes = m.div_ceil(ROWS) * n_lines;
+            let (count, dim) = launch_1d(client, lanes, k * line * ROWS);
+            unsafe {
+                gemm_row_tiled_kernel::launch_unchecked::<F, R>(
+                    client,
+                    count,
+                    dim,
+                    line,
+                    // SAFETY: as above.
+                    ArrayArg::from_raw_parts(lhs.clone(), m * k),
+                    ArrayArg::from_raw_parts(rhs.clone(), k * n),
+                    ArrayArg::from_raw_parts(out.clone(), m * n),
+                    m,
+                    n_lines,
+                    k,
+                    lanes,
+                    ROWS,
+                );
+            }
+        }
     }
 }
 
@@ -141,8 +272,8 @@ fn launch_gemm<R: Runtime, F: DeviceScalar>(
     k: usize,
     n: usize,
 ) -> Vec<F> {
-    let lhs_handle = client.create(Bytes::from_elems(lhs.to_vec()));
-    let rhs_handle = client.create(Bytes::from_elems(rhs.to_vec()));
+    let lhs_handle = upload(client, lhs);
+    let rhs_handle = upload(client, rhs);
     let out_handle = client.empty(m * n * core::mem::size_of::<F>());
     launch_gemm_on_handles::<R, F>(client, &lhs_handle, &rhs_handle, &out_handle, m, k, n);
     let bytes = client.read(vec![out_handle]);
@@ -175,6 +306,10 @@ pub fn gemm_dense<F: DeviceScalar>(
             expected: format!("rhs len {} (= {k}*{n})", k * n),
             actual: rhs.len().to_string(),
         });
+    }
+    // Never launch a zero-length grid; an empty product is an empty result.
+    if m * n == 0 {
+        return Ok(Vec::new());
     }
 
     let out = dispatch_backend!(client, c, Rt, launch_gemm::<Rt, F>(c, lhs, rhs, m, k, n));

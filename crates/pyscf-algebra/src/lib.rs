@@ -41,6 +41,17 @@ pub mod scalar;
 // `NotYetImplemented`. Stays inside the wall: cubecl never appears in its API.
 pub mod device_buffer;
 
+// quick-260826-spd: device-aware launch geometry + vectorization width, shared by
+// every engine below.
+//
+// `pub` for the ALG-06 allowlist ONLY (pyscf-kernels, pyscf-runtime): its
+// signatures name cubecl `Runtime`/`CubeCount`/`CubeDim`, so a method crate
+// calling it would breach the wall — and cannot, since a method crate has no
+// cubecl dependency to resolve those types with. It is published rather than
+// duplicated because the CPU-runtime dispatch heuristics it encodes have to
+// agree across every kernel in the workspace, not just the ones in this crate.
+pub mod launch;
+
 pub mod axpy;
 pub mod dot;
 pub mod gemm;

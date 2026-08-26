@@ -22,36 +22,36 @@
 //!     Exercised by the random oracle differential test
 //!     (`tests/transpose_oracle.rs`) on ROCm.
 
+use crate::launch::{launch_1d, upload};
 use crate::scalar::DeviceScalar;
 use crate::{AlgebraClient, AlgebraError, Tensor};
 use cubecl::Runtime;
-use cubecl::bytes::Bytes;
 use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 
-/// Tiled 2D transpose kernel using shared memory staging with bank-conflict-free padding (+1).
-/// Row-major `M×N` `x` → row-major `N×M` `out`.
+/// 2-D transpose kernel: row-major `M×N` `x` → row-major `N×M` `out`.
 ///
-/// Threads in a 16×16 workgroup collaborate to read a 16×16 tile from global memory
-/// with contiguous column stride (100% coalesced read), write it to on-chip shared memory,
-/// synchronize via `sync_cube()`, and then write the transposed tile back to global memory
-/// with contiguous row stride (100% coalesced write).
-const TILE_X: usize = 32;
-const TILE_Y: usize = 8;
-
+/// One lane per input element, gathering `x[row, col]` to `out[col, row]`.
+///
+/// quick-260826-spd: the launch geometry was a fixed 32x8 two-dimensional cube —
+/// 256 units, the same ask that makes an element-wise kernel pathological on
+/// CubeCL's CPU runtime (see [`crate::launch::launch_1d`]). The kernel body is
+/// unchanged apart from deriving `(row, col)` from the flat `ABSOLUTE_POS`
+/// instead of the 2-D cube coordinates, because a transpose has no reuse to
+/// exploit: it is a pure index permutation, one load and one store per element,
+/// and the only thing that ever mattered here was not over-dispatching.
+///
+/// The write side is necessarily strided — that is what a transpose is — so this
+/// is not vectorized: a `Vector` spanning `N` input columns would scatter to `N`
+/// separate output rows.
 #[cube(launch_unchecked)]
-fn transpose_kernel<F: Float>(x: &Array<F>, out: &mut Array<F>, m: usize, n: usize) {
-    let tx = UNIT_POS_X as usize;
-    let ty = UNIT_POS_Y as usize;
-    let bx = CUBE_POS_X as usize;
-    let by = CUBE_POS_Y as usize;
-
-    let col = bx * TILE_X + tx;
-    let row = by * TILE_Y + ty;
-
-    if row < m && col < n {
-        out[col * m + row] = x[row * n + col];
+fn transpose_kernel<F: Float + CubeElement>(x: &Array<F>, out: &mut Array<F>, m: usize, n: usize) {
+    let tid = ABSOLUTE_POS;
+    if tid < m * n {
+        let row = tid / n;
+        let col = tid % n;
+        out[col * m + row] = x[tid];
     }
 }
 
@@ -67,18 +67,14 @@ fn launch_transpose_on_handles<R: Runtime, F: DeviceScalar>(
     m: usize,
     n: usize,
 ) {
-    let grid_x = (n as u32).div_ceil(TILE_X as u32);
-    let grid_y = (m as u32).div_ceil(TILE_Y as u32);
+    // One load plus one store per element: a single element-op per lane.
+    let (count, dim) = launch_1d(client, m * n, 1);
 
     unsafe {
         transpose_kernel::launch_unchecked::<F, R>(
             client,
-            CubeCount::Static(grid_x, grid_y, 1),
-            CubeDim {
-                x: TILE_X as u32,
-                y: TILE_Y as u32,
-                z: 1,
-            },
+            count,
+            dim,
             // SAFETY: `m*n` matches both buffers. `from_raw_parts` consumes the handle
             // by value, so clone the caller's handles (clones share the binding).
             ArrayArg::from_raw_parts(x.clone(), m * n),
@@ -98,7 +94,7 @@ fn launch_transpose<R: Runtime, F: DeviceScalar>(
     m: usize,
     n: usize,
 ) -> Vec<F> {
-    let x_handle = client.create(Bytes::from_elems(x.to_vec()));
+    let x_handle = upload(client, x);
     let out_handle = client.empty(m * n * core::mem::size_of::<F>());
     launch_transpose_on_handles::<R, F>(client, &x_handle, &out_handle, m, n);
     let bytes = client.read(vec![out_handle]);

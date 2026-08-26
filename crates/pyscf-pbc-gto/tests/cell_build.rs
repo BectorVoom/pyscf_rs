@@ -30,7 +30,7 @@
 //! NOT verified here: the NUMERIC agreement of `rcut` / `mesh` with upstream —
 //! plan 09-04 owns the estimators and `tests/cutoff.rs` is their gate. This
 //! file only asserts that a built cell no longer carries the 09-03 sentinels.
-//! Also not verified: pseudopotential-adjusted electron counts (plan 10-01,
+//! Pseudopotential-adjusted electron counts landed in plan 10-01 (see
 //! D-PBC-11).
 
 mod common;
@@ -316,14 +316,22 @@ fn cell_derefs_to_the_owned_mole() {
 
 #[test]
 fn tot_electrons_scales_with_the_k_point_count() {
+    // Since plan 10-01 the reference systems carry their `gth-pade`
+    // pseudopotential, so `atom_charges()` is the VALENCE charge: 2 x C(q4) = 8,
+    // not 2 x C(Z=6) = 12.
     let cell = systems::diamond();
-    // All-electron until plan 10-01 lands the GTH pseudopotentials: 2 x C = 12.
+    assert_eq!(cell.atom_charges(), vec![4, 4]);
     let n1 = cell.tot_electrons(1);
-    assert_eq!(n1, 12, "2 carbons, all-electron, neutral");
+    assert_eq!(n1, 8, "2 carbons at gth-pade valence charge 4, neutral");
     assert_eq!(cell.tot_electrons(4), 4 * n1);
     assert_eq!(cell.tot_electrons(8), 8 * n1);
+
     // Charge is subtracted ONCE, not per k-point (cell.py:957-967).
+    // `build_diamond_with_charge` deliberately builds WITHOUT a pseudopotential,
+    // so its counts stay all-electron and the two conventions are visible
+    // side by side.
     let charged = build_diamond_with_charge(2);
+    assert_eq!(charged.atom_charges(), vec![6, 6]);
     assert_eq!(charged.tot_electrons(1), 10);
     assert_eq!(charged.tot_electrons(4), 4 * 12 - 2);
 }
