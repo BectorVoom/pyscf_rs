@@ -1232,7 +1232,7 @@ fn eval_gto_sph_kernel(
                     let alpha = env[pe + p_idx];
                     // Coefficient matrix is F-order: ptr_coeff + c_idx*nprim + p.
                     let coef = env[pc + c_idx * nprim + p_idx];
-                    acc += coef * (-alpha * r2).exp();
+                    acc += coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
                 }
                 // ang_of==0 holds on this path (all-s routing); referenced so the
                 // launch arg is not flagged unused.
@@ -1466,7 +1466,7 @@ fn eval_gto_sph_kernel_general(
             for p_idx in 0..nprim {
                 let alpha = env[pe + p_idx];
                 let coef = env[pc + c_idx * nprim + p_idx];
-                acc += coef * (-alpha * r2).exp();
+                acc += coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
             }
             let radial = acc * fac1;
 
@@ -1572,7 +1572,7 @@ fn eval_gto_sph_deriv1_kernel(
             for p_idx in 0..nprim {
                 let alpha = env[pe + p_idx];
                 let coef = env[pc + c_idx * nprim + p_idx];
-                let g0 = coef * (-alpha * r2).exp();
+                let g0 = coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
                 acc += g0;
                 acc2a += (-2.0) * alpha * g0;
             }

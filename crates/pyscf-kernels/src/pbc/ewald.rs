@@ -45,8 +45,6 @@ use cubecl::server::Handle;
 use pyscf_algebra::dispatch_backend;
 use pyscf_algebra::{AlgebraClient, AlgebraError};
 
-use crate::scalar::DeviceScalar;
-
 /// Threads per cube. Same geometry as K-01 / K-02.
 const BLOCK: u32 = 256;
 
@@ -61,10 +59,10 @@ const BLOCK: u32 = 256;
 /// order. The `t < nl*natm*natm` guard is required: the launch rounds the
 /// thread count up to a whole number of cubes.
 #[cube(launch_unchecked)]
-fn ewald_rlij_kernel<F: Float>(
-    coords: &Array<F>,
-    ls: &Array<F>,
-    r: &mut Array<F>,
+fn ewald_rlij_kernel(
+    coords: &Array<f64>,
+    ls: &Array<f64>,
+    r: &mut Array<f64>,
     natm: usize,
     nl: usize,
 ) {
@@ -87,12 +85,12 @@ fn ewald_rlij_kernel<F: Float>(
         let mut r2 = dx * dx;
         r2 += dy * dy;
         r2 += dz * dz;
-        r[t] = F::sqrt(r2);
+        r[t] = cube_math::double::exact::sqrt(r2, cube_math::MathConfig::EXACT);
     }
 }
 
 /// Core launch on resident device handles.
-fn launch_ewald_rlij_on_handles<R: Runtime, F: DeviceScalar>(
+fn launch_ewald_rlij_on_handles<R: Runtime>(
     client: &ComputeClient<R>,
     coords: &Handle,
     ls: &Handle,
@@ -103,11 +101,11 @@ fn launch_ewald_rlij_on_handles<R: Runtime, F: DeviceScalar>(
     let n = nl * natm * natm;
     let groups = (n as u32).div_ceil(BLOCK);
     unsafe {
-        ewald_rlij_kernel::launch_unchecked::<F, R>(
+        ewald_rlij_kernel::launch_unchecked::<R>(
             client,
             CubeCount::Static(groups, 1, 1),
             CubeDim::new_1d(BLOCK),
-            // SAFETY: coords holds 3*natm and ls 3*nl elements of `F`; the
+            // SAFETY: coords holds 3*natm and ls 3*nl elements of `f64`; the
             // output holds nl*natm*natm; the kernel guards `t < n`.
             ArrayArg::from_raw_parts(coords.clone(), natm * 3),
             ArrayArg::from_raw_parts(ls.clone(), nl * 3),
@@ -119,20 +117,20 @@ fn launch_ewald_rlij_on_handles<R: Runtime, F: DeviceScalar>(
 }
 
 /// Host-slice launcher for K-05.
-fn launch_ewald_rlij<R: Runtime, F: DeviceScalar>(
+fn launch_ewald_rlij<R: Runtime>(
     client: &ComputeClient<R>,
-    coords: &[F],
-    ls: &[F],
+    coords: &[f64],
+    ls: &[f64],
     natm: usize,
     nl: usize,
-) -> Vec<F> {
+) -> Vec<f64> {
     let n = nl * natm * natm;
     let coords_h = client.create(Bytes::from_elems(coords.to_vec()));
     let ls_h = client.create(Bytes::from_elems(ls.to_vec()));
-    let r_h = client.empty(n * core::mem::size_of::<F>());
-    launch_ewald_rlij_on_handles::<R, F>(client, &coords_h, &ls_h, &r_h, natm, nl);
+    let r_h = client.empty(n * core::mem::size_of::<f64>());
+    launch_ewald_rlij_on_handles::<R>(client, &coords_h, &ls_h, &r_h, natm, nl);
     let bytes = client.read(vec![r_h]);
-    bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec()
+    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
 }
 
 /// K-05 public entry point: the `(nL, natm, natm)` C-order table of pair
@@ -170,7 +168,7 @@ pub fn ewald_rlij(
         client,
         c,
         Rt,
-        launch_ewald_rlij::<Rt, f64>(c, coords, ls, natm, nl)
+        launch_ewald_rlij::<Rt>(c, coords, ls, natm, nl)
     );
     Ok(out)
 }
@@ -191,12 +189,12 @@ pub fn ewald_rlij(
 /// The `g < ngrids` guard is required: the launch rounds the thread count up to
 /// a whole number of cubes.
 #[cube(launch_unchecked)]
-fn ewald_gs_kernel<F: Float>(
-    gv: &Array<F>,
-    zsi_re: &Array<F>,
-    zsi_im: &Array<F>,
-    params: &Array<F>,
-    term: &mut Array<F>,
+fn ewald_gs_kernel(
+    gv: &Array<f64>,
+    zsi_re: &Array<f64>,
+    zsi_im: &Array<f64>,
+    params: &Array<f64>,
+    term: &mut Array<f64>,
     ngrids: usize,
 ) {
     let g = ABSOLUTE_POS;
@@ -207,7 +205,7 @@ fn ewald_gs_kernel<F: Float>(
         absg2 += gv[gc + 1] * gv[gc + 1];
         absg2 += gv[gc + 2] * gv[gc + 2];
         // cell.py:755 — absG2[absG2 == 0] = 1e200.
-        if absg2 == F::from_int(0) {
+        if absg2 == 0.0 {
             absg2 = params[2];
         }
         let eta = params[0];
@@ -215,8 +213,8 @@ fn ewald_gs_kernel<F: Float>(
         // cell.py:756-757 — coulG = 4*pi/absG2; coulG *= weights.
         let coulg = params[3] / absg2 * weights;
         // cell.py:767 — ZexpG2 = ZSI * exp(-absG2/(4*eta^2)).
-        let four_eta2 = F::from_int(4) * eta * eta;
-        let expfac = F::exp(F::from_int(0) - absg2 / four_eta2);
+        let four_eta2 = 4.0 * eta * eta;
+        let expfac = cube_math::double::exp::exp(0.0 - absg2 / four_eta2, cube_math::MathConfig::EXACT);
         // cell.py:768 — real part of conj(ZSI) * ZexpG2 * coulG.
         let mut z2 = zsi_re[g] * zsi_re[g];
         z2 += zsi_im[g] * zsi_im[g];
@@ -226,7 +224,7 @@ fn ewald_gs_kernel<F: Float>(
 
 /// Core launch on resident device handles.
 #[allow(clippy::too_many_arguments)]
-fn launch_ewald_gs_on_handles<R: Runtime, F: DeviceScalar>(
+fn launch_ewald_gs_on_handles<R: Runtime>(
     client: &ComputeClient<R>,
     gv: &Handle,
     zsi_re: &Handle,
@@ -237,11 +235,11 @@ fn launch_ewald_gs_on_handles<R: Runtime, F: DeviceScalar>(
 ) {
     let groups = (ngrids as u32).div_ceil(BLOCK);
     unsafe {
-        ewald_gs_kernel::launch_unchecked::<F, R>(
+        ewald_gs_kernel::launch_unchecked::<R>(
             client,
             CubeCount::Static(groups, 1, 1),
             CubeDim::new_1d(BLOCK),
-            // SAFETY: gv holds 3*ngrids elements of `F`, both ZSI planes hold
+            // SAFETY: gv holds 3*ngrids elements of `f64`, both ZSI planes hold
             // ngrids, params holds 4, and the output holds ngrids; the kernel
             // guards `g < ngrids`.
             ArrayArg::from_raw_parts(gv.clone(), ngrids * 3),
@@ -255,22 +253,22 @@ fn launch_ewald_gs_on_handles<R: Runtime, F: DeviceScalar>(
 }
 
 /// Host-slice launcher for K-06.
-fn launch_ewald_gs<R: Runtime, F: DeviceScalar>(
+fn launch_ewald_gs<R: Runtime>(
     client: &ComputeClient<R>,
-    gv: &[F],
-    zsi_re: &[F],
-    zsi_im: &[F],
-    params: &[F],
+    gv: &[f64],
+    zsi_re: &[f64],
+    zsi_im: &[f64],
+    params: &[f64],
     ngrids: usize,
-) -> Vec<F> {
+) -> Vec<f64> {
     let gv_h = client.create(Bytes::from_elems(gv.to_vec()));
     let re_h = client.create(Bytes::from_elems(zsi_re.to_vec()));
     let im_h = client.create(Bytes::from_elems(zsi_im.to_vec()));
     let par_h = client.create(Bytes::from_elems(params.to_vec()));
-    let term_h = client.empty(ngrids * core::mem::size_of::<F>());
-    launch_ewald_gs_on_handles::<R, F>(client, &gv_h, &re_h, &im_h, &par_h, &term_h, ngrids);
+    let term_h = client.empty(ngrids * core::mem::size_of::<f64>());
+    launch_ewald_gs_on_handles::<R>(client, &gv_h, &re_h, &im_h, &par_h, &term_h, ngrids);
     let bytes = client.read(vec![term_h]);
-    bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec()
+    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
 }
 
 /// Upstream's G=0 sentinel (`cell.py:755`). Public so the host side and the
@@ -320,7 +318,7 @@ pub fn ewald_gs_terms(
         client,
         c,
         Rt,
-        launch_ewald_gs::<Rt, f64>(c, gv, zsi_re, zsi_im, &params, ngrids)
+        launch_ewald_gs::<Rt>(c, gv, zsi_re, zsi_im, &params, ngrids)
     );
     Ok(out)
 }

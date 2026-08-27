@@ -45,6 +45,7 @@ cubecl-cuda    = { workspace = true, optional = true }
 cubecl-wgpu    = { workspace = true, optional = true }
 cubecl-hip     = { workspace = true, optional = true }
 bytemuck       = { workspace = true }
+cube-math      = { workspace = true }
 tracing        = { workspace = true }
 thiserror      = { workspace = true }
 

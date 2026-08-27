@@ -33,19 +33,17 @@ use cubecl::server::Handle;
 use pyscf_algebra::dispatch_backend;
 use pyscf_algebra::{AlgebraClient, AlgebraError};
 
-use crate::scalar::DeviceScalar;
-
 /// `theta = kpts[k] . Ls[l]`; `re = cos(theta)`, `im = sin(theta)`.
 /// One thread per `(k, l)` pair, flattened as `i = k*nimgs + l`.
 ///
 /// The `i < nkpts*nimgs` guard is required: the launch rounds the thread count
 /// up to a whole number of cubes, so tail threads must not write out of range.
 #[cube(launch_unchecked)]
-fn bloch_phase_kernel<F: Float>(
-    kpts: &Array<F>,
-    ls: &Array<F>,
-    re: &mut Array<F>,
-    im: &mut Array<F>,
+fn bloch_phase_kernel(
+    kpts: &Array<f64>,
+    ls: &Array<f64>,
+    re: &mut Array<f64>,
+    im: &mut Array<f64>,
     nkpts: usize,
     nimgs: usize,
 ) {
@@ -58,8 +56,9 @@ fn bloch_phase_kernel<F: Float>(
         let mut theta = kpts[kc] * ls[lc];
         theta += kpts[kc + 1] * ls[lc + 1];
         theta += kpts[kc + 2] * ls[lc + 2];
-        re[i] = F::cos(theta);
-        im[i] = F::sin(theta);
+        let (s, c) = cube_math::double::trig::sincos(theta, cube_math::MathConfig::EXACT);
+        re[i] = c;
+        im[i] = s;
     }
 }
 
@@ -69,7 +68,7 @@ const BLOCK: u32 = 256;
 /// Core launch on resident device handles. `R` stays generic so one body serves
 /// every backend; the `Runtime` type never escapes into a public signature.
 #[allow(clippy::too_many_arguments)]
-fn launch_bloch_phase_on_handles<R: Runtime, F: DeviceScalar>(
+fn launch_bloch_phase_on_handles<R: Runtime>(
     client: &ComputeClient<R>,
     kpts: &Handle,
     ls: &Handle,
@@ -81,11 +80,11 @@ fn launch_bloch_phase_on_handles<R: Runtime, F: DeviceScalar>(
     let n = nkpts * nimgs;
     let groups = (n as u32).div_ceil(BLOCK);
     unsafe {
-        bloch_phase_kernel::launch_unchecked::<F, R>(
+        bloch_phase_kernel::launch_unchecked::<R>(
             client,
             CubeCount::Static(groups, 1, 1),
             CubeDim::new_1d(BLOCK),
-            // SAFETY: kpts holds 3*nkpts and ls 3*nimgs elements of `F`; the two
+            // SAFETY: kpts holds 3*nkpts and ls 3*nimgs elements of `f64`; the two
             // outputs hold nkpts*nimgs each; the kernel guards `i < n`.
             ArrayArg::from_raw_parts(kpts.clone(), nkpts * 3),
             ArrayArg::from_raw_parts(ls.clone(), nimgs * 3),
@@ -99,23 +98,23 @@ fn launch_bloch_phase_on_handles<R: Runtime, F: DeviceScalar>(
 
 /// Host-slice launcher: upload k-points and lattice vectors, allocate the two
 /// output planes, run the kernel, read both back in ONE batched `client.read`.
-fn launch_bloch_phase<R: Runtime, F: DeviceScalar>(
+fn launch_bloch_phase<R: Runtime>(
     client: &ComputeClient<R>,
-    kpts: &[F],
-    ls: &[F],
+    kpts: &[f64],
+    ls: &[f64],
     nkpts: usize,
     nimgs: usize,
-) -> (Vec<F>, Vec<F>) {
+) -> (Vec<f64>, Vec<f64>) {
     let n = nkpts * nimgs;
     let kpts_h = client.create(Bytes::from_elems(kpts.to_vec()));
     let ls_h = client.create(Bytes::from_elems(ls.to_vec()));
-    let re_h = client.empty(n * core::mem::size_of::<F>());
-    let im_h = client.empty(n * core::mem::size_of::<F>());
-    launch_bloch_phase_on_handles::<R, F>(client, &kpts_h, &ls_h, &re_h, &im_h, nkpts, nimgs);
+    let re_h = client.empty(n * core::mem::size_of::<f64>());
+    let im_h = client.empty(n * core::mem::size_of::<f64>());
+    launch_bloch_phase_on_handles::<R>(client, &kpts_h, &ls_h, &re_h, &im_h, nkpts, nimgs);
     let bytes = client.read(vec![re_h, im_h]);
     (
-        bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec(),
-        bytemuck::cast_slice::<u8, F>(&bytes[1]).to_vec(),
+        bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
+        bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
     )
 }
 
@@ -154,7 +153,7 @@ pub fn bloch_phase(
         client,
         c,
         Rt,
-        launch_bloch_phase::<Rt, f64>(c, kpts, ls, nkpts, nimgs)
+        launch_bloch_phase::<Rt>(c, kpts, ls, nkpts, nimgs)
     );
     Ok(out)
 }

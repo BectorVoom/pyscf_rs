@@ -1,0 +1,391 @@
+//! `KUKS` — unrestricted Kohn-Sham with k-point sampling (plan 12-04).
+//!
+//! Port of `pyscf/pbc/dft/kuks.py:38-113` (`get_veff`, `energy_elec`) and
+//! `:153-200` (the class).
+//!
+//! ```text
+//! nset      = 2
+//! J         = vj[a] + vj[b]                              (kuks.py:82)
+//! get_veff  = Vxc[s] + J − hyb·K[s]                      (kuks.py:83, :89)
+//! ecoul     = 0.5 · (1/N_k) Σ_{s,k} Tr(D^{s,k} J^k)      (kuks.py:87)
+//! exc       = ∫ ε_xc ρ − 0.5 · (1/N_k) Σ_{s,k} Tr(D^{s,k} K^{s,k})  (kuks.py:91)
+//! ```
+//!
+//! Note the factors: `KUKS` subtracts the FULL `vk` (not `0.5·vk`) and takes
+//! `0.5` of the exchange trace, because its two channels are not
+//! spin-degenerate.
+
+use pyscf_algebra::CTensor;
+use pyscf_core::PyscfRsError;
+use pyscf_pbc_df::Fftdf;
+use pyscf_pbc_gto::{Cell, ExxDiv};
+use pyscf_pbc_scf::khooks::KOverrideHooks;
+use pyscf_pbc_scf::kocc::get_occ_unrestricted;
+use pyscf_pbc_scf::krdm::make_rdm1;
+use pyscf_pbc_scf::krhf::{df_err, eig_channel, to_row_major};
+use pyscf_pbc_scf::kscf::kernel;
+use pyscf_pbc_scf::types::{KDms, KInitGuess, KMats, KScfConfig, KScfResult};
+
+use crate::error::PbcDftError;
+use crate::gen_grid::PeriodicGrids;
+use crate::krks::{KsEnergyTags, unwrap_err};
+use crate::numint::KNumInt;
+use crate::veff::{get_jk, sub_scaled, trace_dm_v};
+use crate::xc::err;
+
+/// Unrestricted periodic Kohn-Sham.
+#[derive(Debug)]
+pub struct Kuks {
+    /// The density-fitting object.
+    pub with_df: Fftdf,
+    /// The XC functional string.
+    pub xc: String,
+    /// Exchange divergence treatment.
+    pub exxdiv: Option<ExxDiv>,
+    /// The integration grid.
+    pub grids: PeriodicGrids,
+    /// The numerical-integration driver.
+    pub ni: KNumInt,
+    /// Override the `(nalpha, nbeta)` derived from `cell.spin`.
+    pub nelec: Option<(usize, usize)>,
+    /// Smearing, when enabled.
+    pub smearing: Option<pyscf_pbc_scf::smearing::Smearing>,
+    tags: std::cell::Cell<Option<KsEnergyTags>>,
+    entropy: std::cell::Cell<Option<f64>>,
+}
+
+impl Kuks {
+    /// Build a `KUKS` with the default `FFTDF` and the uniform grid.
+    ///
+    /// # Errors
+    /// Propagates the `FFTDF` and grid construction.
+    pub fn new(cell: Cell, kpts: &[[f64; 3]], xc: &str) -> Result<Self, PbcDftError> {
+        let with_df = Fftdf::new(cell, kpts)
+            .map_err(|e| err(format!("KUKS: FFTDF construction failed: {e}")))?;
+        Self::from_df(with_df, xc)
+    }
+
+    /// `KUKS` over an explicit density-fitting object.
+    ///
+    /// # Errors
+    /// Propagates the grid construction.
+    pub fn from_df(with_df: Fftdf, xc: &str) -> Result<Self, PbcDftError> {
+        let grids = PeriodicGrids::uniform(&with_df.cell, Some(with_df.mesh))?;
+        let ni = KNumInt::new(&with_df.kpts);
+        Ok(Self {
+            with_df,
+            xc: xc.to_string(),
+            exxdiv: Some(ExxDiv::Ewald),
+            grids,
+            ni,
+            nelec: None,
+            smearing: None,
+            tags: std::cell::Cell::new(None),
+            entropy: std::cell::Cell::new(None),
+        })
+    }
+
+    /// The cell.
+    pub fn cell(&self) -> &Cell {
+        &self.with_df.cell
+    }
+
+    /// The k-points.
+    pub fn kpts(&self) -> &[[f64; 3]] {
+        &self.with_df.kpts
+    }
+
+    /// `(nalpha, nbeta)` over the Brillouin-zone supercell — `kuhf.py:442-458`.
+    ///
+    /// # Errors
+    /// [`PyscfRsError`] when the electron count and `cell.spin` disagree.
+    pub fn nelec(&self) -> Result<(usize, usize), PyscfRsError> {
+        if let Some(n) = self.nelec {
+            return Ok(n);
+        }
+        let cell = self.cell();
+        let ne = cell.tot_electrons(self.kpts().len()) as i64;
+        let spin = cell.mol.spin as i64;
+        let nalpha = (ne + spin) / 2;
+        let nbeta = nalpha - spin;
+        if nalpha + nbeta != ne || nalpha < 0 || nbeta < 0 {
+            return Err(unwrap_err(err(format!(
+                "KUKS: electron number {ne} and spin {spin} are not consistent"
+            ))));
+        }
+        Ok((nalpha as usize, nbeta as usize))
+    }
+
+    /// The energy components of the last `get_veff`.
+    pub fn last_tags(&self) -> Option<KsEnergyTags> {
+        self.tags.get()
+    }
+
+    /// Run the SCF.
+    ///
+    /// # Errors
+    /// Propagates every hook and the driver.
+    pub fn kernel(&self, cfg: &KScfConfig) -> Result<KScfResult, PyscfRsError> {
+        self.tags.set(None);
+        self.entropy.set(None);
+        kernel(self, cfg)
+    }
+
+    /// Run with the cell-derived defaults.
+    ///
+    /// # Errors
+    /// As [`Kuks::kernel`].
+    pub fn run(&self) -> Result<KScfResult, PyscfRsError> {
+        self.kernel(&KScfConfig::for_cell(self.cell()))
+    }
+
+    /// `get_rho(mf, dm, grids, kpts)` — `kuks.py` reuses `krks.get_rho` on the
+    /// SPIN-SUMMED density (`krks.py:105-112`).
+    ///
+    /// # Errors
+    /// Propagates the AO evaluation.
+    pub fn get_rho(&self, dms: &KDms) -> Result<Vec<f64>, PbcDftError> {
+        let total: KMats = dms[0]
+            .iter()
+            .zip(&dms[1])
+            .map(|(a, b)| {
+                let mut m = a.clone();
+                for i in 0..m.len() {
+                    m.re[i] += b.re[i];
+                    m.im[i] += b.im[i];
+                }
+                m
+            })
+            .collect();
+        self.ni.get_rho(self.cell(), &total, &self.grids)
+    }
+
+    /// `get_veff` proper — `kuks.py:38-101`.
+    ///
+    /// # Errors
+    /// Propagates the grid loop and the J/K build.
+    pub fn get_veff_tagged(
+        &self,
+        dms: &KDms,
+        kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<(KDms, KsEnergyTags), PbcDftError> {
+        Self::veff_from_parts(
+            &self.with_df,
+            &self.xc,
+            self.exxdiv,
+            &self.grids,
+            &self.ni,
+            dms,
+            kpts_band,
+        )
+    }
+
+    /// The body of [`Kuks::get_veff_tagged`], taken apart from `self` so that
+    /// [`crate::Kroks`] — whose `get_veff` upstream imports verbatim from
+    /// `kuks` (`kroks.py:32-41`) — can call the SAME code rather than carry a
+    /// second copy of it.
+    ///
+    /// # Errors
+    /// Propagates the grid loop and the J/K build.
+    #[allow(clippy::too_many_arguments)]
+    pub fn veff_from_parts(
+        with_df: &Fftdf,
+        xc: &str,
+        exxdiv: Option<ExxDiv>,
+        grids: &PeriodicGrids,
+        ni: &KNumInt,
+        dms: &KDms,
+        kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<(KDms, KsEnergyTags), PbcDftError> {
+        let cell = &with_df.cell;
+        let nao = cell.mol.nao_nr;
+        let nkpts = with_df.kpts.len();
+        let weight = 1.0 / nkpts as f64;
+        let ground_state = kpts_band.is_none();
+
+        // kuks.py:59-60 — one density SET per spin, each carrying every k-point.
+        let sets: [KDms; 2] = [vec![dms[0].clone()], vec![dms[1].clone()]];
+        let nr = ni.nr_uks(cell, grids, xc, &sets, 1, kpts_band)?;
+        let mut vxc: KDms = vec![nr.vmat[0][0].clone(), nr.vmat[1][0].clone()];
+        let mut exc = nr.excsum[0];
+
+        let jk = get_jk(
+            with_df,
+            xc,
+            dms,
+            1,
+            &with_df.kpts,
+            kpts_band,
+            exxdiv,
+            true,
+        )?;
+        let vj = jk
+            .vj
+            .ok_or_else(|| err("KUKS: the density-fitting object returned no vj"))?;
+        // kuks.py:82 — vj = vj[0] + vj[1], ONE Coulomb matrix for both spins.
+        let nband = vj[0].len();
+        let jtot: KMats = (0..nband)
+            .map(|k| {
+                let mut m = vj[0][k].clone();
+                for i in 0..m.len() {
+                    m.re[i] += vj[1][k].re[i];
+                    m.im[i] += vj[1][k].im[i];
+                }
+                m
+            })
+            .collect();
+        for set in vxc.iter_mut() {
+            for (k, m) in set.iter_mut().enumerate() {
+                for i in 0..m.len() {
+                    m.re[i] += jtot[k].re[i];
+                    m.im[i] += jtot[k].im[i];
+                }
+            }
+        }
+        // kuks.py:87 — ecoul = einsum('nKij,Kji->', dm, vj).real * .5 * weight
+        let ecoul = if ground_state {
+            let stacked: Vec<KMats> = vec![jtot.clone(), jtot.clone()];
+            0.5 * weight * trace_dm_v(dms, &stacked, nao).0
+        } else {
+            0.0
+        };
+
+        if let Some(vk) = jk.vk.as_ref() {
+            // kuks.py:89 — vxc -= vk (the FULL exchange, per spin).
+            sub_scaled(&mut vxc, 1.0, vk);
+            if ground_state {
+                // kuks.py:91
+                exc -= 0.5 * weight * trace_dm_v(dms, vk, nao).0;
+            }
+        }
+
+        Ok((
+            vxc,
+            KsEnergyTags {
+                ecoul,
+                exc,
+                nelec: nr.nelec[0].0 + nr.nelec[0].1,
+            },
+        ))
+    }
+}
+
+impl KOverrideHooks for Kuks {
+    fn cell(&self) -> &Cell {
+        &self.with_df.cell
+    }
+    fn kpts(&self) -> &[[f64; 3]] {
+        &self.with_df.kpts
+    }
+    fn nset(&self) -> usize {
+        2
+    }
+
+    fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
+        let nao = self.cell().mol.nao_nr;
+        Ok(to_row_major(
+            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
+            nao,
+        ))
+    }
+
+    fn get_hcore(&self) -> Result<KMats, PyscfRsError> {
+        pyscf_pbc_df::get_hcore(&self.with_df, self.kpts()).map_err(df_err)
+    }
+
+    fn get_init_guess(&self, mode: &KInitGuess, s1e: &KMats) -> Result<KDms, PyscfRsError> {
+        let (na, nb) = self.nelec()?;
+        pyscf_pbc_scf::init_guess::get_init_guess(
+            self.cell(),
+            self.kpts().len(),
+            2,
+            mode,
+            s1e,
+            (na + nb) as f64,
+        )
+    }
+
+    fn get_veff(&self, dms: &KDms) -> Result<KDms, PyscfRsError> {
+        let (v, tags) = self.get_veff_tagged(dms, None).map_err(unwrap_err)?;
+        self.tags.set(Some(tags));
+        Ok(v)
+    }
+
+    fn eig(
+        &self,
+        fock: &KDms,
+        s1e: &KMats,
+    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+        let nao = self.cell().mol.nao_nr;
+        let (mut e, mut c) = eig_channel(&fock[0], s1e, nao)?;
+        let (eb, cb) = eig_channel(&fock[1], s1e, nao)?;
+        e.extend(eb);
+        c.extend(cb);
+        Ok((e, c))
+    }
+
+    fn get_occ(
+        &self,
+        mo_energy: &[Vec<f64>],
+    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+        let nkpts = self.kpts().len();
+        let (na, nb) = self.nelec()?;
+        let (ea, eb) = mo_energy.split_at(nkpts);
+        if let Some(sm) = self.smearing.as_ref() {
+            let pooled: Vec<Vec<f64>> = mo_energy.to_vec();
+            let (occ, fermi, entropy) = sm.occupations(&pooled, (na + nb) as f64, 1.0)?;
+            self.entropy.set(Some(entropy));
+            return Ok((occ, vec![fermi, fermi]));
+        }
+        let (occ_a, occ_b, fermi) = get_occ_unrestricted(ea, eb, na, nb)?;
+        let mut occ = occ_a;
+        occ.extend(occ_b);
+        Ok((occ, fermi.to_vec()))
+    }
+
+    fn make_rdm1(
+        &self,
+        mo_coeff: &[CTensor],
+        mo_occ: &[Vec<f64>],
+    ) -> Result<KDms, PyscfRsError> {
+        let nao = self.cell().mol.nao_nr;
+        let nkpts = self.kpts().len();
+        Ok(vec![
+            make_rdm1(&mo_coeff[..nkpts], &mo_occ[..nkpts], nao),
+            make_rdm1(&mo_coeff[nkpts..], &mo_occ[nkpts..], nao),
+        ])
+    }
+
+    fn energy_elec(
+        &self,
+        dms: &KDms,
+        h1e: &KMats,
+        vhf: &KDms,
+    ) -> Result<(f64, f64), PyscfRsError> {
+        let tags = match self.tags.get() {
+            Some(t) => t,
+            None => {
+                let (_, t) = self.get_veff_tagged(dms, None).map_err(unwrap_err)?;
+                self.tags.set(Some(t));
+                t
+            }
+        };
+        let _ = vhf;
+        let nao = self.cell().mol.nao_nr;
+        let weight = 1.0 / h1e.len() as f64;
+        let mut e1 = 0.0_f64;
+        for set in dms.iter() {
+            for (k, h) in h1e.iter().enumerate() {
+                e1 += pyscf_pbc_scf::krdm::trace_ab(&set[k], h, nao).0;
+            }
+        }
+        e1 *= weight;
+        Ok((e1 + tags.ecoul + tags.exc, tags.ecoul + tags.exc))
+    }
+
+    fn free_energy(&self) -> Option<f64> {
+        self.entropy
+            .get()
+            .map(|s| -self.smearing.as_ref().map_or(0.0, |sm| sm.sigma) * s)
+    }
+}

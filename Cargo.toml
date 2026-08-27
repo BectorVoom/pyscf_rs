@@ -89,6 +89,7 @@ num-traits      = "0.2"
 # form tops out near 1.5e-7 absolute, two orders too coarse for the 1e-9 Ha
 # Ewald acceptance gate. No-std, no transitive deps, already in Cargo.lock.
 libm            = "0.2"
+cube-math       = { path = "../cube-math" }
 thiserror       = "=2.0.18"
 serde           = { version = "=1.0", features = ["derive"] }
 serde_json      = "=1.0.149"

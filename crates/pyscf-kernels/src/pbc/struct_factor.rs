@@ -18,19 +18,17 @@ use cubecl::server::Handle;
 use pyscf_algebra::dispatch_backend;
 use pyscf_algebra::{AlgebraClient, AlgebraError};
 
-use crate::scalar::DeviceScalar;
-
 /// `theta = -(Gv[g] . R_a)`; `si_re = cos(theta)`, `si_im = sin(theta)`.
 /// One thread per `(a, g)` pair, flattened as `i = a*ngrids + g`.
 ///
 /// The `i < natm*ngrids` guard is required: the launch rounds the thread count
 /// up to a whole number of cubes.
 #[cube(launch_unchecked)]
-fn struct_factor_kernel<F: Float>(
-    coords: &Array<F>,
-    gv: &Array<F>,
-    si_re: &mut Array<F>,
-    si_im: &mut Array<F>,
+fn struct_factor_kernel(
+    coords: &Array<f64>,
+    gv: &Array<f64>,
+    si_re: &mut Array<f64>,
+    si_im: &mut Array<f64>,
     natm: usize,
     ngrids: usize,
 ) {
@@ -44,9 +42,10 @@ fn struct_factor_kernel<F: Float>(
         let mut rg = gv[gc] * coords[ac];
         rg += gv[gc + 1] * coords[ac + 1];
         rg += gv[gc + 2] * coords[ac + 2];
-        let theta = F::from_int(0) - rg;
-        si_re[i] = F::cos(theta);
-        si_im[i] = F::sin(theta);
+        let theta = 0.0 - rg;
+        let (s, c) = cube_math::double::trig::sincos(theta, cube_math::MathConfig::EXACT);
+        si_re[i] = c;
+        si_im[i] = s;
     }
 }
 
@@ -56,7 +55,7 @@ const BLOCK: u32 = 256;
 /// Core launch on resident device handles. `R` stays generic so one body serves
 /// every backend; the `Runtime` type never escapes into a public signature.
 #[allow(clippy::too_many_arguments)]
-fn launch_struct_factor_on_handles<R: Runtime, F: DeviceScalar>(
+fn launch_struct_factor_on_handles<R: Runtime>(
     client: &ComputeClient<R>,
     coords: &Handle,
     gv: &Handle,
@@ -68,11 +67,11 @@ fn launch_struct_factor_on_handles<R: Runtime, F: DeviceScalar>(
     let n = natm * ngrids;
     let groups = (n as u32).div_ceil(BLOCK);
     unsafe {
-        struct_factor_kernel::launch_unchecked::<F, R>(
+        struct_factor_kernel::launch_unchecked::<R>(
             client,
             CubeCount::Static(groups, 1, 1),
             CubeDim::new_1d(BLOCK),
-            // SAFETY: coords holds 3*natm and gv 3*ngrids elements of `F`; the
+            // SAFETY: coords holds 3*natm and gv 3*ngrids elements of `f64`; the
             // two outputs hold natm*ngrids each; the kernel guards `i < n`.
             ArrayArg::from_raw_parts(coords.clone(), natm * 3),
             ArrayArg::from_raw_parts(gv.clone(), ngrids * 3),
@@ -86,23 +85,23 @@ fn launch_struct_factor_on_handles<R: Runtime, F: DeviceScalar>(
 
 /// Host-slice launcher: upload the coordinates and G-vectors, allocate the two
 /// output planes, run the kernel, read both back in ONE batched `client.read`.
-fn launch_struct_factor<R: Runtime, F: DeviceScalar>(
+fn launch_struct_factor<R: Runtime>(
     client: &ComputeClient<R>,
-    coords: &[F],
-    gv: &[F],
+    coords: &[f64],
+    gv: &[f64],
     natm: usize,
     ngrids: usize,
-) -> (Vec<F>, Vec<F>) {
+) -> (Vec<f64>, Vec<f64>) {
     let n = natm * ngrids;
     let coords_h = client.create(Bytes::from_elems(coords.to_vec()));
     let gv_h = client.create(Bytes::from_elems(gv.to_vec()));
-    let re_h = client.empty(n * core::mem::size_of::<F>());
-    let im_h = client.empty(n * core::mem::size_of::<F>());
-    launch_struct_factor_on_handles::<R, F>(client, &coords_h, &gv_h, &re_h, &im_h, natm, ngrids);
+    let re_h = client.empty(n * core::mem::size_of::<f64>());
+    let im_h = client.empty(n * core::mem::size_of::<f64>());
+    launch_struct_factor_on_handles::<R>(client, &coords_h, &gv_h, &re_h, &im_h, natm, ngrids);
     let bytes = client.read(vec![re_h, im_h]);
     (
-        bytemuck::cast_slice::<u8, F>(&bytes[0]).to_vec(),
-        bytemuck::cast_slice::<u8, F>(&bytes[1]).to_vec(),
+        bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
+        bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
     )
 }
 
@@ -139,7 +138,7 @@ pub fn struct_factor(
         client,
         c,
         Rt,
-        launch_struct_factor::<Rt, f64>(c, coords, gv, natm, ngrids)
+        launch_struct_factor::<Rt>(c, coords, gv, natm, ngrids)
     );
     Ok(out)
 }
