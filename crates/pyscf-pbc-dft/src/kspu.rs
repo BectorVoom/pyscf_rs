@@ -381,7 +381,16 @@ fn vec_lowdin(
                     .to_string(),
             ));
         }
-        let inv = cube_math::double::pow::pow(*wn, -0.5, cube_math::MathConfig::EXACT);
+        // `w ** -0.5`, matching upstream's `numpy.dot(v * (w**-.5), v.conj().T)`
+        // (`krkspu.py`). Host scalar math uses `std`, NOT `cube-math`:
+        // cube-math is a DEVICE libm — every entry point launders its argument
+        // through `bits::opaque64`, whose `RuntimeCell` has no native
+        // implementation and panics with "Unexpanded Cube functions should not
+        // be called" the moment it is invoked outside a `#[cube]` expansion.
+        // Its own suite says so ("Everything runs on a real CubeCL runtime
+        // rather than by calling the kernels as ordinary Rust functions").
+        // cube-math belongs in `pyscf-kernels`, inside kernels.
+        let inv = wn.powf(-0.5);
         let base = n * nlo;
         for i in 0..nlo {
             let (ar, ai) = (u.re[base + i], u.im[base + i]);

@@ -127,6 +127,32 @@ fn build_alias() -> HashMap<&'static str, &'static str> {
     m.insert("qzpdkh", "qzp-dkh.dat");
 
     // === Density-fitting auxiliary ===
+    // === def2 auxiliary fitting sets (plan 14-01) ===
+    // `pyscf/gto/basis/__init__.py` ALIAS. Needed because
+    // `df.addons.predefined_auxbasis` resolves sto-3g (and every def2 orbital
+    // basis) to `def2-svp-jkfit`, which is the def2-universal file. Without
+    // these rows `make_auxbasis` cannot build the He-fcc auxiliary cell.
+    m.insert("def2universaljfit", "def2-universal-jfit.dat");
+    m.insert("def2universaljkfit", "def2-universal-jkfit.dat");
+    m.insert("def2svpjfit", "def2-universal-jfit.dat");
+    m.insert("def2svpjkfit", "def2-universal-jkfit.dat");
+    m.insert("def2svpri", "def2-svp-ri.dat");
+    m.insert("def2svpdri", "def2-svpd-ri.dat");
+    m.insert("def2tzvpjfit", "def2-universal-jfit.dat");
+    m.insert("def2tzvpjkfit", "def2-universal-jkfit.dat");
+    m.insert("def2tzvpri", "def2-tzvp-ri.dat");
+    m.insert("def2tzvpdri", "def2-tzvpd-ri.dat");
+    m.insert("def2tzvppjfit", "def2-universal-jfit.dat");
+    m.insert("def2tzvppjkfit", "def2-universal-jkfit.dat");
+    m.insert("def2tzvppri", "def2-tzvpp-ri.dat");
+    m.insert("def2tzvppdri", "def2-tzvppd-ri.dat");
+    m.insert("def2qzvpjfit", "def2-universal-jfit.dat");
+    m.insert("def2qzvpjkfit", "def2-universal-jkfit.dat");
+    m.insert("def2qzvpri", "def2-qzvp-ri.dat");
+    m.insert("def2qzvppjfit", "def2-universal-jfit.dat");
+    m.insert("def2qzvppjkfit", "def2-universal-jkfit.dat");
+    m.insert("def2qzvppri", "def2-qzvpp-ri.dat");
+    m.insert("def2qzvppdri", "def2-qzvppd-ri.dat");
     m.insert("weigend", "def2-universal-jfit.dat");
     m.insert("weigendjfit", "def2-universal-jfit.dat");
     m.insert("weigendjkfit", "def2-universal-jkfit.dat");

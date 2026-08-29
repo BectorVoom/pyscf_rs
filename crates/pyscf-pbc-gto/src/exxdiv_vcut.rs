@@ -24,6 +24,21 @@ use pyscf_pbc_tools::mat3::inv3;
 use crate::cell::Cell;
 use crate::types::{ALattice, CellBuildArgs};
 
+/// `erf(x)` on the HOST.
+///
+/// `std` has no `erf`, and `cube-math` — which the kernel crates use — is a
+/// DEVICE libm: every entry point launders its argument through
+/// `bits::opaque64`, whose `RuntimeCell` has no native implementation, so a
+/// host call panics with "Unexpanded Cube functions should not be called".
+/// `rmath` is the crate cube-math was PORTED FROM: same algorithms, host-side,
+/// and bit-identical to the platform `libm` by construction. It carries no
+/// cubecl dependency, so it is on the method-crate side of the ALG-06 wall.
+fn erf(x: f64) -> f64 {
+    use rmath::prelude::{Erf, Function};
+    Erf::new().eval(x)
+}
+
+
 /// `get_coulG(..., exx='vcut_sph')` — `pbc.py:373-380`.
 ///
 /// ```text
@@ -43,7 +58,7 @@ pub fn coulg_vcut_sph(cell: &Cell, absg2: &[f64], nk: usize) -> Result<Vec<f64>,
                    raises NotImplementedError at pbc.py:379-380",
         });
     }
-    let rc = cube_math::double::pow::pow(3.0 * nk as f64 * cell.vol() / (4.0 * PI), 1.0 / 3.0, cube_math::MathConfig::EXACT);
+    let rc = (3.0 * nk as f64 * cell.vol() / (4.0 * PI)).powf(1.0 / 3.0);
     Ok(absg2
         .iter()
         .map(|g2| {
@@ -51,8 +66,8 @@ pub fn coulg_vcut_sph(cell: &Cell, absg2: &[f64], nk: usize) -> Result<Vec<f64>,
                 // pbc.py:378 — `4*pi*0.5*Rc**2`.
                 2.0 * PI * rc * rc
             } else {
-                let g = cube_math::double::exact::sqrt(*g2, cube_math::MathConfig::EXACT);
-                4.0 * PI / g2 * (1.0 - cube_math::double::trig::cos(g * rc, cube_math::MathConfig::EXACT))
+                let g = g2.sqrt();
+                4.0 * PI / g2 * (1.0 - (g * rc).cos())
             }
         })
         .collect())
@@ -107,7 +122,7 @@ pub fn precompute_exx(cell: &Cell, kpts: &[[f64; 3]]) -> Result<WsExx, PyscfRsEr
     let mut lc = [0.0_f64; 3];
     for j in 0..3 {
         let col = [ainv[0][j], ainv[1][j], ainv[2][j]];
-        lc[j] = 1.0 / cube_math::double::exact::sqrt(col[0] * col[0] + col[1] * col[1] + col[2] * col[2], cube_math::MathConfig::EXACT);
+        lc[j] = 1.0 / (col[0] * col[0] + col[1] * col[1] + col[2] * col[2]).sqrt();
     }
     // pbc.py:504-508 — the ASE splitting parameter.
     let rin = lc.iter().copied().fold(f64::INFINITY, f64::min) / 2.0;
@@ -161,13 +176,13 @@ pub fn precompute_exx(cell: &Cell, kpts: &[[f64; 3]]) -> Result<WsExx, PyscfRsEr
     for p in &rs {
         let mut rmin = f64::INFINITY;
         for c in &corners {
-            let d = cube_math::double::exact::sqrt((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2), cube_math::MathConfig::EXACT);
+            let d = ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt();
             rmin = rmin.min(d);
         }
         vr.push(if rmin < 1e-9 {
-            2.0 * alpha / cube_math::double::exact::sqrt(PI, cube_math::MathConfig::EXACT)
+            2.0 * alpha / PI.sqrt()
         } else {
-            cube_math::double::erf::erf(alpha * rmin, cube_math::MathConfig::EXACT) / rmin
+            erf(alpha * rmin) / rmin
         });
     }
 
@@ -231,7 +246,7 @@ pub fn coulg_vcut_ws(
             if *g2 == 0.0 {
                 PI / (ws.alpha * ws.alpha)
             } else {
-                4.0 * PI / g2 * (1.0 - cube_math::double::exp::exp(-g2 / a2, cube_math::MathConfig::EXACT))
+                4.0 * PI / g2 * (1.0 - (-g2 / a2).exp())
             }
         })
         .collect();

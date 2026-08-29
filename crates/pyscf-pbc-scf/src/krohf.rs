@@ -28,7 +28,7 @@ use crate::types::{KDms, KInitGuess, KMats, KScfConfig, KScfResult};
 #[derive(Debug)]
 pub struct Krohf {
     /// The density-fitting object.
-    pub with_df: Fftdf,
+    pub with_df: Box<dyn PeriodicDf>,
     /// Exchange divergence treatment.
     pub exxdiv: Option<ExxDiv>,
     /// Override the `(nalpha, nbeta)` derived from `cell.spin`.
@@ -41,11 +41,11 @@ impl Krohf {
     /// # Errors
     /// Propagates the `FFTDF` construction.
     pub fn new(cell: Cell, kpts: &[[f64; 3]]) -> Result<Self, PyscfRsError> {
-        Ok(Self::from_df(Fftdf::new(cell, kpts).map_err(df_err)?))
+        Ok(Self::from_df(Box::new(Fftdf::new(cell, kpts).map_err(df_err)?)))
     }
 
     /// `KROHF` over an explicit density-fitting object.
-    pub fn from_df(with_df: Fftdf) -> Self {
+    pub fn from_df(with_df: Box<dyn PeriodicDf>) -> Self {
         Self {
             with_df,
             exxdiv: Some(ExxDiv::Ewald),
@@ -55,12 +55,12 @@ impl Krohf {
 
     /// The cell.
     pub fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
 
     /// The k-points.
     pub fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
 
     /// `(nalpha, nbeta)` — same rule as [`crate::Kuhf::nelec`].
@@ -208,10 +208,10 @@ fn mm(a: &CTensor, b: &CTensor, n: usize) -> CTensor {
 
 impl KOverrideHooks for Krohf {
     fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
     fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
     fn nset(&self) -> usize {
         2
@@ -229,7 +229,7 @@ impl KOverrideHooks for Krohf {
     }
 
     fn get_hcore(&self) -> Result<KMats, PyscfRsError> {
-        pyscf_pbc_df::get_hcore(&self.with_df, self.kpts()).map_err(df_err)
+        pyscf_pbc_df::get_hcore(self.with_df.as_ref(), self.kpts()).map_err(df_err)
     }
 
     fn get_init_guess(&self, mode: &KInitGuess, s1e: &KMats) -> Result<KDms, PyscfRsError> {
@@ -257,6 +257,7 @@ impl KOverrideHooks for Krohf {
                     with_j: true,
                     with_k: true,
                     exxdiv: self.exxdiv,
+                    omega: None,
                 },
             )
             .map_err(df_err)?;

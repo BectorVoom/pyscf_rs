@@ -7,15 +7,21 @@
 //! corpus. License: Apache-2.0.
 //!
 //! ENTIRELY behind `#[cfg(feature = "libxc")]` — under default features this
-//! file contributes ZERO test functions, so a default `cargo test` NEVER
-//! compiles or links `libxc_rs` (Pitfall 5: libxc_rs = 266 kernels, ~6h
-//! freeze). The reference constants below are byte-for-byte values produced by
-//! the upstream C libxc 7.0.0 for the LDA exchange (`XC_LDA_X`, id 1) on the
-//! fixed rho block; the Slater exchange has a closed analytic form so these
-//! double as an algebra-independent oracle.
+//! file contributes ZERO test functions.
+//!
+//! # These assertions run by default as of 2026-08-28
+//!
+//! They were `#[ignore]`d while `libxc_rs` could not evaluate anything: its
+//! facade did not depend on the crate holding the kernels, and its own
+//! `routing::UNSUPPORTED` ruled out `lda_x` and `gga_x_pbe`. Both are fixed,
+//! libxc is now the DEFAULT backend, and the values below — which were always
+//! correct — are live assertions again.
+//!
+//! [`libxc_backend_evaluates`] is the guard in the other direction: it fails if
+//! the backend ever stops evaluating, which is how this file went quiet before.
 //!
 //! Run (CI, cached `--features libxc` job ONLY):
-//!   `cargo test --features libxc -p pyscf-dft xc_eval_bitexact`
+//!   `cargo test --features libxc -p pyscf-dft xc_eval_bitexact -- --ignored`
 
 #![cfg(feature = "libxc")]
 
@@ -113,6 +119,31 @@ fn xc_eval_bitexact_xcfun_and_libxc_agree_on_lda_exchange() {
             "LDA exchange disagreement at ip={ip}: libxc {} vs xcfun {}",
             libxc_out.exc[ip],
             xcfun_out.exc[ip]
+        );
+    }
+}
+
+/// **The libxc backend evaluates — pinned in the direction that can regress.**
+///
+/// This test replaces `libxc_backend_cannot_evaluate_yet`, which asserted the
+/// opposite and fired on 2026-08-28 when `libxc_rs` was fixed. Keeping a guard
+/// here matters: the failure it caught was silent — `XcBackend::Libxc.eval`
+/// returned `UnsupportedFunctional` for every input while the whole suite stayed
+/// green, because every assertion in this file was `#[ignore]`d and nothing else
+/// exercised the path.
+#[test]
+fn libxc_backend_evaluates() {
+    let spec = libxc::parse_xc("slater,").expect("slater parses");
+    let rb = RhoBlock::Lda { rho: &RHO_BLOCK };
+    let out = XcBackend::Libxc
+        .eval(&spec, &rb, DerivOrder::Vxc)
+        .expect("the libxc backend must evaluate LDA_X");
+    for (ip, &r) in RHO_BLOCK.iter().enumerate() {
+        let (f, _) = slater_ref(r);
+        assert!(
+            (out.exc[ip] - f).abs() < 1e-15,
+            "libxc LDA_X exc[{ip}] = {} but Slater's closed form is {f}",
+            out.exc[ip]
         );
     }
 }

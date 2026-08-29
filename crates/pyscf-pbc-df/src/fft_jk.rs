@@ -34,6 +34,7 @@ pub fn get_j_kpts(
     hermi: i32,
     kpts: &[[f64; 3]],
     kpts_band: Option<&[[f64; 3]]>,
+    omega: Option<f64>,
 ) -> Result<Vec<KMats>, PbcDfError> {
     let cell = &df.cell;
     let mesh = df.mesh;
@@ -41,9 +42,18 @@ pub fn get_j_kpts(
     let nkpts = kpts.len();
     let nao = cell.mol.nao_nr;
 
-    // fft_jk.py:60-61
+    // fft_jk.py:60-61. `omega` reaches `get_coulG` the way upstream's
+    // `range_coulomb` delivers it through `cell.omega` (`pbc/df/fft.py`).
     let gv = get_gv(cell, Some(mesh))?;
-    let coulg = pyscf_pbc_gto::get_coulg_at_gv(cell, mesh, &gv)?;
+    let coulg = get_coulg(
+        cell,
+        CoulGArgs {
+            mesh: Some(mesh),
+            gv: Some(&gv),
+            omega,
+            ..CoulGArgs::new()
+        },
+    )?;
     let ngrids = coulg.len();
 
     let ao = df.ao_kpts(kpts)?;
@@ -190,6 +200,7 @@ pub fn get_k_kpts(
     kpts: &[[f64; 3]],
     kpts_band: Option<&[[f64; 3]]>,
     exxdiv: Option<ExxDiv>,
+    omega: Option<f64>,
 ) -> Result<Vec<KMats>, PbcDfError> {
     let cell = &df.cell;
     let mesh = df.mesh;
@@ -257,7 +268,7 @@ pub fn get_k_kpts(
                     mesh: Some(mesh),
                     gv: Some(&gv),
                     wrap_around: true,
-                    omega: None,
+                    omega,
                 },
             )?;
 

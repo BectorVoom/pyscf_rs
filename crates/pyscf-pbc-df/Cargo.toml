@@ -12,11 +12,28 @@ description = "FFTDF, AFTDF, GDF, MDF, RSDF, ft_ao, jk builders"
 pyscf-core      = { path = "../pyscf-core" }
 pyscf-algebra   = { path = "../pyscf-algebra" }
 pyscf-gto       = { path = "../pyscf-gto" }
+# Plan 13-01: K-15 `ft_aopair` lives in pyscf-kernels. `pyscf-pbc-gto` already
+# depends on it, so this needs no new check_dependency_wall exemption.
+pyscf-kernels   = { path = "../pyscf-kernels" }
 pyscf-df        = { path = "../pyscf-df" }
 pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
 pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
-hdf5-metno      = { workspace = true }
+# Plan 14-01: the cintx 3-centre driver is reached directly (as
+# `pyscf-pbc-gto::pseudo::vloc_part2` already does), and `libm::tgamma` supplies
+# the half-integer Gamma of `gaussian_int`.
+cintx-core      = { path = "../../../cintx/crates/cintx-core" }
+cintx-ops       = { path = "../../../cintx/crates/cintx-ops" }
+cintx-rs        = { path = "../../../cintx/crates/cintx-rs" }
+cintx-runtime   = { path = "../../../cintx/crates/cintx-runtime" }
+libm            = { workspace = true }
+# Plan 14-03 Task 0 — the D-07 resolution. `pyscf-pbc-df` carried a DIRECT
+# `hdf5-metno` dependency from the Phase-9 scaffolding and never used it, which
+# contradicted D-07 ("pyscf-chkfile is the sole hdf5-metno owner"). The GDF
+# `_cderi` store is the first real HDF5 consumer here, and it goes through
+# `pyscf_chkfile::hdf5` like every other crate (pyscf-runtime, pyscf-ccsd,
+# pyscf-grad, pyscf-geomopt, pyscf-ao2mo).
+pyscf-chkfile   = { path = "../pyscf-chkfile" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
 

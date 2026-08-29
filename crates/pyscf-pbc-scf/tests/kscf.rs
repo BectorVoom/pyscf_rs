@@ -49,7 +49,7 @@ fn tight() -> KScfConfig {
 fn krhf(cell: Cell, nk: [usize; 3], mesh: [usize; 3]) -> (Krhf, Vec<[f64; 3]>) {
     let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, mesh).expect("FFTDF");
-    (Krhf::from_df(df), kpts)
+    (Krhf::from_df(Box::new(df)), kpts)
 }
 
 // ---------------------------------------------------------------------------
@@ -178,13 +178,13 @@ fn kuhf_and_kghf_reproduce_krhf_on_a_closed_shell_cell() {
     let cell = diamond();
     let kpts = make_kpts_default(&cell, [2, 1, 1]).expect("k-mesh");
 
-    let r = Krhf::from_df(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df"))
+    let r = Krhf::from_df(Box::new(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df")))
         .kernel(&tight())
         .expect("KRHF");
-    let u = Kuhf::from_df(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df"))
+    let u = Kuhf::from_df(Box::new(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df")))
         .kernel(&tight())
         .expect("KUHF");
-    let g = Kghf::from_df(Fftdf::with_mesh(cell, &kpts, MESH).expect("df"))
+    let g = Kghf::from_df(Box::new(Fftdf::with_mesh(cell, &kpts, MESH).expect("df")))
         .kernel(&tight())
         .expect("KGHF");
     println!(
@@ -217,12 +217,12 @@ fn kuhf_and_kghf_reproduce_krhf_on_a_closed_shell_cell() {
 fn krohf_reproduces_krhf_on_a_closed_shell_cell() {
     let cell = diamond();
     let kpts = make_kpts_default(&cell, [2, 1, 1]).expect("k-mesh");
-    let r = Krhf::from_df(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df"))
+    let r = Krhf::from_df(Box::new(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df")))
         .kernel(&tight())
         .expect("KRHF");
-    let ro = pyscf_pbc_scf::Krohf::from_df(
+    let ro = pyscf_pbc_scf::Krohf::from_df(Box::new(
         Fftdf::with_mesh(cell, &kpts, MESH).expect("df"),
-    )
+    ))
     .kernel(&tight())
     .expect("KROHF");
     println!("KRHF {:.14}  KROHF {:.14}", r.e_tot, ro.e_tot);
@@ -475,7 +475,7 @@ fn kuhf_he_all_electron_matches_upstream() {
         return;
     };
     let kpts = make_kpts_default(&cell, [2, 2, 2]).expect("k-mesh");
-    let mf = Kuhf::from_df(Fftdf::with_mesh(cell, &kpts, mesh).expect("df"));
+    let mf = Kuhf::from_df(Box::new(Fftdf::with_mesh(cell, &kpts, mesh).expect("df")));
     let got = mf.kernel(&tight()).expect("KUHF");
     assert!(got.converged);
     assert_matches(&got, &want, 1e-12, "KUHF He (all-electron) 2x2x2");

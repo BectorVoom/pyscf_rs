@@ -30,7 +30,7 @@ use crate::types::{KDms, KInitGuess, KMats, KScfConfig, KScfResult};
 #[derive(Debug)]
 pub struct Kghf {
     /// The density-fitting object.
-    pub with_df: Fftdf,
+    pub with_df: Box<dyn PeriodicDf>,
     /// Exchange divergence treatment.
     pub exxdiv: Option<ExxDiv>,
 }
@@ -41,11 +41,11 @@ impl Kghf {
     /// # Errors
     /// Propagates the `FFTDF` construction.
     pub fn new(cell: Cell, kpts: &[[f64; 3]]) -> Result<Self, PyscfRsError> {
-        Ok(Self::from_df(Fftdf::new(cell, kpts).map_err(df_err)?))
+        Ok(Self::from_df(Box::new(Fftdf::new(cell, kpts).map_err(df_err)?)))
     }
 
     /// `KGHF` over an explicit density-fitting object.
-    pub fn from_df(with_df: Fftdf) -> Self {
+    pub fn from_df(with_df: Box<dyn PeriodicDf>) -> Self {
         Self {
             with_df,
             exxdiv: Some(ExxDiv::Ewald),
@@ -54,11 +54,11 @@ impl Kghf {
 
     /// The cell.
     pub fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
     /// The k-points.
     pub fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
     /// Scalar AO count (half the spin-orbital dimension).
     pub fn nao_scalar(&self) -> usize {
@@ -125,10 +125,10 @@ fn set_block(out: &mut CTensor, b: &CTensor, nao: usize, roff: usize, coff: usiz
 
 impl KOverrideHooks for Kghf {
     fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
     fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
     fn nset(&self) -> usize {
         1
@@ -148,7 +148,7 @@ impl KOverrideHooks for Kghf {
 
     fn get_hcore(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.nao_scalar();
-        let h = pyscf_pbc_df::get_hcore(&self.with_df, self.kpts()).map_err(df_err)?;
+        let h = pyscf_pbc_df::get_hcore(self.with_df.as_ref(), self.kpts()).map_err(df_err)?;
         Ok(h.iter().map(|m| block_diag(m, nao)).collect())
     }
 
@@ -206,6 +206,7 @@ impl KOverrideHooks for Kghf {
                     with_j: true,
                     with_k: true,
                     exxdiv: self.exxdiv,
+                    omega: None,
                 },
             )
             .map_err(df_err)?;

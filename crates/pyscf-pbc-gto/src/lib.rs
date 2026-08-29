@@ -11,6 +11,7 @@ pub mod dumps_loads;
 
 // Phase 9 plan 09-04 — cutoff / rcut / mesh estimators.
 pub mod coulg;
+pub mod exxdiv_vcut;
 pub mod cutoff;
 
 // Phase 9 plan 09-05 — G-vectors (K-01), structure factors (K-02), uniform grids.

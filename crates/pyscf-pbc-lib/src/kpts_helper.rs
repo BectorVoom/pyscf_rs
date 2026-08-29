@@ -417,3 +417,208 @@ pub fn get_kconserv3(a: &[[f64; 3]; 3], kpts: &[[f64; 3]], kijkab: &[KIdx]) -> K
         .collect();
     Kconserv3 { shape: new_shape, data: out }
 }
+
+// ---------------------------------------------------------------------------
+// Wrap-around unique / conjugation pairing — `kpts_helper.py:144-268`.
+// Plan 14-02 Task 2. Phase 13 named these as its own and did not ship them;
+// `gdf_builder::gen_uniq_kpts_groups` is the first caller that needs them.
+// ---------------------------------------------------------------------------
+
+/// `np.modf(x)[0]` then fold into `[-0.5, 0.5)` — the body shared by
+/// [`unique_with_wrap_around`] and `group_by_conj_pairs`.
+///
+/// `scaled` must already be `.round(5)`-ed by the caller where upstream rounds.
+fn fold_to_fbz(scaled: &mut [[f64; 3]]) {
+    for k in scaled.iter_mut() {
+        for c in k.iter_mut() {
+            // np.modf keeps the fractional part WITH the sign of the input.
+            *c = c.trunc().mul_add(-1.0, *c);
+            if *c >= 0.5 {
+                *c -= 1.0;
+            } else if *c < -0.5 {
+                *c += 1.0;
+            }
+        }
+    }
+}
+
+/// `round(x, 5)` — numpy's `.round(5)`, half-to-even like Rust's `round_ties_even`.
+fn round5(x: f64) -> f64 {
+    (x * 1e5).round_ties_even() / 1e5
+}
+
+/// `unique_with_wrap_around(cell, kpts)` — `kpts_helper.py:144-153`.
+///
+/// Unique k-points **modulo a reciprocal-lattice vector**. `scaled` is the
+/// caller's `cell.get_scaled_kpts(kpts)`; keeping the conversion outside means
+/// `pyscf-pbc-lib` stays below `pyscf-pbc-gto` in the DAG, exactly as
+/// [`get_kconserv`] takes `a` rather than a `Cell`.
+///
+/// Returns `(index, inverse)` INTO the caller's `kpts`; upstream's `uniq_kpts`
+/// is `kpts[index]`, which the caller can form itself.
+pub fn unique_with_wrap_around(scaled: &[[f64; 3]]) -> (Vec<usize>, Vec<usize>) {
+    let mut s: Vec<[f64; 3]> = scaled
+        .iter()
+        .map(|k| [round5(k[0]), round5(k[1]), round5(k[2])])
+        .collect();
+    fold_to_fbz(&mut s);
+    let u = unique(&s);
+    (u.index, u.inverse)
+}
+
+/// One entry of [`group_by_conj_pairs`]: `(k, Some(k_conj))`, with
+/// `k == k_conj` for a self-conjugate point, or `(k, None)` when the conjugate
+/// is not in the input set.
+pub type ConjPair = (usize, Option<usize>);
+
+/// `group_by_conj_pairs(cell, kpts, wrap_around=True, return_kpts_pairs=False)`
+/// — `kpts_helper.py:170-218`.
+///
+/// Three cases, exactly as upstream's docstring lists them:
+/// 1. self-conjugate — both indices equal;
+/// 2. conjugate present in `kpts` — the pair of indices;
+/// 3. conjugate absent — `(index, None)`.
+///
+/// `scaled` is `cell.get_scaled_kpts(kpts)`. The self-conjugate mask is tested
+/// FIRST and its members are emitted first, which fixes the output order.
+pub fn group_by_conj_pairs(scaled: &[[f64; 3]], wrap_around: bool) -> Vec<ConjPair> {
+    let n = scaled.len();
+    let mut s: Vec<[f64; 3]> = scaled.to_vec();
+    let mut sc: Vec<[f64; 3]> = scaled.iter().map(|k| [-k[0], -k[1], -k[2]]).collect();
+    if wrap_around {
+        // Upstream folds with `.round(5) > .5` / `<= -.5`, i.e. the comparison
+        // is on the ROUNDED value but the shift lands on the unrounded one.
+        for v in [&mut s, &mut sc] {
+            for k in v.iter_mut() {
+                for c in k.iter_mut() {
+                    *c = c.trunc().mul_add(-1.0, *c);
+                    let r = round5(*c);
+                    if r > 0.5 {
+                        *c -= 1.0;
+                    } else if r <= -0.5 {
+                        *c += 1.0;
+                    }
+                }
+            }
+        }
+    }
+    for v in [&mut s, &mut sc] {
+        for k in v.iter_mut() {
+            for c in k.iter_mut() {
+                *c = round5(*c);
+            }
+        }
+    }
+
+    let self_conj: Vec<bool> = (0..n)
+        .map(|k| {
+            (0..3)
+                .map(|c| (s[k][c] - sc[k][c]).abs())
+                .fold(0.0_f64, f64::max)
+                < KPT_DIFF_TOL
+        })
+        .collect();
+
+    let mut pairs: Vec<ConjPair> = (0..n).filter(|k| self_conj[*k]).map(|k| (k, Some(k))).collect();
+    let mut seen = self_conj;
+    for k in 0..n {
+        if seen[k] {
+            continue;
+        }
+        seen[k] = true;
+        let hits = member(&sc[k], &s);
+        match hits.first() {
+            None => pairs.push((k, None)),
+            Some(&j) => {
+                seen[j] = true;
+                pairs.push((k, Some(j)));
+            }
+        }
+    }
+    pairs
+}
+
+/// One yield of [`kk_adapted_iter`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct KkGroup {
+    /// The `ki - kj` difference this group is adapted to, in ABSOLUTE units.
+    pub kpt: [f64; 3],
+    /// The bra k-point indices, `kpt_ij_idx / nkpts`.
+    pub ki_idx: Vec<usize>,
+    /// The ket k-point indices, `kpt_ij_idx % nkpts`.
+    pub kj_idx: Vec<usize>,
+    /// `k == k_conj` — the metric for this group is real.
+    pub self_conj: bool,
+}
+
+/// `kk_adapted_iter(cell, kpts, kk_idx, time_reversal_symmetry)` —
+/// `kpts_helper.py:220-268`.
+///
+/// Groups the `nkpts²` `(ki, kj)` pairs by their difference `kj - ki`, because
+/// the density-fitting metric `j2c` depends only on that difference. Each group
+/// is one `get_2c2e` call in `gdf_builder::gen_uniq_kpts_groups`.
+///
+/// * `scaled_dk` — `cell.get_scaled_kpts(kj - ki)` for every pair, in
+///   `ki * nkpts + kj` order (the caller builds it; see `unique_with_wrap_around`).
+/// * `dk_abs` — the same differences in absolute units, for the `kpt` field.
+/// * `kk_idx` — an optional subset of pair indices. Upstream raises when it is
+///   combined with `time_reversal_symmetry`; so does this port.
+///
+/// # Errors
+/// `Err(())` for the `kk_idx` + `time_reversal_symmetry` combination upstream
+/// refuses.
+#[allow(clippy::result_unit_err)]
+pub fn kk_adapted_iter(
+    nkpts: usize,
+    scaled_dk: &[[f64; 3]],
+    dk_abs: &[[f64; 3]],
+    kk_idx: Option<&[usize]>,
+    time_reversal_symmetry: bool,
+) -> Result<Vec<KkGroup>, ()> {
+    if kk_idx.is_some() && time_reversal_symmetry {
+        return Err(());
+    }
+    let (uniq_index, uniq_inverse) = unique_with_wrap_around(scaled_dk);
+    let uniq_scaled: Vec<[f64; 3]> = uniq_index.iter().map(|&i| scaled_dk[i]).collect();
+    let uniq_abs: Vec<[f64; 3]> = uniq_index.iter().map(|&i| dk_abs[i]).collect();
+    let groups = group_by_conj_pairs(&uniq_scaled, true);
+
+    let rows = |u: usize| -> Vec<usize> {
+        match kk_idx {
+            None => (0..uniq_inverse.len())
+                .filter(|&p| uniq_inverse[p] == u)
+                .collect(),
+            Some(sel) => sel
+                .iter()
+                .enumerate()
+                .filter(|(p, _)| uniq_inverse[*p] == u)
+                .map(|(_, &v)| v)
+                .collect(),
+        }
+    };
+
+    let mut out = Vec::new();
+    for (k, k_conj) in groups {
+        let self_conj = k_conj == Some(k);
+        let idx = rows(k);
+        out.push(KkGroup {
+            kpt: uniq_abs[k],
+            ki_idx: idx.iter().map(|p| p / nkpts).collect(),
+            kj_idx: idx.iter().map(|p| p % nkpts).collect(),
+            self_conj,
+        });
+
+        if self_conj || k_conj.is_none() || time_reversal_symmetry {
+            continue;
+        }
+        let kc = k_conj.unwrap_or(k);
+        let idx = rows(kc);
+        out.push(KkGroup {
+            kpt: uniq_abs[kc],
+            ki_idx: idx.iter().map(|p| p / nkpts).collect(),
+            kj_idx: idx.iter().map(|p| p % nkpts).collect(),
+            self_conj,
+        });
+    }
+    Ok(out)
+}

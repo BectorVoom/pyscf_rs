@@ -106,6 +106,21 @@ approx          = "=0.5.1"
 rstest          = "=0.26.1"
 
 # FOUND-07: panic=abort on shipped artifacts.
+# Dependency build profile. `"*"` covers every NON-workspace dependency and
+# leaves this workspace's own crates on cargo's defaults.
+#
+# This exists because of the libxc kernel tree. `libxc_rs` sets `debug = 0` in
+# its own `[profile.dev]` for its 156 generated kernel crates (some 16 MB of
+# straight-line f64 source), but a dependency is built under the CONSUMER's
+# profile, not its own — so under cargo's default `debug = 2` those crates make
+# rustc exhaust memory and die: `error: rustc interrupted by SIGSEGV` on
+# `libxc-rkernel-gga_x_ityh_pbe`, `mgga_k_csk_loc`, `gga_c_scan_e0`,
+# `gga_x_sfat` and others. Debug info for third-party dependencies is not
+# something this workspace debugs through, so dropping it costs nothing and
+# also speeds up every other dependency build.
+[profile.dev.package."*"]
+debug = 0
+
 [profile.release]
 panic = "abort"
 lto = "thin"

@@ -20,6 +20,9 @@ pub mod krohf;
 pub mod krhf;
 pub mod kuhf;
 pub mod kscf;
+// Phase 14 — range-separated J/K with no density fitting (plan 14-08 Task 4).
+// BLOCKED on the cintx short-range-integral gap; see the module docs.
+pub mod rsjk;
 pub mod smearing;
 pub mod types;
 
@@ -31,5 +34,6 @@ pub use kghf::Kghf;
 pub use krohf::Krohf;
 pub use kuhf::Kuhf;
 pub use kscf::kernel;
+pub use rsjk::RangeSeparatedJkBuilder;
 pub use smearing::{Smearing, SmearingMethod};
 pub use types::{KDms, KInitGuess, KMats, KScfConfig, KScfResult};

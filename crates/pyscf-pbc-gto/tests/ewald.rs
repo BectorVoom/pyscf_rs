@@ -202,14 +202,20 @@ fn ewald_is_negative_for_every_3d_reference_system() {
 /// D-PBC-20 — deferred branches return a typed `NotYetImplemented`, never a
 /// silently wrong number. Graphene is `dimension = 2`.
 #[test]
-fn ewald_defers_the_dimension_2_branch_to_phase_12() {
-    let cell = bohr_cell(reference("graphene"));
-    match ewald(&cell, None, None) {
-        Err(PyscfRsError::NotYetImplemented { phase: 12, what }) => {
-            assert!(what.contains("dimension = 2"), "{what}");
-        }
-        other => panic!("expected NotYetImplemented{{phase:12}}, got {other:?}"),
-    }
+fn ewald_dimension_2_matches_the_recorded_upstream_target() {
+    let r = reference("graphene");
+    let want = r
+        .ewald
+        .expect("the graphene target was recorded in Phase 9 for plan 12-08");
+    let cell = bohr_cell(r);
+    assert_eq!(cell.dimension, 2, "graphene must be the dimension = 2 system");
+    let got = ewald(&cell, None, None).expect("dimension = 2 ewald");
+    let d = (got - want).abs();
+    println!("ewald(graphene, dim=2): rust {got:.15}  upstream {want:.15}  delta {d:.3e}");
+    assert!(
+        d < 1e-11,
+        "the 2-D truncated-Coulomb Ewald sum is {d:e} from the recorded upstream value"
+    );
 }
 
 /// D-PBC-20 — particle-mesh Ewald needs the Phase 11 FFT.
@@ -414,7 +420,11 @@ fn ewald_matches_upstream_to_1e_9_hartree() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 4, "diamond, si, lif and he_fcc must all be gated");
+    assert_eq!(
+        checked, 5,
+        "diamond, si, lif, he_fcc and graphene must all be gated — graphene \
+         joined the set when plan 12-08 landed the dimension = 2 branch"
+    );
 }
 
 /// The `eta`-invariance scan, pinned against upstream point by point — this is
@@ -471,15 +481,12 @@ fn angstrom_reference_systems_match_upstream_within_the_unit_gap() {
             .expect("every reference system has a pseudised ewald target");
         assert_eq!(cell.atom_charges(), *charges, "{name}: valence charges");
 
-        if r.ewald.is_none() {
-            // graphene: dimension = 2 is deferred, and that must stay true for
-            // the Angstrom build as well.
-            assert!(matches!(
-                ewald(&cell, None, None),
-                Err(PyscfRsError::NotYetImplemented { phase: 12, .. })
-            ));
-            continue;
-        }
+        // Plan 12-08 landed the dimension = 2 branch, so graphene is gated here
+        // too rather than skipped.
+        assert!(
+            r.ewald.is_some(),
+            "{name}: every §9.2 reference system now has an upstream target"
+        );
         let got = ewald(&cell, None, None).expect("ewald");
         let bound = expect.abs() * UNIT_GAP * 10.0;
         assert!(
@@ -490,7 +497,11 @@ fn angstrom_reference_systems_match_upstream_within_the_unit_gap() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 4, "diamond, si, lif and he_fcc must all be gated");
+    assert_eq!(
+        checked, 5,
+        "diamond, si, lif, he_fcc and graphene must all be gated — graphene \
+         joined the set when plan 12-08 landed the dimension = 2 branch"
+    );
 }
 
 /// §9.3 — the reduction is `oracle_sum`, so repeated evaluation is
@@ -520,11 +531,8 @@ fn pseudised_ewald_matches_the_recorded_upstream_targets() {
     let mut checked = 0;
     for (name, charges, expect) in PSEUDISED_EWALD.iter() {
         let r = reference(name);
-        // The `dimension == 2` branch (graphene) is Phase 12 — `ewald` returns
-        // NotYetImplemented there, exactly as it does for the all-electron run.
-        if r.dimension != 3 {
-            continue;
-        }
+        // Plan 12-08 landed the `dimension == 2` branch, so graphene is gated
+        // here too rather than skipped.
         let cell = bohr_cell_with_pseudo(r, "gth-pade");
         assert_eq!(
             cell.atom_charges(),
@@ -539,7 +547,11 @@ fn pseudised_ewald_matches_the_recorded_upstream_targets() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 4, "diamond, si, lif and he_fcc must all be gated");
+    assert_eq!(
+        checked, 5,
+        "diamond, si, lif, he_fcc and graphene must all be gated — graphene \
+         joined the set when plan 12-08 landed the dimension = 2 branch"
+    );
 }
 
 /// [`bohr_cell`] with a pseudopotential attached.

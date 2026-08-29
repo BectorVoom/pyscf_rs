@@ -1,0 +1,58 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+
+=== diamond/gth-szv 2x2x2  kmesh=[2, 2, 2]  nkpts=8  nao=8 default mesh=[47 47 47]  override=[31, 31, 31] ===
+  FFTDF  E = -10.93087316795858  conv=True    30.0s
+  AFTDF  E = -10.93087316798466  conv=True   450.6s
+  GDF    E = -10.93209529106369  conv=True     6.4s
+  MDF    E = -10.93087429163887  conv=True    16.9s
+  RSDF   E = -10.93209530458920  conv=True    13.5s
+  --- pairwise |dE| (diamond/gth-szv 2x2x2) ---
+  |FFTDF - AFTDF| = 2.607e-11
+  |FFTDF - GDF  | = 1.222e-03
+  |FFTDF - MDF  | = 1.124e-06
+  |FFTDF - RSDF | = 1.222e-03
+  |AFTDF - GDF  | = 1.222e-03
+  |AFTDF - MDF  | = 1.124e-06
+  |AFTDF - RSDF | = 1.222e-03
+  |GDF   - MDF  | = 1.221e-03
+  |GDF   - RSDF | = 1.353e-08
+  |MDF   - RSDF | = 1.221e-03
+
+=== diamond/gth-szv gamma  kmesh=[1, 1, 1]  nkpts=1  nao=8 default mesh=[47 47 47]  override=[31, 31, 31] ===
+  FFTDF  E = -10.13717266004632  conv=True     2.3s
+  AFTDF  E = -10.13717266289455  conv=True    45.9s
+  GDF    E = -10.14369692267130  conv=True     2.3s
+  MDF    E = -10.13717373919459  conv=True     3.6s
+  RSDF   E = -10.14369691810517  conv=True     9.9s
+  --- pairwise |dE| (diamond/gth-szv gamma) ---
+  |FFTDF - AFTDF| = 2.848e-09
+  |FFTDF - GDF  | = 6.524e-03
+  |FFTDF - MDF  | = 1.079e-06
+  |FFTDF - RSDF | = 6.524e-03
+  |AFTDF - GDF  | = 6.524e-03
+  |AFTDF - MDF  | = 1.076e-06
+  |AFTDF - RSDF | = 6.524e-03
+  |GDF   - MDF  | = 6.523e-03
+  |GDF   - RSDF | = 4.566e-09
+  |MDF   - RSDF | = 6.523e-03
+
+=== He-fcc/sto-3g 2x2x2 (all-electron)  kmesh=[2, 2, 2]  nkpts=8  nao=1 default mesh=[43 43 43]  override=None ===
+  FFTDF  E = -2.80848514315536  conv=True     4.1s
+  AFTDF  E = -2.80848514315506  conv=True    17.4s
+  GDF    E = -2.80842508717097  conv=True     6.0s
+  MDF    E = -2.80848673371326  conv=True     8.7s
+  RSDF   E = -2.80842508705964  conv=True     5.9s
+  --- pairwise |dE| (He-fcc/sto-3g 2x2x2 (all-electron)) ---
+  |FFTDF - AFTDF| = 3.006e-13
+  |FFTDF - GDF  | = 6.006e-05
+  |FFTDF - MDF  | = 1.591e-06
+  |FFTDF - RSDF | = 6.006e-05
+  |AFTDF - GDF  | = 6.006e-05
+  |AFTDF - MDF  | = 1.591e-06
+  |AFTDF - RSDF | = 6.006e-05
+  |GDF   - MDF  | = 6.165e-05
+  |GDF   - RSDF | = 1.113e-10
+  |MDF   - RSDF | = 6.165e-05

@@ -81,6 +81,34 @@ pub fn bohr_cell(a: [[f64; 3]; 3], atoms: Vec<(String, [f64; 3])>, pseudo: Optio
     .expect("reference cell must build")
 }
 
+/// Diamond built with an explicit `precision`.
+///
+/// **Build time, not a post-hoc mutation.** `cell.rcut` is a cached field
+/// computed during `Cell::build`, so assigning `cell.precision = p` afterwards
+/// tightens only the estimators that read `precision` at CALL time (`ft_ao`'s
+/// `estimate_rcut`) and leaves `cell.rcut` — and therefore `pbc_intor`, Ewald
+/// and `eval_gto` — on the original target.
+pub fn diamond_prec(precision: f64) -> Cell {
+    let h = 3.37032;
+    let q = 1.68516;
+    Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![
+                ("C".into(), [0.0, 0.0, 0.0]),
+                ("C".into(), [q, q, q]),
+            ]),
+            basis: BasisInput::Name("gth-szv".into()),
+            unit: Unit::Bohr,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]),
+        pseudo: Some("gth-pade".into()),
+        precision,
+        ..Default::default()
+    })
+    .expect("reference cell must build")
+}
+
 // ---------------------------------------------------------------------------
 // The venv-gated upstream oracle
 // ---------------------------------------------------------------------------

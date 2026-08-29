@@ -9,12 +9,31 @@ description = "Density functional theory (RKS/UKS + Becke grids). Implemented in
 [lib]
 path = "src/lib.rs"
 
-# Off-by-default optional libxc backend — model: pyscf-kernels/Cargo.toml
-# [features] block + xcfun-rs/Cargo.toml. Pitfall 5: the libxc_rs dep MUST be
-# optional or every default build pulls libxc_rs's 266 kernel crates (~6h
-# freeze). Default features carry NO libxc — xcfun-rs is the default XC backend.
+# libxc is the DEFAULT XC backend, matching upstream PySCF (`dft/numint.py:27-34`
+# imports libxc first and falls back to xcfun only on ImportError).
+#
+# This matters for accuracy, not taste: the two libraries are independent
+# implementations of the same functional forms, and carried through an SCF they
+# differ by 4.7e-7 Ha on PBE/Si. While this port defaulted to xcfun, every
+# comparison against a default-configured upstream measured that gap instead of
+# this port's fidelity.
+#
+# `libxc_rs` now evaluates the full corpus and agrees with C libxc 7.0.0 to
+# <= 2.14e-16 (under 1 ulp; several quantities bit-identical) — so the switch
+# should ELIMINATE that gap rather than shrink it. It was blocked until
+# 2026-08-28 by three defects in libxc_rs (a facade that could not reach the
+# kernels, a 1-of-649 params stub, and a partial dispatch table); all are fixed.
+# See `docs/PLAN-defect-remediation-v{1..5}.md` in the libxc_rs tree.
+#
+# Still a feature, so `--no-default-features` gives a libxc-free build that
+# falls back to xcfun — see `XcBackend`'s `Default` impl.
+#
+# Build cost: a cold release build of the libxc kernel tree is >40 min; debug is
+# minutes, and an incremental `cargo check -p pyscf-dft` is ~18 s. (An older
+# note here claimed "266 kernel crates, ~6h freeze"; that was never measured and
+# is wrong.)
 [features]
-default = []
+default = ["libxc"]
 libxc   = ["dep:libxc_rs"]
 # CI-only: turn on the live PySCF oracle harness for the DFT-01
 # rks_uks_bitexact energy assertions. Forwards to pyscf-oracle's `python`
@@ -58,9 +77,8 @@ xcfun-rs      = "0.1.0"
 xcfun-gpu     = { path = "../../../xcfun_rs/crates/xcfun-gpu", default-features = false }
 tracing       = { workspace = true }
 thiserror     = { workspace = true }
-# Optional libxc backend (off by default — see [features] above). The
-# [patch.crates-io] libxc_rs entry stays commented until 04-09 wires the
-# libxc CI gate; nothing references libxc_rs in the default dep graph.
+# The libxc backend, ON by default (see [features] above). Still optional so
+# `--no-default-features` drops it entirely.
 libxc_rs      = { path = "../../../libxc_rs", optional = true }
 
 # NO pyo3 dep here (PyO3 wall) — the Python surface lives in pyscf-py.

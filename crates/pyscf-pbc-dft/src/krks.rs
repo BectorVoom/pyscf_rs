@@ -25,7 +25,7 @@
 
 use pyscf_algebra::CTensor;
 use pyscf_core::PyscfRsError;
-use pyscf_pbc_df::Fftdf;
+use pyscf_pbc_df::{Fftdf, PeriodicDf};
 use pyscf_pbc_gto::{Cell, ExxDiv};
 use pyscf_pbc_scf::khooks::KOverrideHooks;
 use pyscf_pbc_scf::kocc::get_occ_restricted;
@@ -57,7 +57,7 @@ pub struct KsEnergyTags {
 #[derive(Debug)]
 pub struct Krks {
     /// The density-fitting object; it owns the cell and the k-points.
-    pub with_df: Fftdf,
+    pub with_df: Box<dyn PeriodicDf>,
     /// The XC functional string. Upstream's class default is `'LDA,VWN'`.
     pub xc: String,
     /// Exchange divergence treatment (`pbc_scf_SCF_exxdiv`, default
@@ -82,16 +82,16 @@ impl Krks {
     pub fn new(cell: Cell, kpts: &[[f64; 3]], xc: &str) -> Result<Self, PbcDftError> {
         let with_df = Fftdf::new(cell, kpts)
             .map_err(|e| err(format!("KRKS: FFTDF construction failed: {e}")))?;
-        Self::from_df(with_df, xc)
+        Self::from_df(Box::new(with_df), xc)
     }
 
     /// `KRKS` over an explicitly configured density-fitting object.
     ///
     /// # Errors
     /// Propagates the grid construction.
-    pub fn from_df(with_df: Fftdf, xc: &str) -> Result<Self, PbcDftError> {
-        let grids = PeriodicGrids::uniform(&with_df.cell, Some(with_df.mesh))?;
-        let ni = KNumInt::new(&with_df.kpts);
+    pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
+        let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
+        let ni = KNumInt::new(with_df.kpts());
         Ok(Self {
             with_df,
             xc: xc.to_string(),
@@ -106,12 +106,12 @@ impl Krks {
 
     /// The cell.
     pub fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
 
     /// The k-points.
     pub fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
 
     /// Electrons in the whole BZ supercell.
@@ -175,7 +175,7 @@ impl Krks {
 
         // krks.py:89 — J (and K for a hybrid).
         let jk = get_jk(
-            &self.with_df,
+            self.with_df.as_ref(),
             &self.xc,
             dms,
             1,
@@ -226,7 +226,7 @@ impl Krks {
     ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         let mut fock =
-            pyscf_pbc_df::get_hcore(&self.with_df, kpts_band).map_err(df_err)?;
+            pyscf_pbc_df::get_hcore(self.with_df.as_ref(), kpts_band).map_err(df_err)?;
         let (veff, _) = self
             .get_veff_tagged(dms, Some(kpts_band))
             .map_err(unwrap_err)?;
@@ -251,10 +251,10 @@ pub(crate) fn unwrap_err(e: PbcDftError) -> PyscfRsError {
 
 impl KOverrideHooks for Krks {
     fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
     fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
     fn nset(&self) -> usize {
         1
@@ -269,7 +269,7 @@ impl KOverrideHooks for Krks {
     }
 
     fn get_hcore(&self) -> Result<KMats, PyscfRsError> {
-        pyscf_pbc_df::get_hcore(&self.with_df, self.kpts()).map_err(df_err)
+        pyscf_pbc_df::get_hcore(self.with_df.as_ref(), self.kpts()).map_err(df_err)
     }
 
     fn get_init_guess(&self, mode: &KInitGuess, s1e: &KMats) -> Result<KDms, PyscfRsError> {

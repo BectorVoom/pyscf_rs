@@ -52,16 +52,16 @@ impl Kgks {
     pub fn new(cell: Cell, kpts: &[[f64; 3]], xc: &str) -> Result<Self, PbcDftError> {
         let with_df = Fftdf::new(cell, kpts)
             .map_err(|e| err(format!("KGKS: FFTDF construction failed: {e}")))?;
-        Self::from_df(with_df, xc)
+        Self::from_df(Box::new(with_df), xc)
     }
 
     /// `KGKS` over an explicit density-fitting object.
     ///
     /// # Errors
     /// Propagates the grid construction.
-    pub fn from_df(with_df: Fftdf, xc: &str) -> Result<Self, PbcDftError> {
-        let grids = PeriodicGrids::uniform(&with_df.cell, Some(with_df.mesh))?;
-        let ni = KNumInt2C::new(&with_df.kpts);
+    pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
+        let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
+        let ni = KNumInt2C::new(with_df.kpts());
         Ok(Self {
             hf: Kghf::from_df(with_df),
             xc: xc.to_string(),

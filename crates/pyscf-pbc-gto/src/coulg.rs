@@ -15,7 +15,7 @@
 //! | `dimension == 2` analytic truncation | implemented (the kernel; `madelung` still needs the 2-D Ewald of plan 12-08) |
 //! | `dimension == 0` truncated sphere | implemented |
 //! | `dimension == 1` | `NotYetImplemented { phase: 12 }` — upstream raises `NotImplementedError` too |
-//! | `exxdiv = vcut_sph` / `vcut_ws` | `NotYetImplemented { phase: 12 }` (D-PBC-20) |
+//! | `exxdiv = vcut_sph` / `vcut_ws` | implemented (`exxdiv_vcut`); both REFUSE `dimension < 3`, as upstream does (`pbc.py:379-380`, `:409-410`) |
 
 use crate::cell::Cell;
 use crate::types::{ALattice, CellBuildArgs, LowDimFtType};
@@ -146,18 +146,20 @@ pub fn get_coulg(cell: &Cell, args: CoulGArgs<'_>) -> Result<Vec<f64>, PyscfRsEr
     let nk = args.kpts.map_or(1, <[[f64; 3]]>::len);
 
     let mut coulg = match args.exxdiv {
-        Some(ExxDiv::VcutSph) => {
-            return Err(PyscfRsError::NotYetImplemented {
-                phase: 12,
-                what: "get_coulG with exxdiv = 'vcut_sph' (pbc.py:373-380) — D-PBC-20",
-            });
-        }
+        // pbc.py:373-380 — the spherically truncated Coulomb kernel.
+        Some(ExxDiv::VcutSph) => crate::exxdiv_vcut::coulg_vcut_sph(cell, &absg2, nk)?,
+        // pbc.py:382-410 — the Wigner-Seitz truncated kernel. `precompute_exx`
+        // is upstream's `mf._ws_exx` cache; this port has no `mf` to hang it on,
+        // so it is built here from the same inputs. It depends only on the cell
+        // and the k-mesh, so it is a pure function of what is already in `args`.
         Some(ExxDiv::VcutWs) => {
-            return Err(PyscfRsError::NotYetImplemented {
-                phase: 12,
-                what: "get_coulG with exxdiv = 'vcut_ws' — needs precompute_exx \
-                       (pbc.py:382-410, :487-547) — D-PBC-20",
-            });
+            let kpts = args.kpts.ok_or(PyscfRsError::Core(CoreError::InvalidMolecule(
+                "get_coulG with exxdiv = 'vcut_ws' needs the sampling k-points \
+                 (upstream reads them off `mf.kpts` — pbc.py:382-389)"
+                    .to_string(),
+            )))?;
+            let ws = crate::exxdiv_vcut::precompute_exx(cell, kpts)?;
+            crate::exxdiv_vcut::coulg_vcut_ws(cell, &kg, &absg2, &ws)?
         }
         // pbc.py:412-454 — the Ewald-probe-charge family.
         _ => {

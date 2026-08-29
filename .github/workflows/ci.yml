@@ -12,6 +12,7 @@
 #   3. oracle-determinism × 2 (RAYON_NUM_THREADS=1 and =8)
 #   5. four lints: clippy unwrap deny + check-forbidden-paths +
 #      check-catch-unwind + check-dependency-wall (+ check-cubecl-pin)
+#      + check-orphan-modules (no uncompiled source files)
 #   6. select_backend env-var truth table (covered by cargo test)
 name: CI
 
@@ -190,6 +191,22 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo run --quiet -p xtask --bin check-cubecl-pin
+
+  # Every .rs file under crates/*/src must be reachable from its crate root.
+  # An undeclared module is not a warning and not dead code — it is simply not
+  # compiled, so build/check/test/clippy all pass while ignoring it. Phase 12
+  # shipped ~5000 uncompiled lines this way.
+  xtask-orphan-modules:
+    name: xtask check-orphan-modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --quiet -p xtask --bin check-orphan-modules
 
   # BIND-06: forbid lazy_static! in crates/pyscf-py (deadlocks under 3.13t).
   xtask-forbid-lazy-static:

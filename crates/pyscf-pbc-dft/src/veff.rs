@@ -36,7 +36,7 @@ pub struct KsJk {
 /// Propagates the density-fitting build and the XC-string parse.
 #[allow(clippy::too_many_arguments)]
 pub fn get_jk(
-    df: &Fftdf,
+    df: &dyn PeriodicDf,
     xc_code: &str,
     dms: &KDms,
     hermi: i32,

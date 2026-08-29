@@ -22,21 +22,29 @@
 //! `SI` is returned as a planar [`CTensor`] (`re` / `im` planes), never
 //! interleaved — D-PBC-02 / RULE 8.
 //!
-//! # The `inf_vacuum` branches are DEFERRED
+//! # The `inf_vacuum` branches (D-PBC-20, plan 12-08)
 //!
 //! `get_Gv_weights`'s `dimension <= 2 && low_dim_ft_type == inf_vacuum` cases
-//! (`cell.py:558-578`) replace the uniform frequency axes with Gauss-Chebyshev
-//! radial quadrature (`_non_uniform_Gv_base` -> `pyscf.dft.radi.gauss_chebyshev`)
-//! and turn `weights` from a scalar into a per-grid array. PBC-MASTER-PLAN
-//! §8.1 plan 09-05 step 3 assigns them to Phase 12; they return
-//! `NotYetImplemented { phase: 12 }` rather than silently using the uniform
-//! weights (D-PBC-20).
+//! (`cell.py:558-581`) replace each NON-PERIODIC frequency axis with a
+//! Gauss-Chebyshev radial quadrature (`_non_uniform_Gv_base` ->
+//! `pyscf.dft.radi.gauss_chebyshev`, reused here from `pyscf_grids::radial`).
+//! Two things follow, and both are observable:
+//!
+//! * `weights` stops being one scalar and becomes a PER-GRID array — a
+//!   non-uniform rule has no single weight. Read it through
+//!   [`GvWeights::weight`], which hides the split.
+//! * the MESH SHRINKS on every vacuum axis: the base returns `2 * (n / 2)`
+//!   points, so an odd axis comes back one smaller. Upstream notes this at
+//!   `cell.py:598` ("mesh can be different from the input mesh"); the returned
+//!   [`GvWeights::mesh`] is the one actually used, not the one requested.
+//!
+//! The 3-D path is untouched: one scalar weight, the requested mesh.
 
 use crate::cell::Cell;
 use crate::types::LowDimFtType;
 use pyscf_algebra::{CTensor, select_backend};
 use pyscf_core::{CoreError, PyscfRsError};
-use pyscf_pbc_tools::mat3::{det3, transpose3};
+use pyscf_pbc_tools::mat3::{cross3, det3, norm3, transpose3};
 
 /// `np.fft.fftfreq(n, 1./n)` — the INTEGER FFT frequencies
 /// `[0, 1, …, (n-1)/2, -(n/2), …, -1]`.
@@ -78,21 +86,50 @@ pub struct GvWeights {
     /// `(rx, ry, rz)` — the per-axis integer frequencies. `get_SI`'s separable
     /// branch needs these, which is why upstream returns them alongside `Gv`.
     pub gvbase: [Vec<f64>; 3],
-    /// `|det(b)| / (2*pi)^3`, i.e. `1/cell.vol`. A SCALAR for the uniform 3D
-    /// grid; upstream turns it into a per-grid array only in the deferred
-    /// `inf_vacuum` branches (see the module docs).
+    /// `|det(b)|`. A SCALAR for the uniform 3D grid, which is every 3-D cell
+    /// and every low-dimensional cell that is not `inf_vacuum`.
+    ///
+    /// In the `inf_vacuum` branches upstream replaces this with a PER-GRID
+    /// array (`cell.py:558-581`), because the non-uniform Gauss-Chebyshev base
+    /// does not have one weight. Read the effective value through
+    /// [`GvWeights::weight`] rather than this field, so a caller cannot silently
+    /// use the scalar where the array applies.
     pub weights: f64,
-    /// The mesh actually used — `cell.mesh` when the caller passed `None`.
+    /// The per-grid weights, present ONLY in the `inf_vacuum` branches.
+    pub weights_per_grid: Option<Vec<f64>>,
+    /// The mesh actually used. This is `cell.mesh` when the caller passed
+    /// `None` — EXCEPT in the `inf_vacuum` branches, where the non-uniform base
+    /// returns `2 * (mesh[i] / 2)` points on a reduced axis, so an odd input
+    /// mesh comes back one smaller (`cell.py:600`: "mesh can be different from
+    /// the input mesh").
     pub mesh: [usize; 3],
+}
+
+impl GvWeights {
+    /// The quadrature weight at grid point `g` — the per-grid array when the
+    /// `inf_vacuum` base produced one, the scalar otherwise.
+    ///
+    /// # Panics
+    /// If `g` is out of range of a per-grid array.
+    #[must_use]
+    pub fn weight(&self, g: usize) -> f64 {
+        match &self.weights_per_grid {
+            Some(w) => w[g],
+            None => self.weights,
+        }
+    }
 }
 
 /// `get_Gv_weights(cell, mesh)` — `cell.py:539-604`.
 ///
+/// In the `inf_vacuum` branches the returned [`GvWeights::mesh`] may be SMALLER
+/// than the requested one, and [`GvWeights::weights_per_grid`] is populated —
+/// see the module docs.
+///
 /// # Errors
-/// * [`PyscfRsError::NotYetImplemented`] `{ phase: 12 }` for the
-///   `dimension <= 2 && low_dim_ft_type == inf_vacuum` branches;
-/// * [`CoreError::InvalidMolecule`] if the lattice is singular or the mesh is
-///   empty, or if the device launch fails.
+/// * [`CoreError::InvalidMolecule`] if the lattice is singular, the mesh has a
+///   zero axis, `dimension` is not one the `inf_vacuum` branches cover, or the
+///   device launch fails.
 pub fn get_gv_weights(cell: &Cell, mesh: Option<[usize; 3]>) -> Result<GvWeights, PyscfRsError> {
     // cell.py:547-548 — `if mesh is None: mesh = cell.mesh`.
     let mesh = match mesh {
@@ -112,14 +149,73 @@ pub fn get_gv_weights(cell: &Cell, mesh: Option<[usize; 3]>) -> Result<GvWeights
     let b = cell.reciprocal_vectors_2pi()?;
     let mut weights = det3(&b).abs();
 
-    // cell.py:558-578 — DEFERRED (see the module docs).
+    // cell.py:558-581 — the `inf_vacuum` branches. Each NON-periodic axis is
+    // replaced by a non-uniform Gauss-Chebyshev base, and the single scalar
+    // weight becomes an outer product over the axes. The periodic axes keep the
+    // uniform frequencies and contribute a constant factor: `|b_i|` for a
+    // periodic axis in the 1-D case, the cell area `|b_0 x b_1|` for the 2-D
+    // one.
+    let mut rx = rx;
+    let mut ry = ry;
+    let mut rz = rz;
+    let mut per_grid: Option<Vec<f64>> = None;
     if cell.dimension <= 2 && cell.low_dim_ft_type == LowDimFtType::InfVacuum {
-        return Err(PyscfRsError::NotYetImplemented {
-            phase: 12,
-            what: "get_Gv_weights for dimension <= 2 with low_dim_ft_type = inf_vacuum \
-                   (non-uniform Gauss-Chebyshev Gv base, cell.py:558-578)",
-        });
+        let nb = [norm3(&b[0]), norm3(&b[1]), norm3(&b[2])];
+        // cell.py:562-564 etc — `_non_uniform_Gv_base(mesh[i] // 2)`, scaled by
+        // `1 / |b_i|` so the base is in the same units as the uniform one.
+        let base = |n: usize, scale: f64| -> (Vec<f64>, Vec<f64>) {
+            let (r, w) = non_uniform_gv_base(n / 2);
+            (r.into_iter().map(|v| v / scale).collect(), w)
+        };
+        let (wx, wy, wz) = match cell.dimension {
+            // cell.py:561-568 — all three axes non-periodic.
+            0 => {
+                let (nrx, wx) = base(mesh[0], nb[0]);
+                let (nry, wy) = base(mesh[1], nb[1]);
+                let (nrz, wz) = base(mesh[2], nb[2]);
+                rx = nrx;
+                ry = nry;
+                rz = nrz;
+                (wx, wy, wz)
+            }
+            // cell.py:569-575 — x periodic, y and z vacuum.
+            1 => {
+                let wx = vec![nb[0]; mesh[0]];
+                let (nry, wy) = base(mesh[1], nb[1]);
+                let (nrz, wz) = base(mesh[2], nb[2]);
+                ry = nry;
+                rz = nrz;
+                (wx, wy, wz)
+            }
+            // cell.py:576-581 — xy periodic, z vacuum. Upstream folds the AREA
+            // over the xy block (`wxy = repeat(area, mesh[0]*mesh[1])`), which
+            // is the same outer product with `wx = area` and `wy = 1`.
+            2 => {
+                let area = norm3(&cross3(&b[0], &b[1]));
+                let (nrz, wz) = base(mesh[2], nb[2]);
+                rz = nrz;
+                (vec![area; mesh[0]], vec![1.0; mesh[1]], wz)
+            }
+            d => {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "get_Gv_weights: dimension = {d} with low_dim_ft_type = inf_vacuum"
+                ))));
+            }
+        };
+        // cell.py:568 — `einsum('i,j,k->ijk', wx, wy, wz).reshape(-1)`, C-order.
+        let mut w = Vec::with_capacity(wx.len() * wy.len() * wz.len());
+        for a in &wx {
+            for c in &wy {
+                for e in &wz {
+                    w.push(a * c * e);
+                }
+            }
+        }
+        per_grid = Some(w);
     }
+    // cell.py:598-600 — "NOTE mesh can be different from the input mesh": the
+    // non-uniform base returns `2 * (n / 2)` points, so an odd axis shrinks.
+    let mesh = [rx.len(), ry.len(), rz.len()];
 
     // cell.py:585-597 — the C kernel, here K-01 on the device.
     let selection = select_backend().map_err(|e| {
@@ -140,12 +236,38 @@ pub fn get_gv_weights(cell: &Cell, mesh: Option<[usize; 3]>) -> Result<GvWeights
     // `1/cell.vol == det(b)/(2pi)^3`.
     weights /= (2.0 * std::f64::consts::PI).powi(3);
 
+    // The per-grid array carries the same `1/(2 pi)^3` as the scalar.
+    let weights_per_grid = per_grid.map(|w| {
+        let f = 1.0 / (2.0 * std::f64::consts::PI).powi(3);
+        w.into_iter().map(|x| x * f).collect()
+    });
+
     Ok(GvWeights {
         gv,
         gvbase: [rx, ry, rz],
         weights,
+        weights_per_grid,
         mesh,
     })
+}
+
+
+/// `_non_uniform_Gv_base(n)` — `cell.py:607-613`.
+///
+/// A Gauss-Chebyshev radial grid mirrored about zero:
+/// `hstack((rs, -rs[::-1]))`, `hstack((ws, ws[::-1]))`, so `n` input points
+/// become `2n` output points. Upstream's commented-out alternative includes a
+/// point at the origin; the live line does not, and neither does this.
+///
+/// The radial rule itself is `pyscf_grids::radial::gauss_chebyshev`, the same
+/// one the molecular Becke grids use — there is no second copy of it here.
+fn non_uniform_gv_base(n: usize) -> (Vec<f64>, Vec<f64>) {
+    let (rs, ws) = pyscf_grids::radial::gauss_chebyshev(n);
+    let mut r = rs.clone();
+    r.extend(rs.iter().rev().map(|v| -v));
+    let mut w = ws.clone();
+    w.extend(ws.iter().rev().copied());
+    (r, w)
 }
 
 /// `get_Gv(cell, mesh)` — `cell.py:525-537`. Just

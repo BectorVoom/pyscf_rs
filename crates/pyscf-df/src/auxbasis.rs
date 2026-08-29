@@ -49,7 +49,14 @@ pub fn DEFAULT_AUXBASIS() -> &'static HashMap<&'static str, (&'static str, &'sta
         m.insert("6-311+g**", ("weigend", "weigend"));
         m.insert("3-21g", ("weigend", "weigend"));
         // === Minimal ===
-        m.insert("sto-3g", ("weigend", "weigend"));
+        // Upstream `DEFAULT_AUXBASIS['sto3g'] = ('def2-svp-jkfit', 'def2-svp-ri')`.
+        // The Phase-3 table said `weigend` here, which is the UNIVERSAL fallback,
+        // not this row. Found by plan 14-01 when `make_auxbasis` on the He-fcc
+        // reference cell went through it. The upstream-faithful lookup — with
+        // canonical keys, the BSE tier and the ETB fallback — is
+        // `crate::make_auxbasis::predefined_auxbasis`; prefer it over the two
+        // `default_*` helpers below, which exist only for the Phase-3 API.
+        m.insert("sto-3g", ("def2-svp-jkfit", "def2-svp-ri"));
         m.insert("sto-6g", ("weigend", "weigend"));
         // === ANO ===
         m.insert("ano", ("weigend", "weigend"));

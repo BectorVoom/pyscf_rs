@@ -32,7 +32,7 @@ fn main() {
     let cell = diamond();
     let kpts = make_kpts_default(&cell, [nk,nk,nk]).unwrap();
     let df = Fftdf::with_mesh(cell.clone(), &kpts, [m,m,m]).unwrap();
-    let mf = Krhf::from_df(df);
+    let mf = Krhf::from_df(Box::new(df));
     let cfg = KScfConfig { conv_tol: 1e-12, conv_tol_grad: Some(1e-8), max_cycle: 60, verbose: false, ..KScfConfig::default() };
     let t = Instant::now();
     let r = mf.kernel(&cfg).unwrap();

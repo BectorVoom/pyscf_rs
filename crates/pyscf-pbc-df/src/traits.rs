@@ -34,6 +34,13 @@ pub struct JkOpts<'a> {
     pub with_k: bool,
     /// How to treat the exchange divergence at `G + k = 0`.
     pub exxdiv: Option<ExxDiv>,
+    /// Range-separation parameter for an RSH functional, mirroring upstream's
+    /// `FFTDF.get_jk(..., omega=...)` (`pbc/df/fft.py`), which forwards it by
+    /// setting `cell.omega` inside `range_coulomb`. This port has no mutable
+    /// `cell.omega`, so the value is threaded explicitly into `get_coulG`
+    /// instead: `Some(w > 0)` selects the LONG-range kernel, `Some(w < 0)` the
+    /// SHORT-range one, `None` the full Coulomb kernel.
+    pub omega: Option<f64>,
 }
 
 impl JkOpts<'_> {
@@ -45,12 +52,18 @@ impl JkOpts<'_> {
             with_j: true,
             with_k: true,
             exxdiv: None,
+            omega: None,
         }
     }
 }
 
 /// A periodic density-fitting builder.
-pub trait PeriodicDf {
+///
+/// Object-safe by construction (every method takes `&self`/`&mut self`, none is
+/// generic, none returns `Self`), which is what lets plan 13-07 store it as
+/// `Box<dyn PeriodicDf>` in every k-point driver (D-PBC-22). The `Debug`
+/// supertrait is required because those drivers `#[derive(Debug)]`.
+pub trait PeriodicDf: std::fmt::Debug {
     /// The cell the builder is bound to.
     fn cell(&self) -> &Cell;
     /// The FFT mesh (or, for a Gaussian builder, the auxiliary mesh).
@@ -72,6 +85,9 @@ pub trait PeriodicDf {
     /// # Errors
     /// Builder-specific.
     fn get_pp(&self, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError>;
+    /// A short name for `dump_flags` and chkfile provenance — `"FFTDF"`,
+    /// `"AFTDF"`, … (plan 13-07 STEP 4).
+    fn name(&self) -> &'static str;
     /// Coulomb and exchange matrices for `nset` density-matrix channels.
     ///
     /// # Errors

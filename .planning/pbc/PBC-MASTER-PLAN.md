@@ -248,6 +248,10 @@ stop, write a deviation note in the plan's SUMMARY, and escalate.
 | **D-PBC-18** | MPI paths (Phase 20) ship as a **single-rank-correct implementation** behind a `mpi` cargo feature that is OFF by default; multi-rank uses `mpi` crate bindings only if the feature is on. | Keeps the default wheel dependency-free, matching v1.0's distribution goal. |
 | **D-PBC-19** | Every new crate gets its **numeric acceptance test written before the implementation** (TDD), using a hard-coded reference value from a one-off upstream PySCF run recorded in the plan. | The oracle venv is CI-gated; in-tree gates must not depend on it. |
 | **D-PBC-20** | Cell dimension support ships **3D first, then 2D, then 1D/0D**. `cell.dimension < 3` paths return `NotYetImplemented { phase: 12 }` until plan 12-08. | 3D is 95% of real use; low-dim Coulomb truncation is a separate, subtle body of work. |
+| **D-PBC-21** | `ft_aopair` is a **direct lattice sum** `Σ_L e^{ikL} ∫ φ_μ(r) φ_ν(r−L) e^{−i(G+q)r}` over `get_lattice_Ls(rcut = ft_ao.estimate_rcut(cell).max())`, with upstream's own per-shell-pair Schwarz screen. Upstream's `_RangeSeparatedCell` + `ExtendedMole` BvK supermole (~600 of `ft_ao.py`'s 790 lines) is **not ported**; the BvK bucket contraction is a deferred performance optimisation, revisited in Phase 14. | The RS/BvK machinery is numerically transparent — it decontracts and recontracts, and only *drops* terms below `cell.precision·1e-2`. Porting the definition instead makes the screen never tighter than upstream's, so the 1e-10 oracle agreement is a convergence statement rather than a coincidence. Recorded 2026-08-28, plan 13-01. |
+| **D-PBC-22** | `with_df` on every k-point driver is **`Box<dyn PeriodicDf>`**, not a concrete builder and not a generic parameter `D: PeriodicDf`. `pyscf_pbc_df::get_{nuc,pp,hcore}` take `&dyn PeriodicDf`. | Phase 11 hard-wired `Fftdf` into eight drivers, so nothing downstream can be handed an AFTDF — Phase 13's own gate is unmeasurable without this. The trait is already object-safe. A generic parameter would monomorphise the whole SCF machinery once per builder for no measured gain, against one vtable hop per SCF iteration. Recorded 2026-08-28, plan 13-07. |
+| **D-PBC-23** | `exclude_dd_block` is **DEFERRED**: Phase 14 ports the *definition* of the 3-centre lattice sum (upstream's `exclude_dd_block = False` route) and does not port `ft_ao._RangeSeparatedCell` / `_int_dd_block` / `merge_diffused_block` / `ExtendedMole.strip_basis`. A caller that explicitly asks for `true` gets `NotYetImplemented { phase: 17 }`. | **This one needed a MEASUREMENT, not a judgement.** D-PBC-21 could argue the RS machinery is numerically transparent; that argument does NOT carry here, because `exclude_dd_block` is not screening — it RE-ROUTES the smooth–smooth block of `(ij\|L)` out of the real-space sum and into an FFT, and upstream's default is the *more* accurate route. `measurements/ddblock.py` prices it: **1.835e-8 Ha** (diamond 2×2×2), **2.900e-8** (gamma), **exactly 0** (He-fcc/`sto-3g`, which has no smooth shell — `bas_type = [1]`). So Gate 1 is stated on He-fcc, where the deferral is provably inert, and Gate 1b asserts diamond against upstream run with `exclude_dd_block=False`. Plan 14-05 then measured a SECOND piece of the same machinery: `ExtendedMole.strip_basis`'s per-shell-pair radii are worth **1.054e-09** in `j3c` and **2.750e-09** in the ERI, and the port — which evaluates every pair to the maximum radius — is the MORE converged of the two. Recorded 2026-08-29, plans 14-01/14-05. |
+| **D-PBC-24** | Everything range-separated in Phase 14 — `rsdf_builder._RSGDFBuilder`, `mdf._RSMDFBuilder`, `rsdf.RSGDF`, `scf.rsjk` — is **BLOCKED on `cintx`, not deferred by choice**, and returns `NotYetImplemented { phase: 14 }` naming the gap. The ω machinery (all twelve estimators, `weighted_coulG_LR/_SR`, `_gaussian_int`) ships and is gated. | Range separation is not a distinct integral symbol: upstream never calls an `int2e_sr_*`. It is libcint's `PTR_RANGE_OMEGA` (`env[8]`) toggle around the STANDARD `int3c2e`/`int2c2e`/`int2e`. `cintx_runtime::ExecutionOptions` has `f12_zeta` (`env[9]`), `rinv_orig` and `common_orig` and **no `range_omega`**; no kernel reads `env[8]`; and `incore::aux_e2` reaches cintx through `build_image_expanded_with_aux`, which builds its `BasisSet` from the parsed per-element basis rather than from an `_env` array, so even `pyscf-gto`'s own direct-`_env` workaround is unreachable. **This is Phase 4's Open Question A5 / cintx#11**, already documented in `crates/pyscf-gto/src/range_coulomb.rs`. `14-07-PLAN.md` Task 7b required this be REPORTED rather than worked around with a numerically different kernel — a full-range substitute would run, converge, and be silently a different method, and for `rsjk` (which is EXACT) the wrong answer would land inside GDF's 1.2e-3 fitting error and look plausible. Consequence: **Gate 3 is unreachable** and `GDF._prefer_ccdf` stays `true`. **Lifting it is planned in `.planning/carryovers/D-PBC-24-cintx-range-omega-PLAN.md`**, whose sizing finding is that `rys_order = (sum l_ceil)/2 + 1` is `<= 3` on every system this milestone gates, and that libcint computes the short-range integral in that regime as `full - LR` with DOUBLED Rys roots using only the standard root finder — so `CINTsr_rys_roots` is a later stage, not a prerequisite. Recorded 2026-08-29, plans 14-07/14-08; planned 2026-08-30. |
 
 ---
 
@@ -1341,18 +1345,113 @@ FFTDF `get_nuc`/`get_pp`/`get_jk`. Record every reference number in `11-VERIFICA
 ### 8.5 Phase 13 — `ft_ao` + AFTDF
 
 **Goal:** analytic Fourier transforms of AO pairs, and the analytic-FT density-fitting
-builder that GDF/MDF/RSDF all sit on.
+builder that GDF/MDF/RSDF all sit on. At the end of this phase `KRHF(cell, kpts)`
+runs on **either** FFTDF or AFTDF with no driver change, and the two agree.
 
-**Plans:** 6 (13-01 … 13-06).
+**Plans:** 8 (13-01 … 13-08).
+
+| Wave | Plans |
+|---|---|
+| 1 | 13-01 (`ft_aopair` MD kernel, K-15), 13-02 (`ft_ao`, single-centre FT) |
+| 2 | 13-03 (`ft_aopair_kpts` + `FtKernel` dispatch: k-resolution, aosym, screening, G-blocking) |
+| 3 | 13-04 (`AFTDF`: `build`/`ft_loop`/`pw_loop`/`weighted_coulG`/`get_nuc`/`get_pp`) |
+| 4 | 13-05 (`aft_jk`), 13-06 (`fft_ao2mo` + `aft_ao2mo`) |
+| 5 | 13-07 (`Box<dyn PeriodicDf>` — make every K-driver builder-agnostic) |
+| 6 | 13-08 (verification rollup) |
 
 ---
 
-#### Plan 13-01 — `ft_aopair` cubecl kernel (K-15) — **the biggest new kernel in v2.0**
+#### 8.5.0 Two decisions that govern the whole phase
 
-**FILES** `crates/pyscf-kernels/src/pbc/ft_aopair.rs`, `crates/pyscf-pbc-df/src/ft_ao.rs`
+**D-PBC-21 — `ft_aopair` is a DIRECT lattice sum, not a port of the BvK supermole.**
+Upstream spends ~600 of `ft_ao.py`'s 790 lines on `_RangeSeparatedCell` (partial
+basis de-contraction into steep/local/smooth blocks) and `ExtendedMole` (a
+Born–von-Kármán supercell `Mole` whose shells carry a `bas_mask` back to the
+primitive cell). **Neither changes the answer.** `_RangeSeparatedCell` decontracts
+and then `recontract`s; `ExtendedMole.strip_basis` only *drops* image shells whose
+Schwarz bound is below `cell.precision * 1e-2`. Both are screening and
+cache-blocking devices for a C loop over a supermole.
 
-**PORT** `pyscf/pbc/df/ft_ao.py:1-790` (whole file: `ft_aopair`, `ft_aopair_kpts`,
-`ft_ao`, `gen_ft_kernel`, `_ft_aopair_kpts`, `_RangeSeparatedCell` helpers).
+This port implements the mathematical definition instead —
+
+```
+ft_aopair_kpts[k, μν, G] = Σ_L e^{i k·L} ∫ φ_μ(r) φ_ν(r − L) e^{−i(G+q)·r} dr
+```
+
+— over `Ls = get_lattice_Ls(cell, rcut = estimate_rcut(cell).max())`, with the SAME
+per-shell-pair Schwarz screen upstream uses (`ft_ao.py:744-790`, ported verbatim as
+`estimate_rcut`). The de-contraction is therefore never needed: a contracted shell
+is screened by its **most diffuse** primitive, which is exactly what
+`_extract_pgto_params(cell, 'min')` selects.
+
+Consequence: the port is smaller AND its screening is never *tighter* than
+upstream's, so the 1e-10 oracle gate is a convergence statement, not a
+coincidence. The BvK bucket contraction is recorded as a **deferred performance
+optimisation** in plan 13-03 STEP 2, not a correctness item.
+
+> **MEASURED 2026-08-28/29, and it forces a three-part Gate 1.**
+> `ft_ao.estimate_rcut` is **looser** than `cell.rcut` — on diamond/`gth-szv` they
+> are **20.420** and **21.319** Bohr. So upstream's own `ft_aopair[G=0]` does NOT
+> reproduce `pbc_intor("int1e_ovlp")` to 1e-10: it lands at **1.554e-9** at gamma
+> and **5.322e-10** at `k ≠ 0`.
+>
+> Scaling `ft_ao.estimate_rcut` on upstream and re-measuring, at mesh 31:
+>
+> | `rcut` | Gate 1 residual | `dvj` | `dvk` |
+> |---|---|---|---|
+> | ×1.0 = 20.42 | 1.554e-9 | 1.996e-11 | 6.487e-10 |
+> | ×1.5 = 30.63 | **1.472e-10** | **7.727e-13** | **1.609e-10** |
+> | ×2.0 = 40.84 | **1.472e-10** | **7.726e-13** | **1.609e-10** |
+>
+> **×1.5 and ×2.0 are identical to four digits.** The FT lattice sum is fully
+> converged at ~30.6 Bohr, so beyond that `ft_aopair` stops changing — and yet the
+> Gate 1 residual sits at 1.472e-10 and will not move.
+>
+> **That residual is therefore NOT `ft_aopair`'s. It is the reference side's.**
+> `pbc_intor("int1e_ovlp")` runs its own lattice sum out to `cell.rcut` = 21.319
+> at `cell.precision` = 1e-8. Once the FT sum is converged, Gate 1 is measuring the
+> truncation error in the OVERLAP, not in the Fourier transform. **A Gate 1 stated
+> as "≤ 1e-11 against `pbc_intor`" is unachievable no matter how correct the
+> kernel is.**
+>
+> **The fix is available and already in the port.**
+> `pyscf_pbc_gto::pbc_intor::intor_cross_with_images` takes an explicit image list
+> — plan 10-06 added it precisely so several operators could share one `Ls`. Gate 1
+> must therefore be run in three parts:
+>
+> | | `rcut` for `ft_aopair` | reference overlap | target |
+> |---|---|---|---|
+> | **1a** | `estimate_rcut` (upstream default) | `pbc_intor`, default `Ls` | **≤ 2e-9** — reproduces upstream's 1.554e-9; this is the setting Gate 3 uses |
+> | **1b** | `1.5 × cell.rcut` | `pbc_intor`, default `Ls` | **≤ 2e-10** — hits the reference's own floor at 1.472e-10; NOT a kernel gate |
+> | **1c** | `1.5 × cell.rcut` | `intor_cross_with_images` over the **SAME `Ls`** | **≤ 1e-13** — both sides converged over one identical image list; **this is the real gate on the McMurchie–Davidson algebra** |
+>
+> Only 1c isolates the kernel. 1a pins agreement with upstream, 1b is a
+> consistency check with a known floor, and 1c is what fails if the recursion is
+> wrong.
+
+**D-PBC-22 — `with_df` becomes `Box<dyn PeriodicDf>`.**
+Phase 11 hard-wired the concrete `Fftdf` into every driver
+(`krhf.rs:29 pub with_df: Fftdf`, and the same in `kuhf`/`krohf`/`kghf` and the
+Phase-12 KS drivers), plus the free functions `pyscf_pbc_df::get_{nuc,pp,hcore}`
+which take `&Fftdf`. `PeriodicDf` is already object-safe — every method takes
+`&self`/`&mut self`, none is generic, none returns `Self`. Plan 13-07 replaces the
+field with `Box<dyn PeriodicDf>` and re-signs the three free functions to
+`&dyn PeriodicDf`. **Do not make the drivers generic over `D: PeriodicDf`**: eight
+driver types × four builders monomorphises the whole SCF machinery four times for
+no measured gain, and the `Box` is dereferenced once per SCF iteration.
+
+---
+
+#### Plan 13-01 — `ft_aopair` McMurchie–Davidson kernel (K-15) — **the biggest new kernel in v2.0**
+
+**FILES** `crates/pyscf-kernels/src/pbc/ft_aopair.rs` (device),
+`crates/pyscf-pbc-df/src/ft_ao/mcmurchie.rs` (host E-coefficient recursion),
+`crates/pyscf-pbc-df/src/ft_ao/mod.rs` (driver),
+`crates/pyscf-kernels/tests/pbc_ft_aopair.rs`
+
+**PORT** `pyscf/pbc/df/ft_ao.py:48-61` (`ft_aopair`), `:744-790` (`estimate_rcut`);
+the integral itself is `pyscf/lib/gto/ft_ao.c` `GTO_ft_ovlp`, reproduced from the
+formula below rather than transliterated from C.
 
 **THE MATH — implement exactly this (McMurchie–Davidson / Hermite expansion):**
 
@@ -1382,46 +1481,533 @@ ft_aopair[μν, G] = Σ_{t,u,v} E_t^{ij,x}·E_u^{ij,y}·E_v^{ij,z}
                    · (−i·G_x)^t·(−i·G_y)^u·(−i·G_z)^v
                    · (π/p)^{3/2} · exp(−|G|²/(4p)) · exp(−i·G·P)
 ```
-For the **periodic, k-resolved** form (`ft_aopair_kpts`), the second centre runs over
-lattice images and carries the Bloch phase:
-```
-ft_aopair_kpts[k, μν, G] = Σ_L exp(i·k·L) · ft_aopair(A, B + L)[μν, G]
-```
-Contraction over primitives and the Cartesian→spherical transform
-(`pyscf_gto::cart2sph_coeff`) are applied afterwards, exactly as in the molecular path.
+Note `K_AB` is carried INSIDE `E_0^{00}`, so it must not be multiplied in a second
+time. The one-axis `E` table has `(i+1)(j+1)(i+j+1)` entries; the three axes share
+`p`, `K_AB` is put on the x axis only and the y/z tables start from `E_0^{00} = 1`.
+
+**HOST/DEVICE SPLIT**
+- **Host** (`mcmurchie.rs`): for every surviving `(shell-pair, image L, primitive
+  pair)` triple, build `P`, `p`, `(π/p)^{3/2}`, and the three `E` tables. This is
+  `O(nprim² · l⁴)` per pair and independent of `nG` — it must never run on device.
+  Flatten into one `f64` upload plus an `i32` index table.
+- **Device** (`ft_aopair.rs`): a pure polynomial-times-exponential evaluation. No
+  recursion, no branching on `l` beyond the comptime-bounded `t` loop.
 
 **KERNEL DESIGN**
-- One cube per `(shell-pair, G-block)`. `CubeDim { x: 256, y: 1, z: 1 }`, one thread per G.
-- Precompute `E_t` on the **host** (small, `(i+1)(j+1)(i+j+1)` per axis per primitive
-  pair) and upload as a flat `f64` array. The device loop is then a pure
-  polynomial-times-exponential evaluation — no recursion on device.
-- Generic over `F: Float` per AGENTS.md §3.
-- Screening: skip a `(shell-pair, L)` whose `K_AB · (π/p)^{3/2}` is below
-  `cell.precision`.
+- Thread = one `(cartesian AO pair c, G index g)`. Cube = `(record block, G block)`,
+  `CubeDim { x: 256, y: 1, z: 1 }` with `x` running over `g` — a coalesced read of
+  `Gv`, which is the only large input.
+- The thread loops over the primitive-pair records of its shell pair and accumulates
+  `(re, im)` in registers, so there are **no atomics**.
+- Output is PLANAR (`D-PBC-02`/RULE 8): two `Array<F>`, `ft_re`/`ft_im`, never
+  interleaved.
+- Generic over `F: Float` per AGENTS.md §3, launched through
+  `pyscf_algebra::dispatch_backend!`, exactly as `pbc/struct_factor.rs` does.
+- **All scalar math is `cube-math`** (`/home/user/Documents/workspace/cube-math`):
+  `cube_math::double::exp::exp` for `exp(−|G|²/4p)` and
+  `cube_math::double::trig::sincos` for `exp(−i·G·P)`, both with
+  `cube_math::MathConfig::EXACT`. Do not call `f64::exp`/`sin`/`cos` inside a
+  `#[cube]` body — the existing PBC kernels (`struct_factor.rs:46`,
+  `ewald.rs:217`, `eval_gto.rs:1235`) set the precedent and the FMA-free
+  `release-oracle` gate depends on it.
+- Screening: skip a `(shell-pair, L)` whose Schwarz bound
+  `K_AB · (π/p)^{3/2}` is below `cell.precision * 1e-2` — the same constant
+  upstream's `estimate_rcut` uses, and for the same stated reason (hermitian
+  symmetry of the result).
+
+**STEPS**
+1. Add `pyscf-kernels` to `crates/pyscf-pbc-df/Cargo.toml`. `pyscf-pbc-gto` already
+   depends on it, so `xtask check_dependency_wall` needs no new exemption — run it
+   and confirm.
+2. `estimate_rcut(cell, precision) -> Vec<f64>` in `ft_ao/mod.rs`, a line-by-line
+   port of `ft_ao.py:744-790` **including the two-pass `r0` refinement** and the
+   default `precision = cell.precision * 1e-2`.
+3. `mcmurchie::e_coefficients(li, lj, a, b, ax, bx) -> Vec<f64>` — the one-axis
+   recursion above, indexed `[i][j][t]` flattened row-major.
+4. `ft_aopair_prims(...)` — assemble the record table for ONE `(q, single k)` call.
+5. The device kernel + `launch_ft_aopair_on_handles` following the
+   `struct_factor.rs` shape exactly (core launch on resident handles, `Runtime`
+   never escaping into a public signature).
+6. Cartesian → spherical: reuse `pyscf_gto::cart2sph_coeff`; apply it as two real
+   GEMMs on each of `ft_re`/`ft_im` (D-PBC-03: four real GEMMs, never Karatsuba).
+7. This plan ships `q = 0`, one k-point, `aosym = 's1'`, `comp = 1` only. Everything
+   else is 13-03.
 
 **TEST** `crates/pyscf-kernels/tests/pbc_ft_aopair.rs`
 1. **s-s analytic check (no oracle):** for two s primitives, compare against the
    closed form `(π/p)^{3/2}·exp(−G²/4p)·exp(−iG·P)·K_AB` to 1e-14.
 2. **Numerical-FT check (no oracle):** on a dense real-space grid,
    `Σ_r ao_μ(r)·ao_ν(r)·exp(−iG·r)·(vol/ngrids)` matches `ft_aopair` to 1e-6 for a
-   `[40,40,40]` mesh, for `l` up to 2.
-3. **G = 0 identity:** `ft_aopair[μν, G=0]` equals the periodic overlap
-   `pbc_intor("int1e_ovlp")[μν]` to 1e-10. **This is the single best correctness gate.**
-4. Oracle-gated: match `pyscf.pbc.df.ft_ao.ft_aopair` to 1e-10.
+   `[40,40,40]` mesh, for `l` up to 2. Uses `pyscf_pbc_gto::eval_ao_kpts`, so this
+   test also cross-checks Phase 10.
+3. **G = 0 identity — RUN IT THREE WAYS.** See §8.5.0's boxed table for why two
+   is not enough. `ft_aopair[μν, G=0]` vs the periodic overlap:
+   - **1a, screening-faithful** — `rcut = estimate_rcut(cell).max()` (upstream's
+     default), reference `pbc_intor("int1e_ovlp")`: **≤ 2e-9**. Upstream itself
+     measures **1.554e-9** at gamma and **5.322e-10** at `k ≠ 0`. Do NOT gate this
+     at 1e-10; it is not achievable and it is not a defect. This is the `rcut`
+     Gate 3 uses.
+   - **1b, converged FT against the default overlap** — `rcut = 1.5 × cell.rcut`:
+     **≤ 2e-10**. The measured value is 1.472e-10 and it does not improve at
+     `2.0 × cell.rcut`, because at that point the residual belongs to
+     `pbc_intor`'s own truncation (`cell.rcut` = 21.319, `precision` = 1e-8), not
+     to `ft_aopair`. A consistency check with a known floor — NOT a kernel gate.
+   - **1c, both sides over ONE image list** — `rcut = 1.5 × cell.rcut` for
+     `ft_aopair`, and the reference built with
+     `pyscf_pbc_gto::pbc_intor::intor_cross_with_images` over **the same `Ls`**:
+     **≤ 1e-13**. **This is the real gate on the McMurchie–Davidson recursion**
+     (risk R-08) — it is the only one of the three in which both sides are
+     converged over identical images, so nothing but the algebra can move it.
+   **All three need no oracle.**
+4. **Hermiticity:** `ft_aopair[μν, G] == conj(ft_aopair[νμ, −G])` to 1e-13.
+5. Oracle-gated (`PYSCF_ORACLE_VENV`): match
+   `pyscf.pbc.df.ft_ao.ft_aopair(cell, Gv)` to 1e-10 on diamond and on He-fcc.
 
 **DONE** `cargo test -p pyscf-kernels --test pbc_ft_aopair`
 
 ---
 
-#### Plans 13-02 … 13-06
+#### Plan 13-02 — `ft_ao`: the single-centre AO Fourier transform
 
-| Plan | Content | Port from |
-|---|---|---|
-| **13-02** | `ft_ao` (single-AO FT, `Σ_L e^{ikL} ∫ φ_μ(r−L) e^{−iGr}`), `gen_ft_kernel` dispatch, range-separated cell splitting | `df/ft_ao.py` (rest) |
-| **13-03** | `AFTDF`: `build`, `get_nuc`, `get_pp`, `pw_loop`, `ft_loop`, `weighted_coulG` | `df/aft.py` (776 l) |
-| **13-04** | `aft_jk`: `get_j_kpts`, `get_k_kpts`, `get_jk`, `_format_dms` | `df/aft_jk.py` (753 l) |
-| **13-05** | `aft_ao2mo`: `get_eri`, `general`, `ao2mo_7d` | `df/aft_ao2mo.py` (434 l) |
-| **13-06** | Verification: AFTDF `KRHF` energy == FFTDF `KRHF` energy to 1e-6 on 3 systems | — |
+**FILES** `crates/pyscf-gto/src/ft_ao.rs` (molecular — mirrors upstream's own
+location), `crates/pyscf-pbc-df/src/ft_ao/mod.rs` (the k-point wrapper),
+`crates/pyscf-gto/tests/ft_ao.rs`
+
+**PORT** `pyscf/gto/ft_ao.py` (`ft_ao`, the `GTO_ft_ovlp` single-centre branch) and
+`pyscf/pbc/df/ft_ao.py:93-100` (the periodic wrapper).
+
+**THE MATH.** With one centre this collapses out of the MD recursion entirely:
+```
+ft_ao[μ, G] = Σ_prim  c_prim · (π/α)^{3/2} · exp(−|G|²/(4α))
+                     · (Cartesian angular factor in (−iG)) · exp(−i·G·A)
+```
+The angular factor is the `l = i, j = 0` special case of plan 13-01's `E` table, so
+implement it by CALLING `mcmurchie::e_coefficients(l, 0, α, 0, 0, 0)` rather than by
+writing a second recursion — one recursion, one place to be wrong.
+
+**THE PERIODIC WRAPPER IS TWO LINES AND BOTH MATTER** (`ft_ao.py:93-100`):
+```rust
+if gamma_point(kpt) { mol_ft_ao(mol, Gv) } else { mol_ft_ao(mol, Gv + kpt) }
+```
+There is no lattice sum here. `ft_ao` is evaluated on the *fake* nuclear cell whose
+`rcut = 0.1`, so the images never contribute.
+
+**STEPS**
+1. `pyscf_gto::ft_ao(mol, gv) -> CTensor` (`nao × nG`, planar).
+2. `pyscf_pbc_df::ft_ao::ft_ao(mol, gv, kpt)` — the shift-by-`kpt` wrapper.
+3. `_fake_nuc(cell, with_pseudo)` — port `aft.py:247-274` verbatim, including
+   `eta = 0.5/rloc²` when the atom has a GTH pseudopotential and `eta = 1e16`
+   otherwise, and `norm = half_sph_norm / gaussian_int(2, eta)`. Build it as a real
+   `Mole` (`_atm`/`_bas`/`_env` rows) so `ft_ao` consumes it unchanged.
+
+**TEST** `crates/pyscf-gto/tests/ft_ao.rs`
+1. s-function closed form to 1e-14.
+2. `ft_ao[μ, G=0] == ∫φ_μ` — for `l > 0` that is exactly 0; for `l = 0` it is
+   `c·(π/α)^{3/2}`. To 1e-13.
+3. Numerical FT on a dense grid to 1e-8, `l` up to 3.
+4. Oracle-gated: `pyscf.gto.ft_ao.ft_ao` to 1e-12 on `cc-pVDZ` water.
+5. `_fake_nuc(diamond).charge`-weighted `ft_ao` reproduces
+   `get_gth_vlocG_part1` × `SI` to 1e-12 — the identity that makes 13-04's
+   two `get_nuc` branches consistent.
+
+**DONE** `cargo test -p pyscf-gto --test ft_ao`
+
+---
+
+#### Plan 13-03 — `ft_aopair_kpts`, `FtKernel` dispatch, aosym, G-blocking
+
+**FILES** `crates/pyscf-pbc-df/src/ft_ao/mod.rs`, `crates/pyscf-pbc-df/tests/ft_ao.rs`
+
+**PORT** `ft_ao.py:63-90` (`ft_aopair_kpts`), `:102-250` (`gen_ft_kernel` and the
+inner `ft_kernel` closure — port the SHAPE and the `aosym` handling, not the
+`libpbc` plumbing).
+
+**STEPS**
+1. `struct FtKernel` replaces upstream's closure: it owns the cell, the screened
+   `(shell-pair, image)` record table, the uploaded E-coefficient buffer and the
+   device client. Building it is the expensive half; `FtKernel::eval(gv, q, kpts,
+   shls_slice, aosym)` is the cheap half, called once per G block.
+2. **k-resolution.** One kernel launch per k-point, with the Bloch phase
+   `e^{i k·L}` folded into the per-image record on the host. Upstream instead
+   accumulates into `bvk_ncells` buckets and contracts with `expLk` — that is a
+   pure optimisation and is DEFERRED (see D-PBC-21); record it in the module docs
+   with the measured cost so Phase 14 can revisit it.
+3. **`q` handling.** `GvT = Gv.T + q[:, None]` (`ft_ao.py:163`). `q` is
+   `kptj − kpti` and enters ONLY through this shift — never through the lattice sum.
+4. **`aosym`.**
+   - `s1` — the full `ni × nj` block.
+   - `s2` — the packed lower triangle, `nij = i1(i1+1)/2 − i0(i0+1)/2`. Assert
+     `shls_slice[2] == 0`, as upstream does.
+   - `s1hermi` — gamma point only; assert `is_zero(q) && is_zero(kptjs) && ni == nj`,
+     compute the `i ≥ j` half and mirror it (`ft_ao.py:234-236`). Note upstream's
+     own comment: it mirrors WITHOUT conjugation because at `q = k = 0` the pair
+     density is real-symmetric.
+5. **`shls_slice`** as a 4-tuple over the PRIMITIVE cell's shells, with `ni`/`nj`
+   taken from `cell0_ao_loc`.
+6. **Output layout.** Upstream returns `[nkpts, nGv, ni, nj]` after its
+   `np.rollaxis(out, -1, 2)`. This port returns G-major
+   (`ft[k][(g, μ, ν)]`, `g` slowest) because every consumer in 13-04/13-05
+   contracts over `G` in blocks; the layout is stated once in the module docs and
+   never re-derived at a call site.
+7. **G-blocking.** `eval` takes a `Gv` slice, so `ft_loop` can walk the mesh in
+   blocks sized from `PYSCF_MAX_MEMORY`. The record table is built once, outside
+   the loop.
+
+**TEST** `crates/pyscf-pbc-df/tests/ft_ao.rs`
+1. **Gate 1, k-resolved:** `ft_aopair_kpts[k, G=0]` vs the periodic overlap for
+   diamond at `2×2×2` and He-fcc at gamma, in all three variants of plan 13-01
+   test 3 — **1a ≤ 2e-9**, **1b ≤ 2e-10**, **1c ≤ 1e-13** (1c against
+   `intor_cross_with_images` over the same `Ls`). No oracle. 1c is the one that
+   must hold at every k-point, not just gamma.
+2. `s2` unpacks to `s1` element-for-element (bit-identical, not "to 1e-15").
+3. `s1hermi` at gamma equals the `s1` result to 1e-13.
+4. Block invariance: evaluating the mesh in blocks of 64 gives a **bit-identical**
+   result to one whole-mesh call.
+5. `q`-shift identity: `ft_aopair_kpts(Gv, q=k)` equals `ft_aopair_kpts(Gv + k, q=0)`
+   to 1e-13.
+6. Oracle-gated: `ft_ao.ft_aopair_kpts` to 1e-10, diamond `2×2×2`, mesh `[11,11,11]`.
+
+**DONE** `cargo test -p pyscf-pbc-df --test ft_ao`
+
+---
+
+#### Plan 13-04 — `AFTDF`: `build`, `ft_loop`, `pw_loop`, `weighted_coulG`, `get_nuc`, `get_pp`
+
+**FILES** `crates/pyscf-pbc-df/src/aftdf.rs`, `crates/pyscf-pbc-df/tests/aftdf.rs`
+
+**PORT** `pyscf/pbc/df/aft.py:104-165` (`_get_pp_loc_part1`), `:186-234`
+(`get_pp`, `get_nuc`), `:236-245` (`weighted_coulG`), `:247-274` (`_fake_nuc`),
+`:276-301` (`estimate_ke_cutoff`), `:421-551` (`AFTDFMixin.pw_loop`, `.ft_loop`),
+`:585-770` (`AFTDF`).
+
+**STEPS**
+1. `struct Aftdf { cell, kpts, mesh, eta, ft_kernel: OnceCell<FtKernel>, … }` and
+   `impl PeriodicDf for Aftdf`. `build()` constructs the `FtKernel` and caches it.
+2. `estimate_ke_cutoff(cell, precision)` — port `aft.py:276-301` (`_estimate_ke_cutoff`
+   with its **two** Newton passes) — and warn, as upstream does, when
+   `mesh < mesh_guess * KE_SCALING`. `KE_SCALING = 0.75`; confirm the constant
+   against `pyscf/pbc/df/aft.py`'s import before hard-coding it.
+3. `weighted_coulG(kpt, exx, mesh, omega)` = `get_coulG(...) * kws`, where `kws`
+   comes from the EXISTING `pyscf_pbc_gto::get_gv_weights`. **`exx` is threaded
+   through to `get_coulG`** — see §8.5.0's note on the exxdiv divergence.
+4. `ft_loop(mesh, q, kpts, shls_slice, aosym) -> impl Iterator<Item = (FtBlock, p0, p1)>`
+   and `pw_loop(...)` (the `s2`, real/imag-split, transposed variant `_get_pp_loc_part1`
+   uses). Both are thin generators over `FtKernel::eval`.
+5. `_get_pp_loc_part1(with_pseudo)`:
+   - `with_pseudo = true` → `vpplocG = −Σ_i SI[i,G] · get_gth_vlocG_part1[i,G]`
+     (both already exist in `pyscf_pbc_gto::pseudo::vloc`).
+   - `with_pseudo = false` → `vpplocG[G] = Σ_i (−Z_i) · ft_ao(fakenuc)[i,G] · coulG[G]`,
+     using plan 13-02's `ft_ao` and `_fake_nuc`.
+   - Then `× kws`, and contract with the `aosym='s2'` `ft_loop` block exactly as
+     `aft.py:141-154` does — **keep upstream's real/imaginary bookkeeping literally**,
+     including the `if not is_zero(kpts[k])` guard that leaves `vjI` at zero for a
+     gamma k-point.
+   - Unpack the triangle (`lib.unpack_tril`) to a full `nao × nao` matrix.
+6. `get_nuc(kpts)` = `_get_pp_loc_part1(with_pseudo=false)`.
+7. `get_pp(kpts)` = `_get_pp_loc_part1(with_pseudo=true)`
+   `+ pyscf_pbc_gto::pseudo::get_pp_loc_part2(cell, kpts)`
+   `+ pyscf_pbc_gto::pseudo::get_pp_nl(cell, kpts)`.
+   **Both addends already ship** (Phase 10 plans 10-05/10-06). AFTDF and FFTDF
+   therefore differ ONLY in part 1 — which is what makes the `get_pp` cross-check
+   in 13-08 a clean measurement of `ft_aopair` itself.
+
+**TEST** `crates/pyscf-pbc-df/tests/aftdf.rs`
+1. `get_nuc`/`get_pp` are Hermitian to 1e-12 and real at gamma.
+2. **Cross-builder, no oracle:** `Aftdf::get_pp` vs `Fftdf::get_pp` on diamond
+   `2×2×2` at meshes `[15,21,31,41]`. Assert the deviation **falls until it reaches
+   a plateau, then STAYS on that plateau** — measured on upstream, the J/K analogue
+   is flat to three digits between mesh 31 and 41 (see plan 13-05's boxed table).
+   **Do NOT assert monotone convergence to a small constant; it is false for a
+   correct implementation.** What the test must catch is a plateau at the WRONG
+   level: pin it against the recorded upstream floor. This is the phase's
+   early-warning system, and it must be characterised at mesh ≥ 31 — at mesh 21 the
+   general screening residual still masks the effect.
+3. `get_nuc` on He-fcc (all-electron — the branch a `gth-pade` cell never reaches)
+   vs `Fftdf::get_nuc`, same monotonicity assertion.
+4. Oracle-gated: `AFTDF(cell, kpts).get_nuc()` and `.get_pp()` to 1e-11.
+
+**DONE** `cargo test -p pyscf-pbc-df --test aftdf`
+
+---
+
+#### Plan 13-05 — `aft_jk`
+
+**FILES** `crates/pyscf-pbc-df/src/aft_jk.rs`, `crates/pyscf-pbc-df/tests/aft_jk.rs`
+
+**PORT** `pyscf/pbc/df/aft_jk.py:41-94` (`get_j_kpts`, `_update_vj_`), `:96-133`
+(`get_j_for_bands`), `:135-293` (`get_k_kpts`), `:295-364` (`get_k_for_bands`),
+`:366-418` (`_update_vk_`), `:641-753` (`get_jk`, `_format_dms`).
+
+**PORT THIS ONE STATEMENT BY STATEMENT.** Same warning as plan 11-06 for
+`fft_jk.get_k_kpts`: keep upstream's identifiers (`vkR`, `vkI`, `wcoulG`,
+`kpti_idx`, `swap_2e`, `k_to_compute`) as Rust identifiers so a reviewer can diff
+against the Python line for line.
+
+**THE ONE PLACE AFTDF IS NOT FFTDF — read before writing `get_k_kpts`.**
+`aft_jk.py:285` applies the Ewald exchange correction only
+`if exxdiv == 'ewald' and cell.low_dim_ft_type == 'inf_vacuum'`. For an ordinary
+3-D cell that is FALSE, and the correction instead arrives through
+`weighted_coulG(kpt, exxdiv, mesh)` → `get_coulG(..., exx='ewald')`, which adds
+`Nk · vol · madelung` at `G+k = 0` (`tools/pbc.py:480-484`). FFTDF in 2.12.1 does
+the opposite: no `exx` in `coulG`, and `_ewald_exxdiv_for_G0` applied analytically
+afterwards. **The two agree exactly to the extent that `ft_aopair[G=0] == S`** —
+which is Gate 1. This is the same difference PySCF **2.14** later imposed on
+`fft_jk` (Phase 11 measured it at 1.7e-5 in `vk`), so it is a real, documented
+divergence and NOT a bug to "fix". `pyscf_pbc_gto::get_coulg` already implements
+the folding (`coulg.rs:198-203`); do not add a second path.
+
+> **MEASURED 2026-08-28/29 — this term DOMINATES the AFTDF/FFTDF difference, and
+> it is a first-order gate concern, not a footnote.** Diamond/`gth-szv` 2×2×2,
+> fixed init-guess density, `max|vj_AFT − vj_FFT|` / `max|vk_AFT − vk_FFT|`:
+>
+> | mesh | `exxdiv=None` dvj / dvk | `exxdiv='ewald'` dvj / dvk |
+> |---|---|---|
+> | 15 | — | 3.827e-7 / 1.112e-6 |
+> | 21 | 2.365e-10 / 1.690e-9 | 2.365e-10 / 1.804e-9 |
+> | 31 | 1.996e-11 / **2.653e-11** | 1.996e-11 / **6.487e-10** |
+> | 41 | — | 1.996e-11 / 6.485e-10 |
+>
+> Three things to take from this table.
+>
+> 1. **The difference FLOORS by mesh 31 and does not improve at mesh 41** —
+>    1.996e-11 and 6.487e-10 → 6.485e-10, identical to three digits. Above mesh
+>    ~31 this is not a mesh effect at all. Any test that asserts "monotone
+>    convergence to 1e-13 at a large mesh" will fail, and it will fail for a
+>    correct implementation.
+> 2. **With `exxdiv='ewald'` (the SCF default) the G=0 term is ~96% of the
+>    residual at mesh 31** — 6.2e-10 of 6.487e-10. Turning exxdiv off drops `dvk`
+>    by 25×, to 2.653e-11.
+> 3. **The mesh-21 row is a trap.** There the general screening residual
+>    (1.690e-9) still dominates and the two error sources partially cancel in the
+>    max-abs norm, making the exxdiv term look like ~1.1e-10 — negligible. It is
+>    not. Do not characterise this effect at mesh 21; use mesh 31 or above.
+>
+> The mechanism is exact, not empirical. `_ewald_exxdiv_for_G0`
+> (`df_jk.py:1480`) builds its correction from `s = cell.pbc_intor('int1e_ovlp')`
+> — the **exact** overlap — while AFTDF's folded `coulG[G+k=0]` route effectively
+> uses `ft_aopair[G=0] = S + δ`. So
+>
+> ```
+> floor(|vk_AFT − vk_FFT|)  ≈  2 · madelung · ‖S·D‖ · ‖δ‖
+> ```
+>
+> with `madelung = 0.3400910` on this cell and `δ` the **Gate-1a screening
+> residual** (1.554e-9). Gate 1 and Gate 2 are therefore coupled quantitatively:
+> the only lever on the Gate-2 floor is `rcut`.
+
+**STEPS**
+1. `_format_dms` / `_format_jks` / `_format_kpts_band` — reuse
+   `crate::df_jk`'s, which plan 11-07 already put in one place. Do not duplicate.
+2. `get_j_kpts`: one `ft_loop` pass, `_update_vj_`'s four real `einsum`s expressed
+   as `pyscf_algebra` GEMMs on the planar halves.
+3. `get_k_kpts`: iterate `kk_adapted_iter(cell, kpts)`. **`kk_adapted_iter` and
+   `group_by_conj_pairs` are NOT yet ported** — `pyscf-pbc-lib::kpts_helper` has
+   `unique`/`member`/`get_kconserv` but neither of these. Port
+   `pyscf/pbc/lib/kpts_helper.py:170-219` and `:221-268` into
+   `crates/pyscf-pbc-lib/src/kpts_helper.rs` as part of THIS plan, with their own
+   tier-1 tests (every k-point covered exactly once; conjugate pairs are mutual).
+4. Time-reversal symmetry: implement the `k_to_compute` mask and the final
+   `vk[k_conj] = conj(vk[k])` fill. Upstream disables it when the input density
+   matrices break the symmetry by more than 1e-6 — port that check, it is load
+   bearing for KUHF.
+5. `_update_vk_` only. The four other update variants (`_update_vk1_`,
+   `_update_vk_dmf`, `_update_vk1_dmf`, `_update_vk_fake_gamma`) are thread-count
+   and MO-factorisation optimisations that produce the same numbers; return
+   `NotYetImplemented { phase: 14 }` from any code path that would select them,
+   rather than silently taking a different route (D-PBC-20).
+6. `get_jk` (single-k) and the two `*_for_bands` entry points.
+
+**TEST** `crates/pyscf-pbc-df/tests/aft_jk.rs`
+1. `vj`, `vk` Hermitian to 1e-12; real at gamma.
+2. Coulomb-energy symmetry in its two densities (the plan 11-06 identity), no oracle.
+3. Explicit `kpts_band` equal to `kpts` reproduces the default path bit-identically.
+4. **Cross-builder, pinned to the measured upstream floor** (the boxed table
+   above): `Aftdf::get_jk` vs `Fftdf::get_jk` from a fixed init-guess density on
+   diamond `2×2×2` at meshes `[15,21,31,41]`. Assert (a) mesh 31 and mesh 41 agree
+   to within 1% of each other — the plateau is real and the port sits on it; (b)
+   the `exxdiv='ewald'` `dvk` plateau is **~6.5e-10** and the `exxdiv=None` `dvk`
+   plateau is **~2.7e-11**, i.e. the port reproduces upstream's 25× exxdiv gap
+   rather than accidentally cancelling it; (c) `dvj` plateaus at **~2.0e-11** under
+   both. Deviating from these levels means the port's `rcut` differs from
+   upstream's — which is a legitimate choice, but it must be a DECLARED one, not a
+   surprise.
+5. Oracle-gated: `AFTDF.get_jk` to 1e-11.
+
+**DONE** `cargo test -p pyscf-pbc-df --test aft_jk`
+
+---
+
+#### Plan 13-06 — `fft_ao2mo` + `aft_ao2mo`
+
+**FILES** `crates/pyscf-pbc-df/src/fft_ao2mo.rs`, `crates/pyscf-pbc-df/src/aft_ao2mo.rs`,
+`crates/pyscf-pbc-df/tests/pbc_ao2mo.rs`
+
+**PORT** `pyscf/pbc/df/aft_ao2mo.py` (all of it) and `pyscf/pbc/df/fft_ao2mo.py`.
+
+**WHY `fft_ao2mo` IS IN THIS PHASE.** It is not in the roadmap text, and Phase 11
+skipped it. It costs ~200 lines, it reuses machinery that already ships
+(`Fftdf::ao_kpts`, `fft`, `get_coulG`), and it turns 13-06's acceptance from "one
+oracle number" into "two independent builders that must agree" — the same
+cross-check that makes 13-04 and 13-05 trustworthy. Ship it here.
+
+**STEPS**
+1. `get_ao_pairs_G(kpts, q, aosym)` and `get_mo_pairs_G` for both builders.
+2. `get_eri(kpts, compact)` — the 4-index `(kp kq | kr ks)` block, momentum
+   conservation checked through `pyscf_pbc_lib::get_kconserv`.
+3. `general(mo_coeffs, kpts)` — the four-index MO transform.
+4. `ao2mo_7d(mo_coeff_kpts, kpts)` — the `[nk,nk,nk,nmo,nmo,nmo,nmo]` tensor
+   Phase 15's KMP2 and Phase 16's KCCSD consume. Shape and index order are a
+   downstream contract: state them in the module docs and assert them in a test.
+
+**TEST** `crates/pyscf-pbc-df/tests/pbc_ao2mo.rs`
+1. 8-fold permutational symmetry of `get_eri` at gamma, to 1e-12.
+2. `general` with identity MO coefficients reproduces `get_eri` bit-identically.
+3. `ao2mo_7d` slices agree with the corresponding `general` call to 1e-13.
+4. **Cross-builder:** `Aftdf::get_eri` vs `Fftdf::get_eri`, monotone in mesh.
+5. Oracle-gated: both against upstream to 1e-11.
+
+**DONE** `cargo test -p pyscf-pbc-df --test pbc_ao2mo`
+
+---
+
+#### Plan 13-07 — `Box<dyn PeriodicDf>`: make every K-driver builder-agnostic (D-PBC-22)
+
+**FILES** `crates/pyscf-pbc-df/src/fftdf.rs`, `crates/pyscf-pbc-scf/src/{krhf,kuhf,krohf,kghf,gamma}.rs`,
+`crates/pyscf-pbc-dft/src/{krks,kuks,kroks,kgks}.rs`, `crates/pyscf-py/src/bridge.rs`
+
+**THE PROBLEM.** `KRHF { pub with_df: Fftdf }` (`krhf.rs:29`, and the same in
+`kuhf`/`krohf`/`kghf` and every Phase-12 KS driver), plus
+`pyscf_pbc_df::get_{nuc,pp,hcore}(df: &Fftdf, …)` (`fftdf.rs:271/310/359`). Nothing
+downstream can be handed an AFTDF today, so **without this plan Phase 13's gate
+cannot even be measured.**
+
+**STEPS**
+1. Re-sign `get_nuc`/`get_pp`/`get_hcore` to take `&dyn PeriodicDf`. `get_hcore` is
+   the only one with real logic (it adds `int1e_kin` and picks pp vs nuc from
+   `cell.pseudo`); the other two become trait-method forwards, with the FFT bodies
+   moving to `impl PeriodicDf for Fftdf`.
+2. `with_df: Box<dyn PeriodicDf>` in all eight drivers. `KRHF::new` keeps building an
+   `Fftdf` (unchanged default, matching upstream); `KRHF::from_df` takes the box.
+3. Add `PeriodicDf: Send + Sync` if — and only if — the drivers are used across
+   threads today; check before widening the bound.
+4. `Fftdf` and `Aftdf` both get a `fn name(&self) -> &'static str` for `dump_flags`
+   and chkfile provenance.
+5. `pyscf-py`: `mf.with_df = AFTDF(cell, kpts)` must work from Python. Phase 20 owns
+   the full `pyscf.pbc.df` surface — here, only wire the assignment and the
+   subclass-override dispatch Phase 3 established.
+
+**TEST** `crates/pyscf-pbc-scf/tests/df_swap.rs`
+1. `KRHF` built with an explicitly constructed `Fftdf` gives a **bit-identical**
+   energy to `KRHF::new` (proves the box changed nothing).
+2. The same for `KUHF`, `KROHF`, `KGHF`, `KRKS`, `KUKS`.
+3. `KRHF` with an `Aftdf` converges and reports `with_df.name() == "AFTDF"`.
+
+**DONE** `cargo test -p pyscf-pbc-scf --test df_swap && cargo test -p pyscf-pbc-dft`
+
+---
+
+#### Plan 13-08 — Verification rollup
+
+**FILES** `.planning/phases/13-ft-ao-aftdf/13-VERIFICATION.md`, `.planning/ROADMAP.md`,
+`.planning/STATE.md`
+
+**THE THREE GATES, AND WHAT EACH ACTUALLY MEASURES**
+
+| # | Gate | Oracle? | What a failure means |
+|---|---|---|---|
+| 1a | `ft_aopair[G=0] == pbc_intor("int1e_ovlp")` to **≤ 2e-9** at `rcut = estimate_rcut` (upstream measures 1.554e-9 / 5.322e-10) | no | the screening does not match upstream's |
+| 1b | the same identity to **≤ 2e-10** at `rcut = 1.5 × cell.rcut` (measured floor 1.472e-10, set by `pbc_intor`'s OWN truncation) | no | the FT lattice sum is not converged |
+| 1c | `ft_aopair[G=0]` vs `intor_cross_with_images` over the **same `Ls`**, to **≤ 1e-13** | no | the MD recursion, the contraction, or the cart→sph transform is wrong — **this is the kernel gate** |
+| 2 | AFTDF `KRHF` == FFTDF `KRHF`, converged in mesh | no | see below |
+| 3 | AFTDF `KRHF`/`get_nuc`/`get_pp`/`get_jk`/`get_eri` vs upstream 2.12.1 to **1e-11** | yes | anything |
+
+**Gate 2 is not a mesh sweep. It is a `(rcut, mesh)` surface with two floors.**
+The roadmap says 1e-13; the master plan's original 13-06 said 1e-6; the first
+rewrite of this section said "monotone convergence to 1e-13 at the largest mesh".
+**All three are wrong, and the third is wrong in a way that would fail a correct
+implementation.** Measured on upstream 2026-08-28/29, diamond/`gth-szv`/`gth-pade`
+`2×2×2`, fixed init-guess density:
+
+| mesh | `dvj` | `dvk` (`exxdiv='ewald'`) | `dvk` (`exxdiv=None`) |
+|---|---|---|---|
+| 15 | 3.827e-7 | 1.112e-6 | — |
+| 21 | 2.365e-10 | 1.804e-9 | 1.690e-9 |
+| 31 | 1.996e-11 | 6.487e-10 | 2.653e-11 |
+| 41 | 1.996e-11 | 6.485e-10 | — |
+
+and, at fixed mesh 31, scaling `ft_ao.estimate_rcut`:
+
+| `rcut` | Gate 1 residual | `dvj` | `dvk` |
+|---|---|---|---|
+| ×1.0 = 20.42 | 1.554e-9 | 1.996e-11 | 6.487e-10 |
+| ×1.5 = 30.63 | 1.472e-10 | 7.727e-13 | 1.609e-10 |
+| ×2.0 = 40.84 | 1.472e-10 | 7.726e-13 | 1.609e-10 |
+
+**Read both tables together and the structure is unambiguous.**
+
+- Down the first table (fix `rcut`, raise the mesh): everything **plateaus at mesh
+  31** and mesh 41 is identical to three digits. Above mesh ~31 the mesh is not the
+  controlling parameter at all.
+- Down the second (fix the mesh, raise `rcut`): everything plateaus at
+  **`rcut` ≈ 1.5 × cell.rcut** and ×2.0 is identical to four digits.
+- So there are **two independent floors** — AFTDF's `rcut` screening and FFTDF's
+  mesh aliasing — and lowering either one alone stalls against the other. At
+  (×1.5, mesh 31) `dvj` reaches 7.7e-13 while `dvk` stops at 1.6e-10, which is
+  FFTDF's mesh-31 aliasing and no `rcut` can touch it.
+- The `exxdiv` column is the other half of the story: with `exxdiv='ewald'` — the
+  SCF default — the G=0 asymmetry of risk R-15 is **~96% of `dvk` at mesh 31**
+  (6.2e-10 of 6.487e-10), and switching it off drops `dvk` 25×. **Do not
+  characterise any of this at mesh 21**: there the general screening residual still
+  dominates, the two error sources partially cancel in the max-abs norm, and the
+  exxdiv term misleadingly looks like ~1.1e-10.
+
+**Therefore state Gate 2 as a paired ladder, not a sweep:**
+
+> On diamond/`gth-szv`/`gth-pade` at `2×2×2`, with both SCFs at `conv_tol = 1e-12`,
+> `|E_AFTDF − E_FFTDF|` is measured on the **pairs** `(rcut, mesh)` =
+> `(×1.0, 21)`, `(×1.0, 31)`, `(×1.5, 31)`, `(×1.5, 41)`. It must fall as the pair
+> tightens and then sit on the recorded upstream floor for that pair — the port
+> reproduces upstream's floor, it does not beat it and it does not miss it.
+
+**The upstream energy series measured so far** (mesh ≥ 31 rows were still running
+when this section was written — plan 13-08 Task 0 completes the table and pastes it
+into `13-VERIFICATION.md` §1):
+
+| mesh | `E_FFTDF` | `E_AFTDF` | `|ΔE|` |
+|---|---|---|---|
+| 15 | −10.93090153682113 | −10.93087523588556 | 2.630e-5 |
+| 21 | −10.93087319091901 | −10.93087316555834 | 2.536e-8 |
+| 31 | −10.93087316795859 | −10.93087316798466 | **2.607e-11** |
+| 41 | −10.93087316795859 | −10.93087316798466 | **2.607e-11** |
+
+**Mesh 31 and mesh 41 are BIT-IDENTICAL — all 14 printed digits of both
+energies.** The energy floor at upstream's default `rcut` is **2.607e-11 Ha**, and
+the roadmap's 1e-13 is unreachable — three orders out. Meshes 55 and 71 add
+nothing and should not be run; the ladder stops at 41. Note
+it lands with `dvj`'s plateau (1.996e-11) and the `exxdiv=None` `dvk` plateau
+(2.653e-11), NOT with the `exxdiv='ewald'` `dvk` plateau (6.487e-10): the G=0
+asymmetry is a near-uniform shift and largely cancels in `Tr(D·vk)`, so it
+dominates the MATRIX difference while contributing little to the ENERGY. Gate the
+matrices and the energy at different levels; do not carry one number across both.
+Correct the ROADMAP to 2.607e-11 at `(×1.0, 31)`, exactly as Phase 12 §1d did for
+the proposed 1e-15 gate.
+
+The measurement scripts and the full recorded results are committed at
+`.planning/phases/13-ft-ao-aftdf/measurements/` (`README.md` + four scripts);
+re-run them rather than re-deriving them.
+
+**Also record**
+- the `get_pp` cross-builder convergence table from 13-04 test 2 (this isolates
+  `ft_aopair` from the SCF);
+- the wall-clock cost of `FtKernel::build` and of one `ft_loop` pass at the default
+  mesh, so Phase 14's decision about the BvK bucket contraction (D-PBC-21) has a
+  number behind it;
+- whether `xtask check-orphan-modules` and `check_dependency_wall` stayed green —
+  Phase 12's lesson (its source had never been compiled) applies to every new
+  module this phase adds.
+
+**DONE** `cargo test --workspace` green; `13-VERIFICATION.md` written; ROADMAP
+Phase 13 ticked; `STATE.md` advanced.
 
 ---
 
@@ -1437,11 +2023,11 @@ Contraction over primitives and the Cartesian→spherical transform
 | **14-02** | `gdf_builder`: `_CCGDFBuilder`, `get_2c2e`, `get_3c2e`, the compensating-charge (Gaussian-nuclear-model) scheme, `weighted_ft_ao` | `df/gdf_builder.py` (1062 l) | The Coulomb divergence is handled by subtracting a smooth compensating charge whose FT is analytic |
 | **14-03** | `GDF` class: `build`, `_make_j3c`, `sr_loop`, `get_naoaux`, HDF5 `_cderi` on-disk store | `df/df.py` (1029 l) | HDF5 via `hdf5-metno`, same RAII-spill pattern as `pyscf-ccsd` |
 | **14-04** | `df_jk`: `get_j_kpts`, `get_k_kpts`, `get_jk`, `_ewald_exxdiv_for_G0`, `_format_dms/_format_jks/_format_kpts_band` | `df/df_jk.py` (1552 l) | `_ewald_exxdiv_for_G0` is shared by FFTDF/AFTDF — **move it here in 11-07 and re-export**, do not duplicate |
-| **14-05** | `df_ao2mo`, `outcore` | `df/df_ao2mo.py` (351 l), `df/outcore.py` (250 l) | |
-| **14-06** | `MDF` (mixed density fitting = GDF + AFT residual) | `df/mdf.py`, `mdf_jk.py`, `mdf_ao2mo.py` (785 l) | |
-| **14-07** | `rsdf_helper` + `rsdf_builder` (range-separated GDF) | `df/rsdf_helper.py` (1348 l), `rsdf_builder.py` (1631 l) | Largest single porting task in the milestone; split into 3 sub-tasks by function group |
-| **14-08** | `RSDF` class + `rsdf_jk`; `scf/rsjk.py` (range-separated JK build, no DF) | `df/rsdf.py` (680 l), `rsdf_jk.py`, `scf/rsjk.py` (1355 l) | |
-| **14-09** | Verification: every DF builder gives the same `KRHF` energy to 1e-6 on diamond 2×2×2; GDF uses < 20% of FFTDF memory at mesh `[40,40,40]` | — | |
+| **14-05** | `df_ao2mo`, `outcore` — **and Phase 13's `ao2mo_7d` carry-over, closed for all three builders** | `df/df_ao2mo.py` (351 l), `df/outcore.py` (250 l) | SHIPPED. `ao2mo_7d`'s index order is now a fixed contract: `eri[ki,kj,kk][i,j,k,l]`, `kl = kconserv[ki,kj,kk]`, chemists' notation. `outcore` blocks over the k-point pair, not the auxiliary shell (stated deviation). |
+| **14-06** | `MDF` (mixed density fitting = GDF + AFT residual) | `df/mdf.py`, `mdf_jk.py`, `mdf_ao2mo.py` (785 l) | SHIPPED as `_CCMDFBuilder`, composed over 14-02's `make_j3c` with a `Scheme` tag rather than a second driver. `_RSMDFBuilder` is blocked by D-PBC-24. It caught the phase's largest defect — `decompose_j2c` read `zeigh_gen`'s COLUMN-MAJOR eigenvectors row-major, worth **6.3e6 Ha**, on a branch no earlier gate had reached. |
+| **14-07** | `rsdf_helper` + `rsdf_builder` (range-separated GDF) | `df/rsdf_helper.py` (1348 l), `rsdf_builder.py` (1631 l) | **7a SHIPPED** (all twelve ω estimators + `weighted_coulG_LR/_SR` + `_gaussian_int`, gated at 1e-12 against `measurements/omega.out`). **7b/7c/7d BLOCKED — D-PBC-24**, the cintx `range_omega` (`env[8]`) gap. Task 7d's flip of `GDF._prefer_ccdf` does not happen. |
+| **14-08** | `RSDF` class + `rsdf_jk`; `scf/rsjk.py` (range-separated JK build, no DF) | `df/rsdf.py` (680 l), `rsdf_jk.py`, `scf/rsjk.py` (1355 l) | `get_aux_chg` and ONE shared `density_fit` for all four shims SHIPPED. `RSGDF` and `rsjk` BLOCKED — D-PBC-24. `rsjk` lives in `pyscf-pbc-scf` and is deliberately NOT a `PeriodicDf`: it has no `cderi` and no auxiliary count, so the impl would have to lie in two methods. |
+| **14-09** | Verification rollup | — | SHIPPED — `14-VERIFICATION.md`. **This row's stated gate was wrong too**: "the same `KRHF` energy to 1e-6" softens the ROADMAP's 1e-15 but keeps its category error. GDF is an APPROXIMATION; `\|E_FFTDF − E_GDF\|` on diamond 2×2×2 is **1.222e-03**, and upstream's own two GDF builders disagree by up to **4.502e-06**. The five gates that replace it are in `14-CONTEXT.md`: **1** (MET, 2.750e-10 vs upstream on the all-electron control), **1b** (PARTIAL — diamond's `make_j3c` wall time is unmeasured), **2** (MET, MDF's mesh ladder), **3** (UNREACHABLE — D-PBC-24), **4** (MET, 6.08 % at a PINNED 2×2×2; the same system is 20.50 % at 3×3×3, which is why the mesh is pinned). |
 
 ---
 
@@ -1696,6 +2282,8 @@ re-export from a `dev-dependencies` test-support module. **Do not redefine them 
 | R-06 | Global-aufbau `get_occ` implemented per-k → converges to the wrong state | **MAJOR** | Explicit test: for a metal at 2×2×2, occupancies differ between k-points | 11-09 |
 | R-07 | exxdiv/Madelung convention mismatch → energy off by ~0.1 Ha | **MAJOR** | `madelung` hard-coded reference test (11-02) + `exxdiv=None` vs `"ewald"` difference equals `−madelung·nelec/2` exactly | 11-02 |
 | R-08 | `ft_aopair` McMurchie–Davidson recursion wrong at `l ≥ 2` | **MAJOR** | Numerical-FT tier-1 test on a dense grid (13-01 test 2) + the `G=0 == S` identity (test 3) | 13-01 |
+| R-15 | AFTDF and FFTDF treat `exxdiv='ewald'` DIFFERENTLY (AFTDF folds `Nk·vol·madelung` into `coulG[G+k=0]`; 2.12.1's FFTDF applies `_ewald_exxdiv_for_G0` analytically from the EXACT overlap, `df_jk.py:1480`). Read as a bug, "fixing" it would break the upstream match on one side or the other. **MEASURED: this is ~96% of `max\|vk_AFT − vk_FFT\|` at mesh 31** (6.2e-10 of 6.487e-10; `exxdiv=None` drops it 25× to 2.653e-11) — first-order, not a footnote. | **MAJOR** | §8.5 plan 13-05's boxed table; the floor is `≈ 2·madelung·‖S·D‖·‖δ‖` with `δ` = the Gate-1a residual, so Gates 1 and 2 are coupled quantitatively; 13-05 test 4 pins BOTH plateau levels. Characterise at mesh ≥ 31 only — at mesh 21 the two error sources cancel in the max-abs norm and hide it | 13-05 |
+| R-16 | The Phase-13 gate "AFTDF KRHF == FFTDF KRHF to 1e-13" is unreachable, and so is any monotone-in-mesh restatement of it. **MEASURED: the difference plateaus at mesh 31 and is identical at mesh 41 to three digits, and separately plateaus at `rcut` ×1.5 (unchanged at ×2.0).** Two independent floors — AFTDF's `rcut` screening and FFTDF's mesh aliasing — and lowering one alone stalls against the other, so a monotone-convergence assertion would fail a CORRECT implementation. | **MAJOR** | §8.5 plan 13-08 states Gate 2 as a `(rcut, mesh)` **ladder** over the pairs (×1.0,21), (×1.0,31), (×1.5,31), (×1.5,41), pinned to the recorded upstream floor per pair; measurements committed at `.planning/phases/13-ft-ao-aftdf/measurements/` | 13-08 |
 | R-09 | KCCSD memory blowup (`nkpts³·nvir⁴`) | **MAJOR** | Reuse `pyscf-ccsd`'s `WorkspacePool` + `PYSCF_MAX_MEMORY` pre-flight refusal + HDF5 spill | 16-02 |
 | R-10 | ~~Missing cintx derivative integrals block Phase 18~~ **RETIRED 2026-08-22** — every gradient family Phase 18 needs ships and is oracle-covered (§2.4). | — | superseded by R-13/R-14 | — |
 | R-13 | cintx moment-weighted families (`int3c1e_r{2,4,6}_origk`, `int1e_r{2,4}_origi`) are unimplemented → **GTH pseudopotentials do not work → no periodic SCF at all** | **SHOWSTOPPER** | They are cintx Wave 0.5 (10 symbols, one engine class, sph-only). §2.4 records the status; plans 10-05/10-06 carry a Task-0 availability check that fails loudly. All five reference systems (§9.2) use `gth-pade`, so this gates Phase 11 onward. **Land cintx Wave 0.5 before starting Phase 10.** | 10-05, 10-06 |

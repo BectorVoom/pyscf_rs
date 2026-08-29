@@ -198,9 +198,11 @@ pub const EWALD_REFERENCES: [EwaldReference; 5] = [
         ew_cut: 18.89726124565062,
         n_ls: 85,
         mesh: [7, 7, 35],
-        // Upstream `c.ewald()` == -44.57202102404764 via the dimension == 2
-        // truncated-Coulomb branch (cell.py:773-800). DEFERRED to plan 12-08.
-        ewald: None,
+        // Upstream `c.ewald()` via the dimension == 2 truncated-Coulomb branch
+        // (cell.py:773-800). RECORDED IN PHASE 9 as plan 12-08's target, before
+        // the branch existed — so it is a pre-committed reference, not a number
+        // fitted after the fact.
+        ewald: Some(-44.57202102404764),
     },
 ];
 

@@ -17,7 +17,7 @@
 
 use pyscf_algebra::CTensor;
 use pyscf_core::PyscfRsError;
-use pyscf_pbc_df::Fftdf;
+use pyscf_pbc_df::{Fftdf, PeriodicDf};
 use pyscf_pbc_gto::{Cell, ExxDiv};
 use pyscf_pbc_scf::khooks::KOverrideHooks;
 use pyscf_pbc_scf::kocc::get_occ_unrestricted;
@@ -37,7 +37,7 @@ use crate::xc::err;
 #[derive(Debug)]
 pub struct Kuks {
     /// The density-fitting object.
-    pub with_df: Fftdf,
+    pub with_df: Box<dyn PeriodicDf>,
     /// The XC functional string.
     pub xc: String,
     /// Exchange divergence treatment.
@@ -62,16 +62,16 @@ impl Kuks {
     pub fn new(cell: Cell, kpts: &[[f64; 3]], xc: &str) -> Result<Self, PbcDftError> {
         let with_df = Fftdf::new(cell, kpts)
             .map_err(|e| err(format!("KUKS: FFTDF construction failed: {e}")))?;
-        Self::from_df(with_df, xc)
+        Self::from_df(Box::new(with_df), xc)
     }
 
     /// `KUKS` over an explicit density-fitting object.
     ///
     /// # Errors
     /// Propagates the grid construction.
-    pub fn from_df(with_df: Fftdf, xc: &str) -> Result<Self, PbcDftError> {
-        let grids = PeriodicGrids::uniform(&with_df.cell, Some(with_df.mesh))?;
-        let ni = KNumInt::new(&with_df.kpts);
+    pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
+        let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
+        let ni = KNumInt::new(with_df.kpts());
         Ok(Self {
             with_df,
             xc: xc.to_string(),
@@ -87,12 +87,12 @@ impl Kuks {
 
     /// The cell.
     pub fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
 
     /// The k-points.
     pub fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
 
     /// `(nalpha, nbeta)` over the Brillouin-zone supercell — `kuhf.py:442-458`.
@@ -170,7 +170,7 @@ impl Kuks {
         kpts_band: Option<&[[f64; 3]]>,
     ) -> Result<(KDms, KsEnergyTags), PbcDftError> {
         Self::veff_from_parts(
-            &self.with_df,
+            self.with_df.as_ref(),
             &self.xc,
             self.exxdiv,
             &self.grids,
@@ -189,7 +189,7 @@ impl Kuks {
     /// Propagates the grid loop and the J/K build.
     #[allow(clippy::too_many_arguments)]
     pub fn veff_from_parts(
-        with_df: &Fftdf,
+        with_df: &dyn PeriodicDf,
         xc: &str,
         exxdiv: Option<ExxDiv>,
         grids: &PeriodicGrids,
@@ -197,9 +197,9 @@ impl Kuks {
         dms: &KDms,
         kpts_band: Option<&[[f64; 3]]>,
     ) -> Result<(KDms, KsEnergyTags), PbcDftError> {
-        let cell = &with_df.cell;
+        let cell = with_df.cell();
         let nao = cell.mol.nao_nr;
-        let nkpts = with_df.kpts.len();
+        let nkpts = with_df.kpts().len();
         let weight = 1.0 / nkpts as f64;
         let ground_state = kpts_band.is_none();
 
@@ -214,7 +214,7 @@ impl Kuks {
             xc,
             dms,
             1,
-            &with_df.kpts,
+            with_df.kpts(),
             kpts_band,
             exxdiv,
             true,
@@ -272,10 +272,10 @@ impl Kuks {
 
 impl KOverrideHooks for Kuks {
     fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
     fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
     fn nset(&self) -> usize {
         2
@@ -290,7 +290,7 @@ impl KOverrideHooks for Kuks {
     }
 
     fn get_hcore(&self) -> Result<KMats, PyscfRsError> {
-        pyscf_pbc_df::get_hcore(&self.with_df, self.kpts()).map_err(df_err)
+        pyscf_pbc_df::get_hcore(self.with_df.as_ref(), self.kpts()).map_err(df_err)
     }
 
     fn get_init_guess(&self, mode: &KInitGuess, s1e: &KMats) -> Result<KDms, PyscfRsError> {

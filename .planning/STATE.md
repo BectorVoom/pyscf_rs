@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Periodic Boundary Conditions
 status: in_progress
-last_updated: "2026-08-26T00:00:00.000Z"
-last_activity: 2026-08-26
+last_updated: "2026-08-29T00:00:00.000Z"
+last_activity: 2026-08-29
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 28
-  completed_plans: 28
+  total_phases: 5
+  completed_phases: 5
+  total_plans: 48
+  completed_plans: 48
   percent: 100
 ---
 
@@ -20,62 +20,239 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 12 — periodic DFT (Phases 9, 10 and 11 COMPLETE + verified 2026-08-26)
+**Current focus:** Phase 15 — KMP2. Phase 14 is CLOSED (2026-08-29).
 
 ## Current Position
 
-Phase: 11-fft-fftdf-periodic-hf — **COMPLETE**
+Phase: 14-gdf-mdf-rsdf-rsjk — **CLOSED 2026-08-29.** Full evidence in
+`.planning/phases/14-gdf-mdf-rsdf-rsjk/14-VERIFICATION.md`.
+
+**Four of five gates MET, one UNREACHABLE, and the fifth's blocker is a missing
+capability in `cintx`, not in this port.**
+
+| gate | result |
+|---|---|
+| **1** — the algebra vs upstream, all-electron control | **MET** — `KRHF` on GDF **2.750e-10**; `fuse(j3c)` 1.412e-12; `j2c` 7.105e-14; `df_ao2mo.get_eri` 1.667e-12; `ao2mo_7d` 1.984e-12; `KRHF` on MDF 2.827e-10 |
+| **1b** — the same on diamond | **PARTIAL** — everything that needs no 3-centre build is gated at ≤1e-11; the flagship `make_j3c` is an unmeasured multi-hour run and its oracle is an `#[ignore]`d acceptance test |
+| **2** — MDF converges to FFTDF | **MET** — 6.002e-05 (GDF) → 1.695e-06 → **3.433e-09** → 3.245e-08, on upstream's CC ladder to within 1 %, INCLUDING the non-monotone bounce |
+| **3** — GDF vs RSDF | **UNREACHABLE** — RSDF is blocked on the cintx `range_omega` gap (D-PBC-24) |
+| **4** — `_cderi` memory, k-mesh PINNED at 2×2×2 | **MET** — 6.08 % of the FFTDF AO table on diamond (upstream 6.17 %); 20.50 % at 3×3×3, which is why the mesh is pinned |
+
+### The ROADMAP's gate was wrong in both halves and is rewritten
+
+"Every DF builder gives the same KRHF energy to 1e-15 with GDF under 20% of
+FFTDF memory" cannot stand: GDF is an APPROXIMATION whose fitting error is
+1.222e-03 Ha on diamond 2×2×2, upstream's own two GDF builders disagree by up to
+4.502e-06, and one f64 ulp at |E| ≈ 10.9 is 1.78e-15. The memory half is
+k-mesh dependent and does not say so. `14-CONTEXT.md`'s five gates replace it;
+the ROADMAP line and `PBC-MASTER-PLAN.md` §8.6's row are both corrected, not
+quietly shipped against.
+
+### 14-05 — `df_ao2mo` + `outcore`. **Phase 13's `ao2mo_7d` carry-over is CLOSED.**
+
+The contract Phase 15 was blocked on:
+`eri[ki, kj, kk][i, j, k, l]`, shape `(nk, nk, nk, nmoi, nmoj, nmok, nmol)`,
+`kl = kconserv[ki, kj, kk]`, chemists' notation (the first index of each pair
+conjugated). KMP2 reads it as `eri[ki, ka, kj][i, a, j, b]` = `(ia|jb)` with
+`kb = kconserv[ki, ka, kj]` — the SAME table under two index namings, no
+re-ordering. Asserted with four different `nmo`s (2/3/1/4) over every
+`(ki,kj,kk)` of a 2×2×2 mesh at <1e-13, and against upstream at 1.984e-12.
+
+**The attribution device worth keeping:** upstream's own `df_ao2mo.get_eri`, run
+over THIS port's `cderi` through a stub `mydf`, agrees to **1.110e-16** — one
+ulp at `|eri| ~ 0.5`, i.e. the two contractions differ only in summation order
+(sequential here, BLAS `ddot` there). So "is the contraction upstream's?" and
+"is the `cderi` upstream's?" are permanently separated.
+
+**`_ao2mo.r_e2` conjugates the BRA only** — measured (2.512e-15 bra-only against
+12.227 for both), because `r_ao2mo.c`'s two comments both say `^*` and its
+arithmetic does not.
+
+### 14-06 — MDF. Gate 2 met, and BOTH of the plan's premises were wrong
+
+* MDF's default mesh is `[11,11,11]` (diamond 2×2×2) and `[9,9,9]` (He-fcc), not
+  the plan's `[7,7,7]` — mesh 7 is `mdfladder.py`'s lowest rung.
+* **`measurements/mdfladder.out` measures the WRONG BUILDER.** `MDF._prefer_ccdf`
+  is `False`, so every row of it is `_RSMDFBuilder` — plan 14-07's route.
+  `mdfladder_cc.py` / `.out` were added and are what Gate 2 asserts against.
+
+MDF beats GDF by **170×** at gamma and **17 000×** at the 2×2×2 plateau.
+`make_j3c` is ONE driver with a `Scheme` tag, mirroring upstream's
+`_CCMDFBuilder(_CCGDFBuilder)` subclass; `Mdf` composes an inner `Gdf` (so
+14-04's `df_jk` and 14-05's `df_ao2mo` are reused unchanged) and an inner
+`Aftdf` at MDF's mesh (so Phase 13's `aft_jk` is).
+
+### 14-07 / 14-08 — BLOCKED on cintx, and the block is documented (D-PBC-24)
+
+Range separation is libcint's `PTR_RANGE_OMEGA` (`env[8]`) toggle around the
+STANDARD `int3c2e`/`int2c2e`/`int2e` — upstream never calls an `int2e_sr_*`.
+cintx's safe API cannot set it: `ExecutionOptions` carries `f12_zeta`
+(`env[9]`), `rinv_orig` and `common_orig` and no `range_omega`; no kernel reads
+`env[8]`; and the periodic 3-centre driver builds its `BasisSet` from the parsed
+per-element basis rather than from an `_env` array, so even `pyscf-gto`'s own
+direct-`_env` workaround is unreachable. **This is Phase 4's Open Question A5 /
+cintx#11**, already documented in `crates/pyscf-gto/src/range_coulomb.rs`.
+
+`14-07-PLAN.md` Task 7b named this failure mode in advance and required it be
+REPORTED, not worked around — so `_RSGDFBuilder`, `_RSMDFBuilder`, `RSDF` and
+`rsjk` return `NotYetImplemented` naming the gap, and the refusals are asserted.
+
+**What DID ship:** 7a in full — all twelve ω estimators, `weighted_coulG_LR/_SR`
+and `_gaussian_int`, every number gated at 1e-12 against
+`measurements/omega.out` (added as Task 0, before any code). `rsjk`, RSH
+functionals and Phase 17 all need them regardless. Plus `get_aux_chg` (equal to
+14-01's monopole at 1e-14) and ONE shared `density_fit` for all four upstream
+shims.
+
+## SIX defects the phase's own tests caught
+
+1. **`decompose_j2c` read `zeigh_gen`'s COLUMN-MAJOR eigenvectors row-major —
+   worth +6 306 866.73 Ha.** The transpose of an orthogonal matrix is still
+   orthogonal, so the factor had the right shape, rank and eigenvalues and
+   nothing crashed. **No gate had ever reached the eigen branch**: `j2ctag` is
+   `CD` on every measured system, including diamond, whose `eig_min` is
+   3.17e-11 and which upstream still decomposes by Cholesky. MDF
+   (`j2c_eig_always = True`) was its first consumer. New regression test:
+   `V j2c Vᴴ = I` on the retained subspace — the identity that DEFINES the
+   factor, 2.709e-14 (He-fcc) / 3.094e-08 (diamond, a conditioning floor).
+2. **Two missing devices from `gen_uniq_kpts_groups`**, both invisible on
+   Cholesky: `if self_conj: j2c = j2c.real` (a complex eigensolver may return an
+   arbitrary phase, and `cderi` is contracted with NO conjugate, so it survives
+   as `e^{2iθ}`), and the conjugate pass at `−kpt` with `_conj_j2c` rather than
+   an independent decomposition of `j2c[−k]`.
+3. **`get_naoaux` was STRICTER than upstream.** 14-03 made it raise on per-k
+   rank disagreement; upstream takes one arbitrary block. The ranks legitimately
+   differ per k-difference on the eigen route (MDF keeps 10 vectors for one
+   group and 11 for another at mesh 15). Now returns the diagonal `(0,0)`
+   block's rank, which is what `df_jk`'s `rho` accumulator needs.
+4. **`ExtendedMole.strip_basis` is worth 1.054e-09 in `j3c` / 2.750e-09 in the
+   ERI, and 14-02's gate could not see it** — it compared against a standalone
+   `incore.Int3cBuilder`, which strips nothing. Localised by six measurements in
+   which every INPUT matched and the assembly did not. Flattening upstream's
+   per-shell-pair radius array to its own maximum collapses it to 7.333e-13:
+   **the port is the MORE converged of the two.**
+5. Both of 14-06's stated premises (above).
+6. `_ao2mo.r_e2`'s conjugation convention (above).
+
+## Carry-overs
+
+**ONE piece of work, not four.** `ft_ao._RangeSeparatedCell` + `ExtendedMole`
+(with `strip_basis`, `_int_dd_block`, `merge_diffused_block`) closes:
+
+| what | priced at |
+|---|---|
+| D-PBC-23 `exclude_dd_block` | 1.835e-08 Ha (diamond 2×2×2), 2.900e-08 (gamma), **0** (He-fcc) |
+| `strip_basis` (new, 14-05) | 1.054e-09 in `j3c` → 2.750e-09 in the ERI |
+| Phase 13's `ft_aopair` residual (D-PBC-21) | 5.121e-10 |
+
+~600 + ~60 lines, and it feeds Phase 17.
+
+**D-PBC-24, the cintx `range_omega` gap** — a cintx change, not a port change.
+Blocks `_RSGDFBuilder`, `_RSMDFBuilder`, `RSDF`, `rsjk`, Gate 3, plan 14-07 Task
+7d, and (already) Phase 4's numerical RSH assertion.
+**Planned in `.planning/carryovers/D-PBC-24-cintx-range-omega-PLAN.md`** (five
+stages, cintx-side). The finding that sizes it: `rys_order ≤ 3` on every system
+this phase gates, and in that regime libcint gets the short-range integral from
+`full − LR` with doubled Rys roots and the STANDARD root finder — so stage 2
+unblocks Gate 3 without porting `CINTsr_rys_roots` at all.
+
+**Smaller, each already refused rather than ignored:** `rsjk`'s MPI variants
+(Phase 19, a named non-goal); `GDF`/`MDF` band k-points (Phase 17);
+`GDF.get_jk(omega)` (same cintx gap); `exp_to_discard`; the MO-factorised
+`get_k_kpts` (Phase 17); `outcore`'s k-pair blocking axis; diamond's `make_j3c`
+wall time.
+
+## Phase 15 is UNBLOCKED
+
+Both prerequisites are met: `ao2mo_7d`'s index order is fixed and asserted
+(14-05), and `sr_loop` / `get_naoaux` / the HDF5 `_cderi` store give KMP2 a GDF
+it can read (14-03), now also constructible from an existing file through
+`Gdf::with_cderi` / `Gdf::load_cderi`.
+
+Last activity: 2026-08-29 — Phase 14 implemented, verified and CLOSED.
+
+---
+
+Phase: 13-ft-ao-aftdf — **IMPLEMENTED, not closed** (retained below for continuity)
+Plans: 13-01 … 13-05 and 13-07 shipped; **13-06 PARTIAL** (`get_eri` +
+`get_ao_pairs_G` for both builders — oracle 4.172e-12 — but not `general` /
+`get_mo_pairs_G` / `ao2mo_7d`); 13-08 written as
+`.planning/phases/13-ft-ao-aftdf/13-VERIFICATION.md`.
+
+**What runs.** `KRHF` runs on either builder with no driver change — that was the
+point of the phase and it took a cross-crate refactor (D-PBC-22,
+`Box<dyn PeriodicDf>` across all 8 drivers plus `veff::get_jk` and `get_hcore`)
+which is proven BIT-IDENTICAL on the FFTDF path.
+
+**Gate 1 MET in three parts. Gate 2 MET as a `(rcut, mesh)` ladder. Gate 3 MET
+for `get_nuc`/`vj`/`vk`, near-met for `get_pp`.** Full numbers in `13-VERIFICATION.md`. The short
+version: all three roadmap gate numbers were unmeasured, and measuring them first
+is what made the phase tractable.
+  * `ft_ao.estimate_rcut` (20.420 Bohr) is LOOSER than `cell.rcut` (21.319), so
+    upstream's own `ft_aopair[G=0]` misses `int1e_ovlp` by 1.554e-9 and Gate 1's
+    "1e-10" cannot pass. Past `rcut` x1.5 the FT sum is converged (x2.0 identical
+    to four digits) and the residual sticks at 1.472e-10 — which is `pbc_intor`'s
+    OWN truncation, not the kernel's. Hence 1a/1b/**1c**, and 1c (both sides over
+    one identical image list, via `intor_cross_with_images`) passes at **1e-13**
+    on diamond, He-fcc and all 8 k-points. That is the real gate on the algebra.
+  * Gate 2 is a `(rcut, mesh)` ladder with TWO floors. Upstream plateaus at
+    **2.607e-11 Ha**, BIT-IDENTICAL at mesh 31 and 41.
+  * Gate 2 in the port: 9.309e-5 -> 5.066e-8 -> **2.378e-10** over meshes
+    15/21/27 (diamond, gamma), the same ~1000x-per-6-mesh rate as upstream.
+  * **Gate 3 is MET for 4 of 5 quantities** — `get_nuc` 2.755e-12, `vj`
+    3.733e-12, `vk` 2.116e-12, `get_eri` 4.172e-12, all under the 1e-11 bar. That DISPROVES the
+    obvious hypothesis that `ft_aopair`'s 5.121e-10 screening residual propagates
+    broadly: all three run through the same `ft_loop`.
+  * **`get_pp` is the exception at 1.806e-9, and the cause is upstream.**
+    `aft.get_pp` builds part 2 with `_IntPPBuilder`; `pp_int.get_pp_loc_part2` is
+    the reference route Phase 10 ported and `fft.get_pp` agrees with. **Those two
+    upstream routes disagree with EACH OTHER by 1.7933e-9** — 99.3% of the gap.
+    Substituting `pp_int` into upstream's own `AFTDF.get_pp` collapses the
+    deviation to **3.982e-11** (45x). Asserted in the test suite so the
+    attribution cannot rot. Worth reporting upstream on its own account.
+  * `ft_aopair`'s own 5.121e-10 is separate and is screening: three upstream
+    screens were ported (`strip_basis`, `get_ovlp_mask` over the
+    `_RangeSeparatedCell` per-primitive grouping, libcint `PTR_EXPCUTOFF`),
+    1.553e-9 -> 5.733e-10 -> 5.121e-10. The remainder is `ExtendedMole`, which
+    D-PBC-21 declines to port and Phase 14 needs anyway for `gdf_builder`.
+
+**The evidence that the Gate-3 residual is truncation and not algebra** is
+oracle-free and sharp: Gate 1c at 1e-13, and the `get_pp` anti-Hermitian residue
+falling from 5.133e-11 at upstream `rcut` to **2.665e-15** at a converged one.
+Upstream tightens `precision` by 1e-2 for exactly that asymmetry
+(`ft_ao.py:749-753`), and 5.13e-11 is on its 1e-10 target.
+
+**Four defects the phase's own tests caught**, all in new code: (1) the
+per-record screen reapplied `cell.precision*1e-2` — the IMAGE-LIST threshold — as
+an absolute per-primitive-pair cutoff, accumulating to 1.66e-7 while every
+angular-off-diagonal element stayed exact to 1e-16; (2) `estimate_rcut`'s `cs` is
+the libcint contraction coefficient, NOT `gto_norm` (that is
+`aft.estimate_ke_cutoff`), worth 21.186 vs 20.420 Bohr; (3) `Gamma(1.5)` returned
+1 because the half-integer reduction stopped one step early, making `_fake_nuc`
+short by exactly sqrt(pi)/2; (4) Phase-10's `get_pp_loc_part2`/`get_pp_nl` are
+F-ORDER and were added raw, transposing the non-local block.
+
+**Two performance corrections, both measurement-driven.** `FtKernel` was going to
+be consolidated away as unnecessary; it is not — the record table is
+`O(nimgs*nprim^2*npairs)` MD recursions and does not depend on `G`, so rebuilding
+it per G-block made one `get_pp` take minutes. And `get_k_kpts` built one kernel
+per `(ki,kj)` pair when the table depends on the ket k-point alone — `nkpts`
+instead of `nkpts^2`.
+
+Next: `ao2mo_7d` (the remaining 13-06 piece, which Phase 15's KMP2 is blocked on
+and whose index order should be defined against KMP2 rather than guessed here),
+then the Gate-3 closure inside Phase 14 alongside `gdf_builder`.
+Last activity: 2026-08-29 — Phase 13 implemented and verified.
+
+---
+
+Phase: 11-fft-fftdf-periodic-hf — **COMPLETE** (retained below for continuity)
 Plan: 11-12 COMPLETE (the phase verification rollup)
 Status: **Phase 11 is CLOSED.** `KRHF(diamond, 2x2x2, gth-szv/gth-pade)` matches
 live upstream PySCF **2.12.1** to **4.0e-12 Ha** at mesh 31 AND at the default
 mesh 47; the ALL-ELECTRON control (`KRHF`/`KUHF` on He-fcc) meets the 1e-12 gate
-outright at **2.2e-13**. The supercell-equivalence identity holds ORACLE-FREE at
-**1.6e-10**. Full results in
+outright at **2.2e-13**. Full results in
 `.planning/phases/11-fft-fftdf-periodic-hf/11-VERIFICATION.md`.
-Next: Phase 12 (periodic DFT) — it inherits `UniformGrids`, `FFTDF` and the
-`KOverrideHooks` driver unchanged and adds the periodic `NumInt`.
-Last activity: 2026-08-26 — Completed plans 11-01 … 11-12.
-  * **11-01/11-03:** `pyscf-pbc-tools/src/{fft,fft_kernel}.rs`. TWO engines:
-    `fft_blas` is a statement-for-statement port of upstream's `_fftn_blas`
-    (three batched complex GEMMs through `zgemm_dense`, D-PBC-03/05) and is the
-    reference; `fft_stockham` is a HOST mixed radix-2 / direct / Bluestein
-    transform and is the default, licensed by the D-PBC-06 condition (the two
-    agree to **1e-13** over 200 random `(mesh, n_batch)`). Both match live
-    `tools.fft` to 1e-12. The plan asked for a cubecl Stockham kernel; the
-    measured deviation is documented in the module docs — the default mesh 47 is
-    PRIME so radix-2/3/5 never applies, and the CPU runtime sustains only
-    ~5 GFLOP/s on the GEMM engine's `(141376, 47) x (47, 47)` products.
-  * **11-02:** `get_coulG` (all 3D/2D/0D branches + range separation),
-    `madelung` (matches upstream to <1e-9 on four k-meshes), the Ewald exxdiv.
-    **`_Gv_wrap_around` had to reproduce LAPACK, not an explicit inverse:** for
-    an odd mesh and a half-integer k offset the extreme frequency lands on
-    `+/- 0.5` EXACTLY, and whether it folds is decided by the last bit of
-    `np.linalg.solve`. The two representatives differ by a whole box edge —
-    measured, that single decision moved `coulG` by **0.145** at two grid points
-    and `vk` by 5e-8. `gv_wrap_around` is now `dgetf2` + `dgetrs` for n = 3 and
-    reproduces `np.linalg.solve` BIT-FOR-BIT (all 64 k-pairs agree to 2.2e-16).
-  * **11-04:** `UniformGrids` in `pyscf-pbc-gto::grids` (NOT `pyscf-pbc-dft`, or
-    the DAG would cycle). `BeckeDFTGrids` has no FFTDF consumer and moves to
-    Phase 12.
-  * **11-05/11-08:** `FFTDF` + the `PeriodicDf` trait every later builder plugs
-    into. `get_nuc` 2.1e-13, `vj` 1.7e-14, `vk` 5.5e-13, `get_pp` 1.9e-13,
-    `get_hcore` 1.9e-13 vs upstream. `get_pp` takes its NON-LOCAL half from
-    Phase 10's exact real-space `get_pp_nl` rather than `ft_ao` (Phase 13);
-    the two agree once upstream's planewave expansion converges (1.5e-3 at
-    mesh 11 -> 1.1e-13 at mesh 31 and beyond).
-  * **11-06/11-07:** `fft_jk`. `get_k_kpts` is ported statement-by-statement
-    with upstream's variable names kept as identifiers, per the master plan's
-    warning. `_ewald_exxdiv_for_G0` lives ONCE in `df_jk.rs` (plan 14-04's
-    instruction) and is verified to add EXACTLY `madelung * S D S`.
-  * **11-09/11-10:** ONE driver (`kscf::kernel`) generic over `KOverrideHooks`
-    (D-PBC-13); `KRHF`/`KUHF`/`KROHF`/`KGHF` and the gamma-point variants are
-    implementations of the trait. `nfock != nset` exists for ROHF alone.
-  * **11-11:** smearing (Fermi/Gaussian, bisected mu, entropy -> `e_free`,
-    `e_zero`, and the lower-triangle gradient it forces), addons, the periodic
-    chkfile (complex `mo_coeff` in h5py's own `{r, i}` COMPOUND layout, with the
-    primitives added to `pyscf-chkfile`, D-05), and the `_cast_mol_init_guess`
-    reuse of the molecular guesses.
-  * **11-12:** `11-VERIFICATION.md`, the ROADMAP tick, and this entry.
 
 ### Two defects found by Phase 11's own tests
 

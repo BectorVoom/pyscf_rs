@@ -1,13 +1,13 @@
-//! Default xtask entry point — runs all five checks sequentially.
+//! Default xtask entry point — runs every check sequentially.
 //!
 //! Usage:
-//!   cargo run -p xtask                       # runs all 5 checks
+//!   cargo run -p xtask                       # runs all checks
 //!   cargo run -p xtask --bin check-no-fma    # one specific check
 //!
 //! Each individual check is a separate [[bin]] in Cargo.toml.
 //!
 //! Exit codes:
-//!   0 — all 5 checks passed
+//!   0 — all checks passed
 //!   2 — at least one check failed (see stderr for the failing check name)
 
 use std::process::{Command, ExitCode};
@@ -19,6 +19,7 @@ fn main() -> ExitCode {
         "check-catch-unwind",
         "check-dependency-wall",
         "check-cubecl-pin",
+        "check-orphan-modules",
     ];
     let current_exe = std::env::current_exe().ok();
     let bin_dir = current_exe.as_ref().and_then(|p| p.parent());

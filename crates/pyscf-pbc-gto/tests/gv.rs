@@ -16,8 +16,11 @@
 //!   * the uniform grid is the lattice-fraction product grid, sums to zero for
 //!     `wrap_around = true` on an odd mesh, and the two `wrap_around` variants
 //!     differ only by whole lattice translations;
-//!   * the deferred `inf_vacuum` branch returns `NotYetImplemented { phase: 12 }`
-//!     rather than silently using the uniform weights (D-PBC-20);
+//!   * the `inf_vacuum` branch (D-PBC-20, plan 12-08) uses the non-uniform
+//!     Gauss-Chebyshev base: the vacuum axes are reduced to `2 * (n // 2)`
+//!     points, the scalar weight becomes a per-grid array, and the periodic
+//!     axes are untouched — while the 3-D path stays a scalar on the requested
+//!     mesh;
 //!   * a zero-axis mesh is an error, and `atmlst` selects the right rows.
 //!
 //! Tier 2 (hard-coded upstream references, D-PBC-19) — the `n = 1..8`
@@ -411,24 +414,77 @@ fn uniform_grids_are_the_lattice_fraction_product_grid() {
     }
 }
 
-/// D-PBC-20: the `inf_vacuum` branch of `get_Gv_weights` is DEFERRED to Phase
-/// 12 and must say so, not silently return the uniform weights.
+/// D-PBC-20, plan 12-08 — the `inf_vacuum` branch uses the NON-UNIFORM
+/// Gauss-Chebyshev base, which changes three things at once.
+///
+/// 1. The mesh SHRINKS on every vacuum axis: `_non_uniform_Gv_base(n // 2)`
+///    returns `2 * (n // 2)` points, so an odd axis comes back one smaller.
+///    Upstream says so in a comment (`cell.py:598`, "mesh can be different from
+///    the input mesh") and this is the observable consequence.
+/// 2. The single scalar weight becomes a PER-GRID array — there is no one
+///    weight for a non-uniform rule.
+/// 3. The periodic axes keep the uniform frequencies, so a `dimension = 2` cell
+///    reduces only `z`.
 #[test]
-fn inf_vacuum_gv_weights_are_deferred_to_phase_12() {
+fn inf_vacuum_gv_weights_use_the_non_uniform_base() {
     let mut cell = systems::graphene();
     assert_eq!(cell.dimension, 2);
-    // The uniform branch works while low_dim_ft_type is None.
-    assert!(get_gv_weights(&cell, Some(MESH)).is_ok());
-    cell.low_dim_ft_type = LowDimFtType::InfVacuum;
+
+    // The uniform branch, for comparison.
+    let uni = get_gv_weights(&cell, Some(MESH)).expect("uniform Gv");
     assert!(
-        matches!(
-            get_gv_weights(&cell, Some(MESH)),
-            Err(pyscf_core::PyscfRsError::NotYetImplemented { phase: 12, .. })
-        ),
-        "inf_vacuum must report the Phase-12 gap, not a silently wrong weight"
+        uni.weights_per_grid.is_none(),
+        "a 3-D-style uniform grid has ONE weight, not an array"
     );
-    // get_SI's separable branch goes through get_Gv_weights, so it defers too.
-    assert!(get_si(&cell, None, Some(MESH), None).is_err());
+    assert_eq!(uni.mesh, MESH, "the uniform branch does not resize the mesh");
+
+    cell.low_dim_ft_type = LowDimFtType::InfVacuum;
+    let vac = get_gv_weights(&cell, Some(MESH)).expect("inf_vacuum Gv");
+
+    // (3) xy are periodic and keep the uniform frequencies; (1) z is reduced.
+    assert_eq!(vac.mesh[0], MESH[0], "x is periodic and must not be reduced");
+    assert_eq!(vac.mesh[1], MESH[1], "y is periodic and must not be reduced");
+    assert_eq!(
+        vac.mesh[2],
+        2 * (MESH[2] / 2),
+        "the vacuum axis takes 2 * (n // 2) Gauss-Chebyshev points"
+    );
+
+    // (2) per-grid weights, one per point, all positive and finite.
+    let w = vac
+        .weights_per_grid
+        .as_ref()
+        .expect("the inf_vacuum branch produces per-grid weights");
+    assert_eq!(w.len(), vac.gv.len(), "one weight per G-vector");
+    assert!(
+        w.iter().all(|x| x.is_finite() && *x > 0.0),
+        "every Gauss-Chebyshev weight is positive and finite"
+    );
+    // `GvWeights::weight` is the accessor that hides the scalar/array split.
+    for g in [0usize, w.len() / 2, w.len() - 1] {
+        assert_eq!(vac.weight(g), w[g]);
+    }
+    assert_eq!(uni.weight(0), uni.weights, "the scalar path still reads back");
+
+    // `get_SI`'s separable branch runs through `get_Gv_weights`, so it now
+    // WORKS on the reduced mesh rather than erroring.
+    let si = get_si(&cell, None, Some(MESH), None).expect("get_SI on the reduced mesh");
+    assert_eq!(
+        si.len(),
+        cell.mol._atom.len() * vac.gv.len(),
+        "get_SI must be sized by the REDUCED mesh, not the requested one"
+    );
+}
+
+/// The 3-D path is untouched by plan 12-08: still one scalar weight, still the
+/// requested mesh.
+#[test]
+fn three_dimensional_weights_are_still_a_scalar() {
+    let cell = diamond_bohr();
+    let w = get_gv_weights(&cell, Some(MESH)).expect("Gv");
+    assert!(w.weights_per_grid.is_none());
+    assert_eq!(w.mesh, MESH);
+    assert!(rel(w.weights, 1.0 / cell.vol()) < 1e-14);
 }
 
 /// A zero-length mesh axis is an error rather than an empty grid.

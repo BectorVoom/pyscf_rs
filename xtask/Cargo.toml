@@ -42,6 +42,10 @@ path = "src/bin/check_cubecl_pin.rs"
 name = "check-forbid-lazy-static"
 path = "src/bin/check_forbid_lazy_static.rs"
 
+[[bin]]
+name = "check-orphan-modules"
+path = "src/bin/check_orphan_modules.rs"
+
 [dependencies]
 anyhow         = { workspace = true }
 serde          = { workspace = true }

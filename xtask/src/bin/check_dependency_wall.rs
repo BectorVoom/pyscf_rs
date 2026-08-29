@@ -35,6 +35,15 @@ const FORBIDDEN_DEPS: &[&str] = &[
     "cubecl-runtime",
     "cubecl-std",
     "cubecl-wgpu",
+    // `cube-math` is a cubecl crate wearing a libm's name: its public surface is
+    // `#[cube]` DEVICE functions, and it re-exports cubecl to every dependent.
+    // Letting a method crate depend on it both breaches ALG-06 transitively and
+    // invites the failure that motivated this entry — every entry point
+    // launders its argument through `bits::opaque64`, whose `RuntimeCell` has
+    // no native implementation, so a HOST call panics at runtime with
+    // "Unexpanded Cube functions should not be called" rather than failing to
+    // compile. Kernel crates use it inside kernels; host code uses `std`.
+    "cube-math",
 ];
 
 /// Crates permitted to consume cubecl-* (ALG-06 carve-out).

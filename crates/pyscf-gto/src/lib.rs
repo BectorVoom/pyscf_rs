@@ -134,7 +134,7 @@ pub fn build_in_place(mol: &mut Mole) -> Result<(), pyscf_core::PyscfRsError> {
 /// `Name("cc-pvdz")` → `cc-pvdz`; any other string is returned verbatim
 /// (covers the raw name a caller assigns directly). Mirrors
 /// `pyscf-scf::df_scf::extract_basis_name`.
-fn strip_name_echo(s: &str) -> String {
+pub fn strip_name_echo(s: &str) -> String {
     if let Some(rest) = s.strip_prefix("Name(\"")
         && let Some(name) = rest.strip_suffix("\")")
     {

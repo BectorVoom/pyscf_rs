@@ -16,7 +16,7 @@
 
 use pyscf_algebra::CTensor;
 use pyscf_core::PyscfRsError;
-use pyscf_pbc_df::Fftdf;
+use pyscf_pbc_df::{Fftdf, PeriodicDf};
 use pyscf_pbc_gto::Cell;
 use pyscf_pbc_scf::Krohf;
 use pyscf_pbc_scf::khooks::KOverrideHooks;
@@ -53,16 +53,16 @@ impl Kroks {
         let with_df = Fftdf::new(cell, kpts).map_err(|e| {
             crate::xc::err(format!("KROKS: FFTDF construction failed: {e}"))
         })?;
-        Self::from_df(with_df, xc)
+        Self::from_df(Box::new(with_df), xc)
     }
 
     /// `KROKS` over an explicit density-fitting object.
     ///
     /// # Errors
     /// Propagates the grid construction.
-    pub fn from_df(with_df: Fftdf, xc: &str) -> Result<Self, PbcDftError> {
-        let grids = PeriodicGrids::uniform(&with_df.cell, Some(with_df.mesh))?;
-        let ni = KNumInt::new(&with_df.kpts);
+    pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
+        let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
+        let ni = KNumInt::new(with_df.kpts());
         Ok(Self {
             hf: Krohf::from_df(with_df),
             xc: xc.to_string(),
@@ -117,7 +117,7 @@ impl Kroks {
         // than duplicating it keeps the two in lockstep. `Kuks` is constructed
         // as a thin view over the same density-fitting object.
         Kuks::veff_from_parts(
-            &self.hf.with_df,
+            self.hf.with_df.as_ref(),
             &self.xc,
             self.hf.exxdiv,
             &self.grids,

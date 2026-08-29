@@ -22,7 +22,8 @@ use pyscf_grids::Grids;
 use pyscf_scf::{InitGuessMode, OverrideHooks};
 
 use crate::numint::NumInt;
-use crate::parser::{XcSpec, xcfun};
+use crate::parser::XcSpec;
+use crate::xc_backend::XcBackend;
 use crate::veff::{KsVeff, default_get_veff};
 
 /// The KS override surface — extends `pyscf_scf::OverrideHooks` (a supertrait
@@ -57,8 +58,13 @@ pub trait KsOverrideHooks: OverrideHooks {
     ///     `NotYetImplemented{deferred}` (D-02 — the callable-functional path
     ///     is a v1.x deferred item, per the project Deferred Items table).
     fn define_xc_(&self, description: &str) -> Result<XcSpec, PyscfRsError> {
-        // String-recombination form — route through the (default xcfun) parser.
-        xcfun::parse_xc(description).map_err(PyscfRsError::from)
+        // String-recombination form. Parse in the ACTIVE BACKEND's id namespace:
+        // the returned `XcSpec` is handed to that backend to evaluate, and the
+        // two parsers emit different id spaces (xcfun SLATERX = 0, libxc has no
+        // id 0; xcfun PBEX/PBEC = 5/4 are LDA ids under libxc).
+        XcBackend::default()
+            .parse(description)
+            .map_err(PyscfRsError::from)
     }
 }
 

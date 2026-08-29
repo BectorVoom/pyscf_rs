@@ -10,9 +10,12 @@
 //! Phase 10 plan 10-03 adds K-07 (`bloch_phase`).
 //! Phase 10 plan 10-04 adds K-08 (`eval_ao_k_accumulate`).
 
+//! Phase 13 plan 13-01 adds K-15 (`ft_aopair`) — the largest new kernel in v2.0.
+
 pub mod bloch;
 pub mod eval_ao_k;
 pub mod ewald;
+pub mod ft_aopair;
 pub mod gv;
 pub mod struct_factor;
 pub mod zhadamard;
@@ -20,6 +23,7 @@ pub mod zhadamard;
 pub use bloch::bloch_phase;
 pub use eval_ao_k::{AoKAccumulator, eval_ao_k_accumulate};
 pub use ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
+pub use ft_aopair::{FtAopairTables, ft_aopair};
 pub use gv::gv;
 pub use struct_factor::struct_factor;
 pub use zhadamard::zhadamard;

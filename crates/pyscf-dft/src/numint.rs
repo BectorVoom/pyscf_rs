@@ -71,16 +71,8 @@ use pyscf_grids::Grids;
 use pyscf_runtime::DType;
 
 use crate::error::DftError;
-use crate::parser::{XcSpec, xcfun};
-use crate::xc_backend::{DerivOrder, RhoBlock, XcBackend};
-
-/// xcfun functional ids (0..77) whose family is GGA (gradient-dependent).
-/// The default backend is xcfun (04-05), so the parser emits xcfun ids; the
-/// rest of the mapped corpus (`{0,2,3,28}`) is LDA. MGGA is deferred (v1
-/// corpus tops out at GGA hybrids). Source: the xcfun functional families
-/// cross-checked against `xc_backend::xcfun_id_to_name` + the 04-05 parity
-/// table (SLATERX/VWN are LDA; BECKEX/LYPC/PBEX/PBEC are GGA).
-const XCFUN_GGA_IDS: &[u32] = &[4, 5, 6, 16, 17, 19, 20, 26, 56, 77];
+use crate::parser::XcSpec;
+use crate::xc_backend::{DerivOrder, Family, RhoBlock, XcBackend};
 
 /// CR-02 gap-closure: honest f64→scalar cast for the low-precision path.
 ///
@@ -242,12 +234,13 @@ impl NumInt {
     /// `spin` is accepted for signature parity with upstream (the hybrid
     /// coefficient is spin-independent for the v1 corpus).
     pub fn rsh_coeff(&self, xc_code: &str, _spin: i32) -> Result<(f64, f64, f64), DftError> {
-        // The default backend is xcfun, so parse in the xcfun namespace —
-        // xcfun exposes the standard-hybrid mixing in `hyb[0]` (e.g. b3lyp →
-        // hyb=0.2), whereas the libxc parser folds it inside the compound id.
-        let spec = xcfun::parse_xc(xc_code)?;
-        let (hyb, alpha, omega) = spec.hyb();
-        Ok((omega, alpha, hyb))
+        // Delegated to the BACKEND, because the two parsers report the mixing
+        // differently: xcfun puts it in `hyb[0]` (b3lyp -> 0.2), while libxc
+        // folds it inside the compound id (b3lyp -> id 402, hyb 0) and only the
+        // library can unpack it. `XcBackend::rsh_and_hybrid_coeff` ports
+        // upstream's `rsh_and_hybrid_coeff` for both. Reading `spec.hyb()` here
+        // would silently drop all HF exchange under the libxc default.
+        self.backend.rsh_and_hybrid_coeff(xc_code)
     }
 
     /// `hybrid_coeff(xc_code, spin) -> hyb` — the standard-hybrid HF-exchange
@@ -391,7 +384,8 @@ impl NumInt {
         rho: &RhoBlock<'_>,
         order: DerivOrder,
     ) -> Result<crate::xc_backend::XcOutput, DftError> {
-        let spec = xcfun::parse_xc(xc_code)?;
+        // Parse in the BACKEND's id namespace — see `XcBackend::parse`.
+        let spec = self.backend.parse(xc_code)?;
         self.backend.eval(&spec, rho, order)
     }
 
@@ -568,12 +562,16 @@ impl NumInt {
                                 + dz[g] * ao_at(&ao, 3, g, mu),
                             "gphi_mu GGA gradient projection exceeds f32::MAX in Vxc back-contraction",
                         )?;
-                        // 0.5 factor folds with the symmetrization (vmat += V + Vᵀ).
-                        let half = cast_finite::<S>(
-                            0.5,
-                            "GGA symmetrization 0.5 factor cast in Vxc back-contraction",
-                        )?;
-                        t = t + wvs * gphi_mu * phi_nu * half;
+                        // NO 0.5 here. Upstream halves ONLY the density row
+                        // (`_rks_gga_wv0`, numint.py:1555: `wv[0] = vrho * .5`);
+                        // the gradient rows are `wv[1:] = 2 * vgamma * rho[1:4]`,
+                        // NOT halved. The `vmat += V + Vᵀ` symmetrisation in the
+                        // caller is exactly what supplies the gradient term's
+                        // `∇φ_μ φ_ν + φ_μ ∇φ_ν` pair, so halving it here would
+                        // drop half of the term. Invisible under LDA (no `sigma`
+                        // anywhere); worth ~5% of `V_xc` under PBE.
+                        // Pinned by `tests/vxc_is_exc_derivative.rs`.
+                        t = t + wvs * gphi_mu * phi_nu;
                     }
                     // Cast the per-point contribution back to f64 for the
                     // oracle_sum reduction (XC boundary + reduction are f64).
@@ -725,7 +723,7 @@ impl NumInt {
         let (rho_b, grad_b) = NumInt::eval_rho(&ao, dm_b, ngrids, xctype)?;
 
         // (3) Spin-resolved XC eval. For GGA assemble the three sigma channels.
-        let spec = xcfun::parse_xc(xc_code).map_err(PyscfRsError::from)?;
+        let spec = self.backend.parse(xc_code).map_err(PyscfRsError::from)?;
         let xc_out = match xctype {
             XcType::Lda => {
                 self.backend
@@ -857,10 +855,14 @@ impl NumInt {
                             + oz[g] * ao_at(ao, 3, g, mu);
                         // same-spin: 2·w·vsigma_same·(∇rho_this·∇φ_μ)·φ_ν
                         // cross-spin: w·vsigma_ab·(∇rho_other·∇φ_μ)·φ_ν
-                        // 0.5 prefactor folds with the symmetrization (V + Vᵀ).
+                        //
+                        // NO 0.5: `_uks_gga_wv0` (numint.py:1824-1830) halves
+                        // only `wva[0]`/`wvb[0]`; the gradient rows are
+                        // `rhoa[1:4]*vsigma_aa*2 + rhob[1:4]*vsigma_ab`. See the
+                        // matching note in `nr_rks`'s back-contraction.
                         let grad_term = 2.0 * w * vsigma_same[g] * gphi_this * phi_nu
                             + w * vsigma_ab[g] * gphi_other * phi_nu;
-                        t += 0.5 * grad_term;
+                        t += grad_term;
                     }
                     vrow_terms[g] = t;
                 }
@@ -885,15 +887,23 @@ impl NumInt {
     /// Resolve the `XcType` (LDA vs GGA) for an XC code by parsing it and
     /// inspecting the components. v1 supports LDA + GGA (MGGA deferred).
     fn xc_type_of(xc_code: &str) -> Result<XcType, PyscfRsError> {
-        // Parse in the xcfun namespace (default backend). SVWN → SLATERX(0)+
-        // VWN5C(3) is LDA; PBE → PBEX(5)+PBEC(4) and B3LYP → BECKEX(6)+LYPC(16)
-        // carry GGA components.
-        let spec: XcSpec = xcfun::parse_xc(xc_code).map_err(PyscfRsError::from)?;
-        let is_gga = spec
-            .components()
-            .iter()
-            .any(|&(id, _)| XCFUN_GGA_IDS.contains(&id));
-        Ok(if is_gga { XcType::Gga } else { XcType::Lda })
+        // Parse and classify in the SAME backend namespace — the ids only mean
+        // something to the backend that emitted them. `XcBackend::family` is the
+        // single source of truth for LDA-vs-GGA; the periodic NumInt resolves
+        // through the same call, so the two cannot drift.
+        let backend = XcBackend::default();
+        let spec: XcSpec = backend.parse(xc_code).map_err(PyscfRsError::from)?;
+        match backend
+            .family(&spec)
+            .map_err(PyscfRsError::from)?
+        {
+            Family::Lda => Ok(XcType::Lda),
+            Family::Gga => Ok(XcType::Gga),
+            Family::Mgga => Err(PyscfRsError::NotYetImplemented {
+                phase: 4,
+                what: "meta-GGA functionals in the molecular NumInt",
+            }),
+        }
     }
 }
 

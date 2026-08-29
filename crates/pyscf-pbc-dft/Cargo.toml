@@ -12,6 +12,8 @@ description = "gen_grid, numint, KRKS/KUKS/KROKS/KGKS + gamma, DFT+U, multigrid,
 pyscf-core      = { path = "../pyscf-core" }
 pyscf-algebra   = { path = "../pyscf-algebra" }
 pyscf-dft       = { path = "../pyscf-dft" }
+pyscf-gto       = { path = "../pyscf-gto" }
+pyscf-grids     = { path = "../pyscf-grids" }
 pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
 pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
@@ -19,3 +21,9 @@ pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+
+[dev-dependencies]
+pyscf-gto       = { path = "../pyscf-gto" }
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
+serde_json      = { workspace = true }
+pyscf-grids     = { path = "../pyscf-grids" }

@@ -250,6 +250,11 @@ pub const SUPPORTED_INTORS: &[&str] = &[
     "int1e_ipovlp",
     "int1e_ipkin",
     "int1e_ipnuc",
+    // Plan 14-01: `incore.fill_2c2e` is `auxcell.pbc_intor('int2c2e', ...)` —
+    // the auxiliary metric of every Gaussian density fitting builder. It is an
+    // arity-2 two-electron operator, so it goes through the same lattice sum as
+    // the 1-electron families above.
+    "int2c2e",
 ];
 
 /// [`intor_cross`] against a caller-supplied image list and (optionally) a

@@ -29,5 +29,20 @@ fn pople_falls_back_to_weigend() {
     assert_eq!(default_jkfit("6-31g"), "weigend");
     assert_eq!(default_jkfit("6-31g*"), "weigend");
     assert_eq!(default_jkfit("6-31g**"), "weigend");
-    assert_eq!(default_jkfit("sto-3g"), "weigend");
+}
+
+/// Corrected by plan 14-01. Upstream's `DEFAULT_AUXBASIS['sto3g']` is
+/// `('def2-svp-jkfit', 'def2-svp-ri')`; this table said `weigend`, which is the
+/// UNIVERSAL fallback rather than this row. The upstream-faithful chain (Psi4
+/// table, then BSE metadata, then even-tempered) is
+/// `pyscf_df::predefined_auxbasis` / `pyscf_df::make_auxbasis`, exercised in
+/// `tests/make_auxbasis.rs`.
+#[test]
+fn sto_3g_resolves_to_def2_svp_jkfit() {
+    assert_eq!(default_jkfit("sto-3g"), "def2-svp-jkfit");
+    assert_eq!(default_ri("sto-3g"), "def2-svp-ri");
+    assert_eq!(
+        pyscf_df::predefined_auxbasis("sto-3g", true, false),
+        Some("def2-svp-jkfit")
+    );
 }

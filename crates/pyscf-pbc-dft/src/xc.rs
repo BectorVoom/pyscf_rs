@@ -38,7 +38,6 @@
 //! Second derivatives (`fxc`) follow `transform_fxc`: the `(nvar, nvar, ngrids)`
 //! (RKS) or `(2, nvar, 2, nvar, ngrids)` (UKS) kernel tensor.
 
-use pyscf_dft::parser::xcfun::parse_xc;
 use pyscf_dft::{DerivOrder, Family, XcBackend};
 
 use crate::error::PbcDftError;
@@ -99,11 +98,12 @@ impl XcType {
     /// [`PbcDftError`] when the functional string does not parse, or when it
     /// resolves to a meta-GGA (see the type docs).
     pub fn of(xc_code: &str) -> Result<Self, PbcDftError> {
-        let spec = parse_xc(xc_code).map_err(dft_err)?;
-        // Ask the BACKEND rather than consulting an id table: the evaluator
-        // enforces the same classification later, and a table here would be a
-        // second source of truth that can drift.
-        match XcBackend::default().family(&spec).map_err(dft_err)? {
+        let backend = XcBackend::default();
+        // Parse and classify in the SAME namespace: the ids only mean something
+        // to the backend that emitted them. Asking the backend rather than
+        // consulting a table here keeps one source of truth.
+        let spec = backend.parse(xc_code).map_err(dft_err)?;
+        match backend.family(&spec).map_err(dft_err)? {
             Family::Lda => Ok(XcType::Lda),
             Family::Gga => Ok(XcType::Gga),
             Family::Mgga => Err(err(format!(
@@ -120,9 +120,14 @@ impl XcType {
 /// # Errors
 /// [`PbcDftError`] when the functional string does not parse.
 pub fn rsh_and_hybrid_coeff(xc_code: &str) -> Result<(f64, f64, f64), PbcDftError> {
-    let spec = parse_xc(xc_code).map_err(dft_err)?;
-    let (hyb, alpha, omega) = spec.hyb();
-    Ok((omega, alpha, hyb))
+    // Delegated to the BACKEND. Reading `spec.hyb()` here would be wrong under
+    // the libxc default: the libxc parser resolves `pbe0` to the single compound
+    // id 406 and reports `hyb = 0`, with the 0.25 reachable only by asking the
+    // library. That would make every hybrid look pure and drop the exact
+    // exchange from `veff::get_jk` entirely.
+    XcBackend::default()
+        .rsh_and_hybrid_coeff(xc_code)
+        .map_err(dft_err)
 }
 
 /// `ni.libxc.is_hybrid_xc(xc)` — a nonzero `hyb` OR a nonzero long-range
@@ -605,8 +610,9 @@ fn backend_eval(
     sab: Option<&[f64]>,
     sbb: Option<&[f64]>,
 ) -> Result<(Vec<f64>, Vec<Raw1>), PbcDftError> {
-    let spec = parse_xc(xc_code).map_err(dft_err)?;
-    let out = XcBackend::default()
+    let backend = XcBackend::default();
+    let spec = backend.parse(xc_code).map_err(dft_err)?;
+    let out = backend
         .eval_uks(&spec, ra, rb, saa, sab, sbb, DerivOrder::Vxc)
         .map_err(dft_err)?;
     let n = ra.len();

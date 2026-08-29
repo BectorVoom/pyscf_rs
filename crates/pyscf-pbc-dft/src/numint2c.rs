@@ -184,7 +184,11 @@ impl KNumInt2C {
             // `_eval_xc_eff`, ncol branch: ρ_{a,b} = (ρ ± |m|)/2.
             let s: Vec<f64> = (0..n)
                 .map(|g| {
-                    cube_math::double::exact::sqrt(rho_m[1][g].powi(2) + rho_m[2][g].powi(2) + rho_m[3][g].powi(2), cube_math::MathConfig::EXACT)
+                    // `std` on the host — see the note in `kspu.rs`: cube-math
+                    // is a DEVICE libm and panics outside a `#[cube]` expansion.
+                    // `f64::sqrt` is IEEE-exact anyway, so there is nothing to
+                    // gain here even where cube-math would run.
+                    (rho_m[1][g].powi(2) + rho_m[2][g].powi(2) + rho_m[3][g].powi(2)).sqrt()
                 })
                 .collect();
             let ra = crate::xc::RhoEff {

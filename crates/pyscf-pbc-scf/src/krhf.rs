@@ -26,7 +26,7 @@ use crate::types::{KDms, KInitGuess, KMats, KScfConfig, KScfResult};
 #[derive(Debug)]
 pub struct Krhf {
     /// The density-fitting object; it owns the cell and the k-points.
-    pub with_df: Fftdf,
+    pub with_df: Box<dyn PeriodicDf>,
     /// Exchange divergence treatment. Upstream's default is
     /// `ExxDiv::Ewald` (`pbc_scf_SCF_exxdiv`).
     pub exxdiv: Option<ExxDiv>,
@@ -44,12 +44,12 @@ impl Krhf {
     /// Propagates the `FFTDF` construction.
     pub fn new(cell: Cell, kpts: &[[f64; 3]]) -> Result<Self, PyscfRsError> {
         let with_df = Fftdf::new(cell, kpts).map_err(df_err)?;
-        Ok(Self::from_df(with_df))
+        Ok(Self::from_df(Box::new(with_df)))
     }
 
     /// `KRHF` over an explicitly configured density-fitting object — the seam
     /// AFTDF/GDF plug into in Phases 13/14.
-    pub fn from_df(with_df: Fftdf) -> Self {
+    pub fn from_df(with_df: Box<dyn PeriodicDf>) -> Self {
         Self {
             with_df,
             exxdiv: Some(ExxDiv::Ewald),
@@ -60,12 +60,12 @@ impl Krhf {
 
     /// The cell.
     pub fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
 
     /// The k-points.
     pub fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
 
     /// Electrons in the whole BZ supercell: `cell.tot_electrons(nkpts)`.
@@ -109,7 +109,7 @@ impl Krhf {
         dm_kpts: &KDms,
     ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
-        let mut fock = pyscf_pbc_df::get_hcore(&self.with_df, kpts_band).map_err(df_err)?;
+        let mut fock = pyscf_pbc_df::get_hcore(self.with_df.as_ref(), kpts_band).map_err(df_err)?;
         let r = self
             .with_df
             .get_jk(
@@ -121,6 +121,7 @@ impl Krhf {
                     with_j: true,
                     with_k: true,
                     exxdiv: self.exxdiv,
+                    omega: None,
                 },
             )
             .map_err(df_err)?;
@@ -140,7 +141,7 @@ impl Krhf {
     }
 }
 
-pub(crate) fn df_err(e: pyscf_pbc_df::PbcDfError) -> PyscfRsError {
+pub fn df_err(e: pyscf_pbc_df::PbcDfError) -> PyscfRsError {
     match e {
         pyscf_pbc_df::PbcDfError::Core(c) => c,
         other => PyscfRsError::Core(CoreError::InvalidMolecule(format!(
@@ -151,7 +152,7 @@ pub(crate) fn df_err(e: pyscf_pbc_df::PbcDfError) -> PyscfRsError {
 
 /// Convert Phase 10's F-order k-matrices to the row-major convention Phase 11
 /// works in.
-pub(crate) fn to_row_major(mats: Vec<CTensor>, nao: usize) -> KMats {
+pub fn to_row_major(mats: Vec<CTensor>, nao: usize) -> KMats {
     mats.iter().map(|m| forder_to_c(m, nao, nao)).collect()
 }
 
@@ -159,7 +160,7 @@ pub(crate) fn to_row_major(mats: Vec<CTensor>, nao: usize) -> KMats {
 ///
 /// # Errors
 /// [`CoreError::InvalidMolecule`] when the generalized eigenproblem fails.
-pub(crate) fn eig_channel(
+pub fn eig_channel(
     fock: &KMats,
     s1e: &KMats,
     nao: usize,
@@ -180,10 +181,10 @@ pub(crate) fn eig_channel(
 
 impl KOverrideHooks for Krhf {
     fn cell(&self) -> &Cell {
-        &self.with_df.cell
+        self.with_df.cell()
     }
     fn kpts(&self) -> &[[f64; 3]] {
-        &self.with_df.kpts
+        self.with_df.kpts()
     }
     fn nset(&self) -> usize {
         1
@@ -198,7 +199,7 @@ impl KOverrideHooks for Krhf {
     }
 
     fn get_hcore(&self) -> Result<KMats, PyscfRsError> {
-        pyscf_pbc_df::get_hcore(&self.with_df, self.kpts()).map_err(df_err)
+        pyscf_pbc_df::get_hcore(self.with_df.as_ref(), self.kpts()).map_err(df_err)
     }
 
     fn get_init_guess(&self, mode: &KInitGuess, s1e: &KMats) -> Result<KDms, PyscfRsError> {
@@ -224,6 +225,7 @@ impl KOverrideHooks for Krhf {
                     with_j: true,
                     with_k: true,
                     exxdiv: self.exxdiv,
+                    omega: None,
                 },
             )
             .map_err(df_err)?;

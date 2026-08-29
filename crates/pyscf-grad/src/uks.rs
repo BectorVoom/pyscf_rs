@@ -494,8 +494,13 @@ fn ni_eval_uks_vrho(
     rho_b: &[f64],
 ) -> Result<(Vec<f64>, Vec<f64>), PyscfRsError> {
     use pyscf_dft::xc_backend::XcBackend;
-    let spec = pyscf_dft::parser::xcfun::parse_xc(xc).map_err(PyscfRsError::from)?;
-    let backend = XcBackend::default(); // Xcfun; libxc only under --features libxc
+    let backend = XcBackend::default();
+    // Parse in the BACKEND's own id namespace. Naming a parser module directly
+    // is a namespace bug: xcfun's SLATERX is id 0 and PBEX/PBEC are 5/4, but
+    // libxc has no id 0 and its 4/5 are LDA functionals — so an xcfun-parsed
+    // spec handed to the libxc backend either errors (`UnknownFunctionalId(0)`)
+    // or, worse, silently evaluates a different functional.
+    let spec = backend.parse(xc).map_err(PyscfRsError::from)?;
     let out = backend
         .eval_uks(&spec, rho_a, rho_b, None, None, None, DerivOrder::Vxc)
         .map_err(PyscfRsError::from)?;

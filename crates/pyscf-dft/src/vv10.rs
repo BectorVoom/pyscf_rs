@@ -289,12 +289,13 @@ pub fn nr_nlc_vxc(
                 let phi_nu = ao_at(0, g, nu);
                 // LDA-shaped term: 0.5·w·vrho·φ_μ·φ_ν (numint.py:1411 wv[0]*=.5).
                 let mut t = 0.5 * w * vv.vrho[g] * phi_mu * phi_nu;
-                // GGA gradient term: 2·w·vsigma·(∇ρ·∇φ_μ)·φ_ν, symmetrized
-                // (the same back-contraction shape as the main numint grid
-                // loop; the 0.5 folds with the vmat += V + Vᵀ symmetrization).
+                // GGA gradient term: 2·w·vsigma·(∇ρ·∇φ_μ)·φ_ν. NO 0.5 —
+                // `nr_nlc_vxc` (numint.py:1411) applies `wv[0] *= .5` to the
+                // DENSITY row only, exactly as `_rks_gga_wv0` does; the
+                // `vmat + vmat.T` below is what pairs the gradient term up.
                 let gphi_mu =
                     dx[g] * ao_at(1, g, mu) + dy[g] * ao_at(2, g, mu) + dz[g] * ao_at(3, g, mu);
-                t += 0.5 * 2.0 * w * vv.vsigma[g] * gphi_mu * phi_nu;
+                t += 2.0 * w * vv.vsigma[g] * gphi_mu * phi_nu;
                 row_terms[g] = t;
             }
             let contrib = oracle_sum(&row_terms);

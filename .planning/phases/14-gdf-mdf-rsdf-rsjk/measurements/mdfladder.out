@@ -1,0 +1,22 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+
+=== diamond/gth-szv kmesh=[2, 2, 2] ===
+  FFTDF(mesh=[31, 31, 31]) E = -10.93087316795859
+  GDF                    E = -10.93209529106376  |dE vs FFTDF| = 1.222e-03
+  MDF mesh  7            E = -10.93087429163887  |dE vs FFTDF| = 1.124e-06  conv=True  14.3s
+  MDF mesh 11            E = -10.93087317789629  |dE vs FFTDF| = 9.938e-09  conv=True  34.6s
+  MDF mesh 15            E = -10.93087316925421  |dE vs FFTDF| = 1.296e-09  conv=True  73.2s
+  MDF mesh 21            E = -10.93087316828268  |dE vs FFTDF| = 3.241e-10  conv=True  160.1s
+  MDF mesh 27            E = -10.93087317053376  |dE vs FFTDF| = 2.575e-09  conv=True  296.7s
+
+=== He-fcc/sto-3g kmesh=[2, 2, 2] ===
+  FFTDF(mesh=[31, 31, 31]) E = -2.80848510969415
+  GDF                    E = -2.80842508717097  |dE vs FFTDF| = 6.002e-05
+  MDF mesh  7            E = -2.80848673371344  |dE vs FFTDF| = 1.624e-06  conv=True  1.2s
+  MDF mesh 11            E = -2.80848511342377  |dE vs FFTDF| = 3.730e-09  conv=True  1.9s
+  MDF mesh 15            E = -2.80848514212348  |dE vs FFTDF| = 3.243e-08  conv=True  3.1s
+  MDF mesh 21            E = -2.80848514314754  |dE vs FFTDF| = 3.345e-08  conv=True  4.7s
+  MDF mesh 27            E = -2.80848513934039  |dE vs FFTDF| = 2.965e-08  conv=True  7.5s

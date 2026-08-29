@@ -356,13 +356,18 @@ pub fn get_pp(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError>
 ///
 /// # Errors
 /// Propagates [`get_pp`] / [`get_nuc`] and `pbc_intor('int1e_kin')`.
-pub fn get_hcore(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
-    let cell = &df.cell;
+///
+/// Takes `&dyn PeriodicDf` since plan 13-07 (D-PBC-22): the body is builder
+/// agnostic — it picks `get_pp` vs `get_nuc` from `cell.pseudo` and adds
+/// `int1e_kin` — so binding it to `Fftdf` was the only thing stopping a driver
+/// from running on AFTDF.
+pub fn get_hcore(df: &dyn PeriodicDf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
+    let cell = df.cell();
     let nao = cell.mol.nao_nr;
     let mut nuc = if cell.pseudo.is_some() {
-        get_pp(df, kpts)?
+        df.get_pp(kpts)?
     } else {
-        get_nuc(df, kpts)?
+        df.get_nuc(kpts)?
     };
     let t = pyscf_pbc_gto::get_t(cell, kpts)?;
     for (k, h) in nuc.iter_mut().enumerate() {
@@ -377,6 +382,9 @@ impl PeriodicDf for Fftdf {
     }
     fn mesh(&self) -> [usize; 3] {
         self.mesh
+    }
+    fn name(&self) -> &'static str {
+        "FFTDF"
     }
     fn kpts(&self) -> &[[f64; 3]] {
         &self.kpts
@@ -405,6 +413,7 @@ impl PeriodicDf for Fftdf {
                 opts.hermi,
                 kpts,
                 opts.kpts_band,
+                opts.omega,
             )?)
         } else {
             None
@@ -417,6 +426,7 @@ impl PeriodicDf for Fftdf {
                 kpts,
                 opts.kpts_band,
                 opts.exxdiv,
+                opts.omega,
             )?)
         } else {
             None

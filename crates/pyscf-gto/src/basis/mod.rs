@@ -19,6 +19,7 @@ pub mod cp2k_pp;
 pub mod nwchem;
 pub mod nwchem_ecp;
 pub mod path;
+pub mod pydict;
 
 use pyscf_core::{BasisLoadError, EcpLoadError, GthPseudo, ParsedBasis};
 use std::collections::HashMap;
@@ -76,16 +77,38 @@ pub fn load_basis(name: &str, symbol: &str) -> Result<ParsedBasis, BasisLoadErro
             });
         }
     };
-    let full = dir.join(filename);
-    let text = std::fs::read_to_string(&full).map_err(|e| BasisLoadError::Io {
-        path: full.display().to_string(),
-        source: e,
-    })?;
+    // A few upstream sets — MINAO among them — are stored as a Python MODULE
+    // (`<name>.py`, one nested-list literal per element) rather than as NWChem
+    // text; `basis/__init__.py:665-676` imports those with `importlib`. The
+    // ALIAS table names them without the extension, so try the bare name first
+    // and fall back to `<name>.py`. Nothing here executes Python — `pydict`
+    // reads the literal directly.
+    let bare = dir.join(filename);
+    let (full, text) = match std::fs::read_to_string(&bare) {
+        Ok(t) => (bare, t),
+        Err(bare_err) => {
+            let py = dir.join(format!("{filename}.py"));
+            match std::fs::read_to_string(&py) {
+                Ok(t) => (py, t),
+                // Report the ORIGINAL miss: the `.py` form is the fallback, and
+                // naming it in the error would send a reader looking for the
+                // wrong file.
+                Err(_) => {
+                    return Err(BasisLoadError::Io {
+                        path: bare.display().to_string(),
+                        source: bare_err,
+                    });
+                }
+            }
+        }
+    };
 
-    // Format detection: GTH-prefixed text routes to CP2K; otherwise NWChem /
-    // Gaussian-94. The GTH detection mirrors upstream
-    // `pyscf/gto/basis/__init__.py:_format_basis` line 656.
-    let parsed = if text.contains("GTH") {
+    // Format detection: GTH-prefixed text routes to CP2K; a `.py` module routes
+    // to the literal parser; otherwise NWChem / Gaussian-94. The GTH detection
+    // mirrors upstream `pyscf/gto/basis/__init__.py:_format_basis` line 656.
+    let parsed = if full.extension().is_some_and(|e| e == "py") {
+        pydict::parse_pydict(&text, &key.1, &full.display().to_string())?
+    } else if text.contains("GTH") {
         cp2k::parse_cp2k(&text, &key.1, &full.display().to_string())?
     } else {
         nwchem::parse_nwchem(&text, &key.1, &full.display().to_string())?

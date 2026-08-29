@@ -213,26 +213,47 @@ fn madelung_decreases_with_denser_k_mesh() {
     }
 }
 
-/// The deferred branches announce themselves rather than returning a wrong
-/// kernel (D-PBC-20).
+/// D-PBC-20, plan 12-08 — the two truncated-Coulomb kernels produce a FINITE
+/// kernel, including at `G + k = 0` where the untruncated `4π/G²` diverges.
+/// That finiteness at the origin is the entire point of truncating.
 #[test]
-fn vcut_branches_defer_to_phase_12() {
+fn vcut_branches_produce_a_finite_kernel() {
     let cell = diamond();
     let gv = pyscf_pbc_gto::get_gv(&cell, Some(MESH)).expect("Gv");
+    let kpts = pyscf_pbc_gto::make_kpts_default(&cell, [2, 2, 2]).expect("k-mesh");
     for div in [ExxDiv::VcutSph, ExxDiv::VcutWs] {
-        let err = get_coulg(
+        let v = get_coulg(
             &cell,
             CoulGArgs {
                 exxdiv: Some(div),
                 mesh: Some(MESH),
                 gv: Some(&gv),
+                kpts: Some(&kpts),
                 ..CoulGArgs::new()
             },
         )
-        .expect_err("vcut must defer");
+        .unwrap_or_else(|e| panic!("{div:?}: {e}"));
+        assert_eq!(v.len(), gv.len(), "{div:?}: one kernel value per G");
         assert!(
-            matches!(err, pyscf_core::PyscfRsError::NotYetImplemented { phase: 12, .. }),
-            "expected a phase-12 deferral, got {err}"
+            v.iter().all(|x| x.is_finite()),
+            "{div:?}: the truncated kernel must be finite everywhere, including G = 0"
         );
+        // `vcut_sph`'s G = 0 value is the analytic `2 pi Rc^2` with
+        // `Rc = (3 Nk V / 4 pi)^(1/3)` (pbc.py:374-378) — a closed form, so it
+        // is checked against the formula rather than against a recorded number.
+        if matches!(div, ExxDiv::VcutSph) {
+            let nk = kpts.len() as f64;
+            let rc = (3.0 * nk * cell.vol() / (4.0 * std::f64::consts::PI)).powf(1.0 / 3.0);
+            let want = 2.0 * std::f64::consts::PI * rc * rc;
+            let g0 = gv
+                .iter()
+                .position(|g| g[0] == 0.0 && g[1] == 0.0 && g[2] == 0.0)
+                .expect("a G = 0 entry");
+            assert!(
+                (v[g0] - want).abs() < 1e-10 * want.abs(),
+                "vcut_sph at G = 0 is {}, expected the analytic 2 pi Rc^2 = {want}",
+                v[g0]
+            );
+        }
     }
 }

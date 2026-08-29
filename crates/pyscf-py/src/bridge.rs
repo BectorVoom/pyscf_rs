@@ -326,7 +326,10 @@ impl KsOverrideHooks for PyOverrideBridge {
             // for the subclass-override-invoked assertion but the canonical
             // spec is the Rust parser result (string form, D-02).
             let _hyb: f64 = call_hook(&self.slf, "define_xc_", args, |r| r.extract())?;
-            pyscf_dft::parser::xcfun::parse_xc(description).map_err(PyscfRsError::from)
+            // Backend-namespace parse — see `XcBackend::parse`.
+            pyscf_dft::XcBackend::default()
+                .parse(description)
+                .map_err(PyscfRsError::from)
         })
     }
 }

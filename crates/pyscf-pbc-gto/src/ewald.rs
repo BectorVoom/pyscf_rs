@@ -58,7 +58,7 @@ use crate::cell::Cell;
 use crate::types::LowDimFtType;
 use pyscf_algebra::{oracle_sum, select_backend};
 use pyscf_core::{CoreError, PyscfRsError};
-use pyscf_pbc_tools::mat3::det3;
+use pyscf_pbc_tools::mat3::{cross3, det3, norm3};
 use std::f64::consts::PI;
 
 /// Upstream's `1e200` masking sentinel (`cell.py:733`, `cell.py:755`). Shared
@@ -197,11 +197,12 @@ pub fn ewald_self(chargs: &[f64], ew_eta: f64, dimension: u8, vol: f64) -> f64 {
 /// [`get_ewald_params`], exactly as upstream's
 /// `if ew_eta is None or ew_cut is None` does.
 ///
+/// The `dimension == 2` truncated-Coulomb G-space sum (Sundararaman & Arias,
+/// `cell.py:773-800`) is implemented — plan 12-08.
+///
 /// # Errors
 /// * [`PyscfRsError::NotYetImplemented`] `{ phase: 11 }` when
 ///   `use_particle_mesh_ewald` is set — PME needs the 3-D FFT of plan 11-01;
-/// * [`PyscfRsError::NotYetImplemented`] `{ phase: 12 }` for the
-///   `dimension == 2` truncated-Coulomb branch and for `inf_vacuum` grids;
 /// * [`CoreError::InvalidMolecule`] for the `dimension == 0` truncated-Coulomb
 ///   branch (upstream raises there too), or if a device launch fails;
 /// * propagates [`crate::lattice::get_lattice_ls`] and [`crate::gv::get_si`].
@@ -268,11 +269,7 @@ pub fn ewald(cell: &Cell, ew_eta: Option<f64>, ew_cut: Option<f64>) -> Result<f6
         ewald_g_space(cell, &chargs, mesh, ew_eta)?
     } else if cell.dimension == 2 {
         // cell.py:773-800 — truncated Coulomb, Sundararaman & Arias PRB 87 (2013).
-        return Err(PyscfRsError::NotYetImplemented {
-            phase: 12,
-            what: "ewald for dimension = 2 (truncated-Coulomb G-space sum, \
-                   cell.py:773-800) — PBC-MASTER-PLAN plan 12-08 (D-PBC-20)",
-        });
+        ewald_g_space_2d(cell, &chargs, &coords, mesh, ew_eta)?
     } else if cell.dimension == 0 {
         // cell.py:802-808 — upstream raises here too.
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
@@ -380,4 +377,100 @@ impl Cell {
     pub fn energy_nuc(&self) -> Result<f64, PyscfRsError> {
         ewald(self, None, None)
     }
+}
+
+// ---------------------------------------------------------------------------
+// The 2-D truncated-Coulomb G-space sum
+// ---------------------------------------------------------------------------
+
+/// `erfc(x)` on the HOST — see the note on `exxdiv_vcut::erf`. `std` has no
+/// `erfc`, and `cube-math` is a DEVICE libm that panics outside a `#[cube]`
+/// expansion; `rmath` is the crate it was ported from and is bit-identical to
+/// the platform `libm`.
+fn erfc(x: f64) -> f64 {
+    use rmath::prelude::{Erfc, Function};
+    Erfc::new().eval(x)
+}
+
+/// `erf(x)` on the HOST.
+fn erf(x: f64) -> f64 {
+    use rmath::prelude::{Erf, Function};
+    Erf::new().eval(x)
+}
+
+/// `fn(eta, Gnorm, z)` — `cell.py:776-786`.
+///
+/// The `Gnorm*z > 20` branch is not an approximation but an OVERFLOW guard:
+/// `exp(Gnorm*z)` alone overflows there while `erfc(x)` underflows, so upstream
+/// folds the two together as `exp(Gnorm*z - x²)·erfcx` and lets the product stay
+/// finite. Reproduced exactly, including the threshold.
+fn sa_fn(eta: f64, gnorm: f64, z: f64) -> f64 {
+    let gnorm_z = gnorm * z;
+    let x = gnorm / 2.0 / eta + eta * z;
+    let erfcx = erfc(x);
+    if gnorm_z > 20.0 {
+        (gnorm_z - x * x).exp() * erfcx
+    } else {
+        gnorm_z.exp() * erfcx
+    }
+}
+
+/// `gn(eta, Gnorm, z)` — `cell.py:787-788`.
+fn sa_gn(eta: f64, gnorm: f64, z: f64) -> f64 {
+    PI / gnorm * (sa_fn(eta, gnorm, z) + sa_fn(eta, gnorm, -z))
+}
+
+/// `gn0(eta, z)` — `cell.py:789-790`, the `G == 0` term.
+fn sa_gn0(eta: f64, z: f64) -> f64 {
+    -2.0 * PI * (z * erf(eta * z) + (-(eta * z).powi(2)).exp() / eta / PI.sqrt())
+}
+
+/// The `dimension == 2` G-space Ewald sum — `cell.py:773-800`.
+///
+/// Only the G-vectors lying IN the periodic plane contribute (`Gv[:,2] == 0`),
+/// and the out-of-plane separation `z = r_ij[2]` enters through the
+/// Sundararaman-Arias kernel rather than through a Gaussian.
+fn ewald_g_space_2d(
+    cell: &Cell,
+    chargs: &[f64],
+    coords: &[[f64; 3]],
+    mesh: [usize; 3],
+    ew_eta: f64,
+) -> Result<f64, PyscfRsError> {
+    let b = cell.reciprocal_vectors_2pi()?;
+    // cell.py:791-792
+    let inv_area = norm3(&cross3(&b[0], &b[1])) / (2.0 * PI).powi(2);
+
+    let gw = crate::gv::get_gv_weights(cell, Some(mesh))?;
+    // cell.py:796-797 — the IN-PLANE, non-zero G-vectors.
+    let planar: Vec<[f64; 3]> = gw
+        .gv
+        .iter()
+        .copied()
+        .filter(|g| g[2] == 0.0 && (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]) > 0.0)
+        .collect();
+
+    let n = coords.len();
+    let mut terms: Vec<f64> = Vec::with_capacity(n * n * (planar.len() + 1));
+    for i in 0..n {
+        for j in 0..n {
+            let rij = [
+                coords[i][0] - coords[j][0],
+                coords[i][1] - coords[j][1],
+                coords[i][2] - coords[j][2],
+            ];
+            let zij = rij[2];
+            let qq = chargs[i] * chargs[j];
+            // cell.py:799-801 — the G != 0 sum.
+            for g in &planar {
+                let gdotr = rij[0] * g[0] + rij[1] * g[1] + rij[2] * g[2];
+                let absg = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
+                terms.push(qq * gdotr.cos() * sa_gn(ew_eta, absg, zij));
+            }
+            // cell.py:803 — the G == 0 term.
+            terms.push(qq * sa_gn0(ew_eta, zij));
+        }
+    }
+    // cell.py:804 — `ewg *= inv_area * 0.5`.
+    Ok(oracle_sum(&terms) * inv_area * 0.5)
 }

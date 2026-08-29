@@ -1,0 +1,43 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+
+=== He-fcc/sto-3g kmesh=[2, 2, 2]  (CC route, _prefer_ccdf = True) ===
+  MDF default mesh       = [9, 9, 9]
+  FFTDF(mesh=[31, 31, 31]) E = -2.80848510969415
+  GDF (CC)               E = -2.80842508664874  |dE vs FFTDF| = 6.002e-05
+  MDF(CC) mesh  7        E = -2.80848680458116  |dE vs FFTDF| = 1.695e-06  conv=True  2.8s
+  MDF(CC) mesh  9        E = -2.80848516445121  |dE vs FFTDF| = 5.476e-08  conv=True  14.1s
+  MDF(CC) mesh 11        E = -2.80848511637819  |dE vs FFTDF| = 6.684e-09  conv=True  16.8s
+  MDF(CC) mesh 15        E = -2.80848514185836  |dE vs FFTDF| = 3.216e-08  conv=True  19.8s
+  MDF(CC) mesh 21        E = -2.80848514287130  |dE vs FFTDF| = 3.318e-08  conv=True  18.0s
+
+=== He-fcc/sto-3g gamma kmesh=[1, 1, 1]  (CC route, _prefer_ccdf = True) ===
+  MDF default mesh       = [11, 11, 11]
+  FFTDF(mesh=[31, 31, 31]) E = -3.20863588165692
+  GDF (CC)               E = -3.20865063781250  |dE vs FFTDF| = 1.476e-05
+  MDF(CC) mesh  7        E = -3.20863767014435  |dE vs FFTDF| = 1.788e-06  conv=True  0.7s
+  MDF(CC) mesh 11        E = -3.20863596953689  |dE vs FFTDF| = 8.788e-08  conv=True  0.8s
+  MDF(CC) mesh 15        E = -3.20863590609626  |dE vs FFTDF| = 2.444e-08  conv=True  0.9s
+  MDF(CC) mesh 21        E = -3.20863590383605  |dE vs FFTDF| = 2.218e-08  conv=True  1.1s
+
+=== diamond/gth-szv kmesh=[2, 2, 2]  (CC route, _prefer_ccdf = True) ===
+  MDF default mesh       = [11, 11, 11]
+  FFTDF(mesh=[31, 31, 31]) E = -10.93087316795859
+  GDF (CC)               E = -10.93209469510973  |dE vs FFTDF| = 1.222e-03
+  MDF(CC) mesh  7        E = -10.93087429055202  |dE vs FFTDF| = 1.123e-06  conv=True  55.1s
+  MDF(CC) mesh 11        E = -10.93087317715326  |dE vs FFTDF| = 9.195e-09  conv=True  63.6s
+  MDF(CC) mesh 15        E = -10.93087316856031  |dE vs FFTDF| = 6.017e-10  conv=True  216.1s
+  MDF(CC) mesh 21        E = -10.93087316755095  |dE vs FFTDF| = 4.076e-10  conv=True  419.1s
+  MDF(CC) mesh 27        E = -10.93087316751883  |dE vs FFTDF| = 4.398e-10  conv=True  521.9s
+
+=== diamond/gth-szv gamma kmesh=[1, 1, 1]  (CC route, _prefer_ccdf = True) ===
+  MDF default mesh       = [13, 13, 13]
+  FFTDF(mesh=[31, 31, 31]) E = -10.13717266004632
+  GDF (CC)               E = -10.14369242019110  |dE vs FFTDF| = 6.520e-03
+  MDF(CC) mesh  7        E = -10.13718961140591  |dE vs FFTDF| = 1.695e-05  conv=True  16.9s
+  MDF(CC) mesh 11        E = -10.13717287106620  |dE vs FFTDF| = 2.110e-07  conv=True  19.6s
+  MDF(CC) mesh 13        E = -10.13717269633533  |dE vs FFTDF| = 3.629e-08  conv=True  24.4s
+  MDF(CC) mesh 15        E = -10.13717266708865  |dE vs FFTDF| = 7.042e-09  conv=True  31.6s
+  MDF(CC) mesh 21        E = -10.13717265741312  |dE vs FFTDF| = 2.633e-09  conv=True  48.3s

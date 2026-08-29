@@ -1,0 +1,158 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+
+=== He-fcc/sto-3g  kmesh=[2, 2, 2] ===
+  OMEGA_MIN                                    0.08
+  RCUT_THRESHOLD                               1
+  cell.precision                               1e-08
+  cell.rcut                                    12.2998444640779
+  cell.vol                                     45.5512488263574
+  cell.nao                                     1
+  _guess_omega -> omega                        0.739358637866536
+  _guess_omega -> mesh                         [11, 11, 11]
+  _guess_omega -> ke_cutoff                    30.7085675919949
+  estimate_omega_min                           0.324467042356544
+  estimate_ke_cutoff_for_omega(OMEGA_MIN)      0.335874219073685
+  estimate_ke_cutoff_for_omega(omega)          24.2472773849789
+  estimate_omega_for_ke_cutoff(ke_cutoff)      0.739358637866536
+  estimate_omega_for_ke_cutoff(20.0)           0.596678472583996
+  _round_off_to_odd_mesh([8,9,10])             [9, 9, 11]
+  _estimate_meshz                              43
+  auxcell.nao                                  23
+  estimate_rs_2c2e_rcut(auxcell, omega)        9.26629761172378
+  estimate_rs_2c2e_rcut(auxcell, 0)            6.86540515999242
+  estimate_rcut (plain cell) max               11.1308145093595
+  estimate_rcut (plain cell) all               [11.130814509359459]
+  estimate_ft_rcut (plain cell) max            12.2746145040091
+  estimate_ft_rcut (plain cell) all            [12.274614504009085]
+  estimate_rcut (rs_cell) max                  11.1308145093595
+  estimate_rcut (rs_cell) all                  [ 8.663245191723037 11.130814509359459]
+  estimate_ft_rcut (rs_cell) max               12.2746145040091
+  estimate_ft_rcut (rs_cell) all               [ 9.66126599671062  12.274614504009085]
+  _gaussian_int(auxcell)[:6]                   [1. 1. 1. 1. 0. 0.]
+  max|LR + SR - full| (k=0)                    0
+  max|LR + SR - full| (k=0, G != 0)            0
+  weighted_coulG_LR[:4] (k=0)                  [0.000000000000000e+00 1.387917293470906e-02 2.210996447283078e-05
+ 2.152185039558385e-09]
+  weighted_coulG_SR[:4] (k=0)                  [0.                0.060984093235164 0.018693706577995 0.008318138533356]
+  max|LR + SR - full| (k = kpts[1])            0
+
+=== He-fcc/sto-3g gamma  kmesh=[1, 1, 1] ===
+  OMEGA_MIN                                    0.08
+  RCUT_THRESHOLD                               1
+  cell.precision                               1e-08
+  cell.rcut                                    12.2998444640779
+  cell.vol                                     45.5512488263574
+  cell.nao                                     1
+  _guess_omega -> omega                        1.03510209301315
+  _guess_omega -> mesh                         [15, 15, 15]
+  _guess_omega -> ke_cutoff                    60.18879248031
+  estimate_omega_min                           0.324467042356544
+  estimate_ke_cutoff_for_omega(OMEGA_MIN)      0.335874219073685
+  estimate_ke_cutoff_for_omega(omega)          43.6197478706531
+  estimate_omega_for_ke_cutoff(ke_cutoff)      1.03510209301315
+  estimate_omega_for_ke_cutoff(20.0)           0.596678472583996
+  _round_off_to_odd_mesh([8,9,10])             [9, 9, 11]
+  _estimate_meshz                              43
+  auxcell.nao                                  23
+  estimate_rs_2c2e_rcut(auxcell, omega)        8.1673731657485
+  estimate_rs_2c2e_rcut(auxcell, 0)            6.86540515999242
+  estimate_rcut (plain cell) max               10.2330761903815
+  estimate_rcut (plain cell) all               [10.233076190381492]
+  estimate_ft_rcut (plain cell) max            12.2746145040091
+  estimate_ft_rcut (plain cell) all            [12.274614504009085]
+  estimate_rcut (rs_cell) max                  10.2330761903815
+  estimate_rcut (rs_cell) all                  [ 7.529409169869383 10.233076190381492]
+  estimate_ft_rcut (rs_cell) max               12.2746145040091
+  estimate_ft_rcut (rs_cell) all               [ 9.66126599671062  12.274614504009085]
+  _gaussian_int(auxcell)[:6]                   [1. 1. 1. 1. 0. 0.]
+  max|LR + SR - full| (k=0)                    0
+  max|LR + SR - full| (k=0, G != 0)            0
+  weighted_coulG_LR[:4] (k=0)                  [0.000000000000000e+00 3.168456570590168e-02 6.005162046568528e-04
+ 3.624408603183221e-06]
+  weighted_coulG_SR[:4] (k=0)                  [0.                0.043178700463971 0.018115300337811 0.008314516276938]
+
+=== diamond/gth-szv  kmesh=[2, 2, 2] ===
+  OMEGA_MIN                                    0.08
+  RCUT_THRESHOLD                               1
+  cell.precision                               1e-08
+  cell.rcut                                    21.3194005217776
+  cell.vol                                     76.5673133185936
+  cell.nao                                     8
+  _guess_omega -> omega                        0.601955030338906
+  _guess_omega -> mesh                         [11, 11, 11]
+  _guess_omega -> ke_cutoff                    21.7218834404379
+  estimate_omega_min                           0.180615163949558
+  estimate_ke_cutoff_for_omega(OMEGA_MIN)      0.330921403072804
+  estimate_ke_cutoff_for_omega(omega)          16.8733499340885
+  estimate_omega_for_ke_cutoff(ke_cutoff)      0.601955030338906
+  estimate_omega_for_ke_cutoff(20.0)           0.578002439380595
+  _round_off_to_odd_mesh([8,9,10])             [9, 9, 11]
+  _estimate_meshz                              47
+  auxcell.nao                                  108
+  estimate_rs_2c2e_rcut(auxcell, omega)        16.41536798946
+  estimate_rs_2c2e_rcut(auxcell, 0)            14.1193475082418
+  estimate_rcut (plain cell) max               18.5681214814404
+  estimate_rcut (plain cell) all               [17.731949787234566 18.568121481440436 17.731949787234566
+ 18.568121481440436]
+  estimate_ft_rcut (plain cell) max            20.4810902245603
+  estimate_ft_rcut (plain cell) all            [20.148587596092714 20.48109022456027  20.148587596092714
+ 20.48109022456027 ]
+  estimate_rcut (rs_cell) max                  18.5681214814404
+  estimate_rcut (rs_cell) all                  [13.784887256466423 17.731949787234566 14.184643232582307
+ 18.568121481440436 13.784887256466423 17.731949787234566
+ 14.184643232582307 18.568121481440436]
+  estimate_ft_rcut (rs_cell) max               20.4810902245603
+  estimate_ft_rcut (rs_cell) all               [16.151362026255235 20.148587596092714 16.461146832908195
+ 20.48109022456027  16.151362026255235 20.148587596092714
+ 16.461146832908195 20.48109022456027 ]
+  _gaussian_int(auxcell)[:6]                   [1. 1. 1. 1. 1. 1.]
+  max|LR + SR - full| (k=0)                    0
+  max|LR + SR - full| (k=0, G != 0)            0
+  weighted_coulG_LR[:4] (k=0)                  [0.000000000000000e+00 1.042424770668651e-02 1.182648560964575e-05
+ 6.538199235489595e-10]
+  weighted_coulG_SR[:4] (k=0)                  [0.                0.052539088353152 0.01572900752935  0.006995925575051]
+  max|LR + SR - full| (k = kpts[1])            0
+
+=== diamond/gth-szv gamma  kmesh=[1, 1, 1] ===
+  OMEGA_MIN                                    0.08
+  RCUT_THRESHOLD                               1
+  cell.precision                               1e-08
+  cell.rcut                                    21.3194005217776
+  cell.vol                                     76.5673133185936
+  cell.nao                                     8
+  _guess_omega -> omega                        0.720159089892724
+  _guess_omega -> mesh                         [13, 13, 13]
+  _guess_omega -> ke_cutoff                    31.2795121542305
+  estimate_omega_min                           0.180615163949558
+  estimate_ke_cutoff_for_omega(OMEGA_MIN)      0.330921403072804
+  estimate_ke_cutoff_for_omega(omega)          23.8261432917551
+  estimate_omega_for_ke_cutoff(ke_cutoff)      0.720159089892724
+  estimate_omega_for_ke_cutoff(20.0)           0.578002439380595
+  _round_off_to_odd_mesh([8,9,10])             [9, 9, 11]
+  _estimate_meshz                              47
+  auxcell.nao                                  108
+  estimate_rs_2c2e_rcut(auxcell, omega)        15.7549216891005
+  estimate_rs_2c2e_rcut(auxcell, 0)            14.1193475082418
+  estimate_rcut (plain cell) max               18.0322593334713
+  estimate_rcut (plain cell) all               [17.206331436629934 18.032259333471313 17.206331436629934
+ 18.032259333471313]
+  estimate_ft_rcut (plain cell) max            20.4810902245603
+  estimate_ft_rcut (plain cell) all            [20.148587596092714 20.48109022456027  20.148587596092714
+ 20.48109022456027 ]
+  estimate_rcut (rs_cell) max                  18.0322593334713
+  estimate_rcut (rs_cell) all                  [13.117771242324702 17.206331436629934 13.51516503567531
+ 18.032259333471313 13.117771242324702 17.206331436629934
+ 13.51516503567531  18.032259333471313]
+  estimate_ft_rcut (rs_cell) max               20.4810902245603
+  estimate_ft_rcut (rs_cell) all               [16.151362026255235 20.148587596092714 16.461146832908195
+ 20.48109022456027  16.151362026255235 20.148587596092714
+ 16.461146832908195 20.48109022456027 ]
+  _gaussian_int(auxcell)[:6]                   [1. 1. 1. 1. 1. 1.]
+  max|LR + SR - full| (k=0)                    0
+  max|LR + SR - full| (k=0, G != 0)            0
+  weighted_coulG_LR[:4] (k=0)                  [0.000000000000000e+00 1.792245647565013e-02 1.033396423443383e-04
+ 8.582888180296705e-08]
+  weighted_coulG_SR[:4] (k=0)                  [0.                0.045040879584188 0.015637494372615 0.006995840399989]

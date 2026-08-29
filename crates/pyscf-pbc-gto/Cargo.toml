@@ -9,6 +9,15 @@ authors.workspace = true
 description = "Cell, Gv, SI, ewald, GTH pseudo, pbc_intor, eval_gto periodic, neighborlist"
 
 [dependencies]
+# Host-side libm. `rmath` is the crate `cube-math` was ported from — same
+# algorithms, bit-identical to the platform libm, and NO cubecl dependency, so
+# it sits on the method-crate side of the ALG-06 wall. Needed for `erf`, which
+# `std` does not provide. See the note in `exxdiv_vcut.rs`.
+rmath = { path = "../../../rmath" }
+# `radial::gauss_chebyshev` for the `inf_vacuum` non-uniform Gv base
+# (`cell.py:607-613` uses the same `dft.radi.gauss_chebyshev` the molecular
+# Becke grids do) — one radial rule, not a second copy.
+pyscf-grids = { path = "../pyscf-grids" }
 pyscf-core      = { path = "../pyscf-core" }
 pyscf-algebra   = { path = "../pyscf-algebra" }
 pyscf-gto       = { path = "../pyscf-gto" }

@@ -64,6 +64,7 @@ use xcfun_rs::Dependency;
 /// Functional family — selects the per-point input layout and the backend's
 /// variable encoding (xcfun `Vars`, libxc `Family`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum Family {
     /// Local density approximation: input is `rho` only.
     Lda,
@@ -72,6 +73,14 @@ pub enum Family {
     /// Meta-GGA: input is `(rho, sigma, lapl, tau)`.
     Mgga,
 }
+
+/// xcfun functional ids (0..77) whose family is GGA (gradient-dependent).
+/// The default backend is xcfun (04-05), so the parser emits xcfun ids; the
+/// rest of the mapped corpus (`{0,2,3,28}`) is LDA. MGGA is deferred (the v1
+/// corpus tops out at GGA hybrids). Source: the xcfun functional families
+/// cross-checked against `xcfun_id_to_name` + the 04-05 parity table
+/// (SLATERX/VWN are LDA; BECKEX/LYPC/PBEX/PBEC are GGA).
+pub(crate) const XCFUN_GGA_IDS: &[u32] = &[4, 5, 6, 16, 17, 19, 20, 26, 56, 77];
 
 impl Family {
     /// Number of per-point input scalars (unpolarized) for this family.
@@ -188,18 +197,252 @@ pub struct UksXcOutput {
 
 /// The cfg-gated XC backend seam (D-03). `Xcfun` is the default-compiled
 /// backend; `Libxc` is only present under `--features libxc`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XcBackend {
-    /// Native-Rust xcfun (`xcfun_rs`) — the DEFAULT backend, always compiled.
-    #[default]
+    /// Native-Rust xcfun (`xcfun_rs`) — always compiled; the default only in a
+    /// `--no-default-features` build.
     Xcfun,
-    /// Native-Rust libxc (`libxc_rs`) — ONLY compiled under `--features libxc`
-    /// (CI-only; the default build never references libxc_rs symbols).
+    /// Native-Rust libxc (`libxc_rs`) — the DEFAULT backend, compiled under the
+    /// default-on `libxc` feature.
     #[cfg(feature = "libxc")]
     Libxc,
 }
 
+impl Default for XcBackend {
+    /// **libxc**, matching upstream PySCF, whose own default is libxc with
+    /// xcfun as the ImportError fallback (`dft/numint.py:27-34`).
+    ///
+    /// # Why this is the right default
+    ///
+    /// The two libraries are independent implementations of the same functional
+    /// forms and are not bit-compatible with each other. Carried through an SCF
+    /// that is **4.7e-7 Ha** on `KRKS(Si, 2x2x2, PBE)` — five orders larger than
+    /// the Phase-12 gate. While this port defaulted to xcfun, every comparison
+    /// against a default-configured upstream measured that library gap rather
+    /// than this port's fidelity, and the periodic gates had to drive upstream
+    /// with `mf._numint.libxc = pyscf.dft.xcfun` to say anything meaningful.
+    ///
+    /// `libxc_rs` agrees with C libxc 7.0.0 to **<= 2.14e-16** — under one ulp,
+    /// with several quantities bit-identical — so both sides now evaluate the
+    /// same functional to the same bits.
+    ///
+    /// # History
+    ///
+    /// This default was xcfun until 2026-08-28, blocked by three defects in
+    /// `libxc_rs`, all since fixed: the facade did not depend on the crate
+    /// holding the kernels; `construct_params` was implemented for 1 of 649
+    /// functionals; and production dispatch went through a partial enum table
+    /// that could reach only 219 of 619 functionals. See
+    /// `docs/PLAN-defect-remediation-v{1..5}.md` in the libxc_rs tree.
+    ///
+    /// A `--no-default-features` build has no `Libxc` variant and falls back to
+    /// xcfun, which remains fully supported.
+    fn default() -> Self {
+        #[cfg(feature = "libxc")]
+        {
+            XcBackend::Libxc
+        }
+        #[cfg(not(feature = "libxc"))]
+        {
+            XcBackend::Xcfun
+        }
+    }
+}
+
 impl XcBackend {
+    /// The variable family a parsed [`XcSpec`] needs — LDA(ρ), GGA(ρ,σ) or
+    /// MGGA(ρ,σ,∇²ρ,τ).
+    ///
+    /// This is the SINGLE source of truth for the classification: both
+    /// `NumInt::xc_type_of` (molecular) and `pyscf_pbc_dft::xc::XcType::of`
+    /// (periodic) resolve through it, so the two cannot drift apart.
+    ///
+    /// **`spec` must come from the xcfun parser** (`parser::xcfun::parse_xc`),
+    /// which is what every caller uses regardless of the evaluation backend —
+    /// the classification is a property of the functional, not of the library
+    /// that evaluates it, and only the xcfun id namespace is tabled. Taking
+    /// `&self` keeps the door open for a backend that must ask a C library.
+    ///
+    /// # Errors
+    /// Never fails today; the `Result` is kept so a backend that must ask a
+    /// C library for the family can report the failure without a signature
+    /// change.
+    pub fn family(&self, spec: &XcSpec) -> Result<Family, DftError> {
+        match self {
+            // The xcfun ids are a small fixed corpus, tabled above.
+            XcBackend::Xcfun => {
+                let is_gga = spec
+                    .components()
+                    .iter()
+                    .any(|&(id, _)| XCFUN_GGA_IDS.contains(&id));
+                Ok(if is_gga { Family::Gga } else { Family::Lda })
+            }
+            // libxc knows its own functionals: ask the library rather than
+            // table thousands of ids. The compound family is the WIDEST
+            // component — an LDA correlation term next to a GGA exchange term
+            // still needs `sigma`.
+            #[cfg(feature = "libxc")]
+            XcBackend::Libxc => {
+                let mut fam = Family::Lda;
+                for &(id, _) in spec.components() {
+                    let fid = libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
+                        DftError::BackendEval(format!("libxc: functional id {id} out of range"))
+                    })?)
+                    .map_err(|e| {
+                        DftError::BackendEval(format!("libxc lookup id {id}: {e:?}"))
+                    })?;
+                    let f = match fid.family() {
+                        libxc_rs::Family::Lda => Family::Lda,
+                        libxc_rs::Family::Gga => Family::Gga,
+                        libxc_rs::Family::Mgga => Family::Mgga,
+                    };
+                    if (f as u8) > (fam as u8) {
+                        fam = f;
+                    }
+                }
+                Ok(fam)
+            }
+        }
+    }
+
+    /// `(omega, alpha, beta)` for `xc_code` — upstream's `rsh_coeff`.
+    ///
+    /// # Why this cannot read `spec.hyb()` alone
+    ///
+    /// The two parsers put the hybrid mixing in different places, and both
+    /// match their upstream counterpart exactly:
+    ///
+    /// * `parser::xcfun` expands `b3lyp` into its four primitives and reports
+    ///   `hyb = (0.2, 0, 0)` in the triple;
+    /// * `parser::libxc` resolves `b3lyp` to the single COMPOUND id `402` and
+    ///   reports `hyb = (0, 0, 0)` — exactly as upstream's
+    ///   `libxc.parse_xc('b3lyp')` does. The 0.2 lives INSIDE functional 402
+    ///   and is only reachable by asking the library
+    ///   (`xc_hyb_exx_coef` / `xc_hyb_cam_coef`, here
+    ///   `Functional::exx_coefficient` / `cam_coefficients`).
+    ///
+    /// So reading `spec.hyb()` under the libxc backend would report every
+    /// hybrid as a pure functional and silently drop the HF exchange — B3LYP
+    /// would run with no exact exchange at all. This method ports
+    /// `libxc._rsh_coeff` (`libxc.py:449-483`) instead.
+    ///
+    /// # Errors
+    /// Propagates the parser and the functional lookup.
+    pub fn rsh_coeff(&self, xc_code: &str) -> Result<(f64, f64, f64), DftError> {
+        let spec = self.parse(xc_code)?;
+        let (hyb, alpha, omega) = spec.hyb();
+        match self {
+            // xcfun reports the mixing in the triple; there is nothing to ask
+            // the library for.
+            XcBackend::Xcfun => {
+                let beta = if omega == 0.0 { 0.0 } else { hyb - alpha };
+                Ok((omega, alpha, beta))
+            }
+            #[cfg(feature = "libxc")]
+            XcBackend::Libxc => {
+                // libxc.py:459-467
+                let mut pars = [omega, alpha, if omega == 0.0 { 0.0 } else { hyb - alpha }];
+                // libxc.py:469-482 — accumulate each component's own CAM triple.
+                for &(id, fac) in spec.components() {
+                    let fid = libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
+                        DftError::BackendEval(format!("libxc: functional id {id} out of range"))
+                    })?)
+                    .map_err(|e| DftError::BackendEval(format!("libxc lookup id {id}: {e:?}")))?;
+                    let func = libxc_rs::Functional::new(fid, libxc_rs::Spin::Unpolarized)
+                        .map_err(|e| {
+                            DftError::BackendEval(format!("libxc Functional::new: {e:?}"))
+                        })?;
+                    let (w, a, b) = match func.cam_coefficients() {
+                        Some(c) => (c.omega, c.alpha, c.beta),
+                        None => (0.0, 0.0, 0.0),
+                    };
+                    if pars[0] == 0.0 {
+                        pars[0] = w;
+                    } else if w != 0.0 && pars[0] != w {
+                        return Err(DftError::BackendEval(format!(
+                            "libxc rsh_coeff: different values of omega found for the \
+                             range-separated components of '{xc_code}' ({} vs {w})",
+                            pars[0]
+                        )));
+                    }
+                    pars[1] += a * fac;
+                    pars[2] += b * fac;
+                }
+                Ok((pars[0], pars[1], pars[2]))
+            }
+        }
+    }
+
+    /// The plain hybrid-exchange fraction — upstream's `hybrid_coeff`
+    /// (`libxc.py:406-414`): `hyb[0] + Σ fac · xc_hyb_exx_coef(component)`.
+    ///
+    /// # Errors
+    /// Propagates the parser and the functional lookup.
+    pub fn hybrid_coeff(&self, xc_code: &str) -> Result<f64, DftError> {
+        let spec = self.parse(xc_code)?;
+        let (hyb, _, _) = spec.hyb();
+        match self {
+            XcBackend::Xcfun => Ok(hyb),
+            #[cfg(feature = "libxc")]
+            XcBackend::Libxc => {
+                let mut total = hyb;
+                for &(id, fac) in spec.components() {
+                    let fid = libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
+                        DftError::BackendEval(format!("libxc: functional id {id} out of range"))
+                    })?)
+                    .map_err(|e| DftError::BackendEval(format!("libxc lookup id {id}: {e:?}")))?;
+                    let func = libxc_rs::Functional::new(fid, libxc_rs::Spin::Unpolarized)
+                        .map_err(|e| {
+                            DftError::BackendEval(format!("libxc Functional::new: {e:?}"))
+                        })?;
+                    total += fac * func.exx_coefficient().unwrap_or(0.0);
+                }
+                Ok(total)
+            }
+        }
+    }
+
+    /// `(omega, alpha, hyb)` — upstream's `rsh_and_hybrid_coeff`
+    /// (`dft/numint.py`), the triple every J/K dispatch consumes.
+    ///
+    /// ```text
+    /// omega != 0 : hyb = alpha + beta      (a range-separated hybrid)
+    /// omega == 0 : hyb = hybrid_coeff(xc)  (a plain global hybrid)
+    /// ```
+    ///
+    /// # Errors
+    /// Propagates [`XcBackend::rsh_coeff`] and [`XcBackend::hybrid_coeff`].
+    pub fn rsh_and_hybrid_coeff(&self, xc_code: &str) -> Result<(f64, f64, f64), DftError> {
+        let (omega, alpha, beta) = self.rsh_coeff(xc_code)?;
+        let hyb = if omega.abs() > 1e-10 {
+            alpha + beta
+        } else {
+            self.hybrid_coeff(xc_code)?
+        };
+        Ok((omega, alpha, hyb))
+    }
+
+    /// Parse `xc_code` in THIS backend's functional-id namespace.
+    ///
+    /// The two parsers emit different id spaces — `parser::xcfun` emits xcfun
+    /// ids (`PBEX = 5`), `parser::libxc` emits libxc functional numbers
+    /// (`B88 = 106`) — so a spec is only meaningful to the backend that will
+    /// evaluate it. Every caller that later hands the spec to [`XcBackend::eval`],
+    /// [`XcBackend::eval_uks`] or [`XcBackend::family`] must obtain it here
+    /// rather than naming a parser module directly; otherwise the ids are
+    /// silently reinterpreted in the wrong namespace and the functional
+    /// evaluated is not the one requested.
+    ///
+    /// # Errors
+    /// Propagates the parser.
+    pub fn parse(&self, xc_code: &str) -> Result<XcSpec, DftError> {
+        match self {
+            XcBackend::Xcfun => crate::parser::xcfun::parse_xc(xc_code),
+            #[cfg(feature = "libxc")]
+            XcBackend::Libxc => crate::parser::libxc::parse_xc(xc_code),
+        }
+    }
+
     /// Evaluate the functional `spec` over `rho` at derivative `order`.
     ///
     /// Dispatch mirrors `AlgebraClient` (client.rs match-on-self):
@@ -262,9 +505,9 @@ impl XcBackend {
                 xcfun_eval_uks(spec, rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb, order)
             }
             #[cfg(feature = "libxc")]
-            XcBackend::Libxc => Err(DftError::BackendEval(
-                "libxc UKS eval not yet implemented".into(),
-            )),
+            XcBackend::Libxc => libxc_impl::libxc_eval_uks(
+                spec, rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb, order,
+            ),
         }
     }
 
@@ -525,10 +768,23 @@ fn xcfun_eval(spec: &XcSpec, rho: &RhoBlock<'_>, order: DerivOrder) -> Result<Xc
         out.exc[ip] = out_buf[base];
         if order >= DerivOrder::Vxc && outlen > 1 {
             out.vrho[ip] = out_buf[base + 1]; // ∂f/∂rho_a
-            if detected != Family::Lda && outlen > 3 {
+            if detected != Family::Lda && outlen > 5 {
                 // For A_B_GAA_GAB_GBB the order-1 block is
-                // [f, da, db, dgaa, dgab, dgbb]; index 3 = ∂f/∂gaa.
-                out.vsigma[ip] = out_buf[base + 3];
+                // [f, da, db, dgaa, dgab, dgbb] — indices 3, 4, 5.
+                //
+                // `vsigma` is documented, and consumed, as ∂f/∂σ in the
+                // UNPOLARIZED variable σ = |∇ρ|². The closed-shell input above
+                // substitutes γaa = γab = γbb = σ/4, so the chain rule is
+                //
+                //     ∂f/∂σ = (∂f/∂γaa + ∂f/∂γab + ∂f/∂γbb) · (1/4)
+                //
+                // and ∂f/∂γab is NOT zero for any GGA correlation functional —
+                // for PBE at ρ = 0.3, σ = 0.2 it is the difference between
+                // -5.34e-03 (correct) and -2.50e-02 (∂f/∂γaa alone), a factor
+                // of 4.7. `tests/vxc_is_exc_derivative.rs` pins this against a
+                // finite difference of the returned `exc`.
+                out.vsigma[ip] =
+                    (out_buf[base + 3] + out_buf[base + 4] + out_buf[base + 5]) * 0.25;
             }
         }
     }
@@ -694,7 +950,7 @@ fn xcfun_eval_uks(
 /// "libxc")]` so a default build never references `libxc_rs`.
 #[cfg(feature = "libxc")]
 mod libxc_impl {
-    use super::{DerivOrder, DftError, Family, RhoBlock, XcOutput, XcSpec};
+    use super::{DerivOrder, DftError, Family, RhoBlock, UksXcOutput, XcOutput, XcSpec};
     use libxc_rs::{
         BatchEvaluator, DerivativeOrder, Functional, FunctionalId, GgaInput, GgaOutput, LdaInput,
         LdaOutput, MggaInput, MggaOutput, Spin,
@@ -846,6 +1102,182 @@ mod libxc_impl {
             }
         }
         Ok(out)
+    }
+
+
+    /// The spin-polarized (UKS) libxc path — the counterpart of
+    /// [`super::xcfun_eval_uks`].
+    ///
+    /// # The interleaved SoA layout is the whole of the work here
+    ///
+    /// libxc's polarized buffers are interleaved by POINT, not by spin
+    /// (`libxc-core/src/input/mod.rs`): the kernel indexes
+    /// `ip * dims.<field> + component`, so
+    ///
+    /// ```text
+    /// rho    (dim 2) = [rho_a_0, rho_b_0, rho_a_1, rho_b_1, ...]
+    /// sigma  (dim 3) = [saa_0, sab_0, sbb_0, saa_1, ...]
+    /// vrho   (dim 2) = [vrho_a_0, vrho_b_0, ...]
+    /// vsigma (dim 3) = [vsaa_0, vsab_0, vsbb_0, ...]
+    /// zk     (dim 1) = [f_0, f_1, ...]
+    /// ```
+    ///
+    /// while this crate's [`UksXcOutput`] is spin-major (one `Vec` per channel).
+    /// The pack/unpack below is that transposition and nothing else.
+    ///
+    /// `zk` is the energy per PARTICLE; `exc` is the energy DENSITY, so it is
+    /// scaled by the TOTAL density `rho_a + rho_b` — the same convention
+    /// `libxc_eval` uses for the closed-shell case, where `rho` is already the
+    /// total.
+    ///
+    /// # Errors
+    /// [`DftError::BackendEval`] on a length mismatch, a missing `sigma_*` for a
+    /// GGA, an unmapped functional id, or a backend-side failure. MGGA is
+    /// refused: the callers cannot supply `lapl`/`tau`.
+    pub(super) fn libxc_eval_uks(
+        spec: &XcSpec,
+        rho_a: &[f64],
+        rho_b: &[f64],
+        sigma_aa: Option<&[f64]>,
+        sigma_ab: Option<&[f64]>,
+        sigma_bb: Option<&[f64]>,
+        order: DerivOrder,
+    ) -> Result<UksXcOutput, DftError> {
+        let np = rho_a.len();
+        if rho_b.len() != np {
+            return Err(DftError::BackendEval(format!(
+                "libxc_eval_uks: rho_a len {np} != rho_b len {}",
+                rho_b.len()
+            )));
+        }
+        let spin = Spin::Polarized;
+        let dord = deriv_order(order);
+        let want = order >= DerivOrder::Vxc;
+
+        let mut out = UksXcOutput {
+            exc: vec![0.0; np],
+            vrho_a: vec![0.0; np],
+            vrho_b: vec![0.0; np],
+            vsigma_aa: vec![0.0; np],
+            vsigma_ab: vec![0.0; np],
+            vsigma_bb: vec![0.0; np],
+        };
+        if np == 0 {
+            return Ok(out);
+        }
+
+        // rho, interleaved.
+        let mut rho_i = vec![0.0_f64; np * 2];
+        for ip in 0..np {
+            rho_i[ip * 2] = rho_a[ip];
+            rho_i[ip * 2 + 1] = rho_b[ip];
+        }
+
+        let mut batch = BatchEvaluator::new(spin, np);
+
+        for &(id, fac) in spec.components() {
+            let fid = FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
+                DftError::BackendEval(format!("libxc: functional id {id} out of range"))
+            })?)
+            .map_err(|e| DftError::BackendEval(format!("libxc lookup id {id}: {e:?}")))?;
+            let func = Functional::new(fid, spin)
+                .map_err(|e| DftError::BackendEval(format!("libxc Functional::new: {e:?}")))?;
+
+            match fid.family() {
+                libxc_rs::Family::Lda => {
+                    let input = LdaInput::new(&rho_i, np, spin)
+                        .map_err(|e| DftError::BackendEval(format!("libxc LdaInput: {e:?}")))?;
+                    let mut zk = vec![0.0; np];
+                    let mut vrho = vec![0.0; np * 2];
+                    let mut o = LdaOutput::new(
+                        Some(&mut zk),
+                        if want { Some(&mut vrho) } else { None },
+                        None,
+                        None,
+                        None,
+                        np,
+                        spin,
+                    )
+                    .map_err(|e| DftError::BackendEval(format!("libxc LdaOutput: {e:?}")))?;
+                    batch
+                        .evaluate(&func, &input, dord, &mut o)
+                        .map_err(|e| DftError::BackendEval(format!("libxc eval LDA/UKS: {e:?}")))?;
+                    for ip in 0..np {
+                        out.exc[ip] += fac * zk[ip] * (rho_a[ip] + rho_b[ip]);
+                        out.vrho_a[ip] += fac * vrho[ip * 2];
+                        out.vrho_b[ip] += fac * vrho[ip * 2 + 1];
+                    }
+                }
+                libxc_rs::Family::Gga => {
+                    let saa = require_sigma(sigma_aa, "sigma_aa", np)?;
+                    let sab = require_sigma(sigma_ab, "sigma_ab", np)?;
+                    let sbb = require_sigma(sigma_bb, "sigma_bb", np)?;
+                    let mut sig_i = vec![0.0_f64; np * 3];
+                    for ip in 0..np {
+                        sig_i[ip * 3] = saa[ip];
+                        sig_i[ip * 3 + 1] = sab[ip];
+                        sig_i[ip * 3 + 2] = sbb[ip];
+                    }
+                    let input = GgaInput::new(&rho_i, &sig_i, np, spin)
+                        .map_err(|e| DftError::BackendEval(format!("libxc GgaInput: {e:?}")))?;
+                    let mut zk = vec![0.0; np];
+                    let mut vrho = vec![0.0; np * 2];
+                    let mut vsigma = vec![0.0; np * 3];
+                    let mut o = GgaOutput::new(
+                        Some(&mut zk),
+                        if want { Some(&mut vrho) } else { None },
+                        if want { Some(&mut vsigma) } else { None },
+                        None, None, None, None, None, None, None,
+                        None, None, None, None, None,
+                        np,
+                        spin,
+                    )
+                    .map_err(|e| DftError::BackendEval(format!("libxc GgaOutput: {e:?}")))?;
+                    batch
+                        .evaluate(&func, &input, dord, &mut o)
+                        .map_err(|e| DftError::BackendEval(format!("libxc eval GGA/UKS: {e:?}")))?;
+                    for ip in 0..np {
+                        out.exc[ip] += fac * zk[ip] * (rho_a[ip] + rho_b[ip]);
+                        out.vrho_a[ip] += fac * vrho[ip * 2];
+                        out.vrho_b[ip] += fac * vrho[ip * 2 + 1];
+                        out.vsigma_aa[ip] += fac * vsigma[ip * 3];
+                        out.vsigma_ab[ip] += fac * vsigma[ip * 3 + 1];
+                        out.vsigma_bb[ip] += fac * vsigma[ip * 3 + 2];
+                    }
+                }
+                libxc_rs::Family::Mgga => {
+                    return Err(DftError::BackendEval(
+                        "libxc_eval_uks: MGGA open-shell eval is not available — the callers \
+                         (molecular and periodic NumInt) supply value + deriv1 only, so `lapl` \
+                         and `tau` cannot be formed"
+                            .into(),
+                    ));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+
+    /// One `sigma_*` channel, present and the right length.
+    ///
+    /// A free fn rather than a closure: the returned slice borrows from `o`, not
+    /// from `name`, and only an explicit signature says so.
+    fn require_sigma<'a>(
+        o: Option<&'a [f64]>,
+        name: &'static str,
+        np: usize,
+    ) -> Result<&'a [f64], DftError> {
+        let v = o.ok_or_else(|| {
+            DftError::BackendEval(format!("libxc_eval_uks: GGA requires {name}"))
+        })?;
+        if v.len() != np {
+            return Err(DftError::BackendEval(format!(
+                "libxc_eval_uks: {name} len {} != rho len {np}",
+                v.len()
+            )));
+        }
+        Ok(v)
     }
 
     fn family_mismatch(want: Family, got: Family) -> DftError {

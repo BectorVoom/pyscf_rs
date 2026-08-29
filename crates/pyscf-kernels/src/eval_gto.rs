@@ -114,8 +114,13 @@ use pyscf_core::raw_layout::{
 
 /// libcint `CINTcommon_fac_sp` (g1e.c:566). l=0,1 carry the angular
 /// prefactor in the radial part; l≥2 fold it into the c2s matrix.
+///
+/// `pub` since plan 13-01: `ft_aopair` builds the SAME cartesian AO convention
+/// and must multiply by `common_fac_sp(li)·common_fac_sp(lj)` before the c2s
+/// transform, or its `G=0` limit will not equal `int1e_ovlp`. One definition,
+/// one place to be wrong.
 #[inline]
-fn common_fac_sp(l: u32) -> f64 {
+pub fn common_fac_sp(l: u32) -> f64 {
     match l {
         0 => 0.282_094_791_773_878_14,
         1 => 0.488_602_511_902_919_9,
@@ -139,7 +144,7 @@ fn nsph(l: u32) -> usize {
 /// upstream `GTOshell_eval_grid_cart` loop order
 /// (`for lx=l..0 { for ly=l-lx..0 { lz=l-lx-ly }}`). This ordering is
 /// what `ao_loc_nr` + the c2s columns assume — Pitfall 8/17 lives here.
-fn cart_powers(l: u32) -> Vec<(u32, u32, u32)> {
+pub fn cart_powers(l: u32) -> Vec<(u32, u32, u32)> {
     let mut v = Vec::with_capacity(ncart(l));
     let li = l as i32;
     let mut lx = li;
