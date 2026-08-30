@@ -7,15 +7,18 @@
 //!   - **Always-on structural layer** (runs on the default xcfun backend, no
 //!     libpython): `rsh_coeff` for an RSH functional returns `omega ≠ 0` with
 //!     `alpha ≠ hyb`; `default_get_veff` with `omega ≠ 0` DISPATCHES into the
-//!     RSH branch (`get_k_with_omega`, the standard int2e + env[8]), which
-//!     surfaces the Phase-2 arity-4 ERI gap — proving the branch is reached
-//!     (NOT the dead omega==0 path).
+//!     RSH branch (`get_k_with_omega`, the standard int2e + a ranged ω),
+//!     proving the branch is reached (NOT the dead omega==0 path) AND that the
+//!     K it builds is genuinely long-range rather than a full-range K wearing
+//!     the name.
 //!   - **CI-only bit-exact layer**: CAM-B3LYP/H2O total energy ≤ 1 µHartree
 //!     vs upstream. CAM-B3LYP is libxc-only on this corpus (the xcfun
 //!     XC_CODES table has no CAM-B3LYP entry; the libxc parser maps it to id
-//!     433), so this arm is `#[cfg(feature = "libxc")]`-gated AND further
-//!     blocked by the cintx env[8]+arity-4 gap (cintx#11) — it lives in the
-//!     dedicated `--features libxc` CI job (04-09), never the local build.
+//!     433), so this arm stays `--features libxc`-gated and lives in the
+//!     dedicated CI job (04-09), never the local build. The **cintx half of
+//!     its blocker is gone**: D-PBC-24 gave the safe API `range_omega`, and
+//!     `pyscf-gto/tests/range_coulomb_env.rs` gates
+//!     `SR(ω) + LR(ω) == full` on the `int2e` tensor this branch contracts.
 //!
 //! Upstream reference: `pyscf/dft/rks.py` RSH path (108-129) +
 //! `mol.with_range_coulomb(omega)`.
@@ -142,6 +145,26 @@ fn rsh_get_veff_dispatches_into_range_coulomb_branch() {
         "K_lr must be non-zero — the RSH branch builds a real long-range exchange matrix"
     );
 
+    // Non-zero is not enough, and for a phase it was all this test could ask:
+    // `get_k_with_omega` set `mol._env[8]` and called an `intor` that never saw
+    // that `_env`, so it returned a FULL-RANGE K under a long-range name — it
+    // ran, it converged, and it was silently a different functional. Since
+    // D-PBC-24 the ω reaches cintx through `ExecutionOptions::range_omega`, so
+    // K_lr must now DIFFER from the full-range K by an amount of its own size.
+    let k_full =
+        pyscf_gto::get_k_with_omega(&mut mol.clone(), &dm, 0.0).expect("full-range K (omega = 0)");
+    let scale = k_full.data.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    let moved = k_lr
+        .data
+        .iter()
+        .zip(&k_full.data)
+        .fold(0.0_f64, |m, (a, b)| m.max((a - b).abs()));
+    assert!(
+        moved > 1e-3 * scale,
+        "K_lr(omega={omega}) is (almost) the full-range K (max |delta| = {moved:e} against \
+         scale {scale:e}) — the long-range ERI is not reaching the kernel"
+    );
+
     // env[8] on the shared mol is untouched (the RSH branch clones the Mole for
     // the omega mutation, and get_k_with_omega RAII-restores it on its own clone).
     assert_eq!(
@@ -152,16 +175,20 @@ fn rsh_get_veff_dispatches_into_range_coulomb_branch() {
 }
 
 /// DFT-05 bit-exact arm (CI-only, libxc-gated): CAM-B3LYP / H2O total energy
-/// matches upstream within 1 µHartree. Gated behind `--features libxc` (the
-/// functional is libxc-only on this corpus) AND the cintx env[8]+arity-4 gap
-/// (cintx#11). Lives in the 04-09 dedicated libxc CI job, never local.
+/// matches upstream within 1 µHartree.
+///
+/// Only ONE gate is left: CAM-B3LYP is libxc-only on this corpus (the xcfun
+/// `XC_CODES` table has no entry; the libxc parser maps it to id 433), so this
+/// arm needs `--features libxc` and the 04-09 CI job. The cintx half —
+/// "env[8]+arity-4 (cintx#11)" — is closed: the ranged `int2e` is live and
+/// gated by `pyscf-gto/tests/range_coulomb_env.rs`.
 #[test]
-#[ignore = "DFT-05 CAM-B3LYP/H2O bit-exact: libxc-only functional + cintx env[8]/arity-4 gap (cintx#11), CI-gated"]
+#[ignore = "DFT-05 CAM-B3LYP/H2O bit-exact: libxc-only functional, --features libxc CI job (04-09)"]
 fn cam_b3lyp_h2o_rsh() {
-    // When the libxc backend + cintx gap land:
+    // When the libxc backend lands:
     //   let mol = h2o_mol_ccpvdz();
     //   let mut mf = RKS::new(mol); mf.xc = "cam-b3lyp".into();
     //   let e = mf.kernel()?;
     //   assert ≤ 1e-6 vs the upstream dft.RKS(mol,'cam-b3lyp').kernel() oracle.
-    unimplemented!("libxc backend + cintx#11 (env[8] reader + arity-4 int2e) gap-closure");
+    unimplemented!("libxc backend: CAM-B3LYP is not in the xcfun XC_CODES table");
 }

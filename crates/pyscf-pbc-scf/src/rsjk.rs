@@ -1,7 +1,7 @@
 //! `rsjk` — range-separated J/K with NO density fitting
 //! (`pyscf/pbc/scf/rsjk.py`), plan 14-08 Task 4.
 //!
-//! # STATUS: BLOCKED, and the blocker is the same one that stopped 14-07
+//! # STATUS: NOT PORTED. The blocker that stopped 14-07 is gone.
 //!
 //! `rsjk` is a different animal from every other builder in Phase 14: it has no
 //! auxiliary basis and no `cderi`. It splits the Coulomb operator itself and
@@ -21,16 +21,19 @@
 //! **Its short-range half is a short-range `int2e`.** `rsjk.py:136-187` builds
 //! `supmol_sr` and sets `supmol_sr.omega = -self.omega` before evaluating
 //! `int2e` over it. That is libcint's `PTR_RANGE_OMEGA` (`env[8]`) toggle
-//! around the standard symbol — the exact capability cintx's safe API does not
-//! expose. `ExecutionOptions` (`cintx-runtime/src/options.rs:96`) carries
-//! `f12_zeta` (`env[9]`), `rinv_orig` and `common_orig`, and nothing reads
-//! `env[8]`. This repository already records the gap as Phase 4's Open
-//! Question A5 / cintx#11 in `crates/pyscf-gto/src/range_coulomb.rs`.
+//! around the standard symbol, and cintx's safe API **now exposes it**:
+//! `ExecutionOptions::range_omega` / `SessionBuilder::with_range_omega`
+//! (D-PBC-24), on the same sign convention [`JkOpts::omega`] already uses.
+//! Phase 4's Open Question A5 / cintx#11 in
+//! `crates/pyscf-gto/src/range_coulomb.rs` is answered.
 //!
-//! So `rsjk` cannot be built without substituting the full-range kernel for the
-//! short-range one, which would produce a J/K builder that runs, converges, and
-//! is silently not `rsjk`. [`RangeSeparatedJkBuilder::build`] therefore refuses
-//! (D-PBC-20).
+//! What is missing is the builder: the supermole construction, the real-space
+//! short-range `int2e` sweep with its screening, the `ft_aopair` long-range
+//! half on the coarse grid, and the `vj`/`vk` assembly. None of it is written.
+//! [`RangeSeparatedJkBuilder::build`] therefore still refuses (D-PBC-20), and
+//! **must not** be finished by substituting the full-range kernel: because
+//! `rsjk` is EXACT, a wrong answer would land within the DF fitting error of a
+//! correct GDF and look entirely plausible.
 //!
 //! # What ships anyway
 //!
@@ -55,9 +58,9 @@ use pyscf_pbc_df::traits::{JkOpts, JkResult};
 use pyscf_pbc_gto::Cell;
 
 /// The one-line reason `rsjk` is refused. Deliberately the same text
-/// [`pyscf_pbc_df::rsdf_builder::CINTX_SR_GAP`] carries, because it is the same
-/// missing capability — a reader who hits one should recognise the other.
-pub const CINTX_SR_GAP: &str = pyscf_pbc_df::rsdf_builder::CINTX_SR_GAP;
+/// [`pyscf_pbc_df::rsdf_builder::RS_BUILDER_GAP`] carries, because it is the
+/// same unfinished work — a reader who hits one should recognise the other.
+pub const RS_BUILDER_GAP: &str = pyscf_pbc_df::rsdf_builder::RS_BUILDER_GAP;
 
 /// `RangeSeparatedJKBuilder` — `rsjk.py:47-…`.
 #[derive(Debug, Clone)]
@@ -120,7 +123,7 @@ impl RangeSeparatedJkBuilder {
         Err(PbcDfError::Core(
             pyscf_core::PyscfRsError::NotYetImplemented {
                 phase: 14,
-                what: CINTX_SR_GAP,
+                what: RS_BUILDER_GAP,
             },
         ))
     }
@@ -139,7 +142,7 @@ impl RangeSeparatedJkBuilder {
         Err(PbcDfError::Core(
             pyscf_core::PyscfRsError::NotYetImplemented {
                 phase: 14,
-                what: CINTX_SR_GAP,
+                what: RS_BUILDER_GAP,
             },
         ))
     }

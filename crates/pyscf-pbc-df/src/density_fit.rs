@@ -102,7 +102,7 @@ pub fn density_fit(
             return Err(PbcDfError::Core(
                 pyscf_core::PyscfRsError::NotYetImplemented {
                     phase: 14,
-                    what: crate::rsdf_builder::CINTX_SR_GAP,
+                    what: crate::rsdf_builder::RS_BUILDER_GAP,
                 },
             ));
         }

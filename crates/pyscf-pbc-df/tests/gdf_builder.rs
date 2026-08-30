@@ -207,8 +207,18 @@ fn fuse_rows_subtracts_the_model_charge() {
 #[test]
 fn auxbar_matches_upstream() {
     for (label, cell, nnz, norm) in [
-        ("diamond", common::diamond(), 12usize, 0.230_127_879_651_775_06),
-        ("he", common::he_all_electron(), 4usize, 0.318_783_752_092_640_7),
+        (
+            "diamond",
+            common::diamond(),
+            12usize,
+            0.230_127_879_651_775_06,
+        ),
+        (
+            "he",
+            common::he_all_electron(),
+            4usize,
+            0.318_783_752_092_640_7,
+        ),
     ] {
         let aux = make_modrho_basis(&cell, None, None).expect("auxcell");
         let g = guess_eta(&aux.cell, &kpts(&cell, [2, 2, 2]), None).expect("guess_eta");
@@ -261,18 +271,17 @@ fn j2c_fingerprint_matches_upstream() {
     ] {
         let f = built(&cell, km);
         let naux = f.naux();
-        let j2c = get_2c2e(&cell, &f, &[[0.0; 3]]).expect("get_2c2e");
+        let j2c = get_2c2e(&cell, &f, &[[0.0; 3]], None).expect("get_2c2e");
         assert_eq!(j2c.len(), 1);
         let m = &j2c[0];
         assert_eq!(m.re.len(), naux * naux);
 
-        let got = m
-            .re
-            .iter()
-            .zip(m.im.iter())
-            .map(|(r, i)| r * r + i * i)
-            .sum::<f64>()
-            .sqrt();
+        let got =
+            m.re.iter()
+                .zip(m.im.iter())
+                .map(|(r, i)| r * r + i * i)
+                .sum::<f64>()
+                .sqrt();
         assert!(
             (got - norm).abs() < 1e-8 * norm,
             "{label}: |j2c| = {got}, upstream {norm}"
@@ -308,7 +317,7 @@ fn near_singular_metric_still_takes_the_cholesky_route() {
     let cell = common::diamond();
     let f = built(&cell, [2, 2, 2]);
     let naux = f.naux();
-    let j2c = get_2c2e(&cell, &f, &[[0.0; 3]]).expect("get_2c2e");
+    let j2c = get_2c2e(&cell, &f, &[[0.0; 3]], None).expect("get_2c2e");
     let cd = decompose_j2c(&j2c[0], naux, false).expect("decompose");
     assert_eq!(cd.tag, J2cTag::Cd);
     // Forcing the eigen route must still give a usable factor.
@@ -346,7 +355,7 @@ fn the_eigen_factor_inverts_the_metric_on_its_retained_subspace() {
     ] {
         let f = built(&cell, km);
         let naux = f.naux();
-        let j2c = get_2c2e(&cell, &f, &[[0.0; 3]]).expect("get_2c2e");
+        let j2c = get_2c2e(&cell, &f, &[[0.0; 3]], None).expect("get_2c2e");
         let eig = decompose_j2c(&j2c[0], naux, true).expect("decompose eig");
         let r = eig.rank;
         assert!(r > 0, "{label}: the eigen route dropped every vector");
@@ -402,7 +411,7 @@ fn j2c_obeys_the_conjugation_identity() {
     let f = built(&cell, [2, 2, 2]);
     let naux = f.naux();
     let k = [0.13_f64, -0.07, 0.21];
-    let j2c = get_2c2e(&cell, &f, &[k, [-k[0], -k[1], -k[2]]]).expect("get_2c2e");
+    let j2c = get_2c2e(&cell, &f, &[k, [-k[0], -k[1], -k[2]]], None).expect("get_2c2e");
     let mut worst = 0.0_f64;
     for p in 0..naux * naux {
         worst = worst.max((j2c[0].re[p] - j2c[1].re[p]).abs());
@@ -433,13 +442,15 @@ fn cderi_gate(label: &str, cell: pyscf_pbc_gto::Cell, km: [usize; 3], want: f64)
     let k = kpts(&cell, km);
     let aux = make_modrho_basis(&cell, None, None).expect("auxcell");
     let g = guess_eta(&aux.cell, &k, None).expect("guess_eta");
-    let cderi =
-        make_j3c(&cell, &f, &k, Aosym::S1, g.mesh, false, false, None).expect("make_j3c");
+    let cderi = make_j3c(&cell, &f, &k, Aosym::S1, g.mesh, false, false, None).expect("make_j3c");
     let b = cderi.get(0, 0).expect("cderi[0,0]");
     assert_eq!(b.rank, f.naux(), "{label}: fitting rank");
     assert_eq!(b.nao_pair, cell.mol.nao_nr * cell.mol.nao_nr);
     let (r, i) = cderi_norms(b);
-    assert!(i < 1e-10, "{label}: cderi[0,0] should be real, |Im| = {i:e}");
+    assert!(
+        i < 1e-10,
+        "{label}: cderi[0,0] should be real, |Im| = {i:e}"
+    );
     assert!(
         (r - want).abs() < 1e-8 * want,
         "{label}: |cderi[0,0]_R| = {r}, upstream {want}"
@@ -684,6 +695,7 @@ fn helium_fused_j3c_and_j2c_match_upstream() {
             kj: [0.0; 3],
         }],
         None,
+        None,
     )
     .expect("outcore_auxe2");
     let w: Vec<f64> = want["j3c"]
@@ -736,7 +748,7 @@ fn helium_fused_j3c_and_j2c_match_upstream() {
 
     // --- j2c ---
     let naux = f.naux();
-    let j2c = get_2c2e(&cell, &f, &[[0.0; 3]]).expect("get_2c2e");
+    let j2c = get_2c2e(&cell, &f, &[[0.0; 3]], None).expect("get_2c2e");
     let w2: Vec<f64> = want["j2c"]
         .as_array()
         .expect("j2c")

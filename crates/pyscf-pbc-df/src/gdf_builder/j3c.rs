@@ -161,9 +161,10 @@ pub fn outcore_auxe2(
     aosym: Aosym,
     kptij: &[KptPair],
     rcut: Option<f64>,
+    omega: Option<f64>,
 ) -> Result<Vec<CTensor>, PbcDfError> {
     let nao_pair = aosym.nao_pair(cell.mol.nao_nr);
-    let raw = aux_e2(cell, &fused.fused, aosym, kptij, rcut)?;
+    let raw = aux_e2(cell, &fused.fused, aosym, kptij, rcut, omega)?;
     Ok(raw
         .iter()
         .map(|m| CTensor {
@@ -541,11 +542,20 @@ pub fn make_j3c_scheme(
                 .collect::<Vec<_>>()
         })
         .collect();
-    let realspace_all = outcore_auxe2(cell, fused, aosym, &flat_pairs, rcut)?;
+    // Both schemes here are FULL-RANGE: the compensated-charge and mixed
+    // routes make the lattice sum converge by neutralising the auxiliary
+    // functions, not by splitting the kernel. Range-separated fitting
+    // (`_RSGDFBuilder`, plan 14-07 sub-tasks 7b/7c) passes `Some(-omega)` to
+    // both of these and adds the long-range plane-wave half separately; the ω
+    // argument exists on both callees so that builder is a builder and not a
+    // plumbing change.
+    let realspace_all = outcore_auxe2(cell, fused, aosym, &flat_pairs, rcut, None)?;
 
     let uniq_kpts: Vec<[f64; 3]> = groups.iter().map(|g| g.kpt).collect();
     let j2c_all = match scheme {
-        Scheme::CompensatedCharge => crate::gdf_builder::j2c::get_2c2e(cell, fused, &uniq_kpts)?,
+        Scheme::CompensatedCharge => {
+            crate::gdf_builder::j2c::get_2c2e(cell, fused, &uniq_kpts, None)?
+        }
         // MDF's metric is the Gaussian one with the plane-wave projection
         // REMOVED — `mdf.py:369-400`, and on MDF's own (small) mesh, not the
         // tightened `j2c_mesh` the compensated route uses.
@@ -738,13 +748,7 @@ fn packed_ovlp(s: &CTensor, nao: usize, aosym: Aosym) -> CTensor {
 }
 
 /// Pack one `ft_aopair` G-block from `(nG, nao, nao)` into `(nG, nao_pair)`.
-fn pair_pack(
-    re: &[f64],
-    im: &[f64],
-    ng: usize,
-    nao: usize,
-    aosym: Aosym,
-) -> (Vec<f64>, Vec<f64>) {
+fn pair_pack(re: &[f64], im: &[f64], ng: usize, nao: usize, aosym: Aosym) -> (Vec<f64>, Vec<f64>) {
     let np = aosym.nao_pair(nao);
     if matches!(aosym, Aosym::S1) {
         return (re.to_vec(), im.to_vec());

@@ -52,6 +52,7 @@ pub fn get_ovlp(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PyscfRsE
             comp: None,
             hermi: 1,
             screen: cell.use_loose_rcut,
+            omega: None,
         },
     )?
     .kmats)
@@ -70,6 +71,7 @@ pub fn get_t(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PyscfRsErro
             comp: None,
             hermi: 1,
             screen: cell.use_loose_rcut,
+            omega: None,
         },
     )?
     .kmats)

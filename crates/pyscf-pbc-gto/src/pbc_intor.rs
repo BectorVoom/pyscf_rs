@@ -119,6 +119,31 @@ pub struct PbcIntorOpts {
     /// `false` (the default) reproduces upstream's plain `intor_cross` exactly;
     /// `Cell::pbc_intor` sets it from `cell.use_loose_rcut`, as upstream does.
     pub screen: bool,
+    /// Range-separation parameter ω (libcint `env[PTR_RANGE_OMEGA]`), on the
+    /// SAME sign convention as
+    /// [`JkOpts::omega`](../../pyscf_pbc_df/traits/struct.JkOpts.html) and
+    /// `rsdf_builder::omega`, so no second convention enters the workspace:
+    ///
+    /// * `Some(ω)`, `ω > 0` — long range, `erf(ω r)/r`
+    /// * `Some(ω)`, `ω < 0` — short range, `erfc(|ω| r)/r`
+    /// * `None` or `Some(0.0)` — full Coulomb (the default)
+    ///
+    /// This is upstream's `with cell.with_range_coulomb(omega):` around the
+    /// `pbc_intor` call, not a distinct integral symbol — libcint has no
+    /// `int2c2e_sr_*`. It reaches cintx as `ExecutionOptions::range_omega` and
+    /// is therefore part of the WORKSPACE query, not just the kernel: short
+    /// range doubles the Rys roots.
+    ///
+    /// Only the Coulomb families (`int2c2e`, `int3c2e`, `int2e`) honour it;
+    /// cintx returns `UnsupportedApi` for anything else rather than silently
+    /// evaluating the full-range operator.
+    ///
+    /// **The lattice-image list is NOT re-estimated from ω.** `Ls` still comes
+    /// from the full-range `cell.rcut`, which is conservative under both
+    /// branches (short range decays faster, long range has the same 1/r tail),
+    /// so the sum is correct and merely longer than it needs to be. Tightening
+    /// it is `rsdf_builder::omega::estimate_rs_2c2e_rcut`'s job, at the caller.
+    pub omega: Option<f64>,
 }
 
 /// The k-resolved result of a periodic 1-electron integral.
@@ -413,6 +438,7 @@ pub fn intor_cross_with_images(
             nj,
             nimgs,
             hermi: opts.hermi,
+            omega: opts.omega,
         },
         cell1,
         cell2,
@@ -464,6 +490,8 @@ struct LatticeSumCtx<'a> {
     nj: usize,
     nimgs: usize,
     hermi: i32,
+    /// See [`PbcIntorOpts::omega`].
+    omega: Option<f64>,
 }
 
 /// `Σ_L exp(i·k·L) · <i(0) | O | j(L)>` — the whole lattice sum.
@@ -486,7 +514,13 @@ fn lattice_sum(
     let comp = ctx.comp;
     let ni = ctx.ni;
     let nj = ctx.nj;
-    let opts = ExecutionOptions::default();
+    // ω belongs to the options the WORKSPACE is queried with, not only to the
+    // kernel: short range doubles the Rys roots, and cintx rejects a ω that
+    // changes between query and evaluate as backend contract drift.
+    let opts = ExecutionOptions {
+        range_omega: ctx.omega,
+        ..ExecutionOptions::default()
+    };
 
     // AO offsets/counts are image-independent — the shells are identical, only
     // their centres move — so they are read once, off image 0's basis.
@@ -669,6 +703,7 @@ impl Cell {
                 comp,
                 hermi,
                 screen: self.use_loose_rcut,
+                omega: None,
             },
         )
     }

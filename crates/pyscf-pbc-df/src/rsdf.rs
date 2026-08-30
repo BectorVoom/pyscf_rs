@@ -1,18 +1,19 @@
 //! `RSDF` — the user-facing range-separated density-fitting class
 //! (`pyscf/pbc/df/rsdf.py`), plan 14-08.
 //!
-//! # STATUS: `get_aux_chg` ships. `RSGDF` itself is BLOCKED.
+//! # STATUS: `get_aux_chg` ships. `RSGDF` itself is NOT PORTED.
 //!
 //! `rsdf.RSGDF` subclasses `df.GDF` and selects `rsdf_builder._RSGDFBuilder`,
-//! which plan 14-07 could not ship: cintx's safe API has no `range_omega`
-//! (libcint `env[8]`) knob, so there is no short-range `int3c2e`/`int2c2e` to
-//! build the short-range half of the fit from. The full evidence is in
-//! [`crate::rsdf_builder`]'s module docs; the one-line reason is
-//! [`crate::rsdf_builder::CINTX_SR_GAP`].
+//! which plan 14-07 could not ship because cintx's safe API had no
+//! `range_omega` (libcint `env[8]`) knob. **That blocker is gone** — D-PBC-24
+//! landed it, and [`crate::incore::aux_e2`] / [`crate::incore::fill_2c2e`] both
+//! carry an ω now. What is still missing is `_RSGDFBuilder` itself: sub-tasks
+//! 7b/7c. The full account is in [`crate::rsdf_builder`]'s module docs; the
+//! one-line reason is [`crate::rsdf_builder::RS_BUILDER_GAP`].
 //!
 //! Consequences, all recorded in `14-VERIFICATION.md`:
 //!
-//! * **Gate 3 is unreachable this phase.** It compares `|E(GDF) − E(RSDF)|`
+//! * **Gate 3 is still unreachable.** It compares `|E(GDF) − E(RSDF)|`
 //!   against upstream's own floor (1.353e-08 on diamond 2×2×2, 4.566e-09 at
 //!   gamma, 1.113e-10 on He-fcc). With one of the two builders missing there is
 //!   nothing to compare.
@@ -27,7 +28,7 @@
 use pyscf_pbc_gto::Cell;
 
 use crate::error::PbcDfError;
-use crate::rsdf_builder::CINTX_SR_GAP;
+use crate::rsdf_builder::RS_BUILDER_GAP;
 
 /// `get_aux_chg(auxcell)` — `rsdf.py:65-73`.
 ///
@@ -79,12 +80,12 @@ impl Rsdf {
     /// `RSGDF.build()` — **refused**.
     ///
     /// # Errors
-    /// Always [`PyscfRsError::NotYetImplemented`], naming the cintx gap.
+    /// Always [`PyscfRsError::NotYetImplemented`], naming [`RS_BUILDER_GAP`].
     pub fn build(&mut self) -> Result<(), PbcDfError> {
         Err(PbcDfError::Core(
             pyscf_core::PyscfRsError::NotYetImplemented {
                 phase: 14,
-                what: CINTX_SR_GAP,
+                what: RS_BUILDER_GAP,
             },
         ))
     }

@@ -32,7 +32,7 @@ use pyscf_algebra::CTensor;
 use pyscf_pbc_df::df_ao2mo::{Eri, MoCoeff, ao2mo_7d, general, get_eri};
 use pyscf_pbc_df::gdf_builder::j3c::{Cderi, CderiBlock};
 use pyscf_pbc_df::incore::Aosym;
-use pyscf_pbc_df::pbc_ao2mo::{aft_ao2mo_7d, fft_ao2mo_7d, aft_general, fft_general};
+use pyscf_pbc_df::pbc_ao2mo::{aft_ao2mo_7d, aft_general, fft_ao2mo_7d, fft_general};
 use pyscf_pbc_df::{Aftdf, Fftdf, Gdf};
 use pyscf_pbc_gto::Cell;
 
@@ -214,7 +214,10 @@ fn gamma_eri_from_cderi_has_eightfold_symmetry() {
     let eri = get_eri(&df, [0; 4], false).expect("get_eri");
 
     let imax = eri.data.im.iter().fold(0.0f64, |a, v| a.max(v.abs()));
-    assert!(imax == 0.0, "a gamma ERI must be exactly real, |Im| = {imax:e}");
+    assert!(
+        imax == 0.0,
+        "a gamma ERI must be exactly real, |Im| = {imax:e}"
+    );
 
     let mut worst = 0.0f64;
     for p in 0..nao {
@@ -248,12 +251,19 @@ fn compact_and_s1_are_bit_identical_after_unpacking() {
     let plain = get_eri(&df, [0; 4], false).expect("s1");
 
     assert!(packed.row.packed && packed.col.packed, "compact must pack");
-    assert_eq!(packed.row.len(), nao * (nao + 1) / 2, "s2 packs to nao(nao+1)/2");
+    assert_eq!(
+        packed.row.len(),
+        nao * (nao + 1) / 2,
+        "s2 packs to nao(nao+1)/2"
+    );
     assert!(!plain.row.packed && !plain.col.packed);
 
     let unpacked = packed.restore_s1();
     let d = dev(&unpacked, &plain);
-    assert!(d == 0.0, "compact/s1 must be BIT-identical, differ by {d:e}");
+    assert!(
+        d == 0.0,
+        "compact/s1 must be BIT-identical, differ by {d:e}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -371,7 +381,10 @@ fn ao2mo_7d_index_order_is_the_phase_15_contract() {
 
     let seven = ao2mo_7d(&df, mos, 1.0).expect("ao2mo_7d");
     assert_eq!(seven.nkpts, nk);
-    assert_eq!(seven.nmo, nmo, "shape is (nk, nk, nk, nmoi, nmoj, nmok, nmol)");
+    assert_eq!(
+        seven.nmo, nmo,
+        "shape is (nk, nk, nk, nmoi, nmoj, nmok, nmol)"
+    );
     assert_eq!(
         seven.data.re.len(),
         nk * nk * nk * nmo.iter().product::<usize>(),
@@ -474,7 +487,10 @@ fn get_eri_on_a_real_gdf_matches_the_sr_loop_definition() {
     let id = MoCoeff::identity(nao);
     let g = general(&df, [&id; 4], [0; 4], false).expect("general");
     let dd = dev(&eri, &g);
-    assert!(dd < 1e-13, "general(identity) != get_eri on a real GDF: {dd:e}");
+    assert!(
+        dd < 1e-13,
+        "general(identity) != get_eri on a real GDF: {dd:e}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +586,10 @@ fn plane_wave_general_with_identity_mos_reproduces_get_eri() {
 #[test]
 fn balance_segs_matches_upstream() {
     use pyscf_pbc_df::balance_segs;
-    assert_eq!(balance_segs(&[3, 3, 3, 3], 7, 0, None), vec![(0, 2, 6), (2, 4, 6)]);
+    assert_eq!(
+        balance_segs(&[3, 3, 3, 3], 7, 0, None),
+        vec![(0, 2, 6), (2, 4, 6)]
+    );
     assert_eq!(balance_segs(&[3, 3, 3, 3], 12, 0, None), vec![(0, 4, 12)]);
     assert_eq!(
         balance_segs(&[3, 3, 3, 3], 1, 0, None),
@@ -591,12 +610,9 @@ fn outcore_drivers_reproduce_the_incore_tensor() {
     let cell = common::he_all_electron();
     let aux = make_modrho_basis(&cell, None, None).expect("auxcell");
     let kpts = kpts_of(&cell, [2, 1, 1]);
-    let pairs: Vec<KptPair> = kpts
-        .iter()
-        .map(|k| KptPair { ki: *k, kj: *k })
-        .collect();
+    let pairs: Vec<KptPair> = kpts.iter().map(|k| KptPair { ki: *k, kj: *k }).collect();
 
-    let want = aux_e2(&cell, &aux, Aosym::S2, &pairs, None).expect("incore aux_e2");
+    let want = aux_e2(&cell, &aux, Aosym::S2, &pairs, None, None).expect("incore aux_e2");
     let nao_pair = Aosym::S2.nao_pair(cell.mol.nao_nr);
     let naux = aux.naux();
 
@@ -617,6 +633,7 @@ fn outcore_drivers_reproduce_the_incore_tensor() {
         &pairs,
         "j3c",
         blocking,
+        None,
         None,
     )
     .expect("aux_e2 outcore");
@@ -643,6 +660,7 @@ fn outcore_drivers_reproduce_the_incore_tensor() {
         "eri_mo",
         blocking,
         None,
+        None,
     )
     .expect("aux_e1 outcore");
     assert_eq!(f1.orientation(), Orientation::AuxLeading);
@@ -655,7 +673,10 @@ fn outcore_drivers_reproduce_the_incore_tensor() {
                 d = d.max((got.im[l * nao_pair + p] - w.im[p * naux + l]).abs());
             }
         }
-        assert!(d == 0.0, "aux_e1 outcore pair {k} is not the transpose: {d:e}");
+        assert!(
+            d == 0.0,
+            "aux_e1 outcore pair {k} is not the transpose: {d:e}"
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -878,7 +899,15 @@ fn get_eri_matches_upstream_on_he_fcc() {
     let payload = serde_json::to_string(&quads).expect("json");
 
     // The gate: screens equalised at 1e-14.
-    let args = oracle_args(&cell, "sto-3g", "none", kmesh, "get_eri", payload.clone(), "1e-14");
+    let args = oracle_args(
+        &cell,
+        "sto-3g",
+        "none",
+        kmesh,
+        "get_eri",
+        payload.clone(),
+        "1e-14",
+    );
     let v = common::run_python(&py, ORACLE, &args);
     let w = worst_vs(&pull(&v, "re"), &pull(&v, "im"), &got);
     println!("df_ao2mo.get_eri vs upstream (He-fcc {kmesh:?}, screens equalised): {w:e}");
@@ -892,7 +921,9 @@ fn get_eri_matches_upstream_on_he_fcc() {
     // a target: `strip_basis`'s per-shell-pair radii plus the looser
     // `direct_scf_tol`. Localised above to `strip_basis` — 1.054e-9 in the
     // fused `j3c`, 6.7e-9 in `cderi`, 2.75e-9 here.
-    let args = oracle_args(&cell, "sto-3g", "none", kmesh, "get_eri", payload, "default");
+    let args = oracle_args(
+        &cell, "sto-3g", "none", kmesh, "get_eri", payload, "default",
+    );
     let v = common::run_python(&py, ORACLE, &args);
     let d = worst_vs(&pull(&v, "re"), &pull(&v, "im"), &got);
     println!("df_ao2mo.get_eri vs upstream (He-fcc {kmesh:?}, upstream default screen): {d:e}");

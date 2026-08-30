@@ -104,7 +104,11 @@ fn guess_omega_matches_upstream() {
 #[test]
 fn omega_estimators_match_upstream() {
     assert_eq!(rs::OMEGA_MIN, 0.08, "OMEGA_MIN — rsdf_builder.py:52");
-    assert_eq!(rs::RCUT_THRESHOLD, 1.0, "RCUT_THRESHOLD — rsdf_builder.py:56");
+    assert_eq!(
+        rs::RCUT_THRESHOLD,
+        1.0,
+        "RCUT_THRESHOLD — rsdf_builder.py:56"
+    );
 
     let he = common::he_all_electron();
     close(
@@ -391,39 +395,62 @@ fn sr_and_lr_coulg_match_upstream_values() {
         0.008_318_138_533_356,
     ];
     for i in 0..4 {
-        close(lr[i], want_lr[i], 1e-14, &format!("He weighted_coulG_LR[{i}]"));
-        close(sr[i], want_sr[i], 1e-14, &format!("He weighted_coulG_SR[{i}]"));
+        close(
+            lr[i],
+            want_lr[i],
+            1e-14,
+            &format!("He weighted_coulG_LR[{i}]"),
+        );
+        close(
+            sr[i],
+            want_sr[i],
+            1e-14,
+            &format!("He weighted_coulG_SR[{i}]"),
+        );
     }
 }
 
 // ---------------------------------------------------------------------------
-// 7b / 7c / 7d — the blocker, asserted
+// 7b / 7c / 7d — still unported, asserted
 // ---------------------------------------------------------------------------
 
-/// **The blocker is a REFUSAL, not a silent substitution** (D-PBC-20).
+/// **What is missing is a REFUSAL, not a silent substitution** (D-PBC-20).
 ///
-/// `_RSGDFBuilder` needs a short-range `int3c2e`/`int2c2e`, which cintx's safe
-/// API cannot request. Building anyway with the full-range kernel would give a
-/// builder that runs, converges, and is silently a different method — the one
-/// outcome `14-07-PLAN.md` Task 7b forbids. The message must name the gap so
-/// the next person does not re-derive it.
+/// This test used to say "cintx cannot request a short-range
+/// `int3c2e`/`int2c2e`". D-PBC-24 made it able to, and
+/// `tests/incore.rs::aux_e2_splits_the_coulomb_kernel_at_omega` gates that
+/// end to end — so the assertion moved with the reason rather than being
+/// deleted. What `_RSGDFBuilder` lacks now is its own body: sub-tasks 7b/7c.
+///
+/// Building anyway with the full-range kernel would give a builder that runs,
+/// converges, and is silently a different method — the one outcome
+/// `14-07-PLAN.md` Task 7b forbids, and the reason this assertion survives the
+/// change of cause. Delete it in the commit that ships `_RSGDFBuilder`, not
+/// before.
 #[test]
-fn rs_gdf_builder_refuses_and_names_the_cintx_gap() {
+fn rs_gdf_builder_refuses_and_names_what_is_unported() {
     let cell = common::he_all_electron();
     let mut b = RsGdfBuilder::new(cell.clone(), &[[0.0; 3]]);
     // The ω half of the builder works — that is 7a, and it ships.
     let (omega, mesh, _) = b.guess().expect("guess must work");
     assert!(omega > 0.0 && mesh[0] > 1);
 
-    let e = b.build().expect_err("the SR 3-centre route must be refused");
+    let e = b
+        .build()
+        .expect_err("the SR 3-centre route must be refused");
     let msg = format!("{e}");
     assert!(
-        msg.contains("range_omega") && msg.contains("env[8]"),
-        "the refusal must name the missing cintx capability: {msg}"
+        msg.contains("_RSGDFBuilder") && msg.contains("7b/7c"),
+        "the refusal must name the unported sub-tasks, not a stale blocker: {msg}"
     );
     assert!(
-        msg.contains("cintx#11") || msg.contains("range_coulomb"),
-        "the refusal must point at the recorded gap: {msg}"
+        msg.contains("range_omega") && msg.contains("env[8]"),
+        "the refusal must say the integral capability EXISTS, so the next reader \
+         does not re-derive a blocker that is gone: {msg}"
+    );
+    assert!(
+        !msg.contains("cintx's safe API has no"),
+        "the old cintx blocker text must not come back: {msg}"
     );
 }
 

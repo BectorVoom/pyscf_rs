@@ -146,7 +146,7 @@ pub fn get_2c2e(
     let naux = fused.naux();
 
     // `j2c = fused_cell.pbc_intor('int2c2e', hermi=0, kpts=uniq_kpts)`.
-    let raw: Vec<CTensor> = fill_2c2e(&fused.fused, 0, uniq_kpts)?
+    let raw: Vec<CTensor> = fill_2c2e(&fused.fused, 0, uniq_kpts, None)?
         .into_iter()
         .map(|m| crate::zlinalg::forder_to_c(&m, nauxc, nauxc))
         .collect();

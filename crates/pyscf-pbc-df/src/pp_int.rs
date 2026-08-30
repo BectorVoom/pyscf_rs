@@ -67,7 +67,12 @@ fn vloc_auxcell(cell: &Cell, aux: &[VlocAux]) -> Result<AuxCell, PbcDfError> {
         };
         match basis.get(&sym) {
             None => {
-                basis.insert(sym, ParsedBasis { shells: vec![shell] });
+                basis.insert(
+                    sym,
+                    ParsedBasis {
+                        shells: vec![shell],
+                    },
+                );
             }
             Some(prev) => {
                 if (prev.shells[0].exponents[0] - a.alpha).abs() > 1e-12 {
@@ -141,10 +146,7 @@ fn vloc_auxcell(cell: &Cell, aux: &[VlocAux]) -> Result<AuxCell, PbcDfError> {
 /// # Errors
 /// Propagates [`fake_cell_vloc`] and the 3-centre lattice sum, and refuses a
 /// cell whose atoms of one element carry different local pseudopotentials.
-pub fn get_pp_loc_part2_kpts(
-    cell: &Cell,
-    kpts: &[[f64; 3]],
-) -> Result<Vec<CTensor>, PbcDfError> {
+pub fn get_pp_loc_part2_kpts(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
     let nao = cell.mol.nao_nr;
     let nkpts = kpts.len();
     let mut out: Vec<CTensor> = (0..nkpts).map(|_| CTensor::zeros(nao * nao)).collect();
@@ -171,6 +173,9 @@ pub fn get_pp_loc_part2_kpts(
             Aosym::S1,
             &kptij,
             Some(rcut),
+            // `int3c1e_r{2,4,6}_origk` is overlap-like: libcint's `g1e.c` has no
+            // omega branch, so there is nothing for ω to mean here.
+            None,
         )?;
         let naux = auxcell.naux();
         for (k, b) in blocks.iter().enumerate() {

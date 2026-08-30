@@ -72,7 +72,11 @@ pub const LINEAR_DEP_THRESHOLD: f64 = 1e-10;
 ///
 /// # Errors
 /// Propagates `get_coulG` and the G-vector build.
-pub fn weighted_coulg(cell: &Cell, kpt: [f64; 3], mesh: [usize; 3]) -> Result<Vec<f64>, PbcDfError> {
+pub fn weighted_coulg(
+    cell: &Cell,
+    kpt: [f64; 3],
+    mesh: [usize; 3],
+) -> Result<Vec<f64>, PbcDfError> {
     let gv = pyscf_pbc_gto::gv::get_gv(cell, Some(mesh))?;
     let gw = pyscf_pbc_gto::gv::get_gv_weights(cell, Some(mesh))?;
     let mut coulg = get_coulg(
@@ -114,6 +118,7 @@ pub fn get_2c2e(
     cell: &Cell,
     fused: &FusedCell,
     uniq_kpts: &[[f64; 3]],
+    omega: Option<f64>,
 ) -> Result<Vec<CTensor>, PbcDfError> {
     let nauxc = fused.nauxc();
     let naux = fused.naux();
@@ -121,7 +126,7 @@ pub fn get_2c2e(
     // Pass 1 — the real-space lattice sum over the FUSED cell, `hermi = 0`.
     // `pbc_intor` returns F-order; transpose to row-major so the plane-wave
     // pass below can index `[p * nauxc + q]` throughout.
-    let mut j2c: Vec<CTensor> = fill_2c2e(&fused.fused, 0, uniq_kpts)?
+    let mut j2c: Vec<CTensor> = fill_2c2e(&fused.fused, 0, uniq_kpts, omega)?
         .into_iter()
         .map(|m| crate::zlinalg::forder_to_c(&m, nauxc, nauxc))
         .collect();
@@ -135,9 +140,7 @@ pub fn get_2c2e(
         cell.precision * cell.precision
     );
 
-    let chg: Vec<usize> = (0..nauxc)
-        .filter(|q| !fused.aux_ao.contains(q))
-        .collect();
+    let chg: Vec<usize> = (0..nauxc).filter(|q| !fused.aux_ao.contains(q)).collect();
 
     for (k, kpt) in uniq_kpts.iter().enumerate() {
         let coulg = weighted_coulg(cell, *kpt, mesh)?;
@@ -223,9 +226,7 @@ pub fn get_2c2e(
 /// # Errors
 /// [`PbcDfError::Core`] when the eigen decomposition itself fails.
 pub fn decompose_j2c(j2c: &CTensor, n: usize, j2c_eig_always: bool) -> Result<CdJ2c, PbcDfError> {
-    if !j2c_eig_always
-        && let Some(l) = cholesky_lower(j2c, n)
-    {
+    if !j2c_eig_always && let Some(l) = cholesky_lower(j2c, n) {
         return Ok(CdJ2c {
             j2c: l,
             rank: n,
