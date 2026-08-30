@@ -77,6 +77,26 @@ pub fn weighted_coulg(
     kpt: [f64; 3],
     mesh: [usize; 3],
 ) -> Result<Vec<f64>, PbcDfError> {
+    weighted_coulg_at(cell, kpt, mesh, None)
+}
+
+/// [`weighted_coulg`] at a chosen range-separation sign.
+///
+/// `omega`: `None` full, `Some(w > 0)` long range `erf(wr)/r`, `Some(w < 0)`
+/// short range `erfc(|w|r)/r` — the workspace-wide convention
+/// ([`crate::traits::JkOpts::omega`], `get_coulG`, `PbcIntorOpts::omega`), and
+/// libcint's. Range-separated fitting needs all three of these
+/// ([`crate::rsdf_builder::j2c`]); the compensated and mixed routes use only
+/// the full kernel, which is why [`weighted_coulg`] exists as the short name.
+///
+/// # Errors
+/// Propagates the G-vector build and `get_coulG`.
+pub fn weighted_coulg_at(
+    cell: &Cell,
+    kpt: [f64; 3],
+    mesh: [usize; 3],
+    omega: Option<f64>,
+) -> Result<Vec<f64>, PbcDfError> {
     let gv = pyscf_pbc_gto::gv::get_gv(cell, Some(mesh))?;
     let gw = pyscf_pbc_gto::gv::get_gv_weights(cell, Some(mesh))?;
     let mut coulg = get_coulg(
@@ -86,6 +106,7 @@ pub fn weighted_coulg(
             exxdiv: None,
             mesh: Some(mesh),
             gv: Some(&gv),
+            omega,
             ..Default::default()
         },
     )?;

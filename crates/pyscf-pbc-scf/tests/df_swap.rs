@@ -130,16 +130,23 @@ fn krhf_runs_on_aftdf_all_electron() {
 /// **GATE 1.** A converged `KRHF` on the ALL-ELECTRON He-fcc control, driven by
 /// GDF, against upstream **−2.80842508664874**.
 ///
-/// That is upstream `df.GDF` with `_prefer_ccdf = True` — the compensated
-/// builder this port ships — measured in
-/// `.planning/phases/14-gdf-mdf-rsdf-rsjk/measurements/ccdf.py`. He-fcc is the
-/// control because `exclude_dd_block` is provably inert there (D-PBC-23:
-/// `measurements/ddblock.py` measures its effect as exactly 0), so the gate has
-/// no escape hatch.
+/// He-fcc is the control because `exclude_dd_block` is provably inert there
+/// (D-PBC-23: `measurements/ddblock.py` measures its effect as exactly 0), so
+/// the gate has no escape hatch.
 ///
 /// The number exercises the WHOLE phase in one assertion: the auxiliary cell
-/// (14-01), the compensating charge and `cderi` (14-02), the store and the
-/// nuclear builder (14-03), and the J/K contraction (14-04).
+/// (14-01), the fitting route (14-02 / 14-07), the store and the nuclear
+/// builder (14-03), and the J/K contraction (14-04).
+///
+/// # BOTH routes are pinned, and that is the point
+///
+/// Plan 14-07 Task 7d flipped [`Gdf::prefer_ccdf`] to `false` on 2026-08-30, so
+/// `Gdf::new` now takes the RANGE-SEPARATED route — upstream's default. The two
+/// routes disagree by 5.222e-10 on this system, which is *inside* the 1e-9 bar
+/// this test uses, so a version of this test that pinned only the compensated
+/// number would have kept passing after the flip while silently measuring the
+/// other route. That is exactly the drift Task 7d requires be made explicit, so
+/// each route is now asserted against its OWN upstream number.
 #[test]
 fn krhf_on_gdf_matches_upstream_he_fcc() {
     use pyscf_pbc_df::gdf::Gdf;
@@ -147,24 +154,41 @@ fn krhf_on_gdf_matches_upstream_he_fcc() {
     let cell = he_all_electron();
     let kpts = pyscf_pbc_gto::kpts_mesh::make_kpts(&cell, [2, 2, 2], false, true, None)
         .expect("kpts");
-    let mut c = KScfConfig::for_cell(&cell);
-    c.conv_tol = 1e-11;
-    c.max_cycle = 60;
 
-    let df = Gdf::new(cell, &kpts);
-    let mf = Krhf::from_df(Box::new(df));
-    let out = mf.kernel(&c).expect("KRHF on GDF");
-    assert!(out.converged, "KRHF on GDF did not converge");
+    // `measurements/ccdf.py`, PySCF 2.12.1.
+    const UPSTREAM_RS: f64 = -2.808_425_087_170_97; // `_prefer_ccdf = False`
+    const UPSTREAM_CC: f64 = -2.808_425_086_648_74; // `_prefer_ccdf = True`
 
-    const UPSTREAM: f64 = -2.808_425_086_648_74;
-    let d = (out.e_tot - UPSTREAM).abs();
-    eprintln!("KRHF/GDF He-fcc 2x2x2: E = {:.14}, upstream {UPSTREAM:.14}, |dE| = {d:e}",
-              out.e_tot);
-    assert!(
-        d < 1e-9,
-        "KRHF on GDF: E = {:.14}, upstream {UPSTREAM:.14}, |dE| = {d:e}",
-        out.e_tot
-    );
+    for (route, prefer_ccdf, upstream) in [
+        ("RS (default)", false, UPSTREAM_RS),
+        ("CC", true, UPSTREAM_CC),
+    ] {
+        let mut c = KScfConfig::for_cell(&cell);
+        c.conv_tol = 1e-11;
+        c.max_cycle = 60;
+
+        let mut df = Gdf::new(cell.clone(), &kpts);
+        df.prefer_ccdf = prefer_ccdf;
+        assert_eq!(
+            Gdf::new(cell.clone(), &kpts).prefer_ccdf,
+            false,
+            "Task 7d: the DEFAULT route is the range-separated one"
+        );
+        let mf = Krhf::from_df(Box::new(df));
+        let out = mf.kernel(&c).expect("KRHF on GDF");
+        assert!(out.converged, "KRHF on GDF ({route}) did not converge");
+
+        let d = (out.e_tot - upstream).abs();
+        eprintln!(
+            "KRHF/GDF {route} He-fcc 2x2x2: E = {:.14}, upstream {upstream:.14}, |dE| = {d:e}",
+            out.e_tot
+        );
+        assert!(
+            d < 1e-9,
+            "KRHF on GDF ({route}): E = {:.14}, upstream {upstream:.14}, |dE| = {d:e}",
+            out.e_tot
+        );
+    }
 }
 
 /// GDF is an APPROXIMATION and FFTDF is not, so their energies differ by the DF

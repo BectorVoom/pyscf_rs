@@ -181,7 +181,9 @@ pub fn outcore_auxe2(
 /// making `_CCMDFBuilder` a subclass of `_CCGDFBuilder` that overrides four
 /// methods (`mdf.py:354-460`). This port expresses it as one driver with a
 /// scheme tag, for the same reason: two copies of `make_j3c` would drift.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `RangeSeparated` carries an `f64`, so `Eq` is not derivable; nothing compares
+// two schemes for equality, only matches on them.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Scheme {
     /// `_CCGDFBuilder` — the compensating charge. The working buffer has
     /// `nauxc` rows; the MODEL-CHARGE rows carry the reciprocal-space half and
@@ -194,6 +196,53 @@ pub enum Scheme {
     /// model-charge rows. The metric is the plane-wave-projected one
     /// (`mdf.py:369-400`) and the solve is always the eigen route.
     Mixed,
+    /// `_RSGDFBuilder` — range-separated density fitting (`rsdf_builder.py`),
+    /// plan 14-07 sub-tasks 7b/7c.
+    ///
+    /// The buffer is `naux` rows as for [`Scheme::Mixed`], and for the same
+    /// reason: there are no model-charge rows to hold a separate reciprocal
+    /// half. Everything else differs, and all of it follows from the kernel
+    /// split `1/r = erfc(wr)/r + erf(wr)/r`:
+    ///
+    /// * the real-space pass is evaluated at `Some(-omega)` — the SHORT-range
+    ///   `int3c2e` — against the PLAIN auxiliary cell, so its lattice sum
+    ///   converges on the kernel rather than on a compensating charge;
+    /// * `weighted_ft_ao` carries the LONG-range remainder `coulG - coulG_SR`
+    ///   on every auxiliary column;
+    /// * `add_ft_j3c` **ADDS** that remainder (`rsdf_builder.py:806-811` uses
+    ///   `+1` in all four `ddot`s) where the other two schemes SUBTRACT a
+    ///   projection;
+    /// * the metric is [`crate::rsdf_builder::j2c::get_2c2e`];
+    /// * `vbar` is `pi/omega^2/vol * aux_chg`, not
+    ///   [`crate::gdf_builder::fuse::auxbar`].
+    ///
+    /// The solve is Cholesky-first, as GDF's — MDF's `j2c_eig_always` exists
+    /// because subtracting a plane-wave projection can push the metric
+    /// indefinite, and this scheme subtracts nothing from it.
+    RangeSeparated {
+        /// The range-separation parameter, POSITIVE. The short-range calls
+        /// negate it; see [`crate::rsdf_builder::j2c`].
+        omega: f64,
+        /// `_RSMDFBuilder` rather than `_RSGDFBuilder` (`mdf.py:238-353`).
+        ///
+        /// Upstream expresses this as a subclass that overrides exactly three
+        /// things, and so does this flag:
+        ///
+        /// | | `false` (RSGDF) | `true` (RSMDF) |
+        /// |---|---|---|
+        /// | reciprocal weight | `coulG − coulG_SR` (the LR remainder) | `−coulG_SR` |
+        /// | metric | `SR_analytic + FT_full − FT_SR` | `SR_analytic − FT_SR` |
+        /// | metric mesh | the tightened `j2c_mesh` | the builder's own `mesh` |
+        /// | solve | Cholesky first | eigen always |
+        ///
+        /// The metric difference is the whole of mixed fitting: MDF's basis is
+        /// the Gaussians ORTHOGONALISED against the plane waves,
+        /// `|g> − |G><G|g>`, so `<g|g> − <g|G><G|g>` subtracts the projection
+        /// rather than adding a long-range tail — and the residual the
+        /// Gaussians cannot fit is then carried exactly by `aft_jk` at
+        /// contraction time. The real-space pass is identical either way.
+        mixed: bool,
+    },
 }
 
 /// The `(nrows, ncol)` buffer `add_ft_j3c` and `solve_cderi` operate on.
@@ -226,12 +275,16 @@ fn load_j3c(
     let nrows = match scheme {
         Scheme::CompensatedCharge => fused.nauxc(),
         // `mdf.py:420-428`: the loader's output is truncated to `[:naux]`, so
-        // MDF never allocates model-charge rows at all.
-        Scheme::Mixed => naux,
+        // MDF never allocates model-charge rows at all. The range-separated
+        // route never HAS model-charge rows: its auxiliary cell is unfused.
+        Scheme::Mixed | Scheme::RangeSeparated { .. } => naux,
     };
     let aux_row = |a: usize| match scheme {
         Scheme::CompensatedCharge => fused.aux_ao[a],
-        Scheme::Mixed => a,
+        // Both of these index the plain auxiliary axis directly. For the
+        // range-separated route `aux_ao` is the identity anyway (the cell is
+        // unfused), so the two arms agree by construction.
+        Scheme::Mixed | Scheme::RangeSeparated { .. } => a,
     };
     let mut re = vec![0.0_f64; nrows * nao_pair];
     let mut im = vec![0.0_f64; nrows * nao_pair];
@@ -283,6 +336,7 @@ fn add_ft_j3c(
     gpqi: &[f64],
     p0: usize,
     p1: usize,
+    sign: f64,
 ) {
     let nchg = chg.len();
     let ncol = buf.ncol;
@@ -294,11 +348,15 @@ fn add_ft_j3c(
             let row = c * ncol;
             for col in 0..ncol {
                 let (br, bi) = (gpqr[pb + col], gpqi[pb + col]);
-                // j3cR -= GchgR·GpqR + GchgI·GpqI
-                buf.re[row + col] -= ar * br + ai * bi;
+                // CC / MDF (`sign = -1`): j3cR -= GauxR·GpqR + GauxI·GpqI — a
+                // projection is REMOVED from the Gaussian fit.
+                // RS (`sign = +1`): the long-range remainder is ADDED back,
+                // `rsdf_builder.py:806-811`, where all four `lib.ddot` calls
+                // carry `+1`. Same two products either way; only the sign of
+                // the accumulation differs, which is why this is one kernel.
+                buf.re[row + col] += sign * (ar * br + ai * bi);
                 if !buf.real_only {
-                    // j3cI -= GchgR·GpqI - GchgI·GpqR
-                    buf.im[row + col] -= ar * bi - ai * br;
+                    buf.im[row + col] += sign * (ar * bi - ai * br);
                 }
             }
         }
@@ -327,8 +385,8 @@ fn solve_cderi(
             let (jr, ji) = fused.fuse_rows_complex(&buf.re, &buf.im, ncol);
             CTensor { re: jr, im: ji }
         }
-        Scheme::Mixed => {
-            debug_assert_eq!(buf.nrows, naux, "MDF's buffer is already naux rows");
+        Scheme::Mixed | Scheme::RangeSeparated { .. } => {
+            debug_assert_eq!(buf.nrows, naux, "the buffer is already naux rows");
             CTensor {
                 re: buf.re.clone(),
                 im: buf.im.clone(),
@@ -466,7 +524,18 @@ pub fn make_j3c_scheme(
     let aftdf = Aftdf::with_mesh(cell.clone(), kpts, mesh)?;
 
     // `vbar` — the background-charge term, gamma difference only.
-    let vbar_full = fused.fuse_rows(&auxbar(&fused.fused.cell), 1);
+    // CC/MDF: `auxbar` removes the model charge's `G = 0` divergence.
+    // RS: `pi/omega^2/vol * aux_chg` ADDS the `G = 0` value of the short-range
+    // kernel that `get_coulG` zeroed, because no FT is applied to the
+    // short-range 3-centre tensor (`rsdf_builder.py:739-740, :769`).
+    let vbar_full = match scheme {
+        Scheme::CompensatedCharge | Scheme::Mixed => {
+            fused.fuse_rows(&auxbar(&fused.fused.cell), 1)
+        }
+        Scheme::RangeSeparated { omega, .. } => {
+            crate::rsdf_builder::j2c::rs_vbar(fused, omega, cell.vol())?
+        }
+    };
     let ovlp = pyscf_pbc_gto::pbc_intor::pbc_intor(
         cell,
         "int1e_ovlp",
@@ -549,7 +618,17 @@ pub fn make_j3c_scheme(
     // both of these and adds the long-range plane-wave half separately; the ω
     // argument exists on both callees so that builder is a builder and not a
     // plumbing change.
-    let realspace_all = outcore_auxe2(cell, fused, aosym, &flat_pairs, rcut, None)?;
+    // The compensated-charge and mixed routes are FULL-RANGE: they make the
+    // lattice sum converge by neutralising the auxiliary functions. The
+    // range-separated route converges on the KERNEL instead — `Some(-omega)`
+    // is `erfc(omega r)/r` (`rsdf_builder.py:363-534`), and its auxiliary cell
+    // is unfused, so `fuse_cols` below is a copy.
+    let realspace_omega = match scheme {
+        Scheme::CompensatedCharge | Scheme::Mixed => None,
+        Scheme::RangeSeparated { omega, .. } => Some(-omega),
+    };
+    let realspace_all =
+        outcore_auxe2(cell, fused, aosym, &flat_pairs, rcut, realspace_omega)?;
 
     let uniq_kpts: Vec<[f64; 3]> = groups.iter().map(|g| g.kpt).collect();
     let j2c_all = match scheme {
@@ -560,6 +639,24 @@ pub fn make_j3c_scheme(
         // REMOVED — `mdf.py:369-400`, and on MDF's own (small) mesh, not the
         // tightened `j2c_mesh` the compensated route uses.
         Scheme::Mixed => crate::mdf::builder::get_2c2e(cell, fused, &uniq_kpts, mesh)?,
+        // The range-separated metric is evaluated on its OWN, tighter mesh —
+        // `rsdf_builder.py:288-297`, and upstream says why: "2c2e integrals
+        // the metric can easily cause errors in cderi tensor. self.mesh may
+        // not be enough to produce required accuracy."
+        Scheme::RangeSeparated { omega, mixed } => {
+            // RSGDF evaluates its metric on a TIGHTER mesh than the tensor
+            // (`rsdf_builder.py:288-297`, "self.mesh may not be enough to
+            // produce required accuracy"). RSMDF uses `self.mesh`
+            // (`mdf.py:276`), for 14-06's reason: the plane waves ARE the
+            // basis there, so metric and tensor must be projected against the
+            // same set or the fit is inconsistent.
+            let j2c_mesh = if mixed {
+                mesh
+            } else {
+                crate::rsdf_builder::j2c_mesh(cell, &fused.auxcell.cell, omega)?
+            };
+            crate::rsdf_builder::j2c::get_2c2e(cell, fused, &uniq_kpts, omega, j2c_mesh, mixed)?
+        }
     };
 
     let mut out = Cderi {
@@ -614,6 +711,15 @@ pub fn make_j3c_scheme(
         let (gauxr, gauxi, chg) = match scheme {
             Scheme::CompensatedCharge => weighted_ft_ao(cell, fused, uniq_kpt, mesh)?,
             Scheme::Mixed => crate::mdf::builder::weighted_ft_ao(cell, fused, uniq_kpt, mesh)?,
+            Scheme::RangeSeparated { omega, mixed } => {
+                crate::rsdf_builder::j2c::weighted_ft_ao(cell, fused, uniq_kpt, omega, mesh, mixed)?
+            }
+        };
+        // See `add_ft_j3c`: RS adds the long-range remainder, the other two
+        // remove a projection.
+        let ft_sign = match scheme {
+            Scheme::CompensatedCharge | Scheme::Mixed => -1.0_f64,
+            Scheme::RangeSeparated { .. } => 1.0_f64,
         };
         let kptjs: Vec<[f64; 3]> = g.kj.iter().map(|&j| kpts[j]).collect();
 
@@ -651,6 +757,7 @@ pub fn make_j3c_scheme(
                     &gi2,
                     0,
                     b.p1 - b.p0,
+                    ft_sign,
                 );
             }
             Ok(())

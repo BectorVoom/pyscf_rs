@@ -20,22 +20,63 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 15 — KMP2. Phase 14 is CLOSED (2026-08-29).
+**Current focus:** Phase 15 — KMP2. Phase 14 is CLOSED (2026-08-29); its one
+outstanding gate was REOPENED and MET on 2026-08-30 (see below).
 
 ## Current Position
 
-Phase: 14-gdf-mdf-rsdf-rsjk — **CLOSED 2026-08-29.** Full evidence in
-`.planning/phases/14-gdf-mdf-rsdf-rsjk/14-VERIFICATION.md`.
+Phase: 14-gdf-mdf-rsdf-rsjk — **CLOSED 2026-08-29; Gate 3 MET 2026-08-30.**
+Full evidence in `.planning/phases/14-gdf-mdf-rsdf-rsjk/14-VERIFICATION.md`.
 
-**Four of five gates MET, one UNREACHABLE, and the fifth's blocker is a missing
-capability in `cintx`, not in this port.**
+**Update 2026-08-30 — Gate 3 is no longer unreachable.** D-PBC-24 landed
+`ExecutionOptions::range_omega` in cintx, and plan 14-07 sub-tasks 7b/7c ported
+`rsdf_builder::_RSGDFBuilder` on top of it (`14-07-SUMMARY.md`, appended).
+Measured against vendored PySCF 2.12.1, gated by
+`crates/pyscf-pbc-scf/tests/gate3_rsdf.rs`:
+
+* He-fcc `sto-3g` 2×2×2 — **RSDF 2.325e-10**, **GDF 2.750e-10** (Gate 1 level).
+* diamond `gth-szv` gamma — **RSDF 1.615e-8**, **GDF 2.074e-8** (the GTH floor).
+
+**The ORIGINAL Gate 3 criterion — the port's `|CC − RS|` landing on upstream's
+own gap within 2× — is MET on diamond: 4.465597e-6 against 4.502481e-6, ratio
+0.9918.** On He-fcc it does not discriminate (ratio 0.028) because upstream's
+two routes differ there almost entirely through `exclude_d_aux` /
+`exclude_dd_block`, which this port has in neither route; the gate therefore
+asserts per-route agreement on both systems and reports the ratio.
+
+`_RSNucBuilder`'s absence does not show at 1e-8 even on the pseudopotential
+cell — RSDF's diamond error is smaller than GDF's.
+
+Also shipped on the same foundation: **`_RSMDFBuilder`** (3.209e-10 / 1.897e-11
+/ 7.808e-12 at matched meshes 11/15/21 vs upstream's `df.MDF()` default) and
+**Task 7d — `Gdf::prefer_ccdf` flipped to `false`**, with `df_swap.rs` now
+pinning BOTH routes against their own upstream numbers (they differ by 5.222e-10,
+inside that test's 1e-9 bar, so pinning one would have hidden the flip).
+
+Still open from D-PBC-24 stage 5:
+
+* `_RSNucBuilder` — **performance carry-over, not a fidelity gap** (the same
+  one 14-03 opened for `_CCNucBuilder`). This port uses neither split builder:
+  `get_nuc`/`get_pp` go straight to AFTDF at the cell's converged mesh, gated at
+  2.755e-12 and more accurate than either split. The split buys speed only.
+* `rsdf_helper`'s prescreen — its absence keeps more primitives than upstream,
+  the conservative direction.
+* **`pyscf_pbc_scf::rsjk` — BLOCKED ON PHASE 17, not on cintx.** `range_omega`
+  was necessary but not sufficient: `rsjk`'s short-range half needs
+  `ft_ao._RangeSeparatedCell` + `ExtendedMole.strip_basis` (Phase 17,
+  D-PBC-21/23) AND a periodic 4-centre screened `int2e` driver, of which this
+  port has none. Unlike RSDF there is no all-compact fallback — the screening IS
+  the algorithm. Sequence after Phase 17; size as its own plan.
+
+**At close: four of five gates MET, one UNREACHABLE, and the fifth's blocker was
+a missing capability in `cintx`, not in this port.**
 
 | gate | result |
 |---|---|
 | **1** — the algebra vs upstream, all-electron control | **MET** — `KRHF` on GDF **2.750e-10**; `fuse(j3c)` 1.412e-12; `j2c` 7.105e-14; `df_ao2mo.get_eri` 1.667e-12; `ao2mo_7d` 1.984e-12; `KRHF` on MDF 2.827e-10 |
 | **1b** — the same on diamond | **PARTIAL** — everything that needs no 3-centre build is gated at ≤1e-11; the flagship `make_j3c` is an unmeasured multi-hour run and its oracle is an `#[ignore]`d acceptance test |
 | **2** — MDF converges to FFTDF | **MET** — 6.002e-05 (GDF) → 1.695e-06 → **3.433e-09** → 3.245e-08, on upstream's CC ladder to within 1 %, INCLUDING the non-monotone bounce |
-| **3** — GDF vs RSDF | **UNREACHABLE** — RSDF is blocked on the cintx `range_omega` gap (D-PBC-24) |
+| **3** — GDF vs RSDF | **MET 2026-08-30** (was UNREACHABLE) — per-route vs upstream: He-fcc RSDF 2.325e-10 / GDF 2.750e-10; diamond gamma 1.615e-8 / 2.074e-8. Original gap criterion MET on diamond, ratio **0.9918** |
 | **4** — `_cderi` memory, k-mesh PINNED at 2×2×2 | **MET** — 6.08 % of the FFTDF AO table on diamond (upstream 6.17 %); 20.50 % at 3×3×3, which is why the mesh is pinned |
 
 ### The ROADMAP's gate was wrong in both halves and is rewritten

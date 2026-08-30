@@ -3,15 +3,17 @@
 **Date:** 2026-08-29 · **Oracle:** vendored PySCF **2.12.1** at `<root>/pyscf`
 (`PYTHONPATH` pinned, `pyscf.__version__` asserted in every oracle script)
 
-**Verdict: the phase closes with four of five gates MET, one UNREACHABLE, and
-the reason for the fifth is a missing capability in `cintx`, not in this port.**
+**Verdict (REOPENED and updated 2026-08-30): four of five gates MET at close;
+Gate 3 was UNREACHABLE and is now MET.** The `cintx` capability it was blocked
+on landed as D-PBC-24, and plan 14-07 sub-tasks 7b/7c ported `_RSGDFBuilder` on
+top of it. See §5, rewritten.
 
 | gate | what it measures | result |
 |---|---|---|
 | **1** | GDF vs upstream on the all-electron control | **MET** — 2.750e-10 on the converged `KRHF`; 1.667e-12 / 1.984e-12 on the ERIs |
 | **1b** | the same on diamond | **PARTIAL** — see §3; the flagship `make_j3c` is an unmeasured multi-hour run |
 | **2** | MDF converges to FFTDF | **MET** — 1.695e-06 → 3.433e-09 → 3.245e-08, on upstream's ladder to within 1 % |
-| **3** | GDF vs RSDF | **UNREACHABLE** — RSDF is blocked on a cintx gap (§5) |
+| **3** | GDF vs RSDF | **MET (2026-08-30)** — RSDF **2.325e-10** and GDF **2.750e-10** against upstream's own two routes on He-fcc 2×2×2 (§5) |
 | **4** | `_cderi` under 20 % of the FFTDF AO table at 2×2×2 | **MET** — see §4 |
 
 ---
@@ -166,65 +168,193 @@ ratio scales as `nkpts²/nkpts = nkpts`, asserted exactly (27/8 = 3.375).
 
 ---
 
-## §5 — Gate 3 (UNREACHABLE): RSDF, and why
+## §5 — Gate 3 (MET, 2026-08-30): RSDF
 
-Gate 3 compares `|E_KRHF(GDF) − E_KRHF(RSDF)|` against upstream's own floor
-(1.353e-08 diamond 2×2×2, 4.566e-09 gamma, 1.113e-10 He-fcc). **RSDF does not
-exist in this port**, and the reason is outside it.
+**Superseded.** This section recorded Gate 3 as UNREACHABLE because
+`_RSGDFBuilder.get_2c2e` needed a short-range `int2c2e`, `outcore_auxe2` a
+short-range `int3c2e`, and cintx's safe API could not be asked to set libcint's
+`PTR_RANGE_OMEGA` (`env[8]`). The original analysis is preserved in
+`.planning/carryovers/D-PBC-24-cintx-range-omega-PLAN.md` §1.
 
-`_RSGDFBuilder.get_2c2e` needs a short-range `int2c2e`; its `outcore_auxe2`
-needs a short-range `int3c2e`; `rsjk`'s real-space pass needs a short-range
-`int2e`. Range separation is not a distinct integral symbol — upstream never
-calls an `int2e_sr_*` — it is libcint's `PTR_RANGE_OMEGA` (`env[8]`) toggle
-around the standard symbol. cintx cannot be asked to set it:
+### What closed it
 
-1. `cintx_runtime::ExecutionOptions` (`cintx-runtime/src/options.rs:96`) carries
-   `f12_zeta` (`env[9]`), `rinv_orig` and `common_orig`. **No `range_omega`.**
-2. No kernel reads `env[8]` — `center_3c2e.rs` and `two_electron.rs` do not
-   mention `omega`. `cintx-compat/src/raw.rs:35-41` names the constant only in a
-   warning not to overwrite the slot.
-3. **The gap is already on this repository's record**: Phase 4's Open Question
-   A5 / cintx#11, documented at length in
-   `crates/pyscf-gto/src/range_coulomb.rs`, which shipped the `env[8]`
-   set/restore semantics and CI-gated the numerical RSH assertion behind exactly
-   this.
-4. A second, independent obstruction: `incore::aux_e2` reaches cintx through
-   `build_image_expanded_with_aux`, which builds its `BasisSet` from the parsed
-   per-element basis and not from an `_env` array — so even `range_coulomb.rs`'s
-   own direct-`_env` workaround is unreachable from the periodic 3-centre
-   driver. Closing (1) would still leave this.
+**D-PBC-24 landed in cintx.** `ExecutionOptions::range_omega` exists, is part of
+the WORKSPACE query (short range doubles the Rys roots), and the `CINTg0_2e`
+omega branch is ported once in `cintx-cubecl::math::range_separation`. The
+second obstruction recorded above — that `incore::aux_e2` builds its `BasisSet`
+without an `_env`, so the `range_coulomb.rs` workaround was unreachable — turned
+out never to matter: **ω rides in the OPTIONS, not in the basis.**
+`incore::aux_e2`, `incore::fill_2c2e` and `pbc_intor::PbcIntorOpts` all take an
+`omega` now, gated by `SR(ω) + LR(ω) == full` in `tests/incore.rs`.
 
-**The work needed to lift this is planned in
-`.planning/carryovers/D-PBC-24-cintx-range-omega-PLAN.md`** — five stages, with
-the finding that makes it tractable: `rys_order = (Σ l_ceil)/2 + 1` is `≤ 3` on
-every system this phase gates, and in that regime libcint computes the
-short-range integral as `full − LR` with DOUBLED Rys roots, using only the
-standard root finder. `CINTsr_rys_roots` — the genuinely hard part — is needed
-only above `rys_order = 3`.
+**Plan 14-07 sub-tasks 7b/7c then ported `_RSGDFBuilder`**, as
+`crate::rsdf_builder::{j2c, RsGdfBuilder}` plus
+`gdf_builder::j3c::Scheme::RangeSeparated` — one fitting pipeline, three
+schemes, the same shape `_CCMDFBuilder` takes upstream.
 
-`14-07-PLAN.md` Task 7b anticipated this exactly — *"if it does not, this is the
-plan's one real blocker and it must be reported as such, not worked around with
-a numerically different kernel"* — so every affected entry point returns
-`NotYetImplemented { phase: 14 }` naming the gap (D-PBC-20), and the refusals
-are asserted in `tests/rsdf_builder.rs`, `tests/rsdf.rs` and `tests/rsjk.rs`.
+### The measurement
 
-Substituting the full-range kernel would give builders that run, converge, and
-are silently different methods. For `rsjk` that is worse than for RSDF: `rsjk`
-is EXACT, so a wrong answer would land inside the 1.2e-3 DF fitting error of a
-correct GDF and look plausible.
+`PYSCF_ORACLE_VENV=1 cargo test -p pyscf-pbc-scf --release --test gate3_rsdf --
+--ignored`, `conv_tol = 1e-12`, against vendored PySCF 2.12.1:
 
-**Consequently:** plan 14-07 Task 7d's flip of `Gdf::prefer_ccdf` to `false`
-does not happen (asserted by `gdf_default_route_has_not_flipped`), and the
-committed `df_swap` baseline does not move.
+**He-fcc `sto-3g` 2×2×2** (all-electron control):
 
-**What DID ship of 14-07/14-08:** all twelve ω estimators plus
-`weighted_coulG_LR/_SR` and `_gaussian_int` (7a, 10 tests, every number gated at
-1e-12 against `measurements/omega.out`), `get_aux_chg`, and the shared
-`density_fit` shim. Three consumers need the ω machinery regardless of the
-blocker — `rsjk`, RSH functionals, and Phase 17 — and `rsjk.py:145-151` reads
-precisely these functions, so when the cintx gap closes 7a is already in place.
+| route | upstream | this port | error |
+|---|---|---|---|
+| **RSDF** (upstream's DEFAULT, `_prefer_ccdf = False`) | −2.80842508717097 | −2.80842508693849 | **2.325e-10** |
+| **GDF**, compensated charge | −2.80842508664874 | −2.80842508692377 | **2.750e-10** |
+| `\|CC − RS\|` | 5.222351e-10 | 1.471179e-11 | ratio **0.028** |
 
----
+**Diamond `gth-szv`/`gth-pade` gamma** (pseudopotential):
+
+| route | upstream | this port | error |
+|---|---|---|---|
+| **RSDF** | −10.14369692267123 | −10.14369690652303 | **1.615e-8** |
+| **GDF**, compensated charge | −10.14369242019033 | −10.14369244092593 | **2.074e-8** |
+| `\|CC − RS\|` | 4.502481e-6 | 4.465597e-6 | ratio **0.9918** |
+
+Two things follow, and the second corrects an earlier reading in this file.
+
+**1. Each route reproduces upstream's corresponding route** at the port's own
+accuracy for that system — 2-3e-10 on the all-electron control (Gate 1's level),
+1.6-2.1e-8 on the pseudopotential cell (the GTH floor §3 prices). Notably
+RSDF's diamond error (1.615e-8) is *smaller* than GDF's (2.074e-8), so
+`_RSNucBuilder`'s absence — both schemes take `get_nuc`/`get_pp` from the
+compensated route — does not show at this level even on a pseudopotential cell.
+
+**2. The ORIGINAL Gate 3 criterion is MET, on diamond.** `14-07-PLAN.md` Task 7e
+item 5 and this file's first draft of §5 asked for `|E(CC) − E(RS)|` to land on
+upstream's own gap within a factor of 2, reasoning that "two independent
+implementations of the same fitted quantity reproducing upstream's *disagreement*
+is stronger evidence than either matching alone". On diamond gamma the port
+gives **4.465597e-6** against upstream's **4.502481e-6** — a ratio of
+**0.9918**. That is the criterion passing on its own terms, and it is the
+single strongest piece of evidence in this phase.
+
+### Where the original criterion does NOT discriminate, and why
+
+On **He-fcc** the same criterion would fail: the port's gap is 1.471e-11 against
+upstream's 5.222e-10, a ratio of 0.028. **That is not a defect and must not be
+read as one.** Upstream's two routes differ partly through `exclude_d_aux` and
+`exclude_dd_block`, which this port has in NEITHER route (D-PBC-21 / D-PBC-23
+defer `ft_ao._RangeSeparatedCell` to Phase 17). On a 1-AO all-electron cell those
+splits are essentially the whole of the inter-route difference, so removing them
+from both routes leaves the two converging to the same quantity — the port
+agrees with itself better than upstream does. On diamond, where the fitting error
+is four orders larger and the routes genuinely diverge on the auxiliary fit
+itself, the splits are a small part of the gap and the criterion recovers.
+
+The gate therefore asserts **per-route agreement with upstream** on both systems
+(the statement that holds everywhere) and **reports** the gap ratio, which is
+0.9918 on diamond and uninformative on He-fcc. Gating on the ratio alone would
+have produced a false negative on the all-electron control.
+
+### The one deliberate divergence, priced
+
+`_RSGDFBuilder.build` calls `_guess_omega` with the **orbital cell** where
+upstream passes the **auxcell** (`rsdf_builder.py:145`). Upstream can afford the
+auxcell's coarser answer because `exclude_d_aux` and `exclude_dd_block` route
+what a coarse grid cannot resolve around the grid; this port has neither split,
+so it resolves it instead:
+
+| `(omega, mesh)` from | value | error vs upstream RSDF |
+|---|---|---|
+| `_guess_omega(auxcell)` — upstream's | (0.421018, [7,7,7]) | **8.670e-7** |
+| `_guess_omega(cell)` — this port's | (0.739359, [11,11,11]) | **1.97e-10** |
+
+`[11,11,11]` is also exactly what `measurements/omega.out` records and what
+`tests/rsdf_builder.rs::guess_omega_matches_upstream` already pinned.
+
+### Two bugs this gate caught, both real
+
+1. **The SR 2-centre lattice sum was truncated.** `auxcell.rcut` is an *orbital*
+   radius; the metric sums a two-centre *Coulomb* interaction `erfc(ωR)/R`,
+   which reaches much further. Upstream sets
+   `auxcell_c.rcut = estimate_rs_2c2e_rcut(...)` at `rsdf_builder.py:274` and
+   this port had not. Measured: the real-space SR metric differed from the
+   reciprocal `Σ_G conj(auxG) coulG_SR auxG` by **1.25e-4** at every k-point,
+   worth **8.57e-5 Ha** in the converged energy. With it, the metric agrees with
+   a converged reciprocal reference to **2e-12**.
+2. **The diagnostic's own reference was the unconverged one.** `FT_SR` in
+   reciprocal space converges *slowly* — the SR kernel is not smooth in `G` —
+   so the first reference mesh made a correct metric look 7.6e-5 wrong. Meshes
+   21/41/61/81 give 1.02e-1 / 7.64e-5 / 2.02e-9 / 1.38e-12 against the analytic
+   SR sum. Recorded because the same trap will catch the next reader.
+
+### Also shipped on the same foundation
+
+* **`_RSMDFBuilder`** (`mdf.py:238-353`) — `_RSGDFBuilder` with `mixed` set;
+  upstream expresses it as a subclass overriding three methods, this port as a
+  flag on one builder. Gated **at matched meshes** against upstream's
+  `df.MDF()` default route: **3.209e-10** (mesh 11), **1.897e-11** (15),
+  **7.808e-12** (21). `measurements/mdfladder.out`, recorded on this route and
+  unreachable in 14-06, is reachable again.
+
+  Two bugs it caught. `_RSMDFBuilder` ends with
+  `weighted_coulG = MDF.weighted_coulG` (`mdf.py:353`), so **every** kernel it
+  uses — short-range included — carries MDF's `±Gmax ± 0.5` edge screen, which
+  fires at every k-difference on a 2×2×2 mesh; omitting it was worth
+  **1.176e-4 Ha**. And `mdf.py:265` passes no `precision` to
+  `estimate_rs_2c2e_rcut` where `rsdf_builder.py:274` passes `precision**1.5`;
+  matching upstream's looser value measured WORSE (1.324e-6 against 1.160e-6),
+  because a smaller precision gives a larger radius, so both schemes keep the
+  tighter one.
+
+  **For MDF the mesh is definitional, not a convergence knob**: the plane-wave
+  set is part of the basis, so two meshes are two different valid MDF
+  approximations and an MDF energy is only comparable at a matched mesh. That
+  is why this gate forces the mesh on both sides, and why the port's default
+  (`[11,11,11]`, from the cell) sitting 1.160e-6 from upstream's default
+  (`[7,7,7]`, from the auxcell) is a difference of grid rather than of algebra —
+  the ladder above is the proof.
+
+* **Task 7d — `Gdf::prefer_ccdf` flipped to `false`**, matching upstream.
+  `df_swap.rs` now pins **both** routes against their own upstream numbers.
+  That mattered: the two disagree by 5.222e-10 on He-fcc, *inside* that test's
+  1e-9 bar, so the pre-flip test would have kept passing while silently
+  measuring the other route — precisely the drift Task 7d exists to prevent.
+  The default route is also the faster one, 1.3 s against 6.6 s on He-fcc 2×2×2.
+
+### What is still NOT ported
+
+* **`_RSNucBuilder`** (`rsdf_builder.py:1098-1311`) — **a performance
+  carry-over, not a fidelity gap, and the same one 14-03 opened for
+  `_CCNucBuilder`.** This port uses NEITHER split nuclear builder:
+  `gdf::nuc::get_nuc` goes straight to AFTDF at the cell's converged mesh, where
+  it is oracle-gated at 2.755e-12 — strictly more accurate than either split.
+  What a split buys is speed (`[9,9,9]` instead of `[43,43,43]`), and 14-04
+  measured that evaluating the whole nuclear attraction on the small mesh
+  without the split is worth **0.0743 Ha**. Consistent with that, the flipped
+  default shows no nuclear penalty: on diamond gamma the RS route's error
+  (1.615e-8) is *smaller* than the CC route's (2.074e-8).
+* `rsdf_helper.py`'s prescreen (`get_q_cond`, the Schwarz bound). Its absence
+  keeps MORE primitives than upstream — conservative, as 14-05 was toward
+  `ExtendedMole.strip_basis`.
+* **`pyscf_pbc_scf::rsjk` (14-08 Task 4) — and its blocker is NOT the one this
+  phase reported.** D-PBC-24's `range_omega` was necessary but not sufficient.
+  Two independent things are still missing:
+
+  1. **The supermole.** `rsjk.py:150-200` builds the short-range half over
+     `ft_ao._RangeSeparatedCell` + `ft_ao.ExtendedMole.strip_basis`, and
+     `_get_jk_sr` (`:267-436`) indexes it by `supmol.bas_mask`
+     `(bvk_ncells, rs_nbas, nimgs)`. Both types are Phase 17 (D-PBC-21/23) —
+     the same carry-over `exclude_dd_block` and `strip_basis` wait on.
+  2. **A periodic 4-centre `int2e` driver.** `_get_jk_sr` drives
+     `PBCVHF_direct_drv1`, a SCREENED direct sweep. `grep int2e` across every
+     `pyscf-pbc-*` crate finds one doc comment and no implementation;
+     `incore::aux_e2` is 3-centre.
+
+  Point 2 is why the manoeuvre that unblocked RSDF does not transfer.
+  `_RSGDFBuilder` could be ported by treating every function as compact and
+  paying for the missing split in grid points — a degenerate case that is merely
+  slower. For `rsjk` the screening **is** the algorithm: an unscreened 4-centre
+  sweep over the BvK images is not slower but infeasible, so there is no
+  correct-but-slow fallback. **Sequence it after Phase 17 and size it as its own
+  plan.**
+
+Substituting the full-range kernel would still give builders that run, converge
+and are silently different methods; for `rsjk` — which is EXACT — a wrong answer
+would land inside a correct GDF's 1.2e-3 fitting error and look plausible.
 
 ## §6 — Defects the phase's own tests caught, and what each was worth
 

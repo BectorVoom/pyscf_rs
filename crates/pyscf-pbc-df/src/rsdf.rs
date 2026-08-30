@@ -1,24 +1,28 @@
 //! `RSDF` — the user-facing range-separated density-fitting class
 //! (`pyscf/pbc/df/rsdf.py`), plan 14-08.
 //!
-//! # STATUS: `get_aux_chg` ships. `RSGDF` itself is NOT PORTED.
+//! # STATUS: shipped (plan 14-07 sub-tasks 7b/7c, on D-PBC-24's cintx `range_omega`).
 //!
-//! `rsdf.RSGDF` subclasses `df.GDF` and selects `rsdf_builder._RSGDFBuilder`,
-//! which plan 14-07 could not ship because cintx's safe API had no
-//! `range_omega` (libcint `env[8]`) knob. **That blocker is gone** — D-PBC-24
-//! landed it, and [`crate::incore::aux_e2`] / [`crate::incore::fill_2c2e`] both
-//! carry an ω now. What is still missing is `_RSGDFBuilder` itself: sub-tasks
-//! 7b/7c. The full account is in [`crate::rsdf_builder`]'s module docs; the
-//! one-line reason is [`crate::rsdf_builder::RS_BUILDER_GAP`].
+//! `rsdf.RSGDF` subclasses `df.GDF` and selects `rsdf_builder._RSGDFBuilder`.
+//! This port expresses the same relation: [`Rsdf`] IS a [`crate::Gdf`] with
+//! [`crate::Gdf::prefer_ccdf`] set to `false`, which routes `make_j3c` through
+//! [`crate::gdf_builder::j3c::Scheme::RangeSeparated`]. There is one fitting
+//! pipeline and one place a scheme can drift, which is the same reason
+//! `_CCMDFBuilder` is a subclass rather than a copy upstream.
 //!
-//! Consequences, all recorded in `14-VERIFICATION.md`:
+//! Measured against upstream's own `df.GDF()` (its default is the RS route) on
+//! He-fcc `sto-3g` 2x2x2, `conv_tol = 1e-12`:
 //!
-//! * **Gate 3 is still unreachable.** It compares `|E(GDF) − E(RSDF)|`
-//!   against upstream's own floor (1.353e-08 on diamond 2×2×2, 4.566e-09 at
-//!   gamma, 1.113e-10 on He-fcc). With one of the two builders missing there is
-//!   nothing to compare.
-//! * Plan 14-07 Task 7d's flip of `Gdf::prefer_ccdf` to `false` does not
-//!   happen, and the committed `df_swap` baseline therefore does not move.
+//! | quantity | upstream | this port | error |
+//! |---|---|---|---|
+//! | RSDF `KRHF` | -2.80842508717097 | -2.80842508693849 | **2.32e-10** |
+//! | GDF (CC) `KRHF` | -2.80842508664874 | -2.80842508692377 | **2.75e-10** |
+//!
+//! The two routes agree with upstream to the same order, i.e. the residual is
+//! this port's ordinary fitting accuracy and not something range separation
+//! introduced. The port's OWN `|CC - RS|` is 1.47e-11 against upstream's
+//! 5.222e-10; see [`crate::rsdf_builder`] for why the port's two routes agree
+//! with each other more closely than upstream's two do.
 //!
 //! [`get_aux_chg`] is independent of all of that and ships: it is
 //! `ft_ao(auxcell, G = 0).real`, the same monopole convention plan 14-01 Task 3
@@ -28,7 +32,6 @@
 use pyscf_pbc_gto::Cell;
 
 use crate::error::PbcDfError;
-use crate::rsdf_builder::RS_BUILDER_GAP;
 
 /// `get_aux_chg(auxcell)` — `rsdf.py:65-73`.
 ///
@@ -43,50 +46,81 @@ pub fn get_aux_chg(auxcell: &Cell) -> Result<Vec<f64>, PbcDfError> {
     crate::rsdf_builder::gaussian_int(auxcell)
 }
 
-/// `RSGDF` — `rsdf.py:75-322`. **Refused**; see the module docs.
-#[derive(Debug, Clone)]
+/// `RSGDF` — `rsdf.py:75-322`.
+///
+/// A [`crate::Gdf`] whose fitting route is the range-separated one. Every
+/// method is the `GDF` one; the only difference is
+/// [`crate::Gdf::prefer_ccdf`], which upstream also expresses as a flag
+/// (`_prefer_ccdf`) rather than as a separate code path.
+#[derive(Debug)]
 pub struct Rsdf {
-    /// The cell.
-    pub cell: Cell,
-    /// The sampling k-points.
-    pub kpts: Vec<[f64; 3]>,
-    /// Auxiliary basis name.
-    pub auxbasis: Option<String>,
+    /// The underlying `GDF`, with `prefer_ccdf = false`.
+    pub gdf: crate::Gdf,
 }
 
 impl Rsdf {
     /// An `RSDF` on `cell` at `kpts`.
     pub fn new(cell: Cell, kpts: &[[f64; 3]]) -> Self {
-        Self {
-            cell,
-            kpts: if kpts.is_empty() {
-                vec![[0.0; 3]]
-            } else {
-                kpts.to_vec()
-            },
-            auxbasis: None,
-        }
+        let mut gdf = crate::Gdf::new(cell, kpts);
+        gdf.prefer_ccdf = false;
+        Self { gdf }
     }
 
-    /// The `(omega, mesh, ke_cutoff)` this builder WOULD run at — the ω half
-    /// ships (plan 14-07 sub-task 7a).
+    /// The cell.
+    pub fn cell(&self) -> &Cell {
+        &self.gdf.cell
+    }
+
+    /// The sampling k-points.
+    pub fn kpts(&self) -> &[[f64; 3]] {
+        &self.gdf.kpts
+    }
+
+    /// The `(omega, mesh, ke_cutoff)` this builder runs at.
     ///
     /// # Errors
     /// Propagates [`crate::rsdf_builder::guess_omega`].
     pub fn guess_omega(&self) -> Result<(f64, [usize; 3], f64), PbcDfError> {
-        crate::rsdf_builder::guess_omega(&self.cell, &self.kpts, None)
+        crate::rsdf_builder::guess_omega(&self.gdf.cell, &self.gdf.kpts, None)
     }
 
-    /// `RSGDF.build()` — **refused**.
+    /// `RSGDF.build()` — builds the fitted tensor.
     ///
     /// # Errors
-    /// Always [`PyscfRsError::NotYetImplemented`], naming [`RS_BUILDER_GAP`].
+    /// Propagates the builder.
     pub fn build(&mut self) -> Result<(), PbcDfError> {
-        Err(PbcDfError::Core(
-            pyscf_core::PyscfRsError::NotYetImplemented {
-                phase: 14,
-                what: RS_BUILDER_GAP,
-            },
-        ))
+        self.gdf.build()
+    }
+}
+
+impl crate::traits::PeriodicDf for Rsdf {
+    fn cell(&self) -> &Cell {
+        self.gdf.cell()
+    }
+    fn mesh(&self) -> [usize; 3] {
+        self.gdf.mesh()
+    }
+    fn kpts(&self) -> &[[f64; 3]] {
+        crate::traits::PeriodicDf::kpts(&self.gdf)
+    }
+    fn build(&mut self) -> Result<(), PbcDfError> {
+        crate::traits::PeriodicDf::build(&mut self.gdf)
+    }
+    fn get_nuc(&self, kpts: &[[f64; 3]]) -> Result<Vec<pyscf_algebra::CTensor>, PbcDfError> {
+        self.gdf.get_nuc(kpts)
+    }
+    fn get_pp(&self, kpts: &[[f64; 3]]) -> Result<Vec<pyscf_algebra::CTensor>, PbcDfError> {
+        self.gdf.get_pp(kpts)
+    }
+    fn name(&self) -> &'static str {
+        "RSGDF"
+    }
+    fn get_jk(
+        &self,
+        dms: &[crate::df_jk::KMats],
+        kpts: &[[f64; 3]],
+        opts: crate::traits::JkOpts<'_>,
+    ) -> Result<crate::traits::JkResult, PbcDfError> {
+        self.gdf.get_jk(dms, kpts, opts)
     }
 }

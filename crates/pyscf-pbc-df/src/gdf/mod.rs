@@ -17,12 +17,32 @@
 //! # Which builder this drives
 //!
 //! Upstream's `GDF._prefer_ccdf = False`, so `df.GDF()` runs
-//! `rsdf_builder._RSGDFBuilder`. **This port ships `_CCGDFBuilder` first**
-//! (plan 14-02) because it is the self-contained one, so [`Gdf::prefer_ccdf`]
-//! defaults to `true` here and plan 14-07 flips it. The two routes are not
-//! interchangeable: upstream's own disagree by **5.960e-07** on diamond 2×2×2,
-//! **4.502e-06** at gamma and **5.222e-10** on He-fcc (`measurements/ccdf.py`),
-//! which is why the flip is a recorded decision rather than a default.
+//! `rsdf_builder._RSGDFBuilder`. Plan 14-02 shipped `_CCGDFBuilder` first
+//! because it is the self-contained one, and [`Gdf::prefer_ccdf`] defaulted to
+//! `true`. **Plan 14-07 Task 7d flipped it to `false` on 2026-08-30**, once
+//! 7b/7c had shipped the range-separated builder on D-PBC-24's cintx
+//! `range_omega`.
+//!
+//! The two routes are not interchangeable: upstream's own disagree by
+//! **5.960e-07** on diamond 2×2×2, **4.502e-06** at gamma and **5.222e-10** on
+//! He-fcc (`measurements/ccdf.py`), which is why the flip is a recorded
+//! decision and why `df_swap.rs` now pins BOTH routes against their own
+//! upstream numbers rather than one against the other.
+//!
+//! Measured after the flip, He-fcc `sto-3g` 2x2x2 `KRHF`: the default (RS)
+//! route gives **−2.80842508693849** against upstream's RS
+//! **−2.80842508717097** (2.325e-10), and it is also the faster of the two —
+//! 1.3 s against 6.6 s on this system, because the short-range real-space sum
+//! is cheaper than the compensated one.
+//!
+//! **The flip does not touch `get_nuc` / `get_pp`.** Neither scheme uses a
+//! split nuclear builder: this port evaluates the nuclear attraction EXACTLY
+//! through AFTDF at the cell's converged mesh (see [`nuc::get_nuc`], which
+//! measures why the compensated mesh is wrong for it), where it is oracle-gated
+//! at 2.755e-12. `_CCNucBuilder` and `_RSNucBuilder` are both *performance*
+//! optimisations — they let the nuclear part run on a tiny mesh — and porting
+//! either is the same named carry-over 14-03 opened, not a fidelity gap the
+//! flip widens.
 
 pub mod cderi_store;
 pub mod jk;
@@ -54,7 +74,13 @@ pub struct Gdf {
     pub aosym: Aosym,
     /// `j_only` — build only the diagonal `(k, k)` pairs. J needs no more.
     pub j_only: bool,
-    /// See the module docs. `true` here until plan 14-07 ships the RS route.
+    /// Which 3-centre route `make_j3c` takes. **`false` — upstream's default
+    /// (`df.py`, `GDF._prefer_ccdf = False`) — selects
+    /// `rsdf_builder::_RSGDFBuilder`; `true` selects
+    /// `gdf_builder::_CCGDFBuilder`.**
+    ///
+    /// Flipped to `false` by plan 14-07 Task 7d on 2026-08-30, once 7b/7c
+    /// shipped the range-separated builder. See the module docs for what moved.
     pub prefer_ccdf: bool,
     /// Force the eigenvalue-decomposed metric.
     pub j2c_eig_always: bool,
@@ -71,6 +97,15 @@ pub struct Gdf {
     /// Built lazily too, and much cheaper than `cderi` — `mesh()` needs only
     /// this.
     builder: std::sync::OnceLock<CcGdfBuilder>,
+    /// Override the range-separated 3-centre image radius. `None` estimates it.
+    pub rs_rcut: Option<f64>,
+    /// Override the range-separated long-range mesh. `None` lets `_guess_omega`
+    /// choose.
+    pub rs_mesh: Option<[usize; 3]>,
+    /// The range-separated builder, used when [`Gdf::prefer_ccdf`] is `false`.
+    /// Built lazily for the same reason; it stops at `(omega, mesh, ke_cutoff)`
+    /// and does no 3-centre work.
+    rs_builder: std::sync::OnceLock<crate::rsdf_builder::RsGdfBuilder>,
 }
 
 impl Gdf {
@@ -87,12 +122,16 @@ impl Gdf {
             exp_to_discard: None,
             aosym: Aosym::S2,
             j_only: false,
-            prefer_ccdf: true,
+            // Task 7d — upstream's default. See the field's docs.
+            prefer_ccdf: false,
             j2c_eig_always: false,
             cderi_to_save: None,
             cderi: std::sync::OnceLock::new(),
             file: std::sync::Mutex::new(None),
             builder: std::sync::OnceLock::new(),
+            rs_rcut: None,
+            rs_mesh: None,
+            rs_builder: std::sync::OnceLock::new(),
         }
     }
 
@@ -120,6 +159,28 @@ impl Gdf {
     /// Propagates [`CderiFile::load`].
     pub fn load_cderi(cell: Cell, path: impl AsRef<std::path::Path>) -> Result<Self, PbcDfError> {
         Ok(Self::with_cderi(cell, CderiFile::load(path)?))
+    }
+
+    /// The range-separated builder, built on first use.
+    ///
+    /// # Errors
+    /// As [`Gdf::build`].
+    pub fn rs_builder(&self) -> Result<&crate::rsdf_builder::RsGdfBuilder, PbcDfError> {
+        if let Some(b) = self.rs_builder.get() {
+            return Ok(b);
+        }
+        self.refuse_unsupported()?;
+        let mut b = crate::rsdf_builder::RsGdfBuilder::new(self.cell.clone(), &self.kpts);
+        b.auxbasis = self.auxbasis.clone();
+        b.rcut = self.rs_rcut;
+        b.mesh = self.rs_mesh;
+        b.build()?;
+        let _ = self.rs_builder.set(b);
+        self.rs_builder.get().ok_or_else(|| {
+            PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                pyscf_core::CoreError::InvalidMolecule("GDF: rs builder init raced".into()),
+            ))
+        })
     }
 
     /// The compensated builder, built on first use. Cheap — it stops at the
@@ -152,8 +213,11 @@ impl Gdf {
         if let Some(c) = self.cderi.get() {
             return Ok(c);
         }
-        let b = self.builder()?;
-        let c = b.make_j3c(self.aosym, self.j_only)?;
+        let c = if self.prefer_ccdf {
+            self.builder()?.make_j3c(self.aosym, self.j_only)?
+        } else {
+            self.rs_builder()?.make_j3c(self.aosym, self.j_only)?
+        };
         if let Some(p) = self.cderi_to_save.clone() {
             let mut f = CderiFile::save(&c, &p, true)?;
             f.keep();
@@ -178,16 +242,11 @@ impl Gdf {
     }
 
     fn refuse_unsupported(&self) -> Result<(), PbcDfError> {
-        if !self.prefer_ccdf {
-            return Err(PbcDfError::Core(
-                pyscf_core::PyscfRsError::NotYetImplemented {
-                    phase: 14,
-                    what: "GDF via rsdf_builder._RSGDFBuilder — plan 14-07. It is \
-                           upstream's DEFAULT route and differs from the compensated \
-                           one by up to 4.502e-06 (measurements/ccdf.py)",
-                },
-            ));
-        }
+        // `prefer_ccdf = false` is no longer refused: plan 14-07 sub-tasks
+        // 7b/7c shipped `_RSGDFBuilder` on top of D-PBC-24's cintx
+        // `range_omega`. The two routes differ by up to 4.502e-06
+        // (`measurements/ccdf.py`), which is now a MEASURED agreement rather
+        // than an unreachable one — see `tests/rsdf_builder.rs`.
         if self.exp_to_discard.is_some() {
             return Err(PbcDfError::Core(
                 pyscf_core::PyscfRsError::NotYetImplemented {
@@ -237,10 +296,19 @@ impl PeriodicDf for Gdf {
         // GDF's own mesh is the compensating-charge one — TINY next to FFTDF's
         // ([11,11,11] against [47,47,47] on diamond), because it only has to
         // resolve the model charge, not the density.
-        self.builder()
-            .ok()
-            .and_then(|b| b.eta)
-            .map_or([1, 1, 1], |e| e.mesh)
+        if self.prefer_ccdf {
+            self.builder()
+                .ok()
+                .and_then(|b| b.eta)
+                .map_or([1, 1, 1], |e| e.mesh)
+        } else {
+            // The range-separated route's mesh carries the LONG-range half of
+            // the kernel, so it is `_guess_omega`'s, not `_guess_eta`'s.
+            self.rs_builder()
+                .ok()
+                .and_then(|b| b.mesh)
+                .unwrap_or([1, 1, 1])
+        }
     }
     fn kpts(&self) -> &[[f64; 3]] {
         &self.kpts

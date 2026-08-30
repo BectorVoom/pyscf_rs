@@ -12,7 +12,38 @@ blocks:
   - "Phase 4's numerical RSH assertion (CAM-B3LYP/H2O), CI-gated since 2026 on this same gap"
 implementation_repo: cintx (crates/cintx-runtime, cintx-rs, cintx-compat, cintx-cubecl)
 consumer_repo: pyscf_rs (crates/pyscf-pbc-df, pyscf-pbc-scf, pyscf-gto)
-status: NOT STARTED — evidence gathered 2026-08-30, no code written
+status: |
+  cintx stages 0-2 DONE (user, 2026-08-30). pyscf_rs stage 5 LARGELY DONE
+  2026-08-30:
+    1 omega threading (commit 789530b)                            DONE
+    2 _RSGDFBuilder (7b + 7c-partial; NOT _RSNucBuilder)          DONE
+    3 _RSMDFBuilder + Gate 2 route reachable again                DONE
+    4 Task 7d — Gdf::prefer_ccdf flipped to false                 DONE
+    5 rsjk                                                        BLOCKED (see below)
+    6 delete the refusals                                         DONE except rsjk's
+  Phase 14 Gate 3 MET: RSDF 2.325e-10 / GDF 2.750e-10 (He-fcc 2x2x2),
+  1.615e-8 / 2.074e-8 (diamond gamma); the ORIGINAL gap criterion passes on
+  diamond at ratio 0.9918. RSMDF 3.2e-10 / 1.9e-11 / 7.8e-12 at matched meshes
+  11/15/21. Gated by crates/pyscf-pbc-scf/tests/gate3_rsdf.rs.
+
+  STILL OPEN, and item 5's blocker is NOT the one this plan was written about:
+  * _RSNucBuilder (rsdf_builder.py:1098-1311). Both schemes take get_nuc/get_pp
+    from the compensated route. MEASURED immaterial at 1e-8 — on diamond gamma
+    the RS route's error is SMALLER than the CC route's — so this is a fidelity
+    gap, not an accuracy one.
+  * rsdf_helper.py's prescreen (get_q_cond, the Schwarz bound). Its absence
+    keeps MORE primitives than upstream, which is the conservative direction.
+  * rsjk (14-08 Task 4) — BLOCKED ON PHASE 17, NOT ON CINTX. range_omega was
+    necessary but NOT sufficient. rsjk.py:150-200 builds its short-range half
+    from ft_ao._RangeSeparatedCell + ft_ao.ExtendedMole.strip_basis (the
+    supermole this port defers to Phase 17 under D-PBC-21/23), and _get_jk_sr
+    (:267-436) then drives a SCREENED periodic 4-centre int2e over that
+    supermole (PBCVHF_direct_drv1, indexed by supmol.bas_mask). **This port has
+    no periodic 4-centre int2e driver of any kind** — `grep int2e` across
+    pyscf-pbc-* finds only a doc comment. Unlike RSDF, there is no degenerate
+    all-compact simplification available: the screening IS the algorithm, and an
+    unscreened sweep over BvK images is not merely slower but infeasible.
+    Sequence it after Phase 17's supermole, and size it as its own plan.
 autonomous: false
 must_haves:
   truths:

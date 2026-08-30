@@ -27,13 +27,33 @@
 //! Phase 4's Open Question A5 / cintx#11 in
 //! `crates/pyscf-gto/src/range_coulomb.rs` is answered.
 //!
-//! What is missing is the builder: the supermole construction, the real-space
-//! short-range `int2e` sweep with its screening, the `ft_aopair` long-range
-//! half on the coarse grid, and the `vj`/`vk` assembly. None of it is written.
+//! **cintx was necessary but NOT sufficient, and the remaining blocker is
+//! Phase 17.** Two independent things are missing, neither of them an integral
+//! flag:
+//!
+//! 1. **The supermole.** `rsjk.py:150-200` builds the short-range half over
+//!    `ft_ao._RangeSeparatedCell.from_cell` + `ft_ao.ExtendedMole.from_cell`
+//!    followed by `strip_basis`, and `_get_jk_sr` (`:267-436`) indexes the
+//!    result by `supmol.bas_mask` with shape `(bvk_ncells, rs_nbas, nimgs)`.
+//!    This port has neither type — D-PBC-21 / D-PBC-23 defer both to Phase 17,
+//!    which is also what `exclude_dd_block` and `strip_basis` wait on.
+//! 2. **A periodic 4-centre `int2e` driver.** `_get_jk_sr` drives
+//!    `PBCVHF_direct_drv1`, a SCREENED direct sweep. `grep int2e` across every
+//!    `pyscf-pbc-*` crate finds one doc comment and no implementation:
+//!    [`pyscf_pbc_df::incore::aux_e2`] is 3-centre.
+//!
+//! Point 2 is why the trick that unblocked RSDF does not transfer.
+//! `_RSGDFBuilder` could be ported by treating every basis function as compact
+//! and paying for the missing compact/smooth split in grid points — a
+//! degenerate case that is merely slower. Here the screening **is** the
+//! algorithm: an unscreened 4-centre sweep over the BvK images is not slower
+//! but infeasible, so there is no correct-but-slow version to fall back on.
+//!
 //! [`RangeSeparatedJkBuilder::build`] therefore still refuses (D-PBC-20), and
 //! **must not** be finished by substituting the full-range kernel: because
 //! `rsjk` is EXACT, a wrong answer would land within the DF fitting error of a
-//! correct GDF and look entirely plausible.
+//! correct GDF and look entirely plausible. Sequence it after Phase 17's
+//! supermole and size it as its own plan.
 //!
 //! # What ships anyway
 //!
@@ -57,9 +77,12 @@ use pyscf_pbc_df::error::PbcDfError;
 use pyscf_pbc_df::traits::{JkOpts, JkResult};
 use pyscf_pbc_gto::Cell;
 
-/// The one-line reason `rsjk` is refused. Deliberately the same text
-/// [`pyscf_pbc_df::rsdf_builder::RS_BUILDER_GAP`] carries, because it is the
-/// same unfinished work — a reader who hits one should recognise the other.
+/// The one-line reason `rsjk` is refused, re-exported from
+/// [`pyscf_pbc_df::rsdf_builder::RS_BUILDER_GAP`].
+///
+/// That constant used to cover BOTH this and `_RSGDFBuilder`. Plan 14-07
+/// sub-tasks 7b/7c shipped the latter (Phase 14 Gate 3 is MET), so the text now
+/// names only this — the last consumer of D-PBC-24 still unwritten.
 pub const RS_BUILDER_GAP: &str = pyscf_pbc_df::rsdf_builder::RS_BUILDER_GAP;
 
 /// `RangeSeparatedJKBuilder` — `rsjk.py:47-…`.

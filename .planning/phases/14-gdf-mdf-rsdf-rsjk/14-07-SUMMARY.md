@@ -132,3 +132,176 @@ this port has none (D-PBC-21/23) and calls them with the plain cell.
 refines the smaller radii (diamond: `[13.78, 17.73, 14.18, 18.57, …]` split
 against `[17.73, 18.57, 17.73, 18.57]` plain), so the plain-cell call is the
 conservative one.
+
+---
+
+# Sub-tasks 7b + 7c (partial) — `_RSGDFBuilder` — 2026-08-30
+
+**Status: 7b DONE. 7c PARTIAL (`_RSNucBuilder` and `rsdf_helper`'s prescreen not
+ported). 7d NOT DONE (deliberately).** Gate 3 is MET; see
+`14-VERIFICATION.md` §5.
+
+## What unblocked this
+
+Task 7b's own instruction was to check whether cintx exposed a short-range
+`int3c2e` and, if not, to **report** rather than substitute a different kernel.
+Phase 14 closed on that report. **D-PBC-24 then supplied the capability** —
+`ExecutionOptions::range_omega`, part of the workspace query because short range
+doubles the Rys roots. The second obstruction 14-VERIFICATION recorded (that
+`aux_e2` builds its `BasisSet` with no `_env`, so `range_coulomb.rs`'s
+`OmegaGuard` had nothing to write into) **turned out never to matter: ω rides in
+the OPTIONS, not in the basis.**
+
+## What was written
+
+| file | what |
+|---|---|
+| `gdf_builder/fuse.rs` | `unfused_auxcell` — a degenerate `FusedCell` (`fused == auxcell`, no model charges) so the RS route reuses one driver instead of forking it |
+| `rsdf_builder/j2c.rs` | `get_2c2e` (SR analytic + LR reciprocal), `weighted_ft_ao` (the LR remainder on every aux column), `rs_vbar`, `weighted_coulg_at` |
+| `rsdf_builder/mod.rs` | `RsGdfBuilder::{build, make_j3c}`, `j2c_mesh` |
+| `gdf_builder/j3c.rs` | `Scheme::RangeSeparated { omega }` — SR real-space pass, LR reciprocal pass with the sign FLIPPED, `naux` rows, Cholesky-first solve |
+| `gdf/mod.rs` | `prefer_ccdf = false` now routes to the RS builder instead of refusing; `rs_rcut` / `rs_mesh` overrides |
+| `rsdf.rs` | `Rsdf` IS a `Gdf` with `prefer_ccdf = false`, as `RSGDF` subclasses `GDF` upstream |
+| `density_fit.rs` | `DfKind::Rsdf` builds instead of refusing |
+
+`add_ft_j3c` is now one kernel with a `sign` parameter: CC and MDF **remove** a
+projection (`-1`), RS **adds** the long-range remainder (`+1`,
+`rsdf_builder.py:806-811`, where all four `lib.ddot`s carry `+1`). Same two
+products either way — which is why it stayed one function.
+
+## Result
+
+`conv_tol = 1e-12`, vs vendored PySCF 2.12.1.
+
+He-fcc `sto-3g` 2×2×2 (all-electron):
+
+| route | upstream | port | error |
+|---|---|---|---|
+| RSDF | −2.80842508717097 | −2.80842508693849 | **2.325e-10** |
+| GDF (CC) | −2.80842508664874 | −2.80842508692377 | **2.750e-10** |
+
+Diamond `gth-szv`/`gth-pade` gamma (pseudopotential):
+
+| route | upstream | port | error |
+|---|---|---|---|
+| RSDF | −10.14369692267123 | −10.14369690652303 | **1.615e-8** |
+| GDF (CC) | −10.14369242019033 | −10.14369244092593 | **2.074e-8** |
+
+**The original Gate 3 criterion is MET on diamond**: the port's `|CC − RS|` is
+4.465597e-6 against upstream's 4.502481e-6 — ratio **0.9918**. On He-fcc the same
+ratio is 0.028 and does not discriminate, because upstream's two routes differ
+there almost entirely through the two splits this port has in neither route.
+See `14-VERIFICATION.md` §5.
+
+`_RSNucBuilder`'s absence does not show at 1e-8 even on the pseudopotential cell:
+RSDF's diamond error is smaller than GDF's.
+
+## Two findings worth keeping
+
+**1. `estimate_rs_2c2e_rcut` is load-bearing, not a tuning knob.**
+`auxcell.rcut` is an ORBITAL radius; the metric's lattice sum is over a
+two-centre COULOMB interaction `erfc(ωR)/R`, which reaches much further (at
+ω = 0.42, precision 1e-8: ~9.6 Bohr from the erfc alone). Upstream sets it at
+`rsdf_builder.py:274`. Without it the real-space SR metric was **1.25e-4** off
+its reciprocal equivalent at every k-point, worth **8.57e-5 Ha**. With it, the
+metric matches a converged reciprocal reference to **2e-12**.
+
+**2. `_guess_omega` takes the ORBITAL cell here, where upstream passes the
+auxcell** — the priced cost of having no `_RangeSeparatedCell`. Upstream's
+`exclude_d_aux`/`exclude_dd_block` route what a coarse grid cannot resolve
+around the grid; this port resolves it instead. At upstream's `[7,7,7]` the
+error is **8.670e-7**; at this port's `[11,11,11]`, **1.97e-10**. That
+`[11,11,11]` is exactly what `measurements/omega.out` already recorded.
+
+## A trap for the next reader
+
+The reciprocal `Σ_G conj(auxG) coulG_SR auxG` converges **slowly** — the SR
+kernel is not smooth in `G` — so it is a bad reference unless converged. Meshes
+21/41/61/81 give 1.02e-1 / 7.64e-5 / 2.02e-9 / 1.38e-12 against the analytic SR
+sum. A mesh-41 reference made a correct metric look 7.6e-5 wrong.
+
+## Not done, and why
+
+* **`_RSNucBuilder`** (`rsdf_builder.py:1098-1311`). `Gdf` serves
+  `get_nuc`/`get_pp` from the compensated route for both schemes. **Measured not
+  to matter at 1e-8**: on diamond gamma — a pseudopotential cell, where it would
+  show — RSDF's error against upstream is 1.615e-8, *smaller* than GDF's
+  2.074e-8. Still a fidelity gap worth closing, no longer a suspected accuracy
+  one.
+* **`rsdf_helper.py`'s prescreen.** Its absence keeps MORE primitives than
+  upstream — conservative, as 14-05 was toward `ExtendedMole.strip_basis`.
+* **Task 7d, the `prefer_ccdf` flip.** It moves a committed reference energy
+  (diamond 2×2×2, a documented 5.960e-07 step) and Task 7d requires that be its
+  own cited edit rather than a side effect of shipping the builder.
+  `tests/rsdf_builder.rs::gdf_default_route_has_not_flipped_yet` holds the line.
+
+---
+
+# `_RSMDFBuilder` + Task 7d — 2026-08-30
+
+## `_RSMDFBuilder` (`mdf.py:238-353`)
+
+Upstream is a subclass of `_RSGDFBuilder` overriding three methods; this port
+is a `mixed: bool` on the one builder, for the reason 14-02 made `Scheme` a tag.
+What it changes:
+
+| | `_RSGDFBuilder` | `_RSMDFBuilder` |
+|---|---|---|
+| reciprocal weight | `coulG − coulG_SR` | `−coulG_SR` |
+| metric | `SR_analytic + FT_full − FT_SR` | `SR_analytic − FT_SR` |
+| metric mesh | tightened `j2c_mesh` | the builder's own `mesh` |
+| solve | Cholesky first | eigen always |
+| every kernel | plain | + MDF's `±Gmax±0.5` edge screen |
+
+**Measured at matched meshes** vs upstream's `df.MDF()` default, He-fcc 2×2×2:
+**3.209e-10** (11), **1.897e-11** (15), **7.808e-12** (21).
+
+### Two bugs, both caught by the oracle
+
+1. **The edge screen reaches the SHORT-range kernel.** `_RSMDFBuilder` ends with
+   `weighted_coulG = MDF.weighted_coulG` (`mdf.py:353`), and
+   `weighted_coulG_SR` is defined in terms of it — so MDF's `±Gmax ± 0.5`
+   screen applies to the SR kernel too. It fires at a half-integer scaled
+   k-point, i.e. at EVERY k-difference on a 2×2×2 mesh. Omitting it: **1.176e-4 Ha**.
+2. **The rcut precision differs between the two files** — `mdf.py:265` passes
+   none, `rsdf_builder.py:274` passes `precision**1.5`. Matching upstream's
+   looser value measured **worse** (1.324e-6 vs 1.160e-6): a smaller precision
+   gives a LARGER radius, and this radius feeds a real-space sum whose
+   truncation no mesh can compensate. Both schemes keep the tighter one.
+
+### The mesh means something different for MDF
+
+For GDF the mesh only decides how accurately the long-range half is evaluated,
+so finer is strictly closer to the exact GDF answer. **For MDF the plane-wave
+set is part of the basis** (`<g|g> − <g|G><G|g>`, with `aft_jk` adding the
+residual back over the same `{G}`), so two meshes are two different — equally
+valid — MDF approximations. An MDF energy is only comparable against another at
+the SAME mesh, which is why the gate forces it on both sides. The port's default
+(`[11,11,11]`, from the cell) sits 1.160e-6 from upstream's (`[7,7,7]`, from the
+auxcell); the ladder above is what shows that to be grid, not algebra.
+
+## Task 7d — the flip
+
+`Gdf::prefer_ccdf` now defaults to `false`, matching upstream.
+
+`df_swap.rs::krhf_on_gdf_matches_upstream_he_fcc` pins **both** routes against
+their own upstream numbers. That is the substance of the task, not ceremony: the
+two routes differ by 5.222e-10 on He-fcc, which is *inside* that test's 1e-9
+bar, so the pre-flip version would have kept passing while silently measuring
+the other route. `rsdf_builder.rs::gdf_default_route_is_range_separated` pins the
+default in the new direction.
+
+The flipped default is also the faster one — 1.3 s against 6.6 s on He-fcc
+2×2×2, because the short-range real-space sum is cheaper than the compensated
+one.
+
+**A caveat I had to withdraw.** I first recorded the flipped default as a
+hybrid — "RS fitting, CC nuclear" — matching neither upstream route. That is
+wrong: this port uses NEITHER split nuclear builder. `gdf::nuc::get_nuc` goes
+straight to AFTDF at the cell's converged mesh, oracle-gated at 2.755e-12, which
+is strictly more accurate than either `_CCNucBuilder` or `_RSNucBuilder`. Both
+of those are *performance* devices that let the nuclear part run on a tiny mesh,
+and 14-04 measured that using that mesh WITHOUT the split costs 0.0743 Ha. So
+`_RSNucBuilder` is the same performance carry-over 14-03 opened, and the flip
+does not widen anything. The measurement agrees: on diamond gamma the RS route's
+error (1.615e-8) is smaller than the CC route's (2.074e-8).
