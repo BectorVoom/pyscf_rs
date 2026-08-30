@@ -81,6 +81,11 @@ tracing         = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["fmt"] }
 # Common utility deps.
 bytemuck        = { version = "1", features = ["derive"] }
+# W-02b (KRKS-OPTIMISATION-PLAN.md): batch-level parallelism for independent
+# 3-D FFT rows. Already in Cargo.lock transitively via gemm/faer; pinned here
+# so pyscf-pbc-tools/pyscf-pbc-df can name it directly under ALG-06 (it names
+# no cubecl type, so it is not a wall violation).
+rayon           = "1.12"
 # Host-side numeric abstraction for the precision-generic `Scalar` trait
 # (quick-260522-b06). Small, fast-compiling; does NOT pull cubecl/libxc.
 num-traits      = "0.2"

@@ -14,3 +14,4 @@ pyscf-algebra   = { path = "../pyscf-algebra" }
 pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+rayon           = { workspace = true }

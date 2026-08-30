@@ -10,7 +10,7 @@
 /// Upstream carries this as `exx`/`exxdiv`, a value that is `False`, `None` or
 /// one of three strings. `Option<ExxDiv>` models it: `None` is upstream's
 /// `False`/`None` — no correction at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ExxDiv {
     /// `'ewald'` — the Ewald probe-charge correction, upstream's SCF default.
     #[default]

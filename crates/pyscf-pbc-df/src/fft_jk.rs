@@ -13,8 +13,8 @@
 //! `ao.T` and exactly what `eval_ao_kpts` produces. Every `nao x nao` matrix is
 //! ROW-MAJOR (see `zlinalg::forder_to_c` for the boundary with Phase 10).
 
-use pyscf_algebra::CTensor;
-use pyscf_pbc_gto::{get_coulg, get_gv, is_zero, CoulGArgs, ExxDiv};
+use pyscf_algebra::{CTensor, oracle_dot};
+use pyscf_pbc_gto::{CoulGArgs, ExxDiv, get_coulg, get_gv};
 use pyscf_pbc_tools::{fft, ifft};
 
 use crate::df_jk::{all_gamma, ewald_exxdiv_for_g0, format_kpts_band, KMats};
@@ -164,22 +164,28 @@ fn contract_ao_v_ao(ao: &CTensor, vr: &CTensor, nao: usize, ngrids: usize) -> CT
             aow_im[b + g] = ar * vri + ai * vrr;
         }
     }
+    // D-PBC-17 (W-05): `Σ_g conj(ao[p,g]) aow[q,g]` is the zdotc contraction —
+    // route it through the FOUND-06 pairwise-tree `oracle_dot`, not a naive
+    // sequential `+=` over `ngrids` terms. `re = dot(ar,qr) + dot(ai,qi)`,
+    // `im = dot(ar,qi) - dot(ai,qr)` is the zdotc identity from
+    // `pyscf_algebra::oracle_zdot`, inlined here because `oracle_zdot` takes
+    // owned `CTensor` planes and this contracts row *slices* of one.
     let mut re = vec![0.0_f64; nao * nao];
     let mut im = vec![0.0_f64; nao * nao];
     for p in 0..nao {
         let pb = p * ngrids;
+        let ar = &ao.re[pb..pb + ngrids];
+        let ai = &ao.im[pb..pb + ngrids];
         for q in 0..nao {
             let qb = q * ngrids;
-            let mut sr = 0.0_f64;
-            let mut si = 0.0_f64;
-            for g in 0..ngrids {
-                let (pr, pi) = (ao.re[pb + g], -ao.im[pb + g]);
-                let (qr, qi) = (aow_re[qb + g], aow_im[qb + g]);
-                sr += pr * qr - pi * qi;
-                si += pr * qi + pi * qr;
-            }
-            re[p * nao + q] = sr;
-            im[p * nao + q] = si;
+            let qr = &aow_re[qb..qb + ngrids];
+            let qi = &aow_im[qb..qb + ngrids];
+            let rr = oracle_dot(ar, qr);
+            let ii = oracle_dot(ai, qi);
+            let ri = oracle_dot(ar, qi);
+            let ir = oracle_dot(ai, qr);
+            re[p * nao + q] = rr + ii;
+            im[p * nao + q] = ri - ir;
         }
     }
     CTensor::from_planes(re, im)
@@ -207,8 +213,7 @@ pub fn get_k_kpts(
     let nset = dms.len();
     let nkpts = kpts.len();
     let nao = cell.mol.nao_nr;
-    let coords = &df.grids.coords;
-    let ngrids = coords.len();
+    let ngrids = df.grids.coords.len();
 
     // fft_jk.py:223
     let weight = 1.0 / nkpts as f64 * df.weight();
@@ -259,31 +264,14 @@ pub fn get_k_kpts(
                 Some(ExxDiv::Ewald) | None => None,
                 other => other,
             };
-            let coulg = get_coulg(
-                cell,
-                CoulGArgs {
-                    k: dk,
-                    exxdiv: inner_exxdiv,
-                    kpts: Some(kpts),
-                    mesh: Some(mesh),
-                    gv: Some(&gv),
-                    wrap_around: true,
-                    omega,
-                },
-            )?;
-
-            // fft_jk.py:278-281
-            let expmikr = if is_zero(&dk) {
-                None
-            } else {
-                let mut re = vec![0.0_f64; ngrids];
-                let mut im = vec![0.0_f64; ngrids];
-                for (g, r) in coords.iter().enumerate() {
-                    let ph = -(r[0] * dk[0] + r[1] * dk[1] + r[2] * dk[2]);
-                    re[g] = ph.cos();
-                    im[g] = ph.sin();
-                }
-                Some(CTensor::from_planes(re, im))
+            // W-01: `coulG(dk)` and `expmikr(dk)` (fft_jk.py:262-281) depend
+            // only on `dk`, `omega` and `inner_exxdiv` — never on the density
+            // matrix or on which `(k1,k2)` pair produced this `dk` — so they
+            // are hoisted into a cache on `Fftdf` that survives the whole SCF
+            // instead of being rebuilt on every one of the `Nk^2` pairs.
+            let (coulg, expmikr) = {
+                let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, &gv)?;
+                (entry.0.clone(), entry.1.clone())
             };
 
             // vR_dm[i][p, g], allocated once per (k2, k1) as upstream does.
@@ -479,20 +467,28 @@ fn accumulate_vk(
     nao: usize,
     ngrids: usize,
 ) {
+    // D-PBC-17 (W-05): `Σ_g vR_dm[p,g] ao1T[q,g]` is a PLAIN (unconjugated)
+    // complex dot — `re = dot(xr,yr) - dot(xi,yi)`, `im = dot(xr,yi) +
+    // dot(xi,yr)` — routed through the same FOUND-06 pairwise-tree
+    // `oracle_dot` as `contract_ao_v_ao`'s zdotc, so the error bound is
+    // `O(log2(ngrids)*eps)` instead of `O(ngrids*eps)`. Note the sign pattern
+    // differs from `oracle_zdot`'s zdotc identity because there is no
+    // conjugation here (`accumulate_vk`'s own doc comment: `ao1T` is NOT
+    // conjugated).
     for p in 0..nao {
         let pb = p * ngrids;
+        let xr = &vr_dm.re[pb..pb + ngrids];
+        let xi = &vr_dm.im[pb..pb + ngrids];
         for q in 0..nao {
             let qb = q * ngrids;
-            let mut sr = 0.0_f64;
-            let mut si = 0.0_f64;
-            for g in 0..ngrids {
-                let (xr, xi) = (vr_dm.re[pb + g], vr_dm.im[pb + g]);
-                let (yr, yi) = (ao1t.re[qb + g], ao1t.im[qb + g]);
-                sr += xr * yr - xi * yi;
-                si += xr * yi + xi * yr;
-            }
-            vk.re[p * nao + q] += weight * sr;
-            vk.im[p * nao + q] += weight * si;
+            let yr = &ao1t.re[qb..qb + ngrids];
+            let yi = &ao1t.im[qb..qb + ngrids];
+            let rr = oracle_dot(xr, yr);
+            let ii = oracle_dot(xi, yi);
+            let ri = oracle_dot(xr, yi);
+            let ir = oracle_dot(xi, yr);
+            vk.re[p * nao + q] += weight * (rr - ii);
+            vk.im[p * nao + q] += weight * (ri + ir);
         }
     }
 }

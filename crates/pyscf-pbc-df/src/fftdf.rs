@@ -36,7 +36,10 @@ use std::sync::{Arc, Mutex};
 
 use pyscf_algebra::{AlgebraClient, CTensor, select_backend};
 use pyscf_core::{CoreError, PyscfRsError};
-use pyscf_pbc_gto::{Cell, UniformGrids, eval_ao_kpts, get_coulg_at_gv, get_gv, get_si};
+use pyscf_pbc_gto::{
+    Cell, CoulGArgs, ExxDiv, UniformGrids, eval_ao_kpts, get_coulg, get_coulg_at_gv, get_gv,
+    get_si, is_zero,
+};
 use pyscf_pbc_tools::ifft;
 
 use crate::df_jk::KMats;
@@ -86,7 +89,19 @@ pub struct Fftdf {
     pub max_memory: f64,
     /// Cached `(nao, ngrids)` AO tables, keyed by the k-point list.
     ao_cache: Mutex<HashMap<Vec<[u64; 3]>, Arc<AoKpts>>>,
+    /// W-01: `get_coulG(dk)` and `expmikr(dk)`, keyed on the wrapped `dk =
+    /// kpt2 - kpt1` (bit pattern), `omega` and the exxdiv actually applied
+    /// INSIDE the k-pair loop (never `Ewald` — see [`Fftdf::coulg_and_expmikr`]).
+    /// Both quantities are invariant across the whole SCF for a fixed
+    /// `(dk, omega, exxdiv)`, and a Monkhorst-Pack mesh has only `Nk` distinct
+    /// `dk` values (not `Nk^2`) because `kpts[i] - kpts[j]` is bit-identical
+    /// for every pair sharing the same `(i - j) mod Nk`.
+    coulg_expmikr_cache: Mutex<HashMap<CoulgKey, Arc<(Vec<f64>, Option<CTensor>)>>>,
 }
+
+/// `(dk.to_bits(), omega.to_bits(), exxdiv)` — see
+/// [`Fftdf::coulg_expmikr_cache`].
+type CoulgKey = ([u64; 3], Option<u64>, Option<ExxDiv>);
 
 /// Upstream's `lib.param.MAX_MEMORY` default, in MB, overridable through
 /// `PYSCF_MAX_MEMORY` (the same variable the molecular crates read).
@@ -138,6 +153,7 @@ impl Fftdf {
             grids,
             max_memory: default_max_memory(),
             ao_cache: Mutex::new(HashMap::new()),
+            coulg_expmikr_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -191,11 +207,78 @@ impl Fftdf {
         Ok(block)
     }
 
-    /// Drop the AO cache — call after mutating `cell` or `mesh`.
+    /// Drop the AO cache and the `get_coulG`/`expmikr` cache (W-01) — call
+    /// after mutating `cell` or `mesh`.
     pub fn reset(&self) {
         if let Ok(mut c) = self.ao_cache.lock() {
             c.clear();
         }
+        if let Ok(mut c) = self.coulg_expmikr_cache.lock() {
+            c.clear();
+        }
+    }
+
+    /// `get_coulG(dk)` and the phase table `expmikr(dk) = exp(-i dk.r)` on
+    /// `self.grids.coords`, memoised on `(dk, omega, exxdiv)` — `fft_jk.py`'s
+    /// `get_k_kpts` rebuilds both from scratch on every one of the `Nk^2`
+    /// `(k1, k2)` pairs even though neither depends on the density matrix or
+    /// on which pair produced this particular `dk` (W-01, §2.4 of
+    /// KRKS-OPTIMISATION-PLAN.md). `exxdiv` here is the value ACTUALLY passed
+    /// to `get_coulG` inside the pair loop — `fft_jk::get_k_kpts` already maps
+    /// `Some(ExxDiv::Ewald) | None` to `None` before calling this (the Ewald
+    /// probe-charge correction is applied once, after the loop, at `G+k = 0`),
+    /// so `exxdiv` here is never `Some(ExxDiv::Ewald)`.
+    ///
+    /// # Errors
+    /// Propagates [`get_coulg`].
+    pub fn coulg_and_expmikr(
+        &self,
+        dk: [f64; 3],
+        omega: Option<f64>,
+        exxdiv: Option<ExxDiv>,
+        kpts: &[[f64; 3]],
+        gv: &[[f64; 3]],
+    ) -> Result<Arc<(Vec<f64>, Option<CTensor>)>, PbcDfError> {
+        let key: CoulgKey = (
+            [dk[0].to_bits(), dk[1].to_bits(), dk[2].to_bits()],
+            omega.map(f64::to_bits),
+            exxdiv,
+        );
+        if let Ok(c) = self.coulg_expmikr_cache.lock() {
+            if let Some(v) = c.get(&key) {
+                return Ok(Arc::clone(v));
+            }
+        }
+        let coulg = get_coulg(
+            &self.cell,
+            CoulGArgs {
+                k: dk,
+                exxdiv,
+                kpts: Some(kpts),
+                mesh: Some(self.mesh),
+                gv: Some(gv),
+                wrap_around: true,
+                omega,
+            },
+        )?;
+        let expmikr = if is_zero(&dk) {
+            None
+        } else {
+            let ngrids = self.grids.coords.len();
+            let mut re = vec![0.0_f64; ngrids];
+            let mut im = vec![0.0_f64; ngrids];
+            for (g, r) in self.grids.coords.iter().enumerate() {
+                let ph = -(r[0] * dk[0] + r[1] * dk[1] + r[2] * dk[2]);
+                re[g] = ph.cos();
+                im[g] = ph.sin();
+            }
+            Some(CTensor::from_planes(re, im))
+        };
+        let entry = Arc::new((coulg, expmikr));
+        if let Ok(mut c) = self.coulg_expmikr_cache.lock() {
+            c.insert(key, Arc::clone(&entry));
+        }
+        Ok(entry)
     }
 
     pub(crate) fn client(&self) -> Result<AlgebraClient, PbcDfError> {
