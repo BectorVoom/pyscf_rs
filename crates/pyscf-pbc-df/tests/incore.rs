@@ -7,9 +7,7 @@
 
 mod common;
 
-use pyscf_pbc_df::incore::{
-    Aosym, aux_e2, fill_2c2e, int3c::KptPair, make_modrho_basis,
-};
+use pyscf_pbc_df::incore::{Aosym, aux_e2, fill_2c2e, int3c::KptPair, make_modrho_basis};
 
 // ---------------------------------------------------------------------------
 // Tier 1 — the auxiliary cell. No oracle.
@@ -99,7 +97,7 @@ fn fill_2c2e_is_hermitian_at_gamma() {
     let cell = common::he_all_electron();
     let aux = make_modrho_basis(&cell, None, None).expect("auxcell");
     let naux = aux.naux();
-    let j2c = fill_2c2e(&aux, 0, &[[0.0; 3]]).expect("fill_2c2e");
+    let j2c = fill_2c2e(&aux, 0, &[[0.0; 3]], None).expect("fill_2c2e");
     assert_eq!(j2c.len(), 1);
     let m = &j2c[0];
     assert_eq!(m.re.len(), naux * naux);
@@ -127,8 +125,8 @@ fn aux_e2_s2_packs_s1() {
         ki: [0.0; 3],
         kj: [0.0; 3],
     }];
-    let s1 = aux_e2(&cell, &aux, Aosym::S1, &g, None).expect("s1");
-    let s2 = aux_e2(&cell, &aux, Aosym::S2, &g, None).expect("s2");
+    let s1 = aux_e2(&cell, &aux, Aosym::S1, &g, None, None).expect("s1");
+    let s2 = aux_e2(&cell, &aux, Aosym::S2, &g, None, None).expect("s2");
     for mu in 0..nao {
         for nu in 0..=mu {
             let r1 = mu * nao + nu;
@@ -155,10 +153,16 @@ fn aux_e2_obeys_the_bra_ket_conjugation_identity() {
     let naux = aux.naux();
     let k = [0.1_f64, -0.05, 0.2];
     let pairs = [
-        KptPair { ki: [0.0; 3], kj: k },
-        KptPair { ki: k, kj: [0.0; 3] },
+        KptPair {
+            ki: [0.0; 3],
+            kj: k,
+        },
+        KptPair {
+            ki: k,
+            kj: [0.0; 3],
+        },
     ];
-    let t = aux_e2(&cell, &aux, Aosym::S1, &pairs, None).expect("aux_e2");
+    let t = aux_e2(&cell, &aux, Aosym::S1, &pairs, None, None).expect("aux_e2");
     let mut worst = 0.0_f64;
     for mu in 0..nao {
         for nu in 0..nao {
@@ -182,11 +186,178 @@ fn aux_e2_is_real_at_gamma() {
         ki: [0.0; 3],
         kj: [0.0; 3],
     }];
-    let t = aux_e2(&cell, &aux, Aosym::S1, &g, None).expect("aux_e2");
+    let t = aux_e2(&cell, &aux, Aosym::S1, &g, None, None).expect("aux_e2");
     let max_im = t[0].im.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
     assert!(max_im < 1e-14, "gamma aux_e2 has |Im| = {max_im:e}");
     let max_re = t[0].re.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
     assert!(max_re > 1e-3, "aux_e2 returned an all-zero tensor");
+}
+
+// ---------------------------------------------------------------------------
+// Range separation — `omega` reaches the periodic drivers (D-PBC-24 stage 5).
+//
+// Until cintx grew `ExecutionOptions::range_omega` there was no way to ask for
+// `erfc(w r)/r` from here at all, and `rsdf_builder` recorded that as its
+// blocker: this driver builds its `BasisSet` from `cell.mol._atom`/`_basis`
+// through `build_image_expanded_with_aux` and never materialises an `_env`, so
+// `pyscf-gto`'s `OmegaGuard` trick of writing `mol._env[8]` had nothing to
+// write into. w travels in the OPTIONS instead, which is why the fix needed no
+// change to `build_image_expanded_with_aux`.
+//
+// There is no upstream reference for the periodic short-range tensor to gate
+// against (the same conditional-convergence problem Tier 2 documents below), so
+// the gate here is the KERNEL IDENTITY, applied to the assembled tensor:
+//
+//     erfc(w r)/r + erf(w r)/r == 1/r
+//
+// It holds term by term inside the lattice sum, so it survives the Bloch
+// phases, the modrho scale and the pair packing — and it is the check that
+// catches an erf/erfc swap or a dropped sqrt(theta), which a magnitude check
+// never would. `tests/rsdf_builder.rs` gates the `weighted_coulG` half of the
+// same identity at exactly 0.
+// ---------------------------------------------------------------------------
+
+/// Non-zero w on both sides of libcint's sign convention.
+const OMEGAS: [f64; 2] = [0.8, -0.8];
+
+/// The 3-centre tensor: SR(w) + LR(w) == full, and neither half IS the full one.
+#[test]
+fn aux_e2_splits_the_coulomb_kernel_at_omega() {
+    let cell = common::he_all_electron();
+    let aux = make_modrho_basis(&cell, None, None).expect("auxcell");
+    let g = [KptPair {
+        ki: [0.0; 3],
+        kj: [0.0; 3],
+    }];
+
+    let eval =
+        |omega| aux_e2(&cell, &aux, Aosym::S1, &g, None, omega).expect("aux_e2 under a set omega");
+
+    let full = eval(None);
+    let scale = full[0].re.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    assert!(scale > 1e-3, "the full-range tensor is all zeros");
+
+    for omega in OMEGAS {
+        let lr = eval(Some(omega.abs()));
+        let sr = eval(Some(-omega.abs()));
+
+        // w must actually change the numbers. A driver that accepted the
+        // parameter and dropped it would pass every structural test above.
+        let moved = sr[0]
+            .re
+            .iter()
+            .zip(&full[0].re)
+            .fold(0.0_f64, |m, (a, b)| m.max((a - b).abs()));
+        assert!(
+            moved > 1e-3 * scale,
+            "omega={omega}: the short-range tensor is (almost) the full-range one \
+             (max |delta| = {moved:e} against scale {scale:e})"
+        );
+
+        let residual = (0..full[0].re.len()).fold(0.0_f64, |m, i| {
+            m.max((sr[0].re[i] + lr[0].re[i] - full[0].re[i]).abs())
+        });
+        assert!(
+            residual < 1e-10 * scale,
+            "omega={omega}: SR + LR != full on the 3-centre tensor, residual {residual:e} \
+             against scale {scale:e}"
+        );
+    }
+
+    // An explicit zero is the full Coulomb operator, bit for bit — libcint
+    // branches on `omega == 0.` exactly (`g2e.c:4445`).
+    let zero = eval(Some(0.0));
+    assert_eq!(
+        zero[0].re, full[0].re,
+        "omega = Some(0.0) must be full range"
+    );
+    assert_eq!(zero[0].im, full[0].im);
+}
+
+/// The same identity on the 2-centre auxiliary metric, which reaches cintx
+/// through `pbc_intor` rather than through `aux_e2`'s own driver — two separate
+/// pieces of plumbing, so two separate assertions.
+#[test]
+fn fill_2c2e_splits_the_coulomb_kernel_at_omega() {
+    let cell = common::he_all_electron();
+    let aux = make_modrho_basis(&cell, None, None).expect("auxcell");
+    let g = [[0.0_f64; 3]];
+
+    let eval = |omega| fill_2c2e(&aux, 0, &g, omega).expect("fill_2c2e under a set omega");
+
+    let full = eval(None);
+    let scale = full[0].re.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+    assert!(scale > 1e-3, "the full-range metric is all zeros");
+
+    for omega in OMEGAS {
+        let lr = eval(Some(omega.abs()));
+        let sr = eval(Some(-omega.abs()));
+
+        let moved = sr[0]
+            .re
+            .iter()
+            .zip(&full[0].re)
+            .fold(0.0_f64, |m, (a, b)| m.max((a - b).abs()));
+        assert!(
+            moved > 1e-3 * scale,
+            "omega={omega}: the short-range metric is (almost) the full-range one \
+             (max |delta| = {moved:e})"
+        );
+
+        let residual = (0..full[0].re.len()).fold(0.0_f64, |m, i| {
+            m.max((sr[0].re[i] + lr[0].re[i] - full[0].re[i]).abs())
+        });
+        assert!(
+            residual < 1e-10 * scale,
+            "omega={omega}: SR + LR != full on the 2-centre metric, residual {residual:e}"
+        );
+    }
+
+    assert_eq!(eval(Some(0.0))[0].re, full[0].re);
+}
+
+/// The other half of "fail closed": `PbcIntorOpts::omega` is NOT a global
+/// "range-separated mode" a caller can leave set for a whole block.
+///
+/// Upstream's `with cell.with_range_coulomb(omega):` writes `mol._env[8]` and
+/// every integral evaluated inside the block sees it — harmlessly for the 1e
+/// families, whose `g1e.c` has no omega branch. cintx's SAFE API is stricter
+/// than the env slot it stands for: it refuses a set w on any operator it has
+/// not implemented range separation for, rather than evaluating the full-range
+/// kernel under a range-separated request.
+///
+/// So this port's `omega` must be scoped to the Coulomb calls — `int2c2e` in
+/// [`fill_2c2e`], `int3c2e` in [`aux_e2`] — and a `_RSGDFBuilder` may not set
+/// it once and call `get_ovlp` inside. Pinning the refusal here is what makes
+/// that a contract rather than a convention, and the message names both the
+/// parameter and the three operators that do serve it.
+#[test]
+fn omega_on_a_one_electron_family_is_refused_not_ignored() {
+    use pyscf_pbc_gto::pbc_intor::{PbcIntorOpts, pbc_intor};
+
+    let cell = common::he_all_electron();
+    let g = [[0.0_f64; 3]];
+    let opts = |omega| PbcIntorOpts {
+        hermi: 1,
+        omega,
+        ..Default::default()
+    };
+
+    pbc_intor(&cell, "int1e_ovlp", &g, opts(None)).expect("overlap with no omega");
+    pbc_intor(&cell, "int1e_ovlp", &g, opts(Some(0.0)))
+        .expect("omega = 0 is the full Coulomb operator and must be accepted");
+
+    let err = pbc_intor(&cell, "int1e_ovlp", &g, opts(Some(-0.8)))
+        .expect_err("a set omega on int1e_ovlp must be refused, not silently ignored");
+    let text = format!("{err}");
+    assert!(
+        text.contains("range_omega"),
+        "the refusal must name the parameter it is refusing, got: {text}"
+    );
+    assert!(
+        text.contains("int2e") && text.contains("int3c2e") && text.contains("int2c2e"),
+        "the refusal must name the operators that DO serve omega, got: {text}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +464,7 @@ fn isolated_cell_aux_e2_matches_upstream() {
         ki: [0.0; 3],
         kj: [0.0; 3],
     }];
-    let got = aux_e2(&cell, &aux, Aosym::S1, &g, None).expect("aux_e2");
+    let got = aux_e2(&cell, &aux, Aosym::S1, &g, None, None).expect("aux_e2");
     let w: Vec<f64> = want["j3c"]
         .as_array()
         .expect("j3c")
@@ -312,7 +483,10 @@ fn isolated_cell_aux_e2_matches_upstream() {
         }
     }
     eprintln!("isolated aux_e2: max|diff| = {worst:e} at P = {at}");
-    assert!(worst < 1e-13, "isolated aux_e2 max|diff| = {worst:e} at P = {at}");
+    assert!(
+        worst < 1e-13,
+        "isolated aux_e2 max|diff| = {worst:e} at P = {at}"
+    );
 }
 
 /// `fill_2c2e` against upstream, on the same isolated cell. The 2-centre metric
@@ -340,7 +514,7 @@ fn isolated_cell_fill_2c2e_is_symmetric_and_positive_definite() {
     .expect("isolated cell");
     let aux = make_modrho_basis(&cell, None, None).expect("auxcell");
     let naux = aux.naux();
-    let j2c = fill_2c2e(&aux, 0, &[[0.0; 3]]).expect("fill_2c2e");
+    let j2c = fill_2c2e(&aux, 0, &[[0.0; 3]], None).expect("fill_2c2e");
     // Diagonal (P|P) > 0 for every auxiliary function.
     for p in 0..naux {
         assert!(

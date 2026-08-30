@@ -6,7 +6,12 @@
 //! and `MDF._prefer_ccdf` is `False` (`mdf.py:79`) — so every row of it is the
 //! RANGE-SEPARATED `_RSMDFBuilder`, which plan 14-07 owns. This plan ports
 //! `_CCMDFBuilder`, exactly as 14-02 ported `_CCGDFBuilder`, so the ladder it
-//! must reproduce is `measurements/mdfladder_cc.out`:
+//! must reproduce is `measurements/mdfladder_cc.out`.
+//!
+//! (`_RSMDFBuilder` has since shipped — 14-07 7b/7c on D-PBC-24 — and is gated
+//! against upstream in `pyscf-pbc-scf/tests/gate3_rsdf.rs` at matched meshes.
+//! `mdfladder.out` is therefore reachable again, but this file continues to
+//! gate the CC route, which is still `Mdf`'s default.)
 //!
 //! ```text
 //! He-fcc/sto-3g 2x2x2, CC route, against E_KRHF(FFTDF, mesh 31)
@@ -119,18 +124,30 @@ fn mdf_mesh_is_settable_and_named() {
     assert_eq!(m.name(), "MDF");
 }
 
-/// `_RSMDFBuilder` is REFUSED, not silently substituted — D-PBC-20. It is
-/// upstream's default route and plan 14-07 owns it.
+/// `_RSMDFBuilder` — upstream's default route — ships since plan 14-07 7b/7c.
+///
+/// This test used to assert the REFUSAL. What it pins now is the property that
+/// distinguishes the two routes without needing an oracle: their meshes come
+/// from different estimators, so they differ, and BOTH build. The numbers are
+/// gated against upstream in `pyscf-pbc-scf/tests/gate3_rsdf.rs` at matched
+/// meshes — for MDF the mesh is part of the basis, so an MDF energy is only
+/// comparable against another at the same mesh.
 #[test]
-fn prefer_ccdf_false_is_refused() {
+fn prefer_ccdf_false_builds_the_range_separated_route() {
     let cell = common::he_all_electron();
-    let mut m = Mdf::new(cell, &[[0.0; 3]]);
-    m.prefer_ccdf = false;
-    let e = m.resolved_mesh().expect_err("must refuse the RS route");
-    let msg = format!("{e}");
-    assert!(
-        msg.contains("_RSMDFBuilder") || msg.contains("14-07"),
-        "the refusal must name the plan that owns it: {msg}"
+
+    let mut rs = Mdf::new(cell.clone(), &[[0.0; 3]]);
+    rs.prefer_ccdf = false;
+    let rs_mesh = rs.resolved_mesh().expect("the RS route resolves a mesh");
+
+    let mut cc = Mdf::new(cell, &[[0.0; 3]]);
+    cc.prefer_ccdf = true;
+    let cc_mesh = cc.resolved_mesh().expect("the CC route resolves a mesh");
+
+    assert!(rs_mesh[0] > 1 && cc_mesh[0] > 1, "both meshes are real");
+    assert_ne!(
+        rs_mesh, cc_mesh,
+        "the RS mesh is _guess_omega's, the CC mesh is _guess_eta's"
     );
 }
 

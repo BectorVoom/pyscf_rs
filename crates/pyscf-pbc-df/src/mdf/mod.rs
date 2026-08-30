@@ -34,14 +34,22 @@
 //! Nothing here re-implements a contraction. Upstream's `mdf_jk` and
 //! `mdf_ao2mo` are exactly this thin too (149 + 176 lines, mostly `+=`).
 //!
-//! # `_CCMDFBuilder`, not `_RSMDFBuilder`
+//! # Both builders ship
 //!
 //! `MDF._prefer_ccdf = False` (`mdf.py:79`), so `df.MDF()` runs
-//! `_RSMDFBuilder`. This port ships `_CCMDFBuilder` here, mirroring 14-02's
-//! choice for GDF, and plan 14-07 supplies the range-separated route.
-//! **`measurements/mdfladder.out` was recorded on the DEFAULT (RS) route** and
-//! therefore does not gate this plan; `mdfladder_cc.py` records the CC ladder,
-//! and that is what `tests/mdf.rs` asserts against.
+//! `_RSMDFBuilder`. 14-06 shipped `_CCMDFBuilder` alone, mirroring 14-02's
+//! choice for GDF, because the range-separated route was blocked on cintx.
+//! D-PBC-24 lifted that and plan 14-07 7b/7c ported `_RSGDFBuilder`;
+//! `_RSMDFBuilder` is that builder with `mixed` set
+//! ([`crate::rsdf_builder::RsGdfBuilder::new_mixed`]), since `mdf.py:238-353`
+//! is a subclass overriding exactly three methods.
+//!
+//! [`Mdf::prefer_ccdf`] still defaults to `true` here, as [`Gdf::prefer_ccdf`]
+//! does — flipping either moves a committed reference energy and plan 14-07
+//! Task 7d requires that be its own cited edit.
+//! **`measurements/mdfladder.out` was recorded on the RS route** and is now
+//! reachable; `mdfladder_cc.py` records the CC ladder, which is what
+//! `tests/mdf.rs` asserts against today.
 
 pub mod builder;
 pub mod mdf_ao2mo;
@@ -77,7 +85,8 @@ pub struct Mdf {
     pub aosym: Aosym,
     /// `j_only` — build only the diagonal `(k, k)` pairs.
     pub j_only: bool,
-    /// See the module docs. `true` here until plan 14-07 ships `_RSMDFBuilder`.
+    /// See the module docs. `false` selects `_RSMDFBuilder`, upstream's
+    /// default; `true` (this port's default) selects `_CCMDFBuilder`.
     pub prefer_ccdf: bool,
     /// `exp_to_discard` — refused when set, as [`Gdf`] does.
     pub exp_to_discard: Option<f64>,
@@ -109,16 +118,11 @@ impl Mdf {
     }
 
     fn refuse_unsupported(&self) -> Result<(), PbcDfError> {
-        if !self.prefer_ccdf {
-            return Err(PbcDfError::Core(
-                pyscf_core::PyscfRsError::NotYetImplemented {
-                    phase: 14,
-                    what: "MDF via mdf._RSMDFBuilder — plan 14-07. It is upstream's \
-                           DEFAULT route (mdf.py:79) and is the route every row of \
-                           measurements/mdfladder.out was recorded on",
-                },
-            ));
-        }
+        // `prefer_ccdf = false` is no longer refused: plan 14-07 sub-tasks
+        // 7b/7c shipped `_RSGDFBuilder` on D-PBC-24's cintx `range_omega`, and
+        // `_RSMDFBuilder` is that builder with `mixed` set (`mdf.py:238-353`
+        // is a subclass overriding three methods). `measurements/mdfladder.out`
+        // — recorded on THIS route — is now reachable.
         if self.exp_to_discard.is_some() {
             return Err(PbcDfError::Core(
                 pyscf_core::PyscfRsError::NotYetImplemented {
@@ -129,6 +133,22 @@ impl Mdf {
             ));
         }
         Ok(())
+    }
+
+    /// The range-separated builder MDF's Gaussian half runs on when
+    /// [`Mdf::prefer_ccdf`] is `false` — upstream's default — and the mesh it
+    /// picked.
+    ///
+    /// # Errors
+    /// Propagates the auxiliary-cell build, and refuses the unsupported flags.
+    fn rs_builder(&self) -> Result<(crate::rsdf_builder::RsGdfBuilder, [usize; 3]), PbcDfError> {
+        self.refuse_unsupported()?;
+        let mut b = crate::rsdf_builder::RsGdfBuilder::new_mixed(self.cell.clone(), &self.kpts);
+        b.auxbasis = self.auxbasis.clone();
+        b.mesh = self.mesh;
+        b.build()?;
+        let guess = b.mesh.unwrap_or([1, 1, 1]);
+        Ok((b, self.mesh.unwrap_or(guess)))
     }
 
     /// The compensated builder MDF's Gaussian half runs on, and the mesh it
@@ -159,7 +179,11 @@ impl Mdf {
             let _ = self.resolved_mesh.set(m);
             return Ok(m);
         }
-        let (_, m) = self.cc_builder()?;
+        let m = if self.prefer_ccdf {
+            self.cc_builder()?.1
+        } else {
+            self.rs_builder()?.1
+        };
         let _ = self.resolved_mesh.set(m);
         Ok(m)
     }
@@ -172,25 +196,33 @@ impl Mdf {
         if let Some(g) = self.inner.get() {
             return Ok(g);
         }
-        let (b, mesh) = self.cc_builder()?;
-        let _ = self.resolved_mesh.set(mesh);
-        let (Some(fused), Some(_eta)) = (b.fused.as_ref(), b.eta) else {
-            return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
-                pyscf_core::CoreError::InvalidMolecule("MDF: builder did not build".into()),
-            )));
+        let cderi: Cderi = if self.prefer_ccdf {
+            let (b, mesh) = self.cc_builder()?;
+            let _ = self.resolved_mesh.set(mesh);
+            let (Some(fused), Some(_eta)) = (b.fused.as_ref(), b.eta) else {
+                return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                    pyscf_core::CoreError::InvalidMolecule("MDF: builder did not build".into()),
+                )));
+            };
+            let rcut = crate::gdf_builder::estimate_rcut(&self.cell, &fused.fused.cell, None);
+            make_j3c_scheme(
+                &self.cell,
+                fused,
+                &self.kpts,
+                self.aosym,
+                mesh,
+                self.j_only,
+                true,
+                Some(rcut),
+                Scheme::Mixed,
+            )?
+        } else {
+            // `_RSMDFBuilder` — the mesh and rcut are its own, and
+            // `make_j3c` already knows the scheme from `mixed`.
+            let (b, mesh) = self.rs_builder()?;
+            let _ = self.resolved_mesh.set(mesh);
+            b.make_j3c(self.aosym, self.j_only)?
         };
-        let rcut = crate::gdf_builder::estimate_rcut(&self.cell, &fused.fused.cell, None);
-        let cderi: Cderi = make_j3c_scheme(
-            &self.cell,
-            fused,
-            &self.kpts,
-            self.aosym,
-            mesh,
-            self.j_only,
-            true,
-            Some(rcut),
-            Scheme::Mixed,
-        )?;
         let _ = self.inner.set(Gdf::with_cderi(self.cell.clone(), cderi));
         self.inner.get().ok_or_else(|| {
             PbcDfError::Core(pyscf_core::PyscfRsError::Core(

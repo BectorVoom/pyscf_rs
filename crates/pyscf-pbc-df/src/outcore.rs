@@ -254,6 +254,7 @@ pub fn aux_e1(
     dataname: &str,
     blocking: Blocking,
     rcut: Option<f64>,
+    omega: Option<f64>,
 ) -> Result<Aux3cFile, PbcDfError> {
     run(
         cell,
@@ -265,6 +266,7 @@ pub fn aux_e1(
         dataname,
         blocking,
         rcut,
+        omega,
         Orientation::AuxLeading,
     )
 }
@@ -289,6 +291,7 @@ pub fn aux_e2(
     dataname: &str,
     blocking: Blocking,
     rcut: Option<f64>,
+    omega: Option<f64>,
 ) -> Result<Aux3cFile, PbcDfError> {
     run(
         cell,
@@ -300,6 +303,7 @@ pub fn aux_e2(
         dataname,
         blocking,
         rcut,
+        omega,
         Orientation::PairLeading,
     )
 }
@@ -315,6 +319,7 @@ fn run(
     dataname: &str,
     blocking: Blocking,
     rcut: Option<f64>,
+    omega: Option<f64>,
     orientation: Orientation,
 ) -> Result<Aux3cFile, PbcDfError> {
     let path = erifile.as_ref().to_path_buf();
@@ -344,7 +349,7 @@ fn run(
 
     let mut shapes = Vec::with_capacity(kptij_lst.len());
     for (i0, i1, _) in tasks {
-        let mats = aux_e2_intor(cell, aux, intor, aosym, &kptij_lst[i0..i1], rcut)?;
+        let mats = aux_e2_intor(cell, aux, intor, aosym, &kptij_lst[i0..i1], rcut, omega)?;
         for (n, m) in mats.iter().enumerate() {
             let k = i0 + n;
             // `aux_e2` returns `(nao_pair, naux)` row-major.

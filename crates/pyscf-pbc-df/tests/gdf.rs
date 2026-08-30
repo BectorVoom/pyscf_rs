@@ -43,12 +43,31 @@ fn get_naoaux_matches_the_auxiliary_basis() {
     assert_eq!(d.name(), "GDF");
 }
 
-/// GDF's own mesh is the COMPENSATING-CHARGE mesh, not the density one — that
-/// is why it is cheap. He-fcc: `[9,9,9]` against FFTDF's `[43,43,43]`.
+/// GDF's own mesh is TINY next to the density one — that is why it is cheap —
+/// and **which** small mesh it is depends on the route.
+///
+/// He-fcc 2x2x2, against FFTDF's `[43,43,43]`:
+///
+/// | route | mesh | estimator |
+/// |---|---|---|
+/// | RS (the default since Task 7d) | `[11,11,11]` | `_guess_omega`, carrying the long-range half |
+/// | CC | `[9,9,9]` | `_guess_eta`, resolving the model charge |
+///
+/// This test asserted only the `[9,9,9]` before plan 14-07 Task 7d flipped the
+/// default; both are pinned now, because "the mesh is small" is true of either
+/// and would not have caught the change of route.
 #[test]
-fn gdf_mesh_is_the_model_charge_mesh() {
-    let d = built(common::he_all_electron(), [2, 2, 2], Aosym::S2);
-    assert_eq!(d.mesh(), [9, 9, 9]);
+fn gdf_mesh_is_the_routes_own_small_mesh() {
+    let cell = common::he_all_electron();
+    let k = kpts(&cell, [2, 2, 2]);
+
+    let rs = Gdf::new(cell.clone(), &k);
+    assert!(!rs.prefer_ccdf, "Task 7d: the RS route is the default");
+    assert_eq!(rs.mesh(), [11, 11, 11], "RS: _guess_omega's mesh");
+
+    let mut cc = Gdf::new(cell, &k);
+    cc.prefer_ccdf = true;
+    assert_eq!(cc.mesh(), [9, 9, 9], "CC: _guess_eta's model-charge mesh");
 }
 
 /// The `_cderi` file round-trips bit-identically, in upstream's layout, so a
@@ -311,14 +330,36 @@ fn gdf_is_usable_as_a_boxed_periodic_df() {
     assert_eq!(out.vk.as_ref().expect("vk").len(), 0);
 }
 
-/// The range-separated route is upstream's DEFAULT and this port does not have
-/// it yet, so asking for it must be refused with the measured cost named.
+/// The range-separated route is upstream's DEFAULT, and since plan 14-07
+/// sub-tasks 7b/7c (on D-PBC-24's cintx `range_omega`) this port has it.
+///
+/// This test used to assert the REFUSAL. It now asserts the route runs and
+/// produces a usable `cderi` of the same shape as the compensated one — the
+/// numbers themselves are gated in `tests/rsdf_builder.rs` against upstream.
 #[test]
-fn prefer_ccdf_false_is_refused() {
+fn prefer_ccdf_false_builds_the_range_separated_route() {
     let cell = common::he_all_electron();
     let k = kpts(&cell, [1, 1, 1]);
-    let mut d = Gdf::new(cell, &k);
-    d.prefer_ccdf = false;
-    let e = d.build().expect_err("the RS route is plan 14-07");
-    assert!(format!("{e}").contains("14-07"), "got: {e}");
+
+    let mut rs = Gdf::new(cell.clone(), &k);
+    rs.prefer_ccdf = false;
+    rs.build().expect("the range-separated route builds");
+    let rs_naux = rs.cderi().expect("rs cderi").naoaux().expect("rs naoaux");
+
+    let mut cc = Gdf::new(cell, &k);
+    cc.prefer_ccdf = true;
+    cc.build().expect("the compensated route builds");
+    let cc_naux = cc.cderi().expect("cc cderi").naoaux().expect("cc naoaux");
+
+    assert_eq!(
+        rs_naux, cc_naux,
+        "both routes fit in the same auxiliary basis, so the rank must agree"
+    );
+    // The two routes carry the LONG-range half on different grids, so their
+    // meshes differ by construction — `_guess_omega`'s against `_guess_eta`'s.
+    assert_ne!(
+        pyscf_pbc_df::PeriodicDf::mesh(&rs),
+        pyscf_pbc_df::PeriodicDf::mesh(&cc),
+        "the RS mesh is _guess_omega's, the CC mesh is _guess_eta's"
+    );
 }

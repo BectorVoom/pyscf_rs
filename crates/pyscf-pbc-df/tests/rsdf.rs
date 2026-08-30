@@ -134,37 +134,28 @@ fn density_fit_honours_its_options() {
 /// quietly returned a GDF instead would make Gate 3 pass by comparing GDF with
 /// itself.
 #[test]
-fn density_fit_refuses_rsdf_and_names_the_gap() {
+fn density_fit_produces_rsdf() {
     let cell = common::he_all_electron();
-    let e = density_fit(cell, &[[0.0; 3]], DfKind::Rsdf, DfOpts::default())
-        .expect_err("RSDF must be refused");
-    let msg = format!("{e}");
-    assert!(
-        msg.contains("range_omega") && msg.contains("env[8]"),
-        "the refusal must name the missing cintx capability: {msg}"
-    );
+    let d = density_fit(cell, &[[0.0; 3]], DfKind::Rsdf, DfOpts::default())
+        .expect("RSDF ships since plan 14-07 7b/7c");
+    assert_eq!(d.name(), "RSGDF");
 }
 
-/// `RSDF`'s ω half works — that is plan 14-07's 7a — and its build does not.
+/// `RSDF` picks upstream's `(omega, mesh, ke_cutoff)` and builds.
 ///
-/// Recording both in one test is the point: it says precisely how far the port
-/// got, so `14-VERIFICATION.md`'s "Gate 3 unreachable" is a measured statement
-/// and not a shrug.
+/// The ω half was plan 14-07's 7a and shipped alone; 7b/7c added the builder on
+/// top of D-PBC-24's cintx `range_omega`. The numbers here are
+/// `measurements/omega.out`'s.
 #[test]
-fn rsdf_guesses_omega_but_cannot_build() {
+fn rsdf_guesses_omega_and_builds() {
     let cell = common::he_all_electron();
     let kpts = cell.make_kpts([2, 2, 2]).expect("kpts");
     let mut d = Rsdf::new(cell, &kpts);
 
-    let (omega, mesh, ke) = d.guess_omega().expect("the omega half ships");
+    let (omega, mesh, ke) = d.guess_omega().expect("the omega estimator");
     assert!((omega - 0.739_358_637_866_536).abs() < 1e-12, "omega: {omega}");
     assert_eq!(mesh, [11, 11, 11]);
     assert!((ke - 30.708_567_591_994_9).abs() < 1e-10, "ke_cutoff: {ke}");
 
-    let e = d.build().expect_err("the SR 3-centre route must be refused");
-    let msg = format!("{e}");
-    assert!(
-        msg.contains("range_omega"),
-        "the refusal must name the gap: {msg}"
-    );
+    d.build().expect("the range-separated 3-centre route builds");
 }

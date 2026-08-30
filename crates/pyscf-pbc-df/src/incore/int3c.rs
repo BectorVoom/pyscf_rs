@@ -217,9 +217,8 @@ pub fn estimate_rcut(cell: &Cell, auxcell: &Cell, precision: Option<f64>) -> f64
         fac *= (1.0 + ai / aj).powf(lj) * fl / precision;
 
         // Two fixed-point sweeps from `cell.rcut`, exactly as upstream.
-        let step = |r0: f64| {
-            ((fac * r0 * (sfac * r0).powf(l3 - 2.0) + 1.0).ln() / (sfac * theta)).sqrt()
-        };
+        let step =
+            |r0: f64| ((fac * r0 * (sfac * r0).powf(l3 - 2.0) + 1.0).ln() / (sfac * theta)).sqrt();
         let r0 = step(step(r_start));
         let _ = j;
         if r0.is_finite() && r0 > rcut {
@@ -260,12 +259,19 @@ pub fn conc_locs(ao_loc1: &[i32], ao_loc2: &[i32]) -> Vec<i32> {
 /// which is `auxcell.pbc_intor('int2c2e', hermi, kpts)` plus the modrho scale on
 /// BOTH indices.
 ///
+/// `omega` is upstream's `with auxcell.with_range_coulomb(omega):` wrapper
+/// around the same call — the `_RSGDFBuilder.get_2c2e` half of range-separated
+/// fitting. `None` is the full Coulomb metric and is byte-identical to before.
+/// See [`pyscf_pbc_gto::pbc_intor::PbcIntorOpts::omega`] for the sign
+/// convention and for what the image list does (and does not) do with ω.
+///
 /// # Errors
 /// As [`pyscf_pbc_gto::pbc_intor::pbc_intor`].
 pub fn fill_2c2e(
     aux: &AuxCell,
     hermi: i32,
     kpts: &[[f64; 3]],
+    omega: Option<f64>,
 ) -> Result<Vec<CTensor>, PyscfRsError> {
     let out = pyscf_pbc_gto::pbc_intor::pbc_intor(
         &aux.cell,
@@ -276,6 +282,7 @@ pub fn fill_2c2e(
             // `pbcopt=lib.c_null_ptr()` — incore.py:155-157 explicitly disables
             // the AO-pair prescreen for the metric.
             screen: false,
+            omega,
             ..Default::default()
         },
     )?;
@@ -313,6 +320,13 @@ pub struct KptPair {
 /// only conditionally convergent and the result depends on `rcut` — see the
 /// module docs for the measurement.
 ///
+/// `omega` is upstream's `with cell.with_range_coulomb(omega):` around the
+/// `int3c2e` call — the `_RSGDFBuilder.outcore_auxe2` half of range-separated
+/// fitting, and the reason `_RSGDFBuilder` was blocked until cintx grew
+/// `ExecutionOptions::range_omega` (D-PBC-24). `None` is full Coulomb and is
+/// byte-identical to before. See
+/// [`pyscf_pbc_gto::pbc_intor::PbcIntorOpts::omega`] for the sign convention.
+///
 /// # Errors
 /// [`CoreError::InvalidMolecule`] on a cintx failure, and
 /// [`PyscfRsError::NotYetImplemented`] for the branches D-PBC-23 defers.
@@ -322,8 +336,9 @@ pub fn aux_e2(
     aosym: Aosym,
     kptij_lst: &[KptPair],
     rcut: Option<f64>,
+    omega: Option<f64>,
 ) -> Result<Vec<CTensor>, PyscfRsError> {
-    aux_e2_intor(cell, aux, "int3c2e", aosym, kptij_lst, rcut)
+    aux_e2_intor(cell, aux, "int3c2e", aosym, kptij_lst, rcut, omega)
 }
 
 /// [`aux_e2`] for an arbitrary 3-centre family.
@@ -349,6 +364,7 @@ pub fn aux_e2_intor(
     aosym: Aosym,
     kptij_lst: &[KptPair],
     rcut: Option<f64>,
+    omega: Option<f64>,
 ) -> Result<Vec<CTensor>, PyscfRsError> {
     let nao = cell.mol.nao_nr;
     let nbas = cell.mol.nbas;
@@ -453,7 +469,27 @@ pub fn aux_e2_intor(
     } else {
         Representation::Spheric
     };
-    let opts = ExecutionOptions::default();
+    // ω rides in the OPTIONS, not in the basis. That is what makes range
+    // separation reachable from here at all: this driver builds its `BasisSet`
+    // through `build_image_expanded_with_aux` from `cell.mol._atom`/`_basis`
+    // and never materialises an `_env`, so `pyscf-gto`'s `OmegaGuard` trick of
+    // writing `mol._env[8]` has nothing to write into. `ExecutionOptions`
+    // sidesteps that entirely.
+    //
+    // It is set BEFORE `query_workspace` (in `eval3c`) and never after: short
+    // range doubles the Rys roots, so ω sizes the workspace, and cintx rejects
+    // a ω that changes between query and evaluate as backend contract drift.
+    //
+    // The image list and the Gaussian prescreen below are still the full-range
+    // ones. Both are conservative under either branch — short range decays
+    // faster than 1/r and long range shares its tail — so this is correct and
+    // merely keeps more triples than short range needs. Tightening it is
+    // `rsdf_builder::omega::estimate_rcut`'s job, at the caller, through the
+    // `rcut` argument.
+    let opts = ExecutionOptions {
+        range_omega: omega,
+        ..ExecutionOptions::default()
+    };
 
     // AO offsets/counts, image-independent, off a probe basis.
     let (probe, probe_nbas, probe_naux) = build_basis(cell, &aux.cell, &ls, &[0])?;

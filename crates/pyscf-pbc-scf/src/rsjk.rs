@@ -1,7 +1,7 @@
 //! `rsjk` — range-separated J/K with NO density fitting
 //! (`pyscf/pbc/scf/rsjk.py`), plan 14-08 Task 4.
 //!
-//! # STATUS: BLOCKED, and the blocker is the same one that stopped 14-07
+//! # STATUS: NOT PORTED. The blocker that stopped 14-07 is gone.
 //!
 //! `rsjk` is a different animal from every other builder in Phase 14: it has no
 //! auxiliary basis and no `cderi`. It splits the Coulomb operator itself and
@@ -21,16 +21,39 @@
 //! **Its short-range half is a short-range `int2e`.** `rsjk.py:136-187` builds
 //! `supmol_sr` and sets `supmol_sr.omega = -self.omega` before evaluating
 //! `int2e` over it. That is libcint's `PTR_RANGE_OMEGA` (`env[8]`) toggle
-//! around the standard symbol — the exact capability cintx's safe API does not
-//! expose. `ExecutionOptions` (`cintx-runtime/src/options.rs:96`) carries
-//! `f12_zeta` (`env[9]`), `rinv_orig` and `common_orig`, and nothing reads
-//! `env[8]`. This repository already records the gap as Phase 4's Open
-//! Question A5 / cintx#11 in `crates/pyscf-gto/src/range_coulomb.rs`.
+//! around the standard symbol, and cintx's safe API **now exposes it**:
+//! `ExecutionOptions::range_omega` / `SessionBuilder::with_range_omega`
+//! (D-PBC-24), on the same sign convention [`JkOpts::omega`] already uses.
+//! Phase 4's Open Question A5 / cintx#11 in
+//! `crates/pyscf-gto/src/range_coulomb.rs` is answered.
 //!
-//! So `rsjk` cannot be built without substituting the full-range kernel for the
-//! short-range one, which would produce a J/K builder that runs, converges, and
-//! is silently not `rsjk`. [`RangeSeparatedJkBuilder::build`] therefore refuses
-//! (D-PBC-20).
+//! **cintx was necessary but NOT sufficient, and the remaining blocker is
+//! Phase 17.** Two independent things are missing, neither of them an integral
+//! flag:
+//!
+//! 1. **The supermole.** `rsjk.py:150-200` builds the short-range half over
+//!    `ft_ao._RangeSeparatedCell.from_cell` + `ft_ao.ExtendedMole.from_cell`
+//!    followed by `strip_basis`, and `_get_jk_sr` (`:267-436`) indexes the
+//!    result by `supmol.bas_mask` with shape `(bvk_ncells, rs_nbas, nimgs)`.
+//!    This port has neither type — D-PBC-21 / D-PBC-23 defer both to Phase 17,
+//!    which is also what `exclude_dd_block` and `strip_basis` wait on.
+//! 2. **A periodic 4-centre `int2e` driver.** `_get_jk_sr` drives
+//!    `PBCVHF_direct_drv1`, a SCREENED direct sweep. `grep int2e` across every
+//!    `pyscf-pbc-*` crate finds one doc comment and no implementation:
+//!    [`pyscf_pbc_df::incore::aux_e2`] is 3-centre.
+//!
+//! Point 2 is why the trick that unblocked RSDF does not transfer.
+//! `_RSGDFBuilder` could be ported by treating every basis function as compact
+//! and paying for the missing compact/smooth split in grid points — a
+//! degenerate case that is merely slower. Here the screening **is** the
+//! algorithm: an unscreened 4-centre sweep over the BvK images is not slower
+//! but infeasible, so there is no correct-but-slow version to fall back on.
+//!
+//! [`RangeSeparatedJkBuilder::build`] therefore still refuses (D-PBC-20), and
+//! **must not** be finished by substituting the full-range kernel: because
+//! `rsjk` is EXACT, a wrong answer would land within the DF fitting error of a
+//! correct GDF and look entirely plausible. Sequence it after Phase 17's
+//! supermole and size it as its own plan.
 //!
 //! # What ships anyway
 //!
@@ -54,10 +77,13 @@ use pyscf_pbc_df::error::PbcDfError;
 use pyscf_pbc_df::traits::{JkOpts, JkResult};
 use pyscf_pbc_gto::Cell;
 
-/// The one-line reason `rsjk` is refused. Deliberately the same text
-/// [`pyscf_pbc_df::rsdf_builder::CINTX_SR_GAP`] carries, because it is the same
-/// missing capability — a reader who hits one should recognise the other.
-pub const CINTX_SR_GAP: &str = pyscf_pbc_df::rsdf_builder::CINTX_SR_GAP;
+/// The one-line reason `rsjk` is refused, re-exported from
+/// [`pyscf_pbc_df::rsdf_builder::RS_BUILDER_GAP`].
+///
+/// That constant used to cover BOTH this and `_RSGDFBuilder`. Plan 14-07
+/// sub-tasks 7b/7c shipped the latter (Phase 14 Gate 3 is MET), so the text now
+/// names only this — the last consumer of D-PBC-24 still unwritten.
+pub const RS_BUILDER_GAP: &str = pyscf_pbc_df::rsdf_builder::RS_BUILDER_GAP;
 
 /// `RangeSeparatedJKBuilder` — `rsjk.py:47-…`.
 #[derive(Debug, Clone)]
@@ -120,7 +146,7 @@ impl RangeSeparatedJkBuilder {
         Err(PbcDfError::Core(
             pyscf_core::PyscfRsError::NotYetImplemented {
                 phase: 14,
-                what: CINTX_SR_GAP,
+                what: RS_BUILDER_GAP,
             },
         ))
     }
@@ -139,7 +165,7 @@ impl RangeSeparatedJkBuilder {
         Err(PbcDfError::Core(
             pyscf_core::PyscfRsError::NotYetImplemented {
                 phase: 14,
-                what: CINTX_SR_GAP,
+                what: RS_BUILDER_GAP,
             },
         ))
     }

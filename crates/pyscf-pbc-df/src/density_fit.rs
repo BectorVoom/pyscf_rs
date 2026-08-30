@@ -38,7 +38,7 @@ pub enum DfKind {
     Gdf,
     /// `mdf.MDF` — GDF plus the plane-wave residual (plan 14-06).
     Mdf,
-    /// `rsdf.RSGDF` — range-separated. **Refused**; see [`crate::rsdf`].
+    /// `rsdf.RSGDF` — range-separated (plan 14-07 7b/7c); see [`crate::rsdf`].
     Rsdf,
 }
 
@@ -69,9 +69,7 @@ pub struct DfOpts {
 /// Build one `with_df` object.
 ///
 /// # Errors
-/// Propagates the builder's construction, and refuses [`DfKind::Rsdf`] with
-/// the cintx range-separation gap (D-PBC-20 — a deferred branch never returns
-/// a silently wrong answer).
+/// Propagates the builder's construction.
 pub fn density_fit(
     cell: Cell,
     kpts: &[[f64; 3]],
@@ -99,12 +97,9 @@ pub fn density_fit(
             Box::new(d)
         }
         DfKind::Rsdf => {
-            return Err(PbcDfError::Core(
-                pyscf_core::PyscfRsError::NotYetImplemented {
-                    phase: 14,
-                    what: crate::rsdf_builder::CINTX_SR_GAP,
-                },
-            ));
+            let mut d = crate::Rsdf::new(cell, kpts);
+            d.gdf.auxbasis = opts.auxbasis;
+            Box::new(d)
         }
     })
 }

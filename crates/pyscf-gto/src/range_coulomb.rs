@@ -20,29 +20,45 @@
 //! [`crate::intor`] call between a guarded env-slot mutation; it introduces
 //! NO new intor symbol.
 //!
-//! ## Open Question A5 — RESOLVED (cintx safe-API gap)
-//! cintx *reads* `env[8]`, but its **safe API** (`cintx_rs::SessionRequest`
-//! → `cintx_runtime::ExecutionOptions` → `OperatorEnvParams`) exposes only
-//! `f12_zeta` (env[9]) and `grids_params` — there is **no** `range_omega`
-//! (env[8]) setter on the safe path (verified in cintx source this session).
-//! The omega slot is a single `f64` in the Mole's own `_env`, so this module
-//! sets/restores `mol._env[PTR_RANGE_OMEGA]` directly (a `pyscf-gto`-side
-//! `with_range_coulomb`-equivalent — the slot is owned by `make_env`, D-03).
+//! ## Open Question A5 — CLOSED, and the fix was not the env slot
 //!
-//! **cintx gap-closure marker (RSH-specific):** the *full-range* arity-4
-//! `int2e` rollup landed in 05-08 (cintx#11 closed — `intor("int2e")` now
-//! evaluates with `ExecutionOptions::default()`, i.e. omega=0). What remains
-//! for RSH is the *ranged* path: the safe-API `int2e` does not yet *consume*
-//! the `_env[8]` omega slot the way the `cintx-compat::raw` path does. So while
-//! the set/restore semantics are complete and tested here, the *numerical* RSH
-//! ERI (erf(ωr)/r) flips on only once cintx ships a safe-API
-//! `with_range_coulomb`/`range_omega` knob (or threads `mol._env[8]` into the
-//! safe `int2e` plan). Until then the CAM-B3LYP/H2O bit-exact energy assertion
-//! is CI-gated (mirrors the 04-06 DFT-01 oracle convention).
+//! The original finding was right: cintx *reads* `env[8]` on its
+//! `cintx-compat::raw` path, but its **safe API** takes its parameters from
+//! `ExecutionOptions`, and `intor` builds cintx's `BasisSet` from
+//! `mol._atom`/`_basis` — it never hands cintx the caller's `_env`. So writing
+//! `mol._env[PTR_RANGE_OMEGA]` and calling `intor` set a slot nobody read: the
+//! call returned the FULL-RANGE operator under a range-separated request. It
+//! ran, it converged, and it was silently a different method.
+//!
+//! **D-PBC-24 closed the capability** — `ExecutionOptions::range_omega` /
+//! `SessionBuilder::with_range_omega`, honoured end to end for `int2e`,
+//! `int3c2e` and `int2c2e` and gated against vendored libcint 6.1.3 at 3.4e-14.
+//! [`intor_with_omega`] therefore threads ω through
+//! [`crate::intor_with_options`] as well as setting the env slot, and the
+//! numerical RSH ERI is live rather than CI-gated.
+//!
+//! The [`OmegaGuard`] stays. `mol._env[8]` is the compat surface this port
+//! promises (`with_range_coulomb`'s observable effect, asserted by
+//! `tests/range_coulomb_env.rs`), and any consumer that reaches cintx through
+//! `cintx-compat::raw` rather than the safe API still reads it. Both halves are
+//! set from the same argument, so they cannot disagree.
+//!
+//! ## Fail closed, not full range
+//!
+//! cintx's safe API refuses a non-zero ω on any operator it has not implemented
+//! range separation for, rather than evaluating the full-range kernel. So
+//! `intor_with_omega(mol, "int1e_ovlp", -0.8)` is now an ERROR where it used to
+//! return full-range overlaps. That is the intended contract: upstream's
+//! `with_range_coulomb` block is harmless around a 1e integral only because
+//! libcint's `g1e.c` ignores the slot, and a caller who cannot tell the two
+//! apart is one refactor away from a wrong number. `omega == 0.0` is the full
+//! Coulomb operator and is accepted everywhere.
 
 use pyscf_core::{Density, Mole, PyscfRsError};
 
-use crate::intor::{IntorOutput, intor};
+use cintx_runtime::ExecutionOptions;
+
+use crate::intor::{IntorOutput, intor_with_options};
 
 /// libcint global-param slot for the range-separation omega
 /// (`PTR_RANGE_OMEGA = 8`). Defined locally because `pyscf_core::raw_layout`
@@ -111,11 +127,17 @@ impl Drop for OmegaGuard<'_> {
 /// Mole's `_env[8]` is byte-identical to its value on entry, so subsequent
 /// (non-ranged) intor calls are unaffected (tested in `range_coulomb_env`).
 ///
-/// NOTE (RSH-specific cintx gap, see module docs): full-range arity-4 `int2e`
-/// lands as of 05-08, but the cintx safe-API `int2e` evaluator does not yet
-/// read `_env[8]` — so the *numerical* long/short-range (ranged-omega) ERI
-/// flips on only once cintx threads omega into the safe `int2e` plan. The
-/// env-slot set/restore contract this function owns is verified independently.
+/// ω reaches the integral through cintx's [`ExecutionOptions::range_omega`],
+/// NOT through the env slot the guard writes: `intor` builds cintx's
+/// `BasisSet` from `mol._atom`/`_basis` and never hands cintx this `_env`, so
+/// the slot alone would have been inert (see the module docs). Both are set
+/// from the same `omega` argument, so the compat surface and the evaluated
+/// operator cannot disagree.
+///
+/// # Errors
+/// As [`crate::intor`], plus a typed refusal from cintx when `omega != 0.0` is
+/// asked of an operator with no range-separated kernel — a refusal, never a
+/// full-range substitution.
 pub fn intor_with_omega(
     mol: &mut Mole,
     name: &str,
@@ -126,7 +148,14 @@ pub fn intor_with_omega(
     // `guard.mol()` is a shared borrow of the omega-set Mole; the guard
     // restores env[8] when it drops at the end of this scope, including on
     // the `?`-propagated error path below.
-    intor(guard.mol(), name)
+    intor_with_options(
+        guard.mol(),
+        name,
+        ExecutionOptions {
+            range_omega: Some(omega),
+            ..ExecutionOptions::default()
+        },
+    )
     // guard drops here → env[8] restored.
 }
 
@@ -144,8 +173,9 @@ pub fn intor_with_omega(
 /// symmetric `K[μν] = Σ eri[μλ,νσ] D[λσ]` contraction `fock.rs:108-130`
 /// uses, but on the omega-screened ERIs.
 ///
-/// Returns the K matrix as a [`Density`]. Like [`intor_with_omega`] the
-/// numerical values depend on the cintx env[8] + arity-4 gap (cintx#11).
+/// Returns the K matrix as a [`Density`]. Since D-PBC-24 the ERIs it contracts
+/// really are the ranged ones — before that this built a full-range K under a
+/// range-separated name.
 pub fn get_k_with_omega(mol: &mut Mole, dm: &Density, omega: f64) -> Result<Density, PyscfRsError> {
     let nao = mol.nao_nr;
     if dm.nao != nao {

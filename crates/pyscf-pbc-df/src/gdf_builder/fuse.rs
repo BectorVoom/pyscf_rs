@@ -397,3 +397,37 @@ pub fn compensate_nuccell(cell: &Cell, eta: f64) -> Result<AuxCell, PbcDfError> 
     }
     Ok(apply_modrho(build_aux_cell(cell, basis)?, cell.precision)?)
 }
+
+/// A [`FusedCell`] that fuses **nothing** — `fused == auxcell`, every model
+/// charge absent, `eta = 0`.
+///
+/// Range-separated fitting (`_RSGDFBuilder`, plan 14-07 sub-tasks 7b/7c) runs
+/// the real-space pass against the **plain** auxiliary cell: its lattice sum
+/// converges because the KERNEL is `erfc(omega r)/r`, not because the auxiliary
+/// functions were neutralised. It therefore has no compensating charges and no
+/// model-charge rows — `rsdf_builder.py:363-534` integrates `auxcell`
+/// directly.
+///
+/// Rather than fork [`crate::gdf_builder::j3c::make_j3c_scheme`] on "is there a
+/// fused cell", the range-separated scheme hands it this degenerate one:
+/// [`FusedCell::naux`] equals [`FusedCell::nauxc`], and `fuse_rows` /
+/// `fuse_cols` reduce to a copy. One driver, three schemes, no branch on
+/// nullability.
+pub fn unfused_auxcell(cell: &Cell, auxbasis: Option<&str>) -> Result<FusedCell, PbcDfError> {
+    if cell.mol.cart {
+        return Err(PbcDfError::Core(PyscfRsError::NotYetImplemented {
+            phase: 19,
+            what: "cartesian auxcell — as fuse_auxcell (gdf_builder.py:848-880)",
+        }));
+    }
+    let aux_basis = resolve_auxbasis(cell, auxbasis)?;
+    let auxcell = apply_modrho(build_aux_cell(cell, aux_basis)?, cell.precision)?;
+    let naux = auxcell.naux();
+    Ok(FusedCell {
+        fused: auxcell.clone(),
+        auxcell,
+        aux_ao: (0..naux).collect(),
+        partner: vec![None; naux],
+        eta: 0.0,
+    })
+}

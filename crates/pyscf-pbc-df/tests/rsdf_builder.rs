@@ -104,7 +104,11 @@ fn guess_omega_matches_upstream() {
 #[test]
 fn omega_estimators_match_upstream() {
     assert_eq!(rs::OMEGA_MIN, 0.08, "OMEGA_MIN — rsdf_builder.py:52");
-    assert_eq!(rs::RCUT_THRESHOLD, 1.0, "RCUT_THRESHOLD — rsdf_builder.py:56");
+    assert_eq!(
+        rs::RCUT_THRESHOLD,
+        1.0,
+        "RCUT_THRESHOLD — rsdf_builder.py:56"
+    );
 
     let he = common::he_all_electron();
     close(
@@ -391,52 +395,73 @@ fn sr_and_lr_coulg_match_upstream_values() {
         0.008_318_138_533_356,
     ];
     for i in 0..4 {
-        close(lr[i], want_lr[i], 1e-14, &format!("He weighted_coulG_LR[{i}]"));
-        close(sr[i], want_sr[i], 1e-14, &format!("He weighted_coulG_SR[{i}]"));
+        close(
+            lr[i],
+            want_lr[i],
+            1e-14,
+            &format!("He weighted_coulG_LR[{i}]"),
+        );
+        close(
+            sr[i],
+            want_sr[i],
+            1e-14,
+            &format!("He weighted_coulG_SR[{i}]"),
+        );
     }
 }
 
 // ---------------------------------------------------------------------------
-// 7b / 7c / 7d — the blocker, asserted
+// 7b / 7c / 7d — still unported, asserted
 // ---------------------------------------------------------------------------
 
-/// **The blocker is a REFUSAL, not a silent substitution** (D-PBC-20).
+/// `_RSGDFBuilder` builds, and its `(omega, mesh)` are the ones the port needs.
 ///
-/// `_RSGDFBuilder` needs a short-range `int3c2e`/`int2c2e`, which cintx's safe
-/// API cannot request. Building anyway with the full-range kernel would give a
-/// builder that runs, converges, and is silently a different method — the one
-/// outcome `14-07-PLAN.md` Task 7b forbids. The message must name the gap so
-/// the next person does not re-derive it.
+/// This test used to assert the REFUSAL. Plan 14-07 sub-tasks 7b/7c shipped the
+/// builder on top of D-PBC-24's cintx `range_omega`, so what is worth pinning
+/// now is the one place this port deliberately diverges from upstream: the
+/// `(omega, mesh)` pair comes from `_guess_omega(CELL)`, where upstream passes
+/// the AUXCELL.
+///
+/// Upstream can use the auxcell's coarser answer because `exclude_d_aux` and
+/// `exclude_dd_block` route what a coarse grid cannot resolve around the grid;
+/// this port has neither split, so it pays for the deferral in grid points.
+/// Measured on He-fcc `sto-3g` 2x2x2 against upstream's own RSDF energy
+/// (-2.80842508717097): upstream's `[7,7,7]` gives **8.67e-7**, this port's
+/// `[11,11,11]` gives **1.97e-10**. See `rsdf_builder::RsGdfBuilder::build`.
 #[test]
-fn rs_gdf_builder_refuses_and_names_the_cintx_gap() {
+fn rs_gdf_builder_uses_the_orbital_cell_omega_and_mesh() {
     let cell = common::he_all_electron();
-    let mut b = RsGdfBuilder::new(cell.clone(), &[[0.0; 3]]);
-    // The ω half of the builder works — that is 7a, and it ships.
-    let (omega, mesh, _) = b.guess().expect("guess must work");
-    assert!(omega > 0.0 && mesh[0] > 1);
+    let kpts = kpts_of(&cell, [2, 2, 2]);
+    let mut b = RsGdfBuilder::new(cell.clone(), &kpts);
+    b.build().expect("_RSGDFBuilder builds");
 
-    let e = b.build().expect_err("the SR 3-centre route must be refused");
-    let msg = format!("{e}");
+    let omega = b.omega.expect("omega set by build");
+    let mesh = b.mesh.expect("mesh set by build");
+    // `_guess_omega(cell, ...)` — `measurements/omega.out`, and NOT
+    // `_guess_omega(auxcell, ...)`, which would give (0.421017898945770,
+    // [7,7,7]) as upstream's builder does.
+    close(omega, 0.739_358_637_866_536, TOL, "builder omega");
+    assert_eq!(mesh, [11, 11, 11], "builder mesh");
     assert!(
-        msg.contains("range_omega") && msg.contains("env[8]"),
-        "the refusal must name the missing cintx capability: {msg}"
-    );
-    assert!(
-        msg.contains("cintx#11") || msg.contains("range_coulomb"),
-        "the refusal must point at the recorded gap: {msg}"
+        (omega - 0.421_017_898_945_770).abs() > 1e-3,
+        "the auxcell answer would be a silently coarser method"
     );
 }
 
-/// `GDF::prefer_ccdf` therefore stays `true`: plan 14-07's Task 7d flip cannot
-/// happen while the RS route is unbuildable, and a committed reference energy
-/// must not move on a route that does not exist.
+/// `GDF::prefer_ccdf` defaults to `false` — plan 14-07 Task 7d, 2026-08-30.
+///
+/// This test used to assert the OPPOSITE, holding the line until the RS route
+/// existed. It does now (7b/7c on D-PBC-24), so the flip landed and this pins
+/// it in the new direction. `pyscf-pbc-scf/tests/df_swap.rs` asserts each route
+/// against its own upstream number, which is what stops the flip from being
+/// silent: the two disagree by 5.222e-10 on He-fcc, INSIDE that test's 1e-9
+/// bar, so pinning one number alone would not have caught the change of route.
 #[test]
-fn gdf_default_route_has_not_flipped() {
+fn gdf_default_route_is_range_separated() {
     let cell = common::he_all_electron();
     let g = pyscf_pbc_df::Gdf::new(cell, &[[0.0; 3]]);
     assert!(
-        g.prefer_ccdf,
-        "Task 7d flips this to false ONLY once _RSGDFBuilder builds; until then \
-         the default must stay on the route that works"
+        !g.prefer_ccdf,
+        "Task 7d flipped this to false; upstream's GDF._prefer_ccdf is False"
     );
 }

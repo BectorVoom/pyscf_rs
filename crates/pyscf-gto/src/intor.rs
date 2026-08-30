@@ -69,6 +69,33 @@ pub struct IntorOutput {
 ///   - `PyscfRsError::NotYetImplemented` — for spinor representation
 ///     (Phase 3) or arity > 4 (libcint never goes higher).
 pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
+    intor_with_options(mol, name, ExecutionOptions::default())
+}
+
+/// [`intor`] with caller-supplied cintx [`ExecutionOptions`].
+///
+/// The options ride all the way to `SessionRequest::new`, so anything cintx
+/// puts there — `rinv_orig`, `common_orig`, `f12_zeta`, `range_omega` — reaches
+/// every arity through one seam rather than one entry point per parameter.
+///
+/// `range_omega` is why this exists as a public seam: upstream's
+/// `mol.with_range_coulomb(omega)` writes `mol._env[8]`, but cintx's SAFE API
+/// reads its parameters from `ExecutionOptions`, never from the caller's `_env`
+/// (it builds its own `BasisSet` from `_atom`/`_basis`). Setting the env slot
+/// alone therefore evaluated the FULL-RANGE operator under a range-separated
+/// request — it ran, it converged, and it was silently a different method.
+/// [`crate::range_coulomb::intor_with_omega`] uses this seam so it no longer
+/// does.
+///
+/// # Errors
+/// As [`intor`], plus whatever cintx's validator rejects in `opts` (for
+/// instance a non-zero `range_omega` on an operator that has no
+/// range-separated kernel — a typed refusal, never a substitution).
+pub fn intor_with_options(
+    mol: &Mole,
+    name: &str,
+    opts: ExecutionOptions,
+) -> Result<IntorOutput, PyscfRsError> {
     // ── Built check ────────────────────────────────────────────────────
     if !mol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
@@ -191,7 +218,7 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
             nao,
             layout,
             &full_name,
-            ExecutionOptions::default(),
+            opts,
         ),
         4 => evaluate_arity4(
             descriptor,
@@ -202,6 +229,7 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
             nao,
             layout,
             &full_name,
+            opts,
         ),
         // Single-mol arity-3 through `intor(mol, name)`: `int3c2e_sph` (μν|P)
         // with all three centers drawn from `mol`'s own basis — the
@@ -218,6 +246,7 @@ pub fn intor(mol: &Mole, name: &str) -> Result<IntorOutput, PyscfRsError> {
                 nbas,
                 nao,
                 &full_name,
+                opts,
             ),
             IntorLayout::ComponentLeadingFOrder { .. } => Err(PyscfRsError::NotYetImplemented {
                 phase: 3,
@@ -622,6 +651,7 @@ fn evaluate_arity4(
     nao: usize,
     layout: IntorLayout,
     intor_name: &str,
+    opts: ExecutionOptions,
 ) -> Result<IntorOutput, PyscfRsError> {
     let _ = descriptor; // descriptor read for arity in the dispatcher; future-proof.
 
@@ -675,13 +705,8 @@ fn evaluate_arity4(
                         )))
                     })?;
 
-                    let request = SessionRequest::new(
-                        operator,
-                        representation,
-                        basis,
-                        shells,
-                        ExecutionOptions::default(),
-                    );
+                    let request =
+                        SessionRequest::new(operator, representation, basis, shells, opts.clone());
                     let outcome = request
                         .query_workspace()
                         .map_err(|e| {
@@ -823,6 +848,7 @@ fn evaluate_arity4(
 /// the result must equal `intor_with_auxmol(mol, name, mol)` (mol as its own
 /// auxmol) — exercised by `tests/int3c2e_auxmol.rs`.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn evaluate_arity3_single_mol(
     operator: OperatorId,
     representation: Representation,
@@ -830,6 +856,7 @@ fn evaluate_arity3_single_mol(
     nbas: usize,
     nao: usize,
     intor_name: &str,
+    opts: ExecutionOptions,
 ) -> Result<IntorOutput, PyscfRsError> {
     let total = nao
         .checked_mul(nao)
@@ -859,13 +886,8 @@ fn evaluate_arity3_single_mol(
                          '{intor_name}': {e}",
                     )))
                 })?;
-                let request = SessionRequest::new(
-                    operator,
-                    representation,
-                    basis,
-                    shells,
-                    ExecutionOptions::default(),
-                );
+                let request =
+                    SessionRequest::new(operator, representation, basis, shells, opts.clone());
                 let outcome = request
                     .query_workspace()
                     .map_err(|e| {
@@ -1180,8 +1202,7 @@ pub fn intor_cross(mol_a: &Mole, mol_b: &Mole, name: &str) -> Result<IntorOutput
     let operator = descriptor.id;
 
     // Combined basis: A shells lead, B shells follow.
-    let (combined, n_a_shells, n_b_shells) =
-        crate::projection::build_combined_basis(mol_a, mol_b)?;
+    let (combined, n_a_shells, n_b_shells) = crate::projection::build_combined_basis(mol_a, mol_b)?;
 
     let nao_a = mol_a.nao_nr;
     let nao_b = mol_b.nao_nr;

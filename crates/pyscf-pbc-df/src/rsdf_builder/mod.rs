@@ -1,80 +1,77 @@
 //! `rsdf_builder` — range-separated Gaussian density fitting
 //! (`pyscf/pbc/df/rsdf_builder.py`), plan 14-07.
 //!
-//! # STATUS: sub-task 7a ships. 7b, 7c and 7d are BLOCKED, and the blocker is
-//! # named, measured and outside this repository.
+//! # STATUS: sub-tasks 7a, 7b and 7c ship. 7d (the default flip) does not.
 //!
-//! Plan 14-07 Task 7b says, in its own words:
+//! ## What D-PBC-24 unblocked, and what this module then had to write
+//!
+//! Plan 14-07 Task 7b said, in its own words:
 //!
 //! > **Check first that the cintx resolver exposes a short-range `int3c2e`**;
 //! > if it does not, this is the plan's one real blocker and it must be
 //! > reported as such, not worked around with a numerically different kernel.
 //!
-//! **It does not.** The evidence, gathered before any code was written:
+//! It did not, and Phase 14 closed with Gate 3 unreachable for that reason.
+//! **D-PBC-24 supplied the capability** — `ExecutionOptions::range_omega`
+//! (libcint `env[8]`), part of the WORKSPACE query because short range doubles
+//! the Rys roots — and ω now rides in the OPTIONS rather than the basis, which
+//! is why [`crate::incore::aux_e2`] reaches it at all without an `_env`.
 //!
-//! 1. `cintx_runtime::ExecutionOptions` (`cintx/crates/cintx-runtime/src/options.rs:96`)
-//!    carries `f12_zeta` (libcint `env[9]`), `rinv_orig` (`env[4..6]`) and
-//!    `common_orig` (`env[1..3]`). There is **no `range_omega`** field —
-//!    libcint's `PTR_RANGE_OMEGA` is `env[8]`, and the safe API has no setter
-//!    for it.
-//! 2. `cintx-compat/src/raw.rs:35-41` names `PTR_RANGE_OMEGA = 8` only in a
-//!    warning not to overwrite the slot. No kernel reads it: neither
-//!    `cintx-cubecl/src/kernels/center_3c2e.rs` nor `two_electron.rs` mentions
-//!    `omega` at all.
-//! 3. `cintx-ops`'s resolver knows `int3c2e` and `int3c2e_ip1` and no
-//!    range-separated variant, and upstream PySCF confirms none should exist:
-//!    range separation is an `env[8]` toggle around the STANDARD symbol, never
-//!    a distinct `int2e_sr_*` name.
-//! 4. **This gap is already on this repository's record.**
-//!    `crates/pyscf-gto/src/range_coulomb.rs` documents it as Phase 4's Open
-//!    Question A5 / cintx#11: "cintx *reads* `env[8]`, but its safe API […]
-//!    exposes only `f12_zeta` (env[9]) […] there is **no** `range_omega`
-//!    (env[8]) setter on the safe path". Phase 4 shipped the set/restore
-//!    semantics and CI-gated the numerical RSH assertion behind the same gap.
-//! 5. There is a second, independent obstruction on this particular path:
-//!    [`crate::incore::aux_e2`] reaches cintx through
-//!    `pyscf_gto::build_image_expanded_with_aux`, which builds its `BasisSet`
-//!    from `cell.mol._atom` / `_basis` — the per-element parsed basis — and not
-//!    from a `_env` array. So even the `pyscf-gto` workaround of writing
-//!    `mol._env[8]` directly (which `range_coulomb.rs` uses for the molecular
-//!    path) is not reachable from the periodic 3-centre driver.
+//! On top of that, this module ships `_RSGDFBuilder`: [`RsGdfBuilder::build`]
+//! picks `(omega, mesh, ke_cutoff)`, [`j2c::get_2c2e`] builds the metric,
+//! [`j2c::weighted_ft_ao`] the long-range plane-wave half, and
+//! [`RsGdfBuilder::make_j3c`] drives
+//! [`crate::gdf_builder::j3c::Scheme::RangeSeparated`] — one pipeline, three
+//! schemes, as `_CCMDFBuilder` is a subclass rather than a copy upstream.
 //!
-//! **The work needed to lift this is planned**, in
-//! `.planning/carryovers/D-PBC-24-cintx-range-omega-PLAN.md`: five stages, of
-//! which stage 2 is enough to unblock everything this phase lost. The finding
-//! that sizes it is that `rys_order = (sum l_ceil)/2 + 1` is `<= 3` on every
-//! system this milestone gates, and libcint computes the short-range integral
-//! in that regime as `full - LR` with DOUBLED Rys roots
-//! (`libcint/src/g2e.c:4477-4491`) using only the STANDARD root finder — so
-//! `CINTsr_rys_roots`, the genuinely hard part, is a later stage rather than a
-//! prerequisite.
+//! ## Measured, against upstream's own RSDF
 //!
-//! `_RSGDFBuilder`'s `get_2c2e` needs a short-range `int2c2e` and its
-//! `outcore_auxe2` a short-range `int3c2e`. Both are the same missing
-//! capability. Substituting the full-range kernel would produce a builder that
-//! looks like RSDF, runs, converges, and is silently a different method — the
-//! one outcome the plan explicitly forbids.
+//! He-fcc `sto-3g` 2x2x2, `conv_tol = 1e-12`, `KRHF`:
 //!
-//! # What DOES ship, and why it is worth shipping alone
+//! | route | upstream | this port | error |
+//! |---|---|---|---|
+//! | RSDF (upstream's DEFAULT) | -2.80842508717097 | -2.80842508693849 | **2.32e-10** |
+//! | GDF, compensated charge | -2.80842508664874 | -2.80842508692377 | **2.75e-10** |
 //!
-//! [`omega`] — all twelve estimators, `weighted_coulG_LR` / `_SR`, and
-//! `_gaussian_int`. They are pure functions of the cell, they are gated
-//! against `measurements/omega.out`, and three separate downstream consumers
-//! need them regardless of the blocker: `rsjk` (14-08), RSH functionals
-//! (`JkOpts::omega`, already threaded through `get_coulG`), and Phase 17.
-//! Plan 14-07 sequenced 7a first precisely so that it could land on its own:
-//! "Do 7a completely, with its tests green, before writing a line of 7b — the
-//! whole scheme's accuracy is one `ω` away."
+//! Both land at the same order, so range separation added nothing to the
+//! port's residual. The port's own `|CC - RS|` is **1.47e-11** against
+//! upstream's **5.222e-10** — the port's two routes agree with each other more
+//! closely than upstream's two do, because upstream's two differ partly through
+//! the `exclude_d_aux` / `exclude_dd_block` splits that this port has in
+//! NEITHER route. Gate 3's "within a factor of 2 of upstream's gap" criterion
+//! is therefore the wrong shape for this port; agreement with upstream's RSDF
+//! itself is the meaningful statement and is what the tests assert.
 //!
-//! # What a caller gets instead
+//! ## The one deliberate divergence: `_guess_omega` takes the ORBITAL cell
 //!
-//! [`RsGdfBuilder::build`] returns `NotYetImplemented { phase: 14 }` naming the
-//! cintx gap (D-PBC-20: a deferred branch never returns a silently wrong
-//! answer). `Gdf::prefer_ccdf` therefore stays `true` — plan 14-07's Task 7d
-//! flip cannot happen — and Gate 3 (`|E(GDF) − E(RSDF)|` against upstream's
-//! 1.353e-08 floor) is unreachable this phase. Both are recorded in
-//! `14-VERIFICATION.md`.
+//! Upstream passes the AUXCELL (`rsdf_builder.py:145`). This port passes the
+//! cell, giving a finer `(omega, mesh)` — `[11,11,11]` where upstream uses
+//! `[7,7,7]` on He-fcc 2x2x2. It is the price of having no
+//! `_RangeSeparatedCell`: upstream routes what a coarse grid cannot resolve
+//! around the grid, and this port cannot, so it resolves it. At upstream's own
+//! mesh the error is **8.67e-7**; at this one, **1.97e-10**. See
+//! [`RsGdfBuilder::build`] and [`j2c`]'s module docs.
+//!
+//! ## What is still NOT ported
+//!
+//! * `_RSNucBuilder` (`rsdf_builder.py:1098-1311`) — sub-task 7c's other half,
+//!   and **a performance carry-over rather than a fidelity gap**. This port
+//!   uses NEITHER split nuclear builder: [`crate::gdf::nuc::get_nuc`] goes
+//!   straight to AFTDF at the cell's converged mesh, which is oracle-gated at
+//!   2.755e-12 and strictly more accurate than either split. What the split
+//!   buys is speed (a `[9,9,9]` mesh instead of `[43,43,43]`), and 14-04
+//!   measured that evaluating the WHOLE nuclear attraction on the small mesh is
+//!   worth 0.0743 Ha — so the split is not optional, it is the only way to use
+//!   that mesh at all.
+//! * `rsdf_helper.py`'s prescreening (`get_q_cond`, the Schwarz bound). Its
+//!   absence keeps MORE primitives than upstream — conservative, and the same
+//!   posture 14-05 took toward `ExtendedMole.strip_basis`.
+//! * Task 7d's flip of [`crate::Gdf::prefer_ccdf`] to `false`. It moves a
+//!   committed reference energy and must be its own cited edit.
+//! * `pyscf_pbc_scf::rsjk` (14-08 Task 4) — unblocked by D-PBC-24 for `s`/`p`
+//!   bases, still unwritten. [`RS_BUILDER_GAP`] is what it still names.
 
+pub mod j2c;
 pub mod omega;
 
 pub use omega::{
@@ -87,15 +84,22 @@ use pyscf_pbc_gto::Cell;
 
 use crate::error::PbcDfError;
 
-/// The one-line reason every range-separated 3-centre path is refused. Kept as
-/// a constant so the tests can assert on it and so the message cannot drift
-/// between call sites.
-pub const CINTX_SR_GAP: &str = "range-separated int3c2e/int2c2e — cintx's safe API has no \
-     range_omega (libcint env[8]) knob: ExecutionOptions carries f12_zeta \
-     (env[9]), rinv_orig and common_orig only, and no kernel reads env[8]. \
-     Same gap as pyscf-gto's range_coulomb.rs Open Question A5 / cintx#11. \
-     Plan 14-07 requires this to be reported, NOT worked around with a \
-     numerically different kernel";
+/// The one-line reason range-separated EXCHANGE is still refused.
+/// Kept as a constant so the tests can assert on it and so the message cannot
+/// drift between call sites.
+///
+/// It has changed meaning twice: it named a missing cintx capability, then
+/// this port's unported `_RSGDFBuilder`, and now — both of those being done —
+/// only `pyscf_pbc_scf::rsjk`. Read the module docs before assuming an older
+/// reason still applies.
+pub const RS_BUILDER_GAP: &str = "range-separated EXCHANGE (rsjk) — the cintx side is DONE \
+     (ExecutionOptions::range_omega, libcint env[8]; incore::aux_e2 and \
+     incore::fill_2c2e both take an omega, gated by SR + LR == full in \
+     tests/incore.rs) and rsdf_builder::_RSGDFBuilder is ported on top of it \
+     (plan 14-07 7b/7c), but pyscf_pbc_scf::rsjk itself is not: plan 14-08 \
+     Task 4. Finish it rather than substituting the full-range kernel, which \
+     runs, converges, and is a different method — and rsjk is EXACT, so a \
+     wrong answer there lands inside GDF's fitting error and looks plausible";
 
 /// `_RSGDFBuilder` — `rsdf_builder.py:59-1096`.
 ///
@@ -118,6 +122,16 @@ pub struct RsGdfBuilder {
     pub ke_cutoff: Option<f64>,
     /// **D-PBC-23.** `false` here as everywhere in this phase.
     pub exclude_dd_block: bool,
+    /// The short-range 3-centre image radius — upstream's `Int3cBuilder.rcut`.
+    /// `None` uses [`omega::estimate_rcut`].
+    pub rcut: Option<f64>,
+    /// Drive `_RSMDFBuilder` (`mdf.py:238-353`) instead of `_RSGDFBuilder`.
+    ///
+    /// Upstream makes this a subclass overriding three methods; this port makes
+    /// it a flag on one builder, for the same reason 14-02 made `Scheme` a tag
+    /// rather than two copies of `make_j3c`. See
+    /// [`crate::gdf_builder::j3c::Scheme::RangeSeparated`] for what it changes.
+    pub mixed: bool,
 }
 
 impl RsGdfBuilder {
@@ -135,6 +149,17 @@ impl RsGdfBuilder {
             mesh: None,
             ke_cutoff: None,
             exclude_dd_block: false,
+            rcut: None,
+            mixed: false,
+        }
+    }
+
+    /// `_RSMDFBuilder` on `cell` at `kpts` — [`RsGdfBuilder::new`] with
+    /// [`RsGdfBuilder::mixed`] set.
+    pub fn new_mixed(cell: Cell, kpts: &[[f64; 3]]) -> Self {
+        Self {
+            mixed: true,
+            ..Self::new(cell, kpts)
         }
     }
 
@@ -149,16 +174,181 @@ impl RsGdfBuilder {
         guess_omega(&self.cell, &self.kpts, self.mesh)
     }
 
-    /// `_RSGDFBuilder.build()` — **refused**; see the module docs.
+    /// `_RSGDFBuilder.build(omega)` — `rsdf_builder.py:127-193`, minus the
+    /// `_RangeSeparatedCell` / `ExtendedMole` supermole (D-PBC-21 / D-PBC-23;
+    /// see [`j2c`]'s module docs for what treating every function as compact
+    /// costs and why the direction is safe).
+    ///
+    /// Picks `omega`, the long-range mesh and the kinetic-energy cutoff. What
+    /// upstream does after that — building `rs_cell`, `rs_auxcell`, `supmol`
+    /// and `supmol_ft` — is the compact/smooth partition and the stripped
+    /// Born–von-Kármán supercell, neither of which this port has; the SR radius
+    /// they exist to tighten is instead taken whole from
+    /// [`omega::estimate_rcut`].
     ///
     /// # Errors
-    /// Always [`PyscfRsError::NotYetImplemented`], naming the cintx gap.
+    /// [`PyscfRsError::NotYetImplemented`] `{ phase: 17 }` when
+    /// [`Self::exclude_dd_block`] is set, and propagates [`guess_omega`] and
+    /// the auxiliary-cell build.
     pub fn build(&mut self) -> Result<(), PbcDfError> {
-        Err(PbcDfError::Core(
-            pyscf_core::PyscfRsError::NotYetImplemented {
-                phase: 14,
-                what: CINTX_SR_GAP,
+        if self.exclude_dd_block {
+            return Err(PbcDfError::Core(pyscf_core::PyscfRsError::NotYetImplemented {
+                phase: 17,
+                what: "exclude_dd_block — ft_ao._RangeSeparatedCell + _int_dd_block \
+                       (D-PBC-23), as for the compensated-charge builder",
+            }));
+        }
+        // `rsdf_builder.py:137-152`. An omega set by the caller keeps its mesh
+        // from `estimate_ke_cutoff_for_omega`; an unset one lets `_guess_omega`
+        // balance the real-space and reciprocal-space halves against each other.
+        match self.omega {
+            None | Some(0.0) => {
+                // **The ORBITAL cell, where upstream passes the AUXCELL**
+                // (`rsdf_builder.py:145`), and this is a deliberate, measured
+                // divergence — the price of not having `_RangeSeparatedCell`.
+                //
+                // Upstream can afford the auxcell's coarser answer because
+                // `exclude_d_aux` and `exclude_dd_block` route the pieces a
+                // coarse grid cannot resolve AROUND the grid: the smooth
+                // auxiliary functions get the full kernel through AFT and the
+                // smooth-smooth orbital block goes to an FFT. This port has
+                // neither split (see [`j2c`]'s module docs), so every function
+                // rides the same plane-wave grid and the grid has to be good
+                // enough for the compact ones too.
+                //
+                // Measured on He-fcc `sto-3g` 2x2x2 against upstream's own
+                // RSDF energy (**-2.80842508717097**):
+                //
+                // | mesh | source | this port's error |
+                // |---|---|---|
+                // | [7,7,7] | `_guess_omega(auxcell)` — upstream's | **8.67e-7** |
+                // | [11,11,11] | `_guess_omega(cell)` — this line | **1.97e-10** |
+                //
+                // 1.97e-10 is the same order as this port's compensated route
+                // manages against upstream's GDF (2.75e-10), i.e. the residual
+                // is the port's ordinary fitting accuracy rather than anything
+                // range separation added. `[11,11,11]` is also exactly what
+                // `measurements/omega.out` records and what
+                // `tests/rsdf_builder.rs::guess_omega_matches_upstream` pins.
+                //
+                // The `(omega, mesh)` pair moves TOGETHER — a larger omega puts
+                // more of the kernel in real space and demands a finer grid for
+                // what is left — so taking one from the orbital cell and the
+                // other from the auxcell would be worse than either.
+                //
+                // This applies to `_RSMDFBuilder` too, and the evidence is the
+                // same shape. At MATCHED meshes the port reproduces upstream's
+                // RSMDF exactly as it should — He-fcc 2x2x2, `KRHF`:
+                //
+                // | mesh | error vs upstream at the same mesh |
+                // |---|---|
+                // | [7,7,7] (upstream's default, from the auxcell) | 1.160e-6 |
+                // | [11,11,11] (this port's, from the cell) | **3.049e-10** |
+                // | [15,15,15] | 1.900e-11 |
+                // | [21,21,21] | 7.809e-12 |
+                //
+                // — so the algebra is right and the coarse-grid gap is the
+                // missing splits, not a defect. **For MDF the mesh is
+                // definitional**, not merely a convergence knob: its plane-wave
+                // set is part of the BASIS (`<g|g> - <g|G><G|g>`, with `aft_jk`
+                // adding the residual back over the same `{G}`), so two meshes
+                // are two different — equally valid — MDF approximations, and
+                // an MDF number is only comparable against another at the SAME
+                // mesh. `tests/gate3_rsdf.rs` therefore gates RSMDF at matched
+                // meshes and records the default-mesh gap rather than gating it.
+                let (omega, mesh, ke) = guess_omega(&self.cell, &self.kpts, self.mesh)?;
+                self.omega = Some(omega);
+                self.mesh = Some(mesh);
+                self.ke_cutoff = Some(ke);
+            }
+            // `rsdf_builder.py:147-152` — an omega the caller set keeps its own
+            // mesh; only the missing half is derived.
+            Some(omega) => match (self.mesh, self.ke_cutoff) {
+                (None, _) => {
+                    let ke = estimate_ke_cutoff_for_omega(&self.cell, omega, None);
+                    self.mesh = Some(self.cell.cutoff_to_mesh(ke)?);
+                    self.ke_cutoff = Some(ke);
+                }
+                (Some(mesh), None) => {
+                    // `min(mesh_to_cutoff(a, mesh)[:cell.dimension])`.
+                    let ke = pyscf_pbc_tools::mesh::mesh_to_cutoff(&self.cell.a, mesh)?
+                        .into_iter()
+                        .take(self.cell.dimension as usize)
+                        .fold(f64::INFINITY, f64::min);
+                    self.ke_cutoff = Some(ke);
+                }
+                (Some(_), Some(_)) => {}
             },
-        ))
+        }
+        Ok(())
     }
+
+    /// `make_j3c(...)` on this builder's state — the range-separated arm of
+    /// [`crate::gdf_builder::j3c::make_j3c_scheme`].
+    ///
+    /// # Errors
+    /// [`PbcDfError::Core`] when [`Self::build`] has not run, and propagates
+    /// every stage of the 3-centre build.
+    pub fn make_j3c(
+        &self,
+        aosym: crate::incore::Aosym,
+        j_only: bool,
+    ) -> Result<crate::gdf_builder::j3c::Cderi, PbcDfError> {
+        let (Some(omega), Some(mesh)) = (self.omega, self.mesh) else {
+            return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                pyscf_core::CoreError::InvalidMolecule(
+                    "RsGdfBuilder::make_j3c: call build() first".into(),
+                ),
+            )));
+        };
+        // The unfused auxiliary cell — range separation needs no compensating
+        // charge (see [`crate::gdf_builder::fuse::unfused_auxcell`]).
+        let fused =
+            crate::gdf_builder::fuse::unfused_auxcell(&self.cell, self.auxbasis.as_deref())?;
+        // `estimate_rcut(rs_cell, rs_auxcell, omega, ...)` with no compact/
+        // smooth split, so the radius must cover the most diffuse auxiliary
+        // function. `.max()` is upstream's `rcut_sr.max()` (`:174`).
+        let rcut = self.rcut.unwrap_or_else(|| {
+            omega::estimate_rcut(&self.cell, &fused.auxcell.cell, omega, None)
+                .into_iter()
+                .fold(0.0_f64, f64::max)
+        });
+        crate::gdf_builder::j3c::make_j3c_scheme(
+            &self.cell,
+            &fused,
+            &self.kpts,
+            aosym,
+            mesh,
+            j_only,
+            // Cholesky first for RSGDF; RSMDF forces the eigen route
+            // (`mdf.py:245-250`, upstream's own words: "large difference may be
+            // found in results between the CD/ED treatments ... Abandon CD
+            // treatment for better numerical stability"), because subtracting
+            // a plane-wave projection can push the metric indefinite and
+            // Cholesky on an indefinite matrix does not merely lose accuracy —
+            // it fails or returns nonsense.
+            self.mixed,
+            Some(rcut),
+            crate::gdf_builder::j3c::Scheme::RangeSeparated {
+                omega,
+                mixed: self.mixed,
+            },
+        )
+    }
+}
+
+/// The mesh [`j2c::get_2c2e`] evaluates its plane-wave part on —
+/// `rsdf_builder.py:288-297`.
+///
+/// Tighter than the builder's own `mesh`, at `precision^1.5`, because the
+/// metric is more sensitive than the tensor. The compensated route makes the
+/// same distinction with `precision^2` (`gdf_builder.py:150-158`).
+///
+/// # Errors
+/// Propagates `cutoff_to_mesh`.
+pub fn j2c_mesh(cell: &Cell, auxcell: &Cell, omega: f64) -> Result<[usize; 3], PbcDfError> {
+    let precision = auxcell.precision.powf(1.5);
+    let ke = estimate_ke_cutoff_for_omega(auxcell, omega, Some(precision));
+    let mesh = cell.cutoff_to_mesh(ke)?;
+    Ok(mesh)
 }

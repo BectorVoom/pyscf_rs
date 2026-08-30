@@ -70,30 +70,40 @@ fn an_explicit_omega_overrides_the_guess() {
     assert!(ke > 0.0 && ke.is_finite(), "ke_cutoff: {ke}");
 }
 
-/// **The blocker, asserted.** `build` and `get_jk` refuse and name the missing
-/// cintx capability. Substituting the full-range `int2e` would give a builder
-/// that runs, converges, and is silently not `rsjk` — and because `rsjk` is
-/// EXACT, the wrong answer would land within the DF fitting error of a correct
-/// GDF and look plausible.
+/// **What is unported, asserted.** `build` and `get_jk` refuse and say what is
+/// actually missing.
+///
+/// The short-range `int2e` this builder needs EXISTS now — D-PBC-24 put
+/// `range_omega` (libcint `env[8]`) on cintx's safe API — so the refusal no
+/// longer names another repository. What is missing is `rsjk`'s own body: the
+/// supermole, the screened real-space sweep, the `ft_aopair` long-range half
+/// and the `vj`/`vk` assembly.
+///
+/// The assertion survives the change of cause for the reason it was written:
+/// substituting the full-range `int2e` would give a builder that runs,
+/// converges, and is silently not `rsjk` — and because `rsjk` is EXACT, the
+/// wrong answer would land within the DF fitting error of a correct GDF and
+/// look plausible. Delete it in the commit that ships `rsjk`, not before.
 #[test]
-fn rsjk_refuses_and_names_the_cintx_gap() {
+fn rsjk_refuses_and_names_what_is_unported() {
     let cell = he_all_electron();
     let mut b = RangeSeparatedJkBuilder::new(cell, &[[0.0; 3]]);
     for msg in [
         format!("{}", b.build().expect_err("build must refuse")),
         format!(
             "{}",
-            b.get_jk(
-                &[],
-                &[[0.0; 3]],
-                pyscf_pbc_df::traits::JkOpts::hermitian()
-            )
-            .expect_err("get_jk must refuse")
+            b.get_jk(&[], &[[0.0; 3]], pyscf_pbc_df::traits::JkOpts::hermitian())
+                .expect_err("get_jk must refuse")
         ),
     ] {
         assert!(
             msg.contains("range_omega") && msg.contains("env[8]"),
-            "the refusal must name the missing cintx capability: {msg}"
+            "the refusal must say the integral capability EXISTS, so the next reader \
+             does not re-derive a blocker that is gone: {msg}"
+        );
+        assert!(
+            !msg.contains("cintx's safe API has no"),
+            "the old cintx blocker text must not come back: {msg}"
         );
     }
 }
@@ -126,5 +136,8 @@ fn rsjk_is_not_a_density_fitting_builder() {
     // and explain what `sr_loop` and `get_naoaux` would return.
     let cell = he_all_electron();
     let b = RangeSeparatedJkBuilder::new(cell, &[[0.0; 3]]);
-    assert!(!b.exclude_dd_block, "D-PBC-23: false everywhere in Phase 14");
+    assert!(
+        !b.exclude_dd_block,
+        "D-PBC-23: false everywhere in Phase 14"
+    );
 }

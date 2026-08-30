@@ -19,14 +19,22 @@ cpu = ["pyscf-algebra/cpu", "pyscf-kernels/cpu", "dep:cubecl-cpu"]
 rocm = ["pyscf-algebra/rocm", "pyscf-kernels/rocm", "dep:cubecl-hip"]
 
 [dependencies]
-pyscf-core    = { path = "../pyscf-core" }
-pyscf-algebra = { path = "../pyscf-algebra", default-features = false }
-pyscf-kernels = { path = "../pyscf-kernels", default-features = false }
-pyscf-gto     = { path = "../pyscf-gto" }
-pyscf-scf     = { path = "../pyscf-scf" }
-pyscf-mp2     = { path = "../pyscf-mp2" }
-pyscf-ccsd    = { path = "../pyscf-ccsd" }
-pyscf-df      = { path = "../pyscf-df" }
+pyscf-core       = { path = "../pyscf-core" }
+pyscf-algebra    = { path = "../pyscf-algebra", default-features = false }
+pyscf-kernels    = { path = "../pyscf-kernels", default-features = false }
+pyscf-gto        = { path = "../pyscf-gto" }
+pyscf-scf        = { path = "../pyscf-scf" }
+pyscf-mp2        = { path = "../pyscf-mp2" }
+pyscf-ccsd       = { path = "../pyscf-ccsd" }
+pyscf-df         = { path = "../pyscf-df" }
+# W-00 (KRKS-OPTIMISATION-PLAN.md): the krks_profile baseline harness.
+pyscf-pbc-gto    = { path = "../pyscf-pbc-gto" }
+pyscf-pbc-tools  = { path = "../pyscf-pbc-tools" }
+pyscf-pbc-df     = { path = "../pyscf-pbc-df" }
+pyscf-pbc-dft    = { path = "../pyscf-pbc-dft" }
+pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
 cubecl        = { workspace = true }
 cubecl-cpu    = { workspace = true, optional = true }
 cubecl-hip    = { workspace = true, optional = true }
