@@ -41,10 +41,23 @@ pub struct JkOpts<'a> {
     /// instead: `Some(w > 0)` selects the LONG-range kernel, `Some(w < 0)` the
     /// SHORT-range one, `None` the full Coulomb kernel.
     pub omega: Option<f64>,
+    /// W-08 (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`) — exploit the
+    /// conjugate relation between the `(k1, k2)` and `(k2, k1)` members of the
+    /// exchange pair loop, halving the number of 3-D transforms.
+    ///
+    /// **Opt-in, and it CHANGES THE RESULT in the last bits** (it changes which
+    /// terms are summed into `vk[k]` and in what order), so it is `false`
+    /// everywhere by default and any gate run with it on must be re-baselined
+    /// rather than inherit the existing tolerances. Only `fftdf` honours it;
+    /// every other builder ignores it. See
+    /// [`crate::fft_jk::get_k_kpts_opts`] for the identity it rests on and the
+    /// preconditions it checks.
+    pub kk_symmetry: bool,
 }
 
 impl JkOpts<'_> {
-    /// `hermi = 1`, both matrices, no band k-points, no exxdiv.
+    /// `hermi = 1`, both matrices, no band k-points, no exxdiv, no k-pair
+    /// symmetry.
     pub fn hermitian() -> Self {
         Self {
             hermi: 1,
@@ -53,7 +66,26 @@ impl JkOpts<'_> {
             with_k: true,
             exxdiv: None,
             omega: None,
+            kk_symmetry: false,
         }
+    }
+
+    /// `PYSCF_PBC_KK_SYMMETRY`, read once — whether an SCF driver should turn
+    /// W-08's k-pair symmetry on.
+    ///
+    /// Default `false`. This exists so the accuracy gate can be RE-BASELINED
+    /// with the flag on (W-08's own TEST demands "a separate gate run with the
+    /// flag on whose tolerance is re-baselined and recorded") without every
+    /// driver growing a new argument. `1`/`true`/`yes`/`on` enable it; anything
+    /// else, including unset, does not.
+    pub fn kk_symmetry_default() -> bool {
+        use std::sync::OnceLock;
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("PYSCF_PBC_KK_SYMMETRY").is_ok_and(|v| {
+                matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+            })
+        })
     }
 }
 

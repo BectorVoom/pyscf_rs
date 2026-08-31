@@ -502,7 +502,7 @@ impl PeriodicDf for Fftdf {
             None
         };
         let vk = if opts.with_k {
-            Some(crate::fft_jk::get_k_kpts(
+            Some(crate::fft_jk::get_k_kpts_opts(
                 self,
                 dms,
                 opts.hermi,
@@ -510,6 +510,7 @@ impl PeriodicDf for Fftdf {
                 opts.kpts_band,
                 opts.exxdiv,
                 opts.omega,
+                opts.kk_symmetry,
             )?)
         } else {
             None

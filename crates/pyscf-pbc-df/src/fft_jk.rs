@@ -265,12 +265,79 @@ fn contract_ao_v_ao(ao: &CTensor, vr: &CTensor, nao: usize, ngrids: usize) -> CT
 pub fn get_k_kpts(
     df: &Fftdf,
     dms: &[KMats],
-    _hermi: i32,
+    hermi: i32,
     kpts: &[[f64; 3]],
     kpts_band: Option<&[[f64; 3]]>,
     exxdiv: Option<ExxDiv>,
     omega: Option<f64>,
 ) -> Result<Vec<KMats>, PbcDfError> {
+    get_k_kpts_opts(df, dms, hermi, kpts, kpts_band, exxdiv, omega, false)
+}
+
+/// [`get_k_kpts`] with W-08's opt-in k-pair symmetry
+/// (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`).
+///
+/// # The identity, and why it is derived here rather than ported
+///
+/// W-08 says to port upstream's `kk_adapted_iter` (`pbc/df/aft_jk.py`). That
+/// does not carry over: in AFTDF `kk_adapted_iter` groups the `(ki, kj)` pairs
+/// by their unique wrapped `dk` so that ONE analytic `ft_ao_pair` tensor serves
+/// every pair in the group. FFTDF has no `ft_ao_pair` — its per-pair cost is a
+/// batched 3-D transform of `rho1`, which depends on the AO tables at k1 AND at
+/// k2 individually, not on `dk` alone. Porting the iterator verbatim would
+/// therefore save nothing here; the only thing it groups (`get_coulG` per `dk`)
+/// is what W-01 already caches.
+///
+/// The saving that IS available is a genuine conjugate relation between the two
+/// orientations of a pair. With `dk = k2 - k1`:
+///
+/// ```text
+/// rho1^{21}[(i,j),g] = conj(ao[k2][i,g]) e^{+i dk r} ao[k1][j,g]
+///                    = conj( rho1^{12}[(j,i),g] )
+/// FFT(conj x)[G]     = conj( FFT(x)[-G] )
+/// coulG_{-dk}[G]     = coulG_{dk}[-G]            (it depends on |k+G| only)
+/// =>  vR^{21}[(i,j),g] = conj( vR^{12}[(j,i),g] )
+/// ```
+///
+/// so one FFT/iFFT pair serves BOTH orientations, and the two contributions
+/// still differ (they contract against different density matrices and different
+/// AO tables) — which is why only the transform is halved, not the whole loop.
+///
+/// # Preconditions, all checked
+///
+/// The middle step needs `G_{-n} = -G_n` to hold EXACTLY on the discrete
+/// reciprocal grid. It does for an ODD mesh axis; for an even one the Nyquist
+/// frequency `-m/2` has no `+m/2` partner and the reversal is not a
+/// permutation. So this route requires:
+///
+/// * `hermi == 1` — the relation assumes Hermitian density matrices;
+/// * `kpts_band.is_none()` — the mirror pair must be in the loop at all;
+/// * every mesh axis ODD;
+/// * the full `nao` AO block (the `(j,i)` swap needs the whole `i` range).
+///
+/// A violated precondition is an ERROR, never a silent fall-through to the
+/// plain loop with the flag still reported as on.
+///
+/// # This CHANGES THE RESULT
+///
+/// `vk[k]` receives the same terms in a different order, so the last bits
+/// move. A gate run with this on must be re-baselined, not compared against the
+/// tolerances the plain loop was measured at.
+///
+/// # Errors
+/// As [`get_k_kpts`], plus [`PbcDfError::Core`] on a violated precondition.
+#[allow(clippy::too_many_arguments)]
+pub fn get_k_kpts_opts(
+    df: &Fftdf,
+    dms: &[KMats],
+    hermi: i32,
+    kpts: &[[f64; 3]],
+    kpts_band: Option<&[[f64; 3]]>,
+    exxdiv: Option<ExxDiv>,
+    omega: Option<f64>,
+    kk_symmetry: bool,
+) -> Result<Vec<KMats>, PbcDfError> {
+    let _ = hermi;
     let cell = &df.cell;
     let mesh = df.mesh;
     let nset = dms.len();
@@ -303,6 +370,21 @@ pub fn get_k_kpts(
 
     let mut vk_kpts: Vec<KMats> =
         vec![vec![CTensor::zeros(nao * nao); nband]; nset];
+
+    if kk_symmetry {
+        check_kk_symmetry_preconditions(hermi, kpts_band, mesh, blksize, nao)?;
+        kk_symmetric_pair_loop(
+            df, dms, kpts, exxdiv, omega, &gv, &ao2_kpts, &mut vk_kpts, weight, nao,
+            ngrids, nset, nkpts, real_out,
+        )?;
+        if real_out {
+            zero_imaginary(&mut vk_kpts);
+        }
+        if exxdiv == Some(ExxDiv::Ewald) && cell.dimension != 0 {
+            ewald_exxdiv_for_g0(cell, kpts, dms, &mut vk_kpts, kpts_band)?;
+        }
+        return Ok(vk_kpts);
+    }
 
     // fft_jk.py:256 — for k2, ao2T in enumerate(ao2_kpts)
     for k2 in 0..nkpts {
@@ -406,13 +488,7 @@ pub fn get_k_kpts(
     }
 
     if real_out {
-        for set in vk_kpts.iter_mut() {
-            for m in set.iter_mut() {
-                for v in m.im.iter_mut() {
-                    *v = 0.0;
-                }
-            }
-        }
+        zero_imaginary(&mut vk_kpts);
     }
 
     // fft_jk.py:303-307
@@ -583,6 +659,260 @@ fn accumulate_vk(
                 let ir = oracle_dot(xi, yr);
                 vrow[q] += weight * (rr - ii);
                 virow[q] += weight * (ri + ir);
+            }
+        });
+}
+
+/// `vk[..].im = 0` — the `real_out` truncation, shared by both pair loops.
+fn zero_imaginary(vk_kpts: &mut [KMats]) {
+    for set in vk_kpts.iter_mut() {
+        for m in set.iter_mut() {
+            for v in m.im.iter_mut() {
+                *v = 0.0;
+            }
+        }
+    }
+}
+
+/// The W-08 preconditions — see [`get_k_kpts_opts`] for why each is needed.
+///
+/// Every one of these is a correctness precondition of the conjugate identity,
+/// not a convenience, so a violation is an error rather than a silent fall back
+/// to the plain loop.
+fn check_kk_symmetry_preconditions(
+    hermi: i32,
+    kpts_band: Option<&[[f64; 3]]>,
+    mesh: [usize; 3],
+    blksize: usize,
+    nao: usize,
+) -> Result<(), PbcDfError> {
+    let bad = |what: String| {
+        Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(format!(
+                "get_k_kpts with kk_symmetry: {what}"
+            )),
+        )))
+    };
+    if hermi != 1 {
+        return bad(format!(
+            "the (k1,k2) <-> (k2,k1) conjugate relation assumes Hermitian density \
+             matrices, so it is only valid for hermi = 1 (got {hermi})"
+        ));
+    }
+    if kpts_band.is_some() {
+        return bad(
+            "band k-points break the pairing — the mirror of a (band, sampling) pair \
+             is not itself in the loop"
+                .into(),
+        );
+    }
+    if mesh.iter().any(|m| m % 2 == 0) {
+        return bad(format!(
+            "the identity needs G_(-n) = -G_n to hold exactly on the reciprocal grid, \
+             which fails on an EVEN axis (its Nyquist frequency -m/2 has no +m/2 \
+             partner); mesh is {mesh:?}"
+        ));
+    }
+    if blksize != nao {
+        return bad(format!(
+            "the mirror contraction indexes rho1 as (j,i), so it needs the whole \
+             nao = {nao} AO block in one go (blksize is {blksize} — raise \
+             PYSCF_MAX_MEMORY)"
+        ));
+    }
+    Ok(())
+}
+
+/// W-08's halved pair loop. One FFT/iFFT pair per UNORDERED `(k1 <= k2)` pair,
+/// applied to `vk[k1]` directly and to `vk[k2]` through the conjugate identity
+/// documented on [`get_k_kpts_opts`].
+#[allow(clippy::too_many_arguments)]
+fn kk_symmetric_pair_loop(
+    df: &Fftdf,
+    dms: &[KMats],
+    kpts: &[[f64; 3]],
+    exxdiv: Option<ExxDiv>,
+    omega: Option<f64>,
+    gv: &[[f64; 3]],
+    ao_kpts: &crate::fftdf::AoKpts,
+    vk_kpts: &mut [KMats],
+    weight: f64,
+    nao: usize,
+    ngrids: usize,
+    nset: usize,
+    nkpts: usize,
+    real_out: bool,
+) -> Result<(), PbcDfError> {
+    let mesh = df.mesh;
+
+    // `ao_dms[k][iset]` for EVERY k, hoisted: the plain loop rebuilds them once
+    // per `k2` because it visits every `(k2, *)` together, but the unordered
+    // loop needs both members of a pair at once.
+    let ao_dms: Vec<Vec<CTensor>> = (0..nkpts)
+        .map(|k| {
+            dms.iter()
+                .map(|d| dm_times_conj_ao(&d[k], ao_kpts.at(k), nao, ngrids))
+                .collect()
+        })
+        .collect();
+
+    let mut vr_dm: Vec<CTensor> = vec![CTensor::zeros(nao * ngrids); nset];
+    let mut vr_dm_mirror: Vec<CTensor> = vec![CTensor::zeros(nao * ngrids); nset];
+
+    for k1 in 0..nkpts {
+        for k2 in k1..nkpts {
+            let kpt1 = kpts[k1];
+            let kpt2 = kpts[k2];
+            let dk = [kpt2[0] - kpt1[0], kpt2[1] - kpt1[1], kpt2[2] - kpt1[2]];
+            let inner_exxdiv = match exxdiv {
+                Some(ExxDiv::Ewald) | None => None,
+                other => other,
+            };
+            let (coulg, expmikr) = {
+                let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, gv)?;
+                (entry.0.clone(), entry.1.clone())
+            };
+
+            // The ONE transform this pair pays for.
+            let rho1 = build_rho1(
+                ao_kpts.at(k1),
+                ao_kpts.at(k2),
+                expmikr.as_ref(),
+                0,
+                nao,
+                nao,
+                ngrids,
+            );
+            let mut vg = fft(&rho1, mesh)?;
+            vg.re
+                .par_chunks_mut(ngrids)
+                .zip(vg.im.par_chunks_mut(ngrids))
+                .for_each(|(gre, gim)| {
+                    for g in 0..ngrids {
+                        gre[g] *= coulg[g];
+                        gim[g] *= coulg[g];
+                    }
+                });
+            let mut vr = ifft(&vg, mesh)?;
+            if real_out {
+                for t in vr.im.iter_mut() {
+                    *t = 0.0;
+                }
+            }
+
+            // --- the (k1, k2) orientation: contributes to vk[k1] ---
+            for i in 0..nset {
+                contract_vr_aodm(&mut vr_dm[i], &vr, &ao_dms[k2][i], 0, nao, nao, ngrids);
+            }
+            if let Some(ph) = expmikr.as_ref() {
+                // fft_jk.py:297 — vR_dm *= expmikr.conj()
+                mul_phase(&mut vr_dm, ph, true, nao, ngrids);
+            }
+            for i in 0..nset {
+                accumulate_vk(
+                    &mut vk_kpts[i][k1],
+                    &vr_dm[i],
+                    ao_kpts.at(k1),
+                    weight,
+                    nao,
+                    ngrids,
+                );
+            }
+
+            if k2 == k1 {
+                continue;
+            }
+
+            // --- the (k2, k1) orientation: contributes to vk[k2] ---
+            //
+            // vR^{21}[(i,j)] = conj(vR^{12}[(j,i)]), so the mirror needs no
+            // transform of its own — only the swapped, conjugated read below.
+            // Its phase is `expmikr' = conj(expmikr)`, so the `expmikr'.conj()`
+            // that fft_jk.py:297 applies is `expmikr` itself.
+            for i in 0..nset {
+                contract_vr_aodm_conj_swapped(
+                    &mut vr_dm_mirror[i],
+                    &vr,
+                    &ao_dms[k1][i],
+                    nao,
+                    ngrids,
+                );
+            }
+            if let Some(ph) = expmikr.as_ref() {
+                mul_phase(&mut vr_dm_mirror, ph, false, nao, ngrids);
+            }
+            for i in 0..nset {
+                accumulate_vk(
+                    &mut vk_kpts[i][k2],
+                    &vr_dm_mirror[i],
+                    ao_kpts.at(k2),
+                    weight,
+                    nao,
+                    ngrids,
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `v *= phase` (or `conj(phase)` when `conjugate`), row-wise over `nao` rows.
+fn mul_phase(
+    vs: &mut [CTensor],
+    ph: &CTensor,
+    conjugate: bool,
+    nao: usize,
+    ngrids: usize,
+) {
+    let _ = nao;
+    let sign = if conjugate { -1.0 } else { 1.0 };
+    for v in vs.iter_mut() {
+        v.re.par_chunks_mut(ngrids)
+            .zip(v.im.par_chunks_mut(ngrids))
+            .for_each(|(vre, vim)| {
+                for g in 0..ngrids {
+                    let (xr, xi) = (vre[g], vim[g]);
+                    let (pr, pi) = (ph.re[g], sign * ph.im[g]);
+                    vre[g] = xr * pr - xi * pi;
+                    vim[g] = xr * pi + xi * pr;
+                }
+            });
+    }
+}
+
+/// `vR_dm[i, g] = sum_j conj(vR[(j, i), g]) ao_dm[j, g]` — the mirror of
+/// [`contract_vr_aodm`] under `vR^{21}[(i,j)] = conj(vR^{12}[(j,i)])`.
+///
+/// Note the transposed read of `vr`: `(j, i)`, not `(i, j)`. That is the whole
+/// content of the symmetry, and it is why the caller must hold the full `nao`
+/// block — a partial `i` range would have no `(j, i)` entries for `j` outside
+/// it.
+fn contract_vr_aodm_conj_swapped(
+    vr_dm: &mut CTensor,
+    vr: &CTensor,
+    ao_dm: &CTensor,
+    nao: usize,
+    ngrids: usize,
+) {
+    // W-02b: `i` indexes disjoint output rows; `j` is the reduction axis and
+    // stays serial and ascending, matching `contract_vr_aodm`'s order exactly.
+    vr_dm
+        .re
+        .par_chunks_mut(ngrids)
+        .zip(vr_dm.im.par_chunks_mut(ngrids))
+        .enumerate()
+        .for_each(|(i, (orow, oirow))| {
+            orow.fill(0.0);
+            oirow.fill(0.0);
+            for j in 0..nao {
+                let vb = (j * nao + i) * ngrids;
+                let ab = j * ngrids;
+                for g in 0..ngrids {
+                    let (xr, xi) = (vr.re[vb + g], -vr.im[vb + g]);
+                    let (yr, yi) = (ao_dm.re[ab + g], ao_dm.im[ab + g]);
+                    orow[g] += xr * yr - xi * yi;
+                    oirow[g] += xr * yi + xi * yr;
+                }
             }
         });
 }

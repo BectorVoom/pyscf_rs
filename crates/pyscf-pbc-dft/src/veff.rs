@@ -59,6 +59,10 @@ pub fn get_jk(
                 with_k: wk,
                 exxdiv,
                 omega: w,
+                // W-08: opt-in and OFF by default; `PYSCF_PBC_KK_SYMMETRY`
+                // turns it on for a re-baselined run. It changes the last bits
+                // of `vk`, so it must never become the silent default.
+                kk_symmetry: JkOpts::kk_symmetry_default(),
             },
         )
         .map_err(|e| err(format!("periodic KS: density fitting failed: {e}")))

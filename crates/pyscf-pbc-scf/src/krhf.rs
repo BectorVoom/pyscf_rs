@@ -122,6 +122,9 @@ impl Krhf {
                     with_k: true,
                     exxdiv: self.exxdiv,
                     omega: None,
+                    // W-08 — opt-in, off unless `PYSCF_PBC_KK_SYMMETRY` says
+                    // otherwise. See `JkOpts::kk_symmetry_default`.
+                    kk_symmetry: JkOpts::kk_symmetry_default(),
                 },
             )
             .map_err(df_err)?;
@@ -226,6 +229,9 @@ impl KOverrideHooks for Krhf {
                     with_k: true,
                     exxdiv: self.exxdiv,
                     omega: None,
+                    // W-08 — opt-in, off unless `PYSCF_PBC_KK_SYMMETRY` says
+                    // otherwise. See `JkOpts::kk_symmetry_default`.
+                    kk_symmetry: JkOpts::kk_symmetry_default(),
                 },
             )
             .map_err(df_err)?;

@@ -38,7 +38,7 @@ pub mod traits;
 pub mod zlinalg;
 
 pub use df_jk::{KMats, all_gamma, ewald_exxdiv_for_g0, format_kpts_band};
-pub use fft_jk::{get_j_kpts, get_k_kpts};
+pub use fft_jk::{get_j_kpts, get_k_kpts, get_k_kpts_opts};
 pub use fftdf::{AoKpts, Fftdf, get_hcore, get_nuc, get_pp};
 pub use aftdf::Aftdf;
 pub use incore::{AuxCell, Aosym, aux_e2, fill_2c2e, make_auxcell, make_modrho_basis};

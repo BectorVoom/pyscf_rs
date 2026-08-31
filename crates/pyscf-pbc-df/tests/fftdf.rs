@@ -183,6 +183,7 @@ fn coulomb_energy_is_symmetric_in_its_two_densities() {
         with_k: false,
         exxdiv: None,
         omega: None,
+        kk_symmetry: false,
     };
     let vj1 = df.get_jk(&dm1, &kpts, opts.clone()).expect("vj1").vj.expect("vj");
     let vj2 = df.get_jk(&dm2, &kpts, opts).expect("vj2").vj.expect("vj");
@@ -225,6 +226,7 @@ fn ewald_exxdiv_adds_exactly_madelung_sds() {
                 with_k: true,
                 exxdiv,
                 omega: None,
+                kk_symmetry: false,
             },
         )
         .expect("get_jk")
@@ -447,6 +449,7 @@ fn jk_matches_upstream_on_diamond_222() {
                     with_k,
                     exxdiv,
                     omega: None,
+                    kk_symmetry: false,
                 },
             )
             .expect("get_jk");

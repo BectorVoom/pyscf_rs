@@ -258,6 +258,7 @@ impl KOverrideHooks for Krohf {
                     with_k: true,
                     exxdiv: self.exxdiv,
                     omega: None,
+                    kk_symmetry: false,
                 },
             )
             .map_err(df_err)?;
