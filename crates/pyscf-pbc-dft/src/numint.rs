@@ -45,6 +45,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use rayon::prelude::*;
+
 use pyscf_algebra::{CTensor, oracle_sum};
 use pyscf_pbc_gto::{Cell, EvalAoKptsOutput, eval_ao_kpts};
 use pyscf_pbc_scf::types::{KDms, KMats};
@@ -58,6 +60,40 @@ use crate::xc::{
 
 /// Upstream's `BLKSIZE` grid-block granularity (`dft/numint.py:44`).
 pub const BLKSIZE: usize = 128;
+
+/// Grid points one rayon worker owns where the split has to be over the GRID
+/// rather than over an AO index (W-06 — [`eval_rho_one`]'s `_contract_rho`
+/// stage, whose output IS indexed by the grid point).
+///
+/// One grid point per worker would be pure dispatch overhead; this is large
+/// enough that a chunk is real work and small enough that a `mesh = 21` block
+/// still spreads over every core.
+const RHO_CHUNK: usize = 512;
+
+/// `PYSCF_PBC_NUMINT_BLKSIZE`, read once — the W-07 grid-block override.
+///
+/// Rounded DOWN to a whole number of [`BLKSIZE`] blocks so the partition stays
+/// on the same lattice the memory-derived default uses; a value below one
+/// block, or an unparseable one, is ignored (and warned about) rather than
+/// silently producing a one-point block.
+fn numint_blksize_override() -> Option<usize> {
+    use std::sync::OnceLock;
+    static OVERRIDE: OnceLock<Option<usize>> = OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        let raw = std::env::var("PYSCF_PBC_NUMINT_BLKSIZE").ok()?;
+        match raw.trim().parse::<usize>() {
+            Ok(v) if v >= BLKSIZE => Some(v / BLKSIZE * BLKSIZE),
+            _ => {
+                tracing::warn!(
+                    value = raw,
+                    minimum = BLKSIZE,
+                    "PYSCF_PBC_NUMINT_BLKSIZE is not an integer >= BLKSIZE; ignoring"
+                );
+                None
+            }
+        }
+    })
+}
 
 /// Upstream's block-loop cap, `BLKSIZE * 2400` (`numint.py:1290`).
 const MAX_BLOCK: usize = BLKSIZE * 2400;
@@ -199,6 +235,17 @@ impl KNumInt {
         // divides by it here. Use a conservative unit so the block never
         // exceeds the cap.
         let raw = ((self.max_memory * 1e6 / denom) as usize) * BLKSIZE;
+        // W-07: `PYSCF_PBC_NUMINT_BLKSIZE` overrides the memory-derived block,
+        // rounded down to a whole number of `BLKSIZE` blocks. The DEFAULT is
+        // unchanged — for a 4000 MB budget and a small cell it is still one
+        // block covering the whole grid — so this adds a tuning knob without
+        // moving a single energy. It is a knob and not a new default because a
+        // different block partition changes `oracle_sum`'s input lengths, hence
+        // the pairwise-tree shape, hence the last bits of `nelec`/`excsum`;
+        // `nr_rks` mitigates that by summing per-block PARTIALS through
+        // `oracle_sum` rather than with a running `+=`, but the partition still
+        // shows. See `tests/numint_blocking.rs`.
+        let raw = numint_blksize_override().unwrap_or(raw);
         let blksize = raw.clamp(BLKSIZE, MAX_BLOCK).min(ngrids.max(1));
         let mut out = Vec::new();
         let mut p0 = 0usize;
@@ -293,8 +340,16 @@ impl KNumInt {
         let band = kpts_band.unwrap_or(&self.kpts);
 
         self.last_imag.set(0.0);
-        let mut nelec = vec![0.0_f64; nset];
-        let mut excsum = vec![0.0_f64; nset];
+        // W-07: `nelec`/`excsum` used to be accumulated with a running `+=`
+        // over the grid blocks — a naive sequential sum on the two quantities
+        // that land straight in the total energy, which is exactly what
+        // D-PBC-17 exists to forbid. Collect one partial per block and reduce
+        // THOSE through `oracle_sum` instead. With the default single-block
+        // partition this is bit-identical to the old code (a one-element
+        // pairwise sum is the element); with several blocks it replaces a
+        // sequential fold with the ordered tree.
+        let mut nelec_parts: Vec<Vec<f64>> = vec![Vec::new(); nset];
+        let mut excsum_parts: Vec<Vec<f64>> = vec![Vec::new(); nset];
         let mut vmat: Vec<KMats> =
             vec![vec![CTensor::zeros(nao * nao); band.len()]; nset];
 
@@ -312,10 +367,10 @@ impl KNumInt {
                 let out = eval_xc_eff_rks(xc_code, &rho)?;
                 // numint.py:363-368 — den = rho[0]*weight.
                 let den: Vec<f64> = rho.row(0).iter().zip(w).map(|(r, wg)| r * wg).collect();
-                nelec[i] += oracle_sum(&den);
+                nelec_parts[i].push(oracle_sum(&den));
                 let terms: Vec<f64> =
                     den.iter().zip(&out.exc).map(|(d, e)| d * e).collect();
-                excsum[i] += oracle_sum(&terms);
+                excsum_parts[i].push(oracle_sum(&terms));
                 // numint.py:369 — wv = weight * vxc.
                 let wv = weighted(&out, 0, w);
                 self.accumulate_vxc(&mut vmat[i], &ao1, &wv, ty);
@@ -328,6 +383,8 @@ impl KNumInt {
                 add_conj_transpose(m, nao);
             }
         }
+        let nelec: Vec<f64> = nelec_parts.iter().map(|p| oracle_sum(p)).collect();
+        let excsum: Vec<f64> = excsum_parts.iter().map(|p| oracle_sum(p)).collect();
         Ok(NrKResult {
             nelec,
             excsum,
@@ -779,39 +836,58 @@ fn vxc_mat_one(
         return;
     }
     // aow, in the same F-order-per-component layout as `ao`'s component 0.
+    //
+    // W-06: `nu` indexes DISJOINT output rows of `aow`, so it is the axis split
+    // across workers; the component sum over `n` stays serial and ascending
+    // inside each row, which is what makes this bit-identical to the pre-W-06
+    // `n`-outer nest. The `if s == 0.0 { continue; }` skip is kept deliberately
+    // — see the module note on it.
     let mut aow_re = vec![0.0_f64; ngrids * nao];
     let mut aow_im = vec![0.0_f64; ngrids * nao];
-    for n in 0..nvar {
-        let base = n * ngrids * nao;
-        let wvn = &wv[n];
-        for nu in 0..nao {
+    aow_re
+        .par_chunks_mut(ngrids)
+        .zip(aow_im.par_chunks_mut(ngrids))
+        .enumerate()
+        .for_each(|(nu, (wre, wim))| {
             let b = nu * ngrids;
-            for g in 0..ngrids {
-                let s = wvn[g];
-                if s == 0.0 {
-                    continue;
+            for n in 0..nvar {
+                let base = n * ngrids * nao;
+                let wvn = &wv[n];
+                for g in 0..ngrids {
+                    let s = wvn[g];
+                    if s == 0.0 {
+                        continue;
+                    }
+                    wre[g] += s * ao.re[base + b + g];
+                    wim[g] += s * ao.im[base + b + g];
                 }
-                aow_re[b + g] += s * ao.re[base + b + g];
-                aow_im[b + g] += s * ao.im[base + b + g];
             }
-        }
-    }
-    let mut terms_re = vec![0.0_f64; ngrids];
-    let mut terms_im = vec![0.0_f64; ngrids];
-    for mu in 0..nao {
-        let mb = mu * ngrids;
-        for nu in 0..nao {
-            let nb = nu * ngrids;
-            for g in 0..ngrids {
-                let (ar, ai) = (ao.re[mb + g], -ao.im[mb + g]);
-                let (br, bi) = (aow_re[nb + g], aow_im[nb + g]);
-                terms_re[g] = ar * br - ai * bi;
-                terms_im[g] = ar * bi + ai * br;
+        });
+    // W-06: one worker per output ROW `mu` of `out`. `oracle_sum`'s pairwise
+    // tree shape depends only on `ngrids` and the fixed `PAIRWISE_CHUNK`, never
+    // on which thread evaluates it, so D-PBC-17's thread-count invariance is
+    // preserved exactly. The `terms` scratch becomes per-worker; it used to be
+    // one buffer reused across `(mu, nu)`.
+    out.re
+        .par_chunks_mut(nao)
+        .zip(out.im.par_chunks_mut(nao))
+        .enumerate()
+        .for_each(|(mu, (orow, oirow))| {
+            let mut terms_re = vec![0.0_f64; ngrids];
+            let mut terms_im = vec![0.0_f64; ngrids];
+            let mb = mu * ngrids;
+            for nu in 0..nao {
+                let nb = nu * ngrids;
+                for g in 0..ngrids {
+                    let (ar, ai) = (ao.re[mb + g], -ao.im[mb + g]);
+                    let (br, bi) = (aow_re[nb + g], aow_im[nb + g]);
+                    terms_re[g] = ar * br - ai * bi;
+                    terms_im[g] = ar * bi + ai * br;
+                }
+                orow[nu] += oracle_sum(&terms_re);
+                oirow[nu] += oracle_sum(&terms_im);
             }
-            out.re[mu * nao + nu] += oracle_sum(&terms_re);
-            out.im[mu * nao + nu] += oracle_sum(&terms_im);
-        }
-    }
+        });
 }
 
 /// `eval_rho(cell, ao, dm, xctype, hermi=1)` at ONE k-point — `numint.py:96-186`.
@@ -839,23 +915,30 @@ fn eval_rho_one(
         )));
     }
     // c0[g, j] = Σ_i ao0[g, i] dm[i, j]   (`_dot_ao_dm`)
+    //
+    // W-06: `j` indexes disjoint output rows of `c0`; the reduction over `i`
+    // stays serial and ascending inside each of them, so the same terms reach
+    // each `c0[j, g]` in the same order as the pre-W-06 `i`-outer nest.
     let mut c0_re = vec![0.0_f64; ngrids * nao];
     let mut c0_im = vec![0.0_f64; ngrids * nao];
-    for i in 0..nao {
-        let ib = i * ngrids;
-        for j in 0..nao {
-            let (dr, di) = (dm.re[i * nao + j], dm.im[i * nao + j]);
-            if dr == 0.0 && di == 0.0 {
-                continue;
+    c0_re
+        .par_chunks_mut(ngrids)
+        .zip(c0_im.par_chunks_mut(ngrids))
+        .enumerate()
+        .for_each(|(j, (crow, cirow))| {
+            for i in 0..nao {
+                let (dr, di) = (dm.re[i * nao + j], dm.im[i * nao + j]);
+                if dr == 0.0 && di == 0.0 {
+                    continue;
+                }
+                let ib = i * ngrids;
+                for g in 0..ngrids {
+                    let (ar, ai) = (ao.re[ib + g], ao.im[ib + g]);
+                    crow[g] += ar * dr - ai * di;
+                    cirow[g] += ar * di + ai * dr;
+                }
             }
-            let jb = j * ngrids;
-            for g in 0..ngrids {
-                let (ar, ai) = (ao.re[ib + g], ao.im[ib + g]);
-                c0_re[jb + g] += ar * dr - ai * di;
-                c0_im[jb + g] += ar * di + ai * dr;
-            }
-        }
-    }
+        });
 
     let mut rho = RhoEff::zeros(ty, ngrids);
     let mut imag = 0.0_f64;
@@ -863,17 +946,28 @@ fn eval_rho_one(
     let ncomp = ty.ncomp();
     for c in 0..ncomp {
         let base = c * ngrids * nao;
+        // W-06: `g` is the OUTPUT index here and `j` is the reduction axis, so
+        // the split is over disjoint grid chunks with `j` serial and ascending
+        // inside each — the pre-W-06 order, term for term.
         let mut acc_re = vec![0.0_f64; ngrids];
         let mut acc_im = vec![0.0_f64; ngrids];
-        for j in 0..nao {
-            let jb = j * ngrids;
-            for g in 0..ngrids {
-                let (ar, ai) = (ao.re[base + jb + g], -ao.im[base + jb + g]);
-                let (br, bi) = (c0_re[jb + g], c0_im[jb + g]);
-                acc_re[g] += ar * br - ai * bi;
-                acc_im[g] += ar * bi + ai * br;
-            }
-        }
+        acc_re
+            .par_chunks_mut(RHO_CHUNK)
+            .zip(acc_im.par_chunks_mut(RHO_CHUNK))
+            .enumerate()
+            .for_each(|(c, (are, aim))| {
+                let g0 = c * RHO_CHUNK;
+                for j in 0..nao {
+                    let jb = j * ngrids;
+                    for t in 0..are.len() {
+                        let g = g0 + t;
+                        let (ar, ai) = (ao.re[base + jb + g], -ao.im[base + jb + g]);
+                        let (br, bi) = (c0_re[jb + g], c0_im[jb + g]);
+                        are[t] += ar * br - ai * bi;
+                        aim[t] += ar * bi + ai * br;
+                    }
+                }
+            });
         // `hermi = 1` — the gradient rows carry the `+ c.c.` factor 2
         // (`numint.py:141`).
         let scale = if c == 0 { 1.0 } else { 2.0 };
@@ -912,15 +1006,30 @@ fn default_max_memory() -> f64 {
 
 /// FNV-1a over the raw coordinate bits — the AO cache's grid identity.
 fn coord_hash(coords: &[[f64; 3]]) -> u64 {
+    // W-07 (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`): this used to be
+    // byte-at-a-time FNV-1a — EIGHT rounds of xor/multiply/shift per f64, i.e.
+    // `24 * ngrids` rounds on every single `eval_ao` lookup, purely to decide a
+    // cache hit. At the gate mesh that is 715 000 rounds per call, a visible
+    // share of a warm `nr_rks`.
+    //
+    // The plan's own suggestion was to key on a grid GENERATION COUNTER instead.
+    // That is not available here: `eval_ao` takes a bare `&[[f64; 3]]` slice
+    // with no stable identity — keying on its address would hand a stale AO
+    // table to a caller whose grid was freed and whose replacement landed at the
+    // same address with the same length, which is a wrong-answer bug, not a
+    // cache miss. So the key stays a full hash of every coordinate bit (same
+    // collision semantics as before — nothing is sampled or skipped) and only
+    // the mixing gets cheaper: two multiplies per 64-bit WORD instead of eight
+    // rounds per byte.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for c in coords {
         for x in c {
-            let mut b = x.to_bits();
-            for _ in 0..8 {
-                h ^= b & 0xff;
-                h = h.wrapping_mul(0x1000_0000_01b3);
-                b >>= 8;
-            }
+            // Multiply by an odd constant (invertible, so no information is
+            // lost), then rotate before folding in — the rotate is what carries
+            // the high-bit avalanche down into the low bits that a following
+            // multiply would otherwise leave under-mixed.
+            let z = x.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            h = (h ^ z).rotate_left(27).wrapping_mul(0x1000_0000_01b3);
         }
     }
     h

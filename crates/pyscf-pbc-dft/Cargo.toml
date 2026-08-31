@@ -20,6 +20,11 @@ pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
 thiserror       = { workspace = true }
+# W-06 (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`): the `numint` grid
+# contractions are parallelised over DISJOINT output rows. Each output cell's
+# own summation order is untouched, so `oracle_sum`'s pairwise tree — and with
+# it D-PBC-17's thread-count invariance — is preserved exactly.
+rayon           = { workspace = true }
 tracing         = { workspace = true }
 
 [dev-dependencies]
