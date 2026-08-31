@@ -1,0 +1,27 @@
+{
+  "cell": "si",
+  "nk": [
+    2,
+    2,
+    2
+  ],
+  "mesh": [
+    31,
+    31,
+    31
+  ],
+  "xc": "pbe",
+  "hybrid": false,
+  "nao": 8,
+  "nkpts": 8,
+  "ngrids": 29791,
+  "warm_get_j_kpts_ms": 47.934574,
+  "warm_get_k_kpts_ms": 0.0,
+  "warm_nr_rks_ms": 45.889894,
+  "cold_nr_rks_ms": 16772.0609,
+  "get_ovlp_ms": 183.647428,
+  "get_hcore_ms": 4887.642451,
+  "full_kernel_ms": 22668.965103000002,
+  "e_tot": -7.785668903668534,
+  "converged": true
+}

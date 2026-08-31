@@ -24,9 +24,10 @@ use std::time::Instant;
 
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
-use pyscf_pbc_df::{Fftdf, get_j_kpts, get_k_kpts};
+use pyscf_pbc_df::{Fftdf, get_hcore, get_j_kpts, get_k_kpts};
 use pyscf_pbc_dft::krks::{Krks, hybrid};
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs, make_kpts_default};
+use pyscf_pbc_gto::hcore::get_ovlp;
 use pyscf_pbc_scf::KScfConfig;
 use pyscf_pbc_tools::coulg::ExxDiv;
 use serde::Serialize;
@@ -117,6 +118,13 @@ struct JkReport {
     ngrids: usize,
     warm_get_j_kpts_ms: f64,
     warm_get_k_kpts_ms: f64,
+    /// `KNumInt::nr_rks` with the AO cache already populated — the pure-functional
+    /// hot path (W-06/W-07 target).
+    warm_nr_rks_ms: f64,
+    /// The same call on a COLD AO cache: the one-off AO collocation.
+    cold_nr_rks_ms: f64,
+    get_ovlp_ms: f64,
+    get_hcore_ms: f64,
     full_kernel_ms: f64,
     e_tot: f64,
     converged: bool,
@@ -155,6 +163,30 @@ fn run_jk(args: &[String]) {
     };
     let (result, full_kernel_ms) = time_ms(|| krks.kernel(&cfg).expect("KRKS kernel"));
 
+    // --- the one-off (per-SCF, not per-iteration) stages ---
+    let (_, get_ovlp_ms) = time_ms(|| get_ovlp(&cell, &kpts).expect("get_ovlp"));
+    // `get_hcore` is assembled by the density-fitting object (its V_loc,1 / V_nuc
+    // term needs the FFT box), so it is timed on a fresh `Fftdf` — the one-off an
+    // SCF pays before its first iteration.
+    let df_hcore = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
+    let (_, get_hcore_ms) = time_ms(|| get_hcore(&df_hcore, &kpts).expect("get_hcore"));
+
+    // --- nr_rks, cold and warm ---
+    // `krks` still holds the KNumInt whose AO cache the SCF above populated, so
+    // the warm number is what an SCF iteration actually pays; `ni.reset()` gives
+    // the cold one (the AO collocation itself).
+    krks.ni.reset();
+    let (_, cold_nr_rks_ms) = time_ms(|| {
+        krks.ni
+            .nr_rks(&cell, &krks.grids, &xc, &result.dm, 1, None)
+            .expect("cold nr_rks")
+    });
+    let (_, warm_nr_rks_ms) = time_ms(|| {
+        krks.ni
+            .nr_rks(&cell, &krks.grids, &xc, &result.dm, 1, None)
+            .expect("warm nr_rks")
+    });
+
     let df = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
     // Prime the AO / coulG-expmikr caches before timing (RULE O: measure warm).
     let _ = get_j_kpts(&df, &result.dm, 1, &kpts, None, None).expect("warm get_j_kpts");
@@ -186,6 +218,10 @@ fn run_jk(args: &[String]) {
         ngrids: df.ngrids(),
         warm_get_j_kpts_ms: warm_j_ms,
         warm_get_k_kpts_ms: warm_k_ms,
+        warm_nr_rks_ms,
+        cold_nr_rks_ms,
+        get_ovlp_ms,
+        get_hcore_ms,
         full_kernel_ms,
         e_tot: result.e_tot,
         converged: result.converged,
@@ -194,6 +230,8 @@ fn run_jk(args: &[String]) {
     println!(
         "cell={} nk={:?} mesh={:?} xc={} hybrid={}\n  nao={} nkpts={} ngrids={}\n  \
          get_j_kpts (warm) = {:.3} ms\n  get_k_kpts (warm) = {:.3} ms\n  \
+         nr_rks     (warm) = {:.3} ms   (cold = {:.3} ms)\n  \
+         get_ovlp          = {:.3} ms\n  get_hcore         = {:.3} ms\n  \
          full kernel()     = {:.3} ms  (e_tot={:.10}, converged={})",
         report.cell,
         report.nk,
@@ -205,6 +243,10 @@ fn run_jk(args: &[String]) {
         report.ngrids,
         report.warm_get_j_kpts_ms,
         report.warm_get_k_kpts_ms,
+        report.warm_nr_rks_ms,
+        report.cold_nr_rks_ms,
+        report.get_ovlp_ms,
+        report.get_hcore_ms,
         report.full_kernel_ms,
         report.e_tot,
         report.converged,
@@ -223,15 +265,27 @@ fn run_jk(args: &[String]) {
         .expect("parse baseline json");
         let base_j = baseline["warm_get_j_kpts_ms"].as_f64().unwrap_or(f64::NAN);
         let base_k = baseline["warm_get_k_kpts_ms"].as_f64().unwrap_or(f64::NAN);
+        let base_nr = baseline["warm_nr_rks_ms"].as_f64().unwrap_or(f64::NAN);
+        let base_full = baseline["full_kernel_ms"].as_f64().unwrap_or(f64::NAN);
+        let base_e = baseline["e_tot"].as_f64().unwrap_or(f64::NAN);
+        println!("compare vs {path}:");
+        for (label, base, now) in [
+            ("get_j_kpts", base_j, report.warm_get_j_kpts_ms),
+            ("get_k_kpts", base_k, report.warm_get_k_kpts_ms),
+            ("nr_rks    ", base_nr, report.warm_nr_rks_ms),
+            ("kernel()  ", base_full, report.full_kernel_ms),
+        ] {
+            println!(
+                "  {label}: {base:.3} ms -> {now:.3} ms ({:+.1}%)",
+                100.0 * (now - base) / base
+            );
+        }
+        // The energy is the accuracy signal: a speed change that moves `e_tot`
+        // by more than the gate tolerance is a regression, not an optimisation.
         println!(
-            "compare vs {path}:\n  get_j_kpts: {:.3} ms -> {:.3} ms ({:+.1}%)\n  \
-             get_k_kpts: {:.3} ms -> {:.3} ms ({:+.1}%)",
-            base_j,
-            report.warm_get_j_kpts_ms,
-            100.0 * (report.warm_get_j_kpts_ms - base_j) / base_j,
-            base_k,
-            report.warm_get_k_kpts_ms,
-            100.0 * (report.warm_get_k_kpts_ms - base_k) / base_k,
+            "  e_tot     : {base_e:.12} -> {:.12}  (delta {:.3e})",
+            report.e_tot,
+            report.e_tot - base_e
         );
     }
 }

@@ -1,0 +1,68 @@
+[
+  {
+    "mesh": [
+      16,
+      16,
+      16
+    ],
+    "n_batch": 64,
+    "n_transforms": 64,
+    "total_ms": 2.013491,
+    "ns_per_grid_point": 7.680858612060548
+  },
+  {
+    "mesh": [
+      21,
+      21,
+      21
+    ],
+    "n_batch": 64,
+    "n_transforms": 64,
+    "total_ms": 7.937335999999999,
+    "ns_per_grid_point": 13.391736853471546
+  },
+  {
+    "mesh": [
+      25,
+      25,
+      25
+    ],
+    "n_batch": 64,
+    "n_transforms": 64,
+    "total_ms": 12.030581999999999,
+    "ns_per_grid_point": 12.030581999999999
+  },
+  {
+    "mesh": [
+      27,
+      27,
+      27
+    ],
+    "n_batch": 64,
+    "n_transforms": 64,
+    "total_ms": 20.814668,
+    "ns_per_grid_point": 16.523354544530815
+  },
+  {
+    "mesh": [
+      31,
+      31,
+      31
+    ],
+    "n_batch": 64,
+    "n_transforms": 64,
+    "total_ms": 38.520448,
+    "ns_per_grid_point": 20.20348427377396
+  },
+  {
+    "mesh": [
+      32,
+      32,
+      32
+    ],
+    "n_batch": 64,
+    "n_transforms": 64,
+    "total_ms": 16.003964,
+    "ns_per_grid_point": 7.631284713745117
+  }
+]
