@@ -13,7 +13,7 @@
 //! The exchange matrix is scaled HERE; the caller subtracts `0.5·vk` (RKS/KGKS)
 //! or `vk` (KUKS, whose channels are not spin-degenerate).
 
-use pyscf_algebra::CTensor;
+use pyscf_algebra::{CTensor, oracle_sum};
 use pyscf_pbc_df::{Fftdf, JkOpts, PeriodicDf};
 use pyscf_pbc_gto::ExxDiv;
 use pyscf_pbc_scf::types::{KDms, KMats};
@@ -148,32 +148,67 @@ fn add(a: &mut [KMats], b: &[KMats]) {
 
 /// `einsum('Kij,Kji->', dm, v)` summed over k and channel, times `1/nkpts` —
 /// the shape every periodic KS energy term takes (`krks.py:96`).
+///
+/// # D-PBC-17 — the reduction is ORDERED
+///
+/// `ecoul` (`krks.rs:193`, `kuks.rs:248`) and the exchange half of `exc`
+/// (`krks.rs:203`, `kuks.rs:258`) are both this function's `.0`, so it is on
+/// the energy path and its reduction must be thread- and layout-invariant. The
+/// per-`(channel, k)` partials are collected and reduced with the FOUND-06
+/// pairwise tree instead of a running `+=`, and each partial is itself an
+/// ordered [`trace_ab`]. The nesting is deliberate: two ordered reductions
+/// compose into an ordered reduction, whereas an ordered inner sum folded by a
+/// naive outer loop is only as good as the outer loop.
 pub fn trace_dm_v(dms: &KDms, v: &[KMats], nao: usize) -> (f64, f64) {
-    let mut re = 0.0_f64;
-    let mut im = 0.0_f64;
+    let n: usize = dms.iter().map(Vec::len).sum();
+    let mut re = Vec::with_capacity(n);
+    let mut im = Vec::with_capacity(n);
     for (s, set) in dms.iter().enumerate() {
         for (k, d) in set.iter().enumerate() {
             let (r, i) = trace_ab(d, &v[s][k], nao);
-            re += r;
-            im += i;
+            re.push(r);
+            im.push(i);
         }
     }
-    (re, im)
+    (oracle_sum(&re), oracle_sum(&im))
 }
 
 /// `Tr(A B)` over one row-major `n x n` pair.
+///
+/// # D-PBC-17 — the reduction is ORDERED
+///
+/// The `n^2` products are materialised in a FIXED index order (`i`-major,
+/// `j`-minor — the order the pre-existing loop accumulated in) and each plane
+/// goes through [`oracle_sum`], so the recursion-tree shape depends only on
+/// `n^2` and the fixed `PAIRWISE_CHUNK`.
+///
+/// * For `n^2 <= PAIRWISE_CHUNK` (`nao <= 11`, which covers the `nao = 8`
+///   reference cells) `oracle_sum`'s base case is a strict left-to-right fold
+///   from `0.0` — **bit-identical** to the loop this replaced.
+/// * For `nao >= 12` the tree engages and the error bound improves from
+///   `O(n^2 * eps)` to `O(log2(n^2) * eps)` — at `nao = 26` (`gth-dzvp`, 676
+///   terms) a worst case of ~1.5e-13 relative becomes ~2e-15, against a KRKS
+///   gate of 1e-11.
+///
+/// `oracle_zdot` is NOT the primitive here: `b` is read TRANSPOSED and neither
+/// operand is conjugated, so this is not the `zdotc` contraction it implements.
+/// This is the same routine, and the same reasoning, as
+/// `pyscf_pbc_df::zlinalg::ztrace_ab`; the two are separate only because the
+/// ALG-06 crate split puts them on opposite sides of it.
 pub fn trace_ab(a: &CTensor, b: &CTensor, n: usize) -> (f64, f64) {
-    let mut sr = 0.0_f64;
-    let mut si = 0.0_f64;
+    debug_assert_eq!(a.len(), n * n);
+    debug_assert_eq!(b.len(), n * n);
+    let mut tr = vec![0.0_f64; n * n];
+    let mut ti = vec![0.0_f64; n * n];
     for i in 0..n {
         for j in 0..n {
             let (ar, ai) = (a.re[i * n + j], a.im[i * n + j]);
             let (br, bi) = (b.re[j * n + i], b.im[j * n + i]);
-            sr += ar * br - ai * bi;
-            si += ar * bi + ai * br;
+            tr[i * n + j] = ar * br - ai * bi;
+            ti[i * n + j] = ar * bi + ai * br;
         }
     }
-    (sr, si)
+    (oracle_sum(&tr), oracle_sum(&ti))
 }
 
 /// `a += b` over a `(nset, nkpts)` stack.

@@ -1029,7 +1029,17 @@ under `release-oracle`'s `codegen-units = 1`. Recorded in the scan list itself.
 Chasing a 2-ulp wobble in `KRKS Si 2×2×2 PBE0` (see `SUMMARY.md`) ruled out
 W-09, the AO screen, test scheduling and FMA contraction. What remains is that
 `zlinalg::ztrace_ab` — `Tr(AB)` over `nao²` terms with a naive `sr += …`, feeding
-`ecoul` through `krks::trace_dm_v` — is an unordered reduction on the energy
+`ecoul` through `veff::trace_dm_v` — is an unordered reduction on the energy
 path. That is the same violation W-05 fixed in `fft_jk` and W-07 fixed in
-`nr_rks`, in a routine neither item listed. It should be routed through
-`oracle_sum`.
+`nr_rks`, in routines neither item listed.
+
+**RESOLVED 2026-09-01.** `ztrace_ab`, `veff::trace_ab` and `veff::trace_dm_v`
+now materialise their products in a fixed index order and reduce with
+`oracle_sum`, and `trace_dm_v` reduces its per-`(channel, k)` partials the same
+way rather than folding them. Bit-identical for `nao ≤ 11` (`oracle_sum`'s base
+case below `PAIRWISE_CHUNK` IS the left-to-right fold it replaced), so Gate A's
+energies did not move; 1.3–7.9× better mean accuracy past that, measured over
+400 ill-conditioned trials per size. See `SUMMARY.md` §"Follow-up".
+
+**It did not explain the 2-ulp wobble** — being bit-identical at `nao = 8`, it
+could not have. That observation remains open.

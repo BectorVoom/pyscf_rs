@@ -11,7 +11,7 @@
 //!   This is the same measured tradeoff plan 10-03 recorded for its Bloch
 //!   contraction.
 
-use pyscf_algebra::{AlgebraClient, CTensor, zgemm_dense};
+use pyscf_algebra::{AlgebraClient, CTensor, oracle_sum, zgemm_dense};
 use pyscf_core::{CoreError, PyscfRsError};
 
 /// Device complex GEMM `C = A B`, `a` is `m x k`, `b` is `k x n`, row-major.
@@ -102,18 +102,45 @@ pub fn zscale_real(a: &mut CTensor, s: f64) {
 }
 
 /// `Tr(A B)` for row-major `n x n` operands — `einsum('ij,ji->', a, b)`.
+///
+/// # D-PBC-17 — the reduction is ORDERED
+///
+/// This is an `n^2`-term reduction that reaches an energy (it is the shape
+/// `ecoul` and the `exc` exchange term take), so it goes through the FOUND-06
+/// pairwise tree rather than a running `+=`, exactly as `fft_jk`'s grid
+/// contractions do after W-05. The `n^2` products are materialised in a FIXED
+/// index order (`i`-major, `j`-minor — the order the pre-existing loop
+/// accumulated in) and each plane is reduced with [`oracle_sum`]; the tree
+/// shape then depends only on `n^2` and the fixed `PAIRWISE_CHUNK`, never on
+/// thread count, scheduler or compiler.
+///
+/// Two consequences worth stating, because they pull in opposite directions:
+///
+/// * For `n^2 <= PAIRWISE_CHUNK` (i.e. `nao <= 11`, which covers the `nao = 8`
+///   reference cells) `oracle_sum`'s base case is a strict left-to-right fold
+///   from `0.0` — **bit-identical** to the loop this replaced. Nothing moves on
+///   the gate cells.
+/// * For `nao >= 12` the tree engages and the error bound improves from
+///   `O(n^2 * eps)` to `O(log2(n^2) * eps)`. At `nao = 26` (`gth-dzvp`) that is
+///   676 terms: a worst case of ~1.5e-13 relative becomes ~2e-15.
+///
+/// `oracle_zdot` is NOT the primitive here: `b` is read TRANSPOSED and neither
+/// operand is conjugated, so this is not the `zdotc` contraction that function
+/// implements.
 pub fn ztrace_ab(a: &CTensor, b: &CTensor, n: usize) -> (f64, f64) {
-    let mut sr = 0.0_f64;
-    let mut si = 0.0_f64;
+    debug_assert_eq!(a.len(), n * n);
+    debug_assert_eq!(b.len(), n * n);
+    let mut tr = vec![0.0_f64; n * n];
+    let mut ti = vec![0.0_f64; n * n];
     for i in 0..n {
         for j in 0..n {
             let (ar, ai) = (a.re[i * n + j], a.im[i * n + j]);
             let (br, bi) = (b.re[j * n + i], b.im[j * n + i]);
-            sr += ar * br - ai * bi;
-            si += ar * bi + ai * br;
+            tr[i * n + j] = ar * br - ai * bi;
+            ti[i * n + j] = ar * bi + ai * br;
         }
     }
-    (sr, si)
+    (oracle_sum(&tr), oracle_sum(&ti))
 }
 
 /// Reinterpret a COLUMN-MAJOR (F-order) `ni x nj` complex matrix as ROW-MAJOR.

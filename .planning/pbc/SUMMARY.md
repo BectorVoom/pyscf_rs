@@ -524,15 +524,15 @@ is for:
   `pyscf-pbc-tools` to test the obvious hypothesis, and **all three are
   FMA-clean** — so it is not contraction.
 
-What is left is a reduction on the hybrid path that is NOT on `oracle_sum` and
-whose partial-sum grouping a compiler may therefore vary between builds. The
-strongest candidate is `zlinalg::ztrace_ab` (`Tr(AB)` over `nao²` terms with a
-naive `sr += …`), which feeds `ecoul` through `krks::trace_dm_v` — a D-PBC-17
-violation of exactly the shape W-05 fixed in `fft_jk` and W-07 fixed in
-`nr_rks`, in a routine neither item listed. **Recommended follow-up: route
-`ztrace_ab` and `trace_dm_v` through `oracle_sum`.** Not done here — it is a new
-result-changing edit, and opening one at the end of a session is how a verified
-tree stops being verified.
+What is left is a reduction on the hybrid path that is NOT on `oracle_sum`. The
+strongest candidate was `zlinalg::ztrace_ab` (`Tr(AB)` over `nao²` terms with a
+naive `sr += …`) and its `pyscf-pbc-dft` twin `veff::trace_ab`, which feeds
+`ecoul` through `veff::trace_dm_v` — a D-PBC-17 violation of exactly the shape
+W-05 fixed in `fft_jk` and W-07 fixed in `nr_rks`, in routines neither item
+listed. **That has since been fixed — see the next section.** The wobble
+itself remains unexplained: the fix is provably bit-identical at `nao = 8`, so
+it could not have been the cause, and PBE0 still reads `…377`. It stays open as
+a curiosity, 5600× inside the gate.
 
 The `check-no-fma` extension is kept regardless: it closes §1.5's stated gap for
 three of the four crates this plan touched, and all three pass today.
@@ -626,3 +626,79 @@ Suites  cargo test -p pyscf-pbc-tools -p pyscf-pbc-df -p pyscf-pbc-dft
 | `pyscf-pbc-df/tests/fft_jk_kk_symmetry.rs` | W-08 symmetric route vs the full loop to 1e-13; all four preconditions error |
 | `pyscf-pbc-dft/tests/numint_threads.rs` | `nelec`/`excsum`/`vmat` bit-identical across pools, LDA and GGA |
 | `pyscf-pbc-dft/tests/numint_blocking.rs` | the block-partition contract (bit-identical at the default; 1e-13 across partitions) |
+
+
+---
+
+# Follow-up — `ztrace_ab` / `trace_dm_v` on `oracle_sum` (2026-09-01)
+
+Closes the D-PBC-17 gap recorded as erratum E-10. Not one of the plan's own
+work items: `veff.rs` and `zlinalg.rs` are in neither W-05's nor W-07's FILES
+list, which is exactly how these two survived both precision passes.
+
+**FILES** `crates/pyscf-pbc-df/src/zlinalg.rs` (`ztrace_ab`),
+`crates/pyscf-pbc-dft/src/veff.rs` (`trace_ab`, `trace_dm_v`)
+
+## Why they were a gap
+
+`trace_dm_v` is squarely on the energy path — `krks.rs:193` and `kuks.rs:248`
+take its `.0` as `ecoul`, and `krks.rs:203` / `kuks.rs:258` subtract its `.0` as
+the exchange term — and it was two nested naive running sums: an `n²`-term
+inner `Tr(AB)` and an `(nset·nkpts)`-term outer fold. `ztrace_ab` is the same
+routine on the `pyscf-pbc-df` side of the ALG-06 wall.
+
+Both now materialise their products in a FIXED index order (`i`-major,
+`j`-minor — the order the replaced loops accumulated in) and reduce each plane
+with `oracle_sum`. `trace_dm_v` additionally collects per-`(channel, k)`
+partials and reduces THOSE with `oracle_sum` rather than folding them: two
+ordered reductions compose, whereas an ordered inner sum folded by a naive
+outer loop is only as good as the outer loop.
+
+`oracle_zdot` is deliberately NOT used — `b` is read transposed and neither
+operand is conjugated, so this is not the `zdotc` contraction that function
+implements.
+
+## BIT-PARITY: exact at every cell this repository gates on
+
+`oracle_sum`'s base case for `len ≤ PAIRWISE_CHUNK` (128) is a strict
+left-to-right fold from `0.0` — precisely what the replaced loops did. So for
+`nao ≤ 11`, which covers every KRKS gate cell (`nao = 8`) and every
+`nset·nkpts` outer sum here, **nothing moves**. Asserted directly in
+`crates/pyscf-pbc-dft/tests/veff_trace_precision.rs` against reproductions of
+the pre-change loops kept in the test file (RULE 4), over
+`nao ∈ {1, 2, 8, 11}` × well- and ill-conditioned operands, and over
+`(nset, nkpts) ∈ {(1,1), (1,8), (2,8)}`.
+
+Confirmed end to end: Gate A's six rust energies came back **character-for-character
+identical** to the pre-change run.
+
+## The precision claim, measured rather than asserted
+
+Past `PAIRWISE_CHUNK` the tree engages and the bound improves from
+`O(n²·ε)` to `O(log₂(n²)·ε)`. Mean relative error against a Neumaier-compensated
+reference, 400 ill-conditioned trials per size:
+
+| `nao` | `n²` | ordered | naive | |
+|---|---|---|---|---|
+| 12 | 144 | 6.49e-16 | 8.25e-16 | 1.27× better |
+| 26 (`gth-dzvp`) | 676 | 5.12e-16 | 9.28e-16 | 1.81× better |
+| 64 | 4096 | 1.11e-15 | 8.81e-15 | **7.94× better** |
+
+**The first version of that test was wrong and is worth recording as such.** It
+asserted `err_ordered ≤ err_naive` on a single draw per size, and failed at
+`nao = 12` (ordered 2.0e-15, naive 1.2e-15). A pairwise tree improves the error
+*bound*, not every individual sample — on any one operand pair the naive fold
+can land closer, and here it did. The assertion now averages over an ensemble,
+which is the claim the bound actually makes; the per-trial win rate
+(155/400 → 212/400 → 294/400 as `n²` grows) is printed alongside so the
+distinction stays visible.
+
+## Verification
+
+```
+Gate A   7/7, rust energies BIT-IDENTICAL to the pre-change run
+Gate B   RAYON_NUM_THREADS=1 vs =8 bit-identical
+ALG-06   check-dependency-wall PASS
+Suites   cargo test -p pyscf-pbc-df -p pyscf-pbc-dft -p pyscf-pbc-scf --release
+         — 0 failures
+```
