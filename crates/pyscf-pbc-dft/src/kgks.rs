@@ -158,6 +158,7 @@ impl Kgks {
                     with_k: false,
                     exxdiv: None,
                     omega: None,
+                    kk_symmetry: false,
                 },
             )
             .map_err(|e| err(format!("KGKS: density fitting failed: {e}")))?;

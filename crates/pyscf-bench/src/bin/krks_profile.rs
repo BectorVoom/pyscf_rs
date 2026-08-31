@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
-use pyscf_pbc_df::{Fftdf, get_hcore, get_j_kpts, get_k_kpts};
+use pyscf_pbc_df::{Fftdf, get_hcore, get_j_kpts, get_k_kpts, get_k_kpts_opts};
 use pyscf_pbc_dft::krks::{Krks, hybrid};
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs, make_kpts_default};
 use pyscf_pbc_gto::hcore::get_ovlp;
@@ -37,11 +37,16 @@ use serde::Serialize;
 // public API of that crate, so reproduced here rather than depended on).
 // ---------------------------------------------------------------------------
 
-fn bohr_cell(a: [[f64; 3]; 3], atoms: Vec<(String, [f64; 3])>, pseudo: Option<&str>) -> Cell {
+fn bohr_cell(
+    a: [[f64; 3]; 3],
+    atoms: Vec<(String, [f64; 3])>,
+    pseudo: Option<&str>,
+    basis: &str,
+) -> Cell {
     Cell::build(CellBuildArgs {
         mole: MoleBuildArgs {
             atom: AtomInput::Tuples(atoms),
-            basis: BasisInput::Name("gth-szv".into()),
+            basis: BasisInput::Name(basis.into()),
             unit: Unit::Bohr,
             ..Default::default()
         },
@@ -52,32 +57,64 @@ fn bohr_cell(a: [[f64; 3]; 3], atoms: Vec<(String, [f64; 3])>, pseudo: Option<&s
     .expect("cell must build")
 }
 
-fn silicon() -> Cell {
+fn silicon(basis: &str) -> Cell {
     let h = 5.1311;
     let q = 2.55555;
     bohr_cell(
         [[0.0, h, h], [h, 0.0, h], [h, h, 0.0]],
         vec![("Si".into(), [0.0, 0.0, 0.0]), ("Si".into(), [q, q, q])],
         Some("gth-pade"),
+        basis,
     )
 }
 
-fn diamond() -> Cell {
+/// A Si 2x2x1 supercell — W-09's "large cell" (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`),
+/// the baseline its DEFER UNTIL clause asks for. Four times the atoms of the
+/// reference cell, so `nao` and the AO table grow with it while the k-mesh can
+/// shrink to keep the run affordable.
+fn silicon_supercell(basis: &str) -> Cell {
+    let h = 5.1311;
+    let q = 2.55555;
+    // Two primitive cells stacked along a1 + a2.
+    let a1 = [0.0, h, h];
+    let a2 = [h, 0.0, h];
+    let a3 = [h, h, 0.0];
+    let double = |v: [f64; 3]| [2.0 * v[0], 2.0 * v[1], 2.0 * v[2]];
+    let mut atoms = Vec::new();
+    for (i, j) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+        let shift = [
+            i * a1[0] + j * a2[0],
+            i * a1[1] + j * a2[1],
+            i * a1[2] + j * a2[2],
+        ];
+        atoms.push(("Si".into(), shift));
+        atoms.push(("Si".into(), [shift[0] + q, shift[1] + q, shift[2] + q]));
+    }
+    bohr_cell(
+        [double(a1), double(a2), a3],
+        atoms,
+        Some("gth-pade"),
+        basis,
+    )
+}
+
+fn diamond(basis: &str) -> Cell {
     let h = 3.37032;
     let q = 1.68516;
     bohr_cell(
         [[0.0, h, h], [h, 0.0, h], [h, h, 0.0]],
         vec![("C".into(), [0.0, 0.0, 0.0]), ("C".into(), [q, q, q])],
         Some("gth-pade"),
+        basis,
     )
 }
 
-fn he_all_electron() -> Cell {
+fn he_all_electron(basis: &str) -> Cell {
     let h = 2.834589;
     Cell::build(CellBuildArgs {
         mole: MoleBuildArgs {
             atom: AtomInput::Tuples(vec![("He".into(), [0.0, 0.0, 0.0])]),
-            basis: BasisInput::Name("sto-3g".into()),
+            basis: BasisInput::Name(basis.into()),
             unit: Unit::Bohr,
             ..Default::default()
         },
@@ -87,12 +124,13 @@ fn he_all_electron() -> Cell {
     .expect("He cell must build")
 }
 
-fn cell_by_name(name: &str) -> Cell {
+fn cell_by_name(name: &str, basis: &str) -> Cell {
     match name {
-        "si" | "silicon" => silicon(),
-        "diamond" => diamond(),
-        "he" => he_all_electron(),
-        other => panic!("unknown --cell {other} (expected si|diamond|he)"),
+        "si" | "silicon" => silicon(basis),
+        "si-supercell" => silicon_supercell(basis),
+        "diamond" => diamond(basis),
+        "he" => he_all_electron(if basis == "gth-szv" { "sto-3g" } else { basis }),
+        other => panic!("unknown --cell {other} (expected si|si-supercell|diamond|he)"),
     }
 }
 
@@ -109,6 +147,7 @@ fn time_ms<T>(mut f: impl FnMut() -> T) -> (T, f64) {
 #[derive(Serialize, Default)]
 struct JkReport {
     cell: String,
+    basis: String,
     nk: [usize; 3],
     mesh: [usize; 3],
     xc: String,
@@ -141,13 +180,16 @@ struct TransformReport {
 
 fn run_jk(args: &[String]) {
     let cell_name = arg_value(args, "--cell").unwrap_or_else(|| "si".into());
+    // W-09's DEFER UNTIL clause asks for a LARGE-CELL baseline; `--basis` and
+    // `--cell si-supercell` are how this harness produces one.
+    let basis = arg_value(args, "--basis").unwrap_or_else(|| "gth-szv".into());
     let nk = parse_triple(&arg_value(args, "--nk").unwrap_or_else(|| "2,2,2".into()));
     let mesh = parse_triple(&arg_value(args, "--mesh").unwrap_or_else(|| "31,31,31".into()));
     let xc = arg_value(args, "--xc").unwrap_or_else(|| "pbe".into());
     let json_path = arg_value(args, "--json");
     let compare_path = arg_value(args, "--compare");
 
-    let cell = cell_by_name(&cell_name);
+    let cell = cell_by_name(&cell_name, &basis);
     let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
     let is_hybrid = hybrid(&xc).unwrap_or(false);
 
@@ -197,10 +239,20 @@ fn run_jk(args: &[String]) {
 
     let (_, warm_j_ms) =
         time_ms(|| get_j_kpts(&df, &result.dm, 1, &kpts, None, None).expect("get_j_kpts"));
+    // W-08: `--kk-symmetry` times the halved pair loop instead of the full one.
+    // It is opt-in because it changes the last bits of `vk`; timing it here
+    // beside the full loop is how its 1.x is attributed.
+    let kk_symmetry = args.iter().any(|a| a == "--kk-symmetry");
     let warm_k_ms = if is_hybrid {
+        let _ = get_k_kpts_opts(
+            &df, &result.dm, 1, &kpts, None, Some(ExxDiv::Ewald), None, kk_symmetry,
+        )
+        .expect("warm get_k_kpts");
         let (_, ms) = time_ms(|| {
-            get_k_kpts(&df, &result.dm, 1, &kpts, None, Some(ExxDiv::Ewald), None)
-                .expect("get_k_kpts")
+            get_k_kpts_opts(
+                &df, &result.dm, 1, &kpts, None, Some(ExxDiv::Ewald), None, kk_symmetry,
+            )
+            .expect("get_k_kpts")
         });
         ms
     } else {
@@ -209,6 +261,7 @@ fn run_jk(args: &[String]) {
 
     let report = JkReport {
         cell: cell_name,
+        basis: basis.clone(),
         nk,
         mesh,
         xc: xc.clone(),
@@ -228,12 +281,13 @@ fn run_jk(args: &[String]) {
     };
 
     println!(
-        "cell={} nk={:?} mesh={:?} xc={} hybrid={}\n  nao={} nkpts={} ngrids={}\n  \
+        "cell={} basis={} nk={:?} mesh={:?} xc={} hybrid={}\n  nao={} nkpts={} ngrids={}\n  \
          get_j_kpts (warm) = {:.3} ms\n  get_k_kpts (warm) = {:.3} ms\n  \
          nr_rks     (warm) = {:.3} ms   (cold = {:.3} ms)\n  \
          get_ovlp          = {:.3} ms\n  get_hcore         = {:.3} ms\n  \
          full kernel()     = {:.3} ms  (e_tot={:.10}, converged={})",
         report.cell,
+        report.basis,
         report.nk,
         report.mesh,
         report.xc,
@@ -346,6 +400,230 @@ fn run_transform(args: &[String]) {
     }
 }
 
+#[derive(Serialize, Default)]
+struct ContractReport {
+    shape: String,
+    nao: usize,
+    ngrids: usize,
+    gflop: f64,
+    host_ms: f64,
+    device_zgemm_ms: f64,
+    host_gflops: f64,
+    device_gflops: f64,
+    max_abs_diff: f64,
+}
+
+/// W-03 / W-06 decision benchmark (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`).
+///
+/// Both items say "route these contractions through `pyscf_algebra::zgemm_dense`",
+/// and W-03 step 4 says the item MUST NOT land if the per-call upload/read-back
+/// makes it slower than the host route. That is a MEASUREMENT, and this is the
+/// measurement: the two shapes that actually dominate `get_k_kpts` and `nr_rks`,
+/// run both ways on the same data, with the max absolute difference reported so a
+/// speed comparison can never be quoted without the accuracy one.
+///
+/// * `nao x nao . nao x Ng` — `dm_times_conj_ao` (`fft_jk.rs`), `eval_rho_one`'s
+///   `c0` stage (`numint.rs`). Reduction over `nao` (small).
+/// * `nao x Ng . Ng x nao` — `accumulate_vk` (`fft_jk.rs`), `vxc_mat_one`'s outer
+///   stage (`numint.rs`). Reduction over the GRID, which is the axis D-PBC-17
+///   requires an ordered reduction on — so the host route here is `oracle_dot`,
+///   not a naive `+=`.
+fn run_contract(args: &[String]) {
+    use pyscf_algebra::{CTensor, oracle_dot, select_backend, zgemm_dense};
+    use rayon::prelude::*;
+
+    let mesh = parse_triple(&arg_value(args, "--mesh").unwrap_or_else(|| "21,21,21".into()));
+    let nao: usize = arg_value(args, "--nao")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let reps: usize = arg_value(args, "--reps")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8);
+    let json_path = arg_value(args, "--json");
+
+    let ngrids = mesh[0] * mesh[1] * mesh[2];
+    let mut s = 0x9E37_79B9_7F4A_7C15u64;
+    let mut rand = move || {
+        s = s.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        ((s >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0
+    };
+    let ao = CTensor::from_planes(
+        (0..nao * ngrids).map(|_| rand()).collect(),
+        (0..nao * ngrids).map(|_| rand()).collect(),
+    );
+    let dm = CTensor::from_planes(
+        (0..nao * nao).map(|_| rand()).collect(),
+        (0..nao * nao).map(|_| rand()).collect(),
+    );
+    let client = select_backend().expect("backend").client;
+
+    let mut reports = Vec::new();
+
+    // ---- shape 1: (nao,nao) . (nao,Ng), reduction over nao -----------------
+    {
+        // 8 flops per complex FMA.
+        let gflop = 8.0 * (nao * nao * ngrids) as f64 * 1e-9;
+        let host = || {
+            let mut re = vec![0.0_f64; nao * ngrids];
+            let mut im = vec![0.0_f64; nao * ngrids];
+            re.par_chunks_mut(ngrids)
+                .zip(im.par_chunks_mut(ngrids))
+                .enumerate()
+                .for_each(|(j, (orow, oirow))| {
+                    for l in 0..nao {
+                        let (dr, di) = (dm.re[j * nao + l], dm.im[j * nao + l]);
+                        let ab = l * ngrids;
+                        for g in 0..ngrids {
+                            let (ar, ai) = (ao.re[ab + g], ao.im[ab + g]);
+                            orow[g] += dr * ar - di * ai;
+                            oirow[g] += dr * ai + di * ar;
+                        }
+                    }
+                });
+            CTensor::from_planes(re, im)
+        };
+        let (h, host_ms) = timed(reps, host);
+        let (d, dev_ms) = timed(reps, || {
+            zgemm_dense(&client, &dm, &ao, nao, nao, ngrids).expect("zgemm")
+        });
+        reports.push(finish_contract(
+            "(nao,nao).(nao,Ng)  [reduce over nao]",
+            nao,
+            ngrids,
+            gflop,
+            host_ms,
+            dev_ms,
+            &h,
+            &d,
+        ));
+    }
+
+    // ---- shape 2: (nao,Ng) . (Ng,nao), reduction over the GRID -------------
+    {
+        let gflop = 8.0 * (nao * nao * ngrids) as f64 * 1e-9;
+        // The host route is D-PBC-17's ordered `oracle_dot`, which is what
+        // `accumulate_vk` actually calls today — comparing against a naive `+=`
+        // loop would be comparing against code that no longer exists.
+        let host = || {
+            let mut re = vec![0.0_f64; nao * nao];
+            let mut im = vec![0.0_f64; nao * nao];
+            re.par_chunks_mut(nao)
+                .zip(im.par_chunks_mut(nao))
+                .enumerate()
+                .for_each(|(p, (vrow, virow))| {
+                    let pb = p * ngrids;
+                    let (xr, xi) = (&ao.re[pb..pb + ngrids], &ao.im[pb..pb + ngrids]);
+                    for q in 0..nao {
+                        let qb = q * ngrids;
+                        let (yr, yi) = (&ao.re[qb..qb + ngrids], &ao.im[qb..qb + ngrids]);
+                        vrow[q] = oracle_dot(xr, yr) - oracle_dot(xi, yi);
+                        virow[q] = oracle_dot(xr, yi) + oracle_dot(xi, yr);
+                    }
+                });
+            CTensor::from_planes(re, im)
+        };
+        // `zgemm_dense` wants `(nao,Ng) . (Ng,nao)`, so the right operand is the
+        // transpose. Materialising it is part of the cost of this route and is
+        // timed with it.
+        let (h, host_ms) = timed(reps, host);
+        let (d, dev_ms) = timed(reps, || {
+            let mut tre = vec![0.0_f64; nao * ngrids];
+            let mut tim = vec![0.0_f64; nao * ngrids];
+            for q in 0..nao {
+                for g in 0..ngrids {
+                    tre[g * nao + q] = ao.re[q * ngrids + g];
+                    tim[g * nao + q] = ao.im[q * ngrids + g];
+                }
+            }
+            let t = CTensor::from_planes(tre, tim);
+            zgemm_dense(&client, &ao, &t, nao, ngrids, nao).expect("zgemm")
+        });
+        reports.push(finish_contract(
+            "(nao,Ng).(Ng,nao)   [reduce over GRID]",
+            nao,
+            ngrids,
+            gflop,
+            host_ms,
+            dev_ms,
+            &h,
+            &d,
+        ));
+    }
+
+    for r in &reports {
+        println!(
+            "{}\n  nao={} Ng={}  {:.3} GFLOP\n  \
+             host (rayon, ordered) = {:8.3} ms  ({:6.2} GFLOP/s)\n  \
+             zgemm_dense (device)  = {:8.3} ms  ({:6.2} GFLOP/s)   -> {:.2}x {}\n  \
+             max |host - device|   = {:.3e}",
+            r.shape,
+            r.nao,
+            r.ngrids,
+            r.gflop,
+            r.host_ms,
+            r.host_gflops,
+            r.device_zgemm_ms,
+            r.device_gflops,
+            (r.device_zgemm_ms / r.host_ms).max(r.host_ms / r.device_zgemm_ms),
+            if r.device_zgemm_ms > r.host_ms {
+                "SLOWER on the device"
+            } else {
+                "faster on the device"
+            },
+            r.max_abs_diff,
+        );
+    }
+
+    if let Some(path) = &json_path {
+        let s = serde_json::to_string_pretty(&reports).expect("serialize");
+        std::fs::write(path, s).expect("write json");
+        println!("wrote {path}");
+    }
+}
+
+/// Best-of-`reps` wall time, so a scheduler hiccup cannot make either route look
+/// bad. Returns the last result alongside it for the accuracy comparison.
+fn timed<T>(reps: usize, mut f: impl FnMut() -> T) -> (T, f64) {
+    let mut best = f64::INFINITY;
+    let mut out = f();
+    for _ in 0..reps {
+        let (v, ms) = time_ms(&mut f);
+        best = best.min(ms);
+        out = v;
+    }
+    (out, best)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_contract(
+    shape: &str,
+    nao: usize,
+    ngrids: usize,
+    gflop: f64,
+    host_ms: f64,
+    device_zgemm_ms: f64,
+    h: &pyscf_algebra::CTensor,
+    d: &pyscf_algebra::CTensor,
+) -> ContractReport {
+    let mut max_abs_diff = 0.0_f64;
+    for i in 0..h.len().min(d.len()) {
+        max_abs_diff = max_abs_diff
+            .max((h.re[i] - d.re[i]).abs())
+            .max((h.im[i] - d.im[i]).abs());
+    }
+    ContractReport {
+        shape: shape.to_string(),
+        nao,
+        ngrids,
+        gflop,
+        host_ms,
+        device_zgemm_ms,
+        host_gflops: gflop / (host_ms * 1e-3),
+        device_gflops: gflop / (device_zgemm_ms * 1e-3),
+        max_abs_diff,
+    }
+}
+
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
         .position(|a| a == key)
@@ -366,8 +644,9 @@ fn main() {
     match sub.as_str() {
         "transform" => run_transform(rest),
         "jk" => run_jk(rest),
+        "contract" => run_contract(rest),
         other => {
-            eprintln!("unknown subcommand {other:?} (expected transform|jk)");
+            eprintln!("unknown subcommand {other:?} (expected transform|jk|contract)");
             std::process::exit(1);
         }
     }

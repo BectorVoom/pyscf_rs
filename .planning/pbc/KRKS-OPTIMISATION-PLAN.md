@@ -871,3 +871,165 @@ not re-derive them, and so a future run can check they still hold.
    should attribute its gain between the two — if the radix change alone does not
    deliver the projected ratio, the remainder is `transform_axis` (`fft_kernel.rs:335`)
    and needs the layout fix of `07_memory_coalescing.md` §2 rather than more radix work.
+
+---
+
+## 9. ERRATA — recorded 2026-08-31 after executing W-00, W-02b, W-06, W-07, W-08
+
+Every item here is a claim **in this document** that execution falsified, with
+the measurement that falsified it. They are recorded against the plan rather
+than quietly worked around, per RULE O. Full write-up in
+[`SUMMARY.md`](./SUMMARY.md) §"Session 2"; the raw numbers are committed under
+[`baselines/`](./baselines/).
+
+### E-1 — §2.1's "transform = 93 % of `get_k_kpts`" no longer holds
+
+It was 93 % *before* W-02. After the mixed-radix/Rader landing the isolated
+transform batch is **71 %** of `get_k_kpts` at mesh 21 (1 016 ms of 1 428 ms),
+because the transform got ~5× cheaper and the contractions did not move. The
+non-transform share is therefore **29 %**, four times what W-03's PRIORITY note
+was written against. §2.1's table should be read as a pre-W-02 snapshot.
+
+### E-2 — §2.1's "a pure functional is already fast" is drawn from the wrong number
+
+True per ITERATION, false per RUN. A converged pure-PBE SCF iteration is 27 ms
+(mesh 21) / 94 ms (mesh 31) — under 1.5 s of a 22.7 s run. **74 % of that run
+is the cold `eval_ao_kpts` pass** (16.8 s at mesh 31) and 21 % is `get_hcore`.
+§2.1 measured the same 7.26 s cold figure and then reasoned from the warm one.
+
+Consequence: **W-06 targets ~3 % of a pure-functional run, not "the dominant
+cost"**, and the item that would move one is a faster `eval_ao_kpts`.
+
+### E-3 — W-03 and W-04 do not land; the decision rule is W-03's own
+
+W-03 step 4 made the item conditional on a measurement. `krks_profile contract`
+is that measurement, on the two shapes involved, at the gate mesh:
+
+* `(nao,nao)·(nao,Ng)` — host 22.9 GFLOP/s, `zgemm_dense` 3.4 → **6.7× slower**
+* `(nao,Ng)·(Ng,nao)` — host 15.9 GFLOP/s, `zgemm_dense` 1.9 → **8.3× slower**,
+  and the GEMM's unordered grid sum differs from `oracle_dot`'s pairwise tree by
+  **1.35e-10 — 13× the 1e-11 gate tolerance.**
+
+So W-03 step 1's `accumulate_vk → zgemm_dense` and W-06 step 2's
+`vxc_mat_one → zgemm_h_dense` would **break Gate A**, not merely slow it. They
+also directly contradict W-05, which exists to put those two reductions on the
+ordered primitive.
+
+W-04 cannot rescue them either, for a structural reason the plan does not
+account for: **the 3-D transform is a HOST routine.** `rho1` must return to the
+host and `vR` must go back out on every block, so the round trip W-04 exists to
+remove is imposed by the FFT, not by the contractions — and transfer is only
+about a third of the device time anyway. W-03/W-04 should be re-scoped as
+"device J/K, **blocked on a device FFT**", with `krks_profile contract` as the
+gate that re-opens them.
+
+### E-4 — W-06 steps 3 and 4 are not appropriate on this backend
+
+Step 3 (delete the per-element zero short-circuits) is justified by SIMT branch
+divergence; the default backend is the CPU runtime, which has none. Removing
+them is also a numerical change (`-0.0 + 0.0 == +0.0`). Step 4 is a *kernel*
+fusion item; on the host those four passes are sub-millisecond against a 28.5 ms
+`nr_rks`.
+
+### E-5 — W-07's bit-identity criterion is unachievable, and its reasoning is wrong
+
+"`nr_rks` output must be bit-identical across `PYSCF_PBC_NUMINT_BLKSIZE` once
+the block-independent accumulation is in" cannot hold. `oracle_sum` is a
+pairwise tree whose shape is a function of input LENGTH, so
+`oracle_sum([oracle_sum(b₀), …])` is a different tree from
+`oracle_sum(b₀ ++ b₁ ++ …)` for any partition with more than one block, and
+floating-point addition is not associative. Only concatenating every block is
+partition-independent, and that defeats blocking. The achievable contract —
+bit-identical at the default whole-grid partition, 1e-13 relative across
+partitions — is what `crates/pyscf-pbc-dft/tests/numint_blocking.rs` asserts.
+
+The per-block-partial reduction is still worth having, and landed: it removes a
+naive sequential `+=` from the two quantities that reach the total energy.
+
+### E-6 — W-08 cites the wrong upstream mechanism
+
+`kk_adapted_iter` (`pbc/df/aft_jk.py`) is **not** a conjugate-pair halving. It
+groups `(ki, kj)` by unique wrapped `dk` so that one analytic `ft_ao_pair`
+tensor serves the group. FFTDF has no `ft_ao_pair`: its per-pair cost is a
+batched 3-D transform of `rho1`, which depends on the AO tables at `k1` **and**
+`k2` individually. Ported verbatim it saves nothing here — the only thing it
+groups is the `get_coulG` that W-01 already caches. So W-08's instruction "do
+not invent a symmetry argument; use upstream's" cannot be followed as written:
+upstream has no such argument to borrow for this builder.
+
+The relation that does hold was derived and then **verified against the full
+`Nk²` loop to 5.9e-15 relative** (`tests/fft_jk_kk_symmetry.rs`):
+
+```text
+rho1^{21}[(i,j),g] = conj( rho1^{12}[(j,i),g] );  FFT(conj x)[G] = conj(FFT(x)[-G]);
+coulG_{-dk}[G] = coulG_{dk}[-G]   =>   vR^{21}[(i,j),g] = conj( vR^{12}[(j,i),g] )
+```
+
+One FFT/iFFT pair therefore serves both orientations. The two contributions
+still differ (different density matrices, different AO tables), so **only the
+transform is halved** — which is why the measured factor is **1.56× (mesh 21) /
+1.75× (mesh 31)** and not the "clean 2×" W-08 predicts.
+
+It needs `G_{-n} = -G_n` to be an exact permutation of the reciprocal grid,
+which fails on an EVEN mesh axis (its Nyquist frequency `-m/2` has no `+m/2`
+partner). That, `hermi == 1`, no band k-points, and the full `nao` block are
+checked and are **errors**, never silent fallbacks.
+
+Re-baselined gate (W-08's own TEST asks for this), `PYSCF_PBC_KK_SYMMETRY=1`:
+7/7 pass and **only `KRKS Si 2×2×2 PBE0` moves at all — by one ulp**
+(`-7.796816043923375` → `-7.796816043923376`, residual 5.589e-12 → 5.588e-12).
+Every other case is bit-identical to the full loop. The existing tolerances
+hold unchanged.
+
+### E-7 — §8 Q3's erratum against `PBC-MASTER-PLAN.md` plan 11-01 is now due twice over
+
+§8 Q3 already noted that the shipped `FftEngine::Stockham` default *disagrees
+with* plan 11-01's mandate to route the transform through `zgemm_dense`, and
+asked for an explicit erratum. E-3 strengthens it from a speed argument into an
+**accuracy** one: on the grid-reduction shape the device GEMM is 1.35e-10 away
+from the ordered route, i.e. outside the gate. Plan 11-01's assumption that
+`zgemm_dense` is the fast *and* safe route is wrong on both counts for this
+backend.
+
+
+### E-8 — W-09 is no longer deferred, and it is the largest single win in the plan
+
+W-09's DEFER UNTIL clause ("until W-00 has a large-cell baseline that shows AO
+evaluation is actually a material share of the time") is met and then some:
+AO collocation is **74 %** of a pure-functional run on the 8-AO gate cell and
+**62 %** on Si `gth-dzvp` 2×2×2. It landed, on by default, with these results:
+
+| | baseline | with W-09 |
+|---|---|---|
+| Si `gth-szv` 2×2×2 mesh 31 PBE, full `kernel()` | 22 669 ms | **9 460 ms** (2.40×) |
+| Si `gth-dzvp` 2×2×2 mesh 31 PBE, full `kernel()` | 161 818 ms | **49 870 ms** (3.24×) |
+| Si `gth-szv` 2×2×2 mesh 21 PBE0, full `kernel()` | 14 999 ms | **11 004 ms** (1.36×) |
+
+Two corrections to the item's own text:
+
+* It predicts the payoff is "approximately zero on the 8-AO gate cell". It is
+  **2.4×** there. The plan reasoned from `nao`, but the cost is dominated by the
+  LATTICE-IMAGE loop, which does not shrink with `nao` — the screen rejects 64 %
+  of the images on that cell outright.
+* It expects the accuracy to get worse ("screened terms are dropped"). **Gate A's
+  residuals got SMALLER** — He AE −9.281e-14 → −8.615e-14, LDA 6.506e-12 →
+  6.495e-12, PBE0 5.589e-12 → 5.587e-12 — because upstream screens and this port
+  did not. Screening moves the port TOWARDS its oracle.
+
+### E-9 — Gate C's scan list is extended, and one crate cannot join it
+
+§1.5 says crates join `SCAN_TARGETS` as they accrete oracle-relevant numeric
+paths. `pyscf-pbc-gto`, `pyscf-pbc-df` and `pyscf-pbc-tools` now do, and all
+three are FMA-clean. `pyscf-pbc-dft` could not be added: it pulls in the
+`libxc_rs` rayon kernels, and `libxc-rkernel-mgga_c_tpssloc` **segfaults rustc**
+under `release-oracle`'s `codegen-units = 1`. Recorded in the scan list itself.
+
+### E-10 — a D-PBC-17 gap this plan does not name: `ztrace_ab` / `trace_dm_v`
+
+Chasing a 2-ulp wobble in `KRKS Si 2×2×2 PBE0` (see `SUMMARY.md`) ruled out
+W-09, the AO screen, test scheduling and FMA contraction. What remains is that
+`zlinalg::ztrace_ab` — `Tr(AB)` over `nao²` terms with a naive `sr += …`, feeding
+`ecoul` through `krks::trace_dm_v` — is an unordered reduction on the energy
+path. That is the same violation W-05 fixed in `fft_jk` and W-07 fixed in
+`nr_rks`, in a routine neither item listed. It should be routed through
+`oracle_sum`.

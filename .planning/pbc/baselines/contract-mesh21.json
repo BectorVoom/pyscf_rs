@@ -1,0 +1,24 @@
+[
+  {
+    "shape": "(nao,nao).(nao,Ng)  [reduce over nao]",
+    "nao": 8,
+    "ngrids": 9261,
+    "gflop": 0.004741632,
+    "host_ms": 0.405452,
+    "device_zgemm_ms": 1.01671,
+    "host_gflops": 11.694681491273936,
+    "device_gflops": 4.66370154714717,
+    "max_abs_diff": 1.7763568394002505e-15
+  },
+  {
+    "shape": "(nao,Ng).(Ng,nao)   [reduce over GRID]",
+    "nao": 8,
+    "ngrids": 9261,
+    "gflop": 0.004741632,
+    "host_ms": 0.22365,
+    "device_zgemm_ms": 2.684293,
+    "host_gflops": 21.20112676056338,
+    "device_gflops": 1.7664360783267699,
+    "max_abs_diff": 1.0459189070388675e-11
+  }
+]

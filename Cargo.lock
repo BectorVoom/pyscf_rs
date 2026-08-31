@@ -5565,6 +5565,7 @@ dependencies = [
  "pyscf-pbc-scf",
  "pyscf-pbc-tools",
  "pyscf-scf",
+ "rayon",
  "serde",
  "serde_json",
 ]
@@ -5865,6 +5866,7 @@ dependencies = [
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
  "pyscf-pbc-tools",
+ "rayon",
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
@@ -5884,6 +5886,7 @@ dependencies = [
  "pyscf-pbc-lib",
  "pyscf-pbc-scf",
  "pyscf-pbc-tools",
+ "rayon",
  "serde_json",
  "thiserror 2.0.18",
  "tracing",

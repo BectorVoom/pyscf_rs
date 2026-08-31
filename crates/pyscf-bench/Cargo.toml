@@ -21,6 +21,9 @@ rocm = ["pyscf-algebra/rocm", "pyscf-kernels/rocm", "dep:cubecl-hip"]
 [dependencies]
 pyscf-core       = { path = "../pyscf-core" }
 pyscf-algebra    = { path = "../pyscf-algebra", default-features = false }
+# W-03/W-06 decision benchmark: the host side of the comparison is the rayon
+# route the production code actually takes, not a serial straw man.
+rayon            = { workspace = true }
 pyscf-kernels    = { path = "../pyscf-kernels", default-features = false }
 pyscf-gto        = { path = "../pyscf-gto" }
 pyscf-scf        = { path = "../pyscf-scf" }

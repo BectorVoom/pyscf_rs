@@ -34,10 +34,35 @@
 //! numerically-negligible images, never drop a needed one, so the Bloch sum
 //! stays converged for grid points anywhere in the cell (which
 //! `bloch_periodicity_holds` pins).
+//!
+//! # AO screening (W-09, `.planning/pbc/KRKS-OPTIMISATION-PLAN.md`)
+//!
+//! The image list above is a bounding BOX, so most `(image, grid block)` pairs
+//! are numerically zero: an image `L` in a far corner of the box is outside
+//! every shell's `rcut` for every grid point. Evaluating them costs a full
+//! `eval_gto` sweep over the whole grid and contributes nothing.
+//!
+//! [`screen_blocks`] therefore computes, per image, which `BLKSIZE`-sized grid
+//! blocks any shell can reach — upstream's `non0tab` / `make_screen_index`
+//! (`gto/eval_gto.py:155`) at the same block granularity, and against the same
+//! per-shell `rcut` that [`estimate_rcut_for_eval`] already derives from
+//! `cell.precision`. An image with no surviving block is skipped outright.
+//!
+//! **Block granularity, never per element.** A per-element skip is a data-
+//! dependent branch in the inner loop, which is the branch divergence
+//! `plane_alignment.md` warns about on any SIMT backend and a mispredict on
+//! the CPU one.
+//!
+//! **This DROPS TERMS, so it changes the result.** The dropped mass is bounded
+//! by the same `precision` that sized the image list, and
+//! `tests/eval_ao_screen.rs` pins that: screened vs unscreened agree to well
+//! inside the KRKS gate, and the screen is convergent in `rcut`.
+//! `PYSCF_PBC_AO_SCREEN=0` turns it off for bisection.
 
 use crate::cell::Cell;
 use crate::cutoff::{PgtoOp, extract_pgto_params};
 use crate::pbc_intor::is_gamma;
+use pyscf_core::raw_layout::{ATOM_OF, BAS_SLOTS};
 use pyscf_algebra::{CTensor, select_backend};
 use pyscf_core::{CoreError, PyscfRsError};
 use std::f64::consts::PI;
@@ -203,24 +228,99 @@ pub fn eval_ao_kpts_with_images(
     // home once, after the loop.
     let mut acc: Option<pyscf_kernels::pbc::AoKAccumulator> = None;
 
+    // W-09: the per-image block screen. Built once, outside the image loop,
+    // because both the block boxes and the shell radii are image-independent.
+    // `screen` is `None` when screening is off, and then the loop below is
+    // exactly the pre-W-09 one.
+    let screen: Option<(Vec<BlockBox>, Vec<[f64; 3]>, Vec<f64>)> = if ao_screen_enabled() {
+        let rcut = estimate_rcut_for_eval(cell, deriv_count(eval_name))?;
+        // Squared, so the per-(image, block, shell) test needs no sqrt.
+        let rcut2: Vec<f64> = rcut.iter().map(|r| r * r).collect();
+        let centres = shell_centres(cell);
+        if centres.len() == rcut2.len() {
+            Some((block_boxes(coords), centres, rcut2))
+        } else {
+            // `estimate_rcut_for_eval` returns one radius per SHELL; if that
+            // ever stops matching `nbas` the screen would silently mis-pair
+            // radii with centres, so refuse to screen rather than guess.
+            tracing::warn!(
+                shells = centres.len(),
+                radii = rcut2.len(),
+                "eval_ao_kpts: per-shell rcut count does not match nbas; \
+                 W-09 AO screening disabled for this call"
+            );
+            None
+        }
+    } else {
+        None
+    };
+
+    // The full-length scratch the screened path scatters into. Allocated once
+    // and re-zeroed per image (`13_memory_preallocation.md` §1 — the same
+    // reason the accumulators are hoisted).
+    let mut screened: Vec<f64> = Vec::new();
+
     for (m, l) in ls.iter().enumerate() {
         // phi(r − L): shift the GRID, not the atoms — same function, and it
         // keeps the molecular evaluator and its `Mole` untouched.
-        let shifted: Vec<[f64; 3]> = coords
-            .iter()
-            .map(|r| [r[0] - l[0], r[1] - l[1], r[2] - l[2]])
-            .collect();
-        let ao = pyscf_gto::eval_gto(&cell.mol, eval_name, &shifted)?;
+        let keep = match &screen {
+            None => None,
+            Some((boxes, centres, rcut2)) => {
+                match screen_one_image(boxes, centres, rcut2, *l) {
+                    // No block of the grid is within any shell's rcut of this
+                    // image: it contributes nothing anywhere. This is the
+                    // skip that pays for the whole item.
+                    None => continue,
+                    some => some,
+                }
+            }
+        };
 
-        if m == 0 {
-            n = ao.values.len();
+        let ao_values: &[f64] = match &keep {
+            None => {
+                let shifted: Vec<[f64; 3]> = coords
+                    .iter()
+                    .map(|r| [r[0] - l[0], r[1] - l[1], r[2] - l[2]])
+                    .collect();
+                let ao = pyscf_gto::eval_gto(&cell.mol, eval_name, &shifted)?;
+                screened = ao.values;
+                &screened
+            }
+            Some(keep) => {
+                let (shifted, index) = gather_kept(coords, keep, *l);
+                let ao = pyscf_gto::eval_gto(&cell.mol, eval_name, &shifted)?;
+                // `comp` is not known before the first successful evaluation;
+                // derive it from THIS block, whose grid length is `index.len()`.
+                let sub_comp = ao
+                    .values
+                    .len()
+                    .checked_div(index.len().max(1) * nao)
+                    .unwrap_or(1);
+                let total = sub_comp * ngrids * nao;
+                if screened.len() != total {
+                    screened = vec![0.0_f64; total];
+                } else {
+                    screened.fill(0.0);
+                }
+                scatter_kept(&mut screened, &ao.values, &index, ngrids, nao, sub_comp);
+                &screened
+            }
+        };
+
+        // `n` is fixed by the first image that produced any AO values; a
+        // screened image produces the SAME full length, because the screen
+        // scatters into a full-size zero-filled buffer rather than shortening
+        // the block.
+        if n == 0 {
+            n = ao_values.len();
             // An empty grid or an empty basis leaves no block to divide by;
             // the component count is then moot, so report the scalar 1.
             comp = n.checked_div(ngrids * nao).unwrap_or(1);
-        } else if ao.values.len() != n {
+        } else if ao_values.len() != n {
             return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                "eval_ao_kpts: image {m} produced {} AO values, image 0 produced {n}",
-                ao.values.len()
+                "eval_ao_kpts: image {m} produced {} AO values, an earlier image \
+                 produced {n}",
+                ao_values.len()
             ))));
         }
         if n == 0 {
@@ -235,12 +335,19 @@ pub fn eval_ao_kpts_with_images(
         // `get_or_insert_with` keeps that lazy without an unreachable panic
         // branch (FOUND-07 — no `unwrap`/`expect` in production code).
         acc.get_or_insert_with(|| pyscf_kernels::pbc::AoKAccumulator::zeros(&client, nkpts, n))
-            .accumulate(&client, &ao.values, &pr, &pi)
+            .accumulate(&client, ao_values, &pr, &pi)
             .map_err(|e| {
                 PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                     "eval_ao_kpts: K-08 accumulate failed at image {m}: {e}"
                 )))
             })?;
+    }
+
+    // W-09: every image may have been screened out (an empty basis, or a grid
+    // nothing can reach). `n` is then still 0 and the split below yields the
+    // correctly-shaped empty planes, exactly as an empty image list does.
+    if n == 0 {
+        comp = 1;
     }
 
     // One read-back for the whole lattice sum. An empty image list never built
@@ -285,5 +392,179 @@ impl Cell {
         kpts: &[[f64; 3]],
     ) -> Result<EvalAoKptsOutput, PyscfRsError> {
         eval_ao_kpts(self, eval_name, coords, kpts)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// W-09 — AO screening (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`)
+// ---------------------------------------------------------------------------
+
+/// Grid points per screening block — upstream's `BLKSIZE`
+/// (`gto/eval_gto.py:26`). The screen decides one block at a time; see the
+/// module docs on why never one element at a time.
+pub const SCREEN_BLKSIZE: usize = 128;
+
+/// `PYSCF_PBC_AO_SCREEN`, read once. `0`/`false`/`no`/`off` disables the W-09
+/// screen; anything else, including unset, leaves it on.
+///
+/// Off is the pre-W-09 behaviour, kept as a bisection switch: the screen drops
+/// terms, so it is the first thing to rule out when a periodic result moves.
+fn ao_screen_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !std::env::var("PYSCF_PBC_AO_SCREEN").is_ok_and(|v| {
+            matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off")
+        })
+    })
+}
+
+/// Axis-aligned bounding box of one grid block, in Bohr.
+#[derive(Clone, Copy)]
+struct BlockBox {
+    lo: [f64; 3],
+    hi: [f64; 3],
+}
+
+impl BlockBox {
+    /// Squared distance from `p` to the nearest point of the box — `0` when `p`
+    /// is inside. The standard point-to-AABB test, and the reason the screen is
+    /// `O(1)` per `(image, block, shell)` instead of `O(SCREEN_BLKSIZE)`.
+    fn dist2(&self, p: [f64; 3]) -> f64 {
+        let mut d2 = 0.0;
+        for axis in 0..3 {
+            let x = p[axis];
+            let d = if x < self.lo[axis] {
+                self.lo[axis] - x
+            } else if x > self.hi[axis] {
+                x - self.hi[axis]
+            } else {
+                0.0
+            };
+            d2 += d * d;
+        }
+        d2
+    }
+}
+
+/// One bounding box per `SCREEN_BLKSIZE`-sized block of `coords`.
+fn block_boxes(coords: &[[f64; 3]]) -> Vec<BlockBox> {
+    coords
+        .chunks(SCREEN_BLKSIZE)
+        .map(|chunk| {
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for c in chunk {
+                for axis in 0..3 {
+                    if c[axis] < lo[axis] {
+                        lo[axis] = c[axis];
+                    }
+                    if c[axis] > hi[axis] {
+                        hi[axis] = c[axis];
+                    }
+                }
+            }
+            BlockBox { lo, hi }
+        })
+        .collect()
+}
+
+/// The screen for ONE lattice image: which grid blocks any shell of the image
+/// at `l` can reach.
+///
+/// `shell_centres` and `rcut2` are per-shell; `rcut2[s]` is `rcut[s]^2`, kept
+/// squared so the test needs no square root. Returns `None` when no block
+/// survives — the caller then skips the image entirely, which is where most of
+/// the saving comes from.
+fn screen_one_image(
+    boxes: &[BlockBox],
+    shell_centres: &[[f64; 3]],
+    rcut2: &[f64],
+    l: [f64; 3],
+) -> Option<Vec<bool>> {
+    let mut keep = vec![false; boxes.len()];
+    let mut any = false;
+    for (b, bx) in boxes.iter().enumerate() {
+        for (s, centre) in shell_centres.iter().enumerate() {
+            // The AO of shell `s` in image `l` is centred at `centre + l`;
+            // equivalently the grid is shifted by `-l`, which is what
+            // `eval_ao_kpts_with_images` actually does. Same distance either way.
+            let p = [centre[0] + l[0], centre[1] + l[1], centre[2] + l[2]];
+            if bx.dist2(p) <= rcut2[s] {
+                keep[b] = true;
+                any = true;
+                break;
+            }
+        }
+    }
+    if any { Some(keep) } else { None }
+}
+
+/// Per-shell centres, one entry per basis function shell.
+fn shell_centres(cell: &Cell) -> Vec<[f64; 3]> {
+    (0..cell.mol.nbas)
+        .map(|i| {
+            let atom = cell.mol._bas[i * BAS_SLOTS + ATOM_OF].max(0) as usize;
+            cell.mol.atom_coord(atom)
+        })
+        .collect()
+}
+
+/// Gather the coordinates of the kept blocks, and the flat grid index of each
+/// gathered point.
+fn gather_kept(
+    coords: &[[f64; 3]],
+    keep: &[bool],
+    l: [f64; 3],
+) -> (Vec<[f64; 3]>, Vec<usize>) {
+    let n_kept: usize = keep
+        .iter()
+        .enumerate()
+        .filter(|(_, k)| **k)
+        .map(|(b, _)| {
+            let start = b * SCREEN_BLKSIZE;
+            (start + SCREEN_BLKSIZE).min(coords.len()) - start
+        })
+        .sum();
+    let mut shifted = Vec::with_capacity(n_kept);
+    let mut index = Vec::with_capacity(n_kept);
+    for (b, k) in keep.iter().enumerate() {
+        if !k {
+            continue;
+        }
+        let start = b * SCREEN_BLKSIZE;
+        let end = (start + SCREEN_BLKSIZE).min(coords.len());
+        for (g, r) in coords[start..end].iter().enumerate() {
+            shifted.push([r[0] - l[0], r[1] - l[1], r[2] - l[2]]);
+            index.push(start + g);
+        }
+    }
+    (shifted, index)
+}
+
+/// Scatter a screened AO block back into a full-length, zero-filled buffer.
+///
+/// Both buffers are F-order per component — `values[c*n*nao + mu*n + g]` — so
+/// this is a per-`(component, AO)` row copy at the kept grid indices, and the
+/// skipped points keep the exact zero the screen asserts they hold.
+fn scatter_kept(
+    out: &mut [f64],
+    sub: &[f64],
+    index: &[usize],
+    ngrids: usize,
+    nao: usize,
+    comp: usize,
+) {
+    let n_sub = index.len();
+    for c in 0..comp {
+        let ob = c * ngrids * nao;
+        let sb = c * n_sub * nao;
+        for mu in 0..nao {
+            let orow = ob + mu * ngrids;
+            let srow = sb + mu * n_sub;
+            for (j, &g) in index.iter().enumerate() {
+                out[orow + g] = sub[srow + j];
+            }
+        }
     }
 }

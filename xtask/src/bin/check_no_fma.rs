@@ -85,6 +85,23 @@ const SCAN_TARGETS: &[(&str, &str)] = &[
     // 1/2). The `is_in_workspace` guard below is forward-compatible, so this is
     // safe even though pyscf-ccsd has no release-oracle asm yet.
     ("pyscf-ccsd", "pyscf_ccsd"),
+    // KRKS-OPTIMISATION-PLAN §1.5: "other crates (pyscf-kernels etc.) join the
+    // scan list as they accrete oracle-relevant numeric paths". W-05 put
+    // `fft_jk`'s reductions on `oracle_dot`, W-06/W-07 did the same for
+    // `numint`'s, and W-09 put a screening decision on the AO path — all three
+    // crates now carry arithmetic that reaches a gated energy, so all three are
+    // scanned. Verified clean when added; keeping them here is what stops a
+    // future contraction from moving a 1e-11 gate silently.
+    ("pyscf-pbc-gto", "pyscf_pbc_gto"),
+    ("pyscf-pbc-df", "pyscf_pbc_df"),
+    ("pyscf-pbc-tools", "pyscf_pbc_tools"),
+    // NOT `pyscf-pbc-dft`, and not for want of trying: it pulls in the
+    // `libxc_rs` rayon kernels, and building `libxc-rkernel-mgga_c_tpssloc`
+    // under this profile's `codegen-units = 1` SEGFAULTS rustc (stable
+    // 1.9x, measured 2026-08-31). That is an upstream toolchain crash on a
+    // vendored crate, not an FMA finding; `pyscf-pbc-dft`'s own numeric path
+    // reaches gated energies through `oracle_sum`, which lives in the
+    // already-scanned `pyscf-algebra`. Add it here once that build works.
 ];
 
 fn main() -> Result<ExitCode> {

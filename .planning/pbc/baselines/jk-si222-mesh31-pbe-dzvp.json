@@ -1,0 +1,28 @@
+{
+  "cell": "si",
+  "basis": "gth-dzvp",
+  "nk": [
+    2,
+    2,
+    2
+  ],
+  "mesh": [
+    31,
+    31,
+    31
+  ],
+  "xc": "pbe",
+  "hybrid": false,
+  "nao": 26,
+  "nkpts": 8,
+  "ngrids": 29791,
+  "warm_get_j_kpts_ms": 205.488285,
+  "warm_get_k_kpts_ms": 0.0,
+  "warm_nr_rks_ms": 253.860017,
+  "cold_nr_rks_ms": 70374.902846,
+  "get_ovlp_ms": 591.915899,
+  "get_hcore_ms": 29778.067964,
+  "full_kernel_ms": 161817.52795400002,
+  "e_tot": -7.842006866548525,
+  "converged": true
+}

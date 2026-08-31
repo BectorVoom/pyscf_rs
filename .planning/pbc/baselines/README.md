@@ -86,3 +86,53 @@ move a pure functional is a faster `eval_ao_kpts` — which is W-09's territory
 (AO screening) or a separate AO-collocation item the plan does not yet have.
 W-06 remains worth doing as the ALG-06/D-PBC-03 compliance item it is; it
 should not be sold as the pure-functional fix.
+
+
+---
+
+## Added 2026-08-31, second pass
+
+| file | what it is |
+|---|---|
+| `contract-mesh21.json`, `contract-mesh31.json` | **the W-03/W-04 decision benchmark.** The two contraction shapes that dominate `get_k_kpts` and `nr_rks`, run host (rayon + `oracle_dot`) vs `zgemm_dense`, with the max absolute difference beside the timings. See `SUMMARY.md` §"W-03 and W-04". |
+| `jk-si-gamma-mesh31-pbe-dzvp.json` | Si `gth-dzvp`, gamma, mesh 31 — the smaller half of W-09's large-cell baseline. |
+| `jk-si222-mesh31-pbe-dzvp.json` | Si `gth-dzvp` 2x2x2, mesh 31 — **W-09's DEFER UNTIL baseline.** `nao = 26`, `nkpts = 8`. |
+
+### The large-cell baseline, and what it settled
+
+`jk-si222-mesh31-pbe-dzvp.json` is the "large-cell baseline" W-09's DEFER UNTIL
+clause asks for. Captured BEFORE W-09 landed:
+
+| stage | value | share of the run |
+|---|---|---|
+| cold `nr_rks` (the AO collocation) | 70 375 ms | **43 %** |
+| `get_hcore` | 29 778 ms | 18 % |
+| warm `nr_rks` (per iteration) | 254 ms | — |
+| `get_j_kpts` (per iteration) | 205 ms | — |
+| full `kernel()` | 161 818 ms | — |
+
+Per-iteration work is ~460 ms; over the ~13 iterations it takes, **4 %** of the
+run. AO collocation plus `get_hcore` is **62 %**. W-09's defer condition was
+therefore met with room to spare, and W-09 landed — taking the same run to
+**49 870 ms (3.24x)**.
+
+### Re-running the whole set
+
+```bash
+for m in 21,21,21 31,31,31; do
+  for xc in pbe pbe0; do
+    cargo run -p pyscf-bench --release --bin krks_profile -- \
+      jk --cell si --nk 2,2,2 --mesh $m --xc $xc \
+      --compare .planning/pbc/baselines/jk-si222-mesh${m%%,*}-$xc.json
+  done
+done
+cargo run -p pyscf-bench --release --bin krks_profile -- contract --mesh 31,31,31
+cargo run -p pyscf-bench --release --bin krks_profile -- transform
+```
+
+Add `--kk-symmetry` to time W-08's halved pair loop, and
+`PYSCF_PBC_AO_SCREEN=0` to time the pre-W-09 AO path.
+
+**Note that every `jk-*.json` here predates W-02b/W-06/W-07/W-09**, deliberately:
+they are the reference the session's improvements are quoted against. Re-capture
+them only when starting a new optimisation pass, and say so when you do.
