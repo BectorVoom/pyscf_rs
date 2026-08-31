@@ -12,6 +12,30 @@
 //! Every AO block is `(nao, ngrids)` ROW-MAJOR, which is exactly upstream's
 //! `ao.T` and exactly what `eval_ao_kpts` produces. Every `nao x nao` matrix is
 //! ROW-MAJOR (see `zlinalg::forder_to_c` for the boundary with Phase 10).
+//!
+//! # Parallelism (W-02b, `.planning/pbc/KRKS-OPTIMISATION-PLAN.md`)
+//!
+//! Every contraction here is parallelised over a **disjoint output partition** —
+//! one rayon worker owns one output row (or one `nao`-wide row of `vk`) and no
+//! two workers ever touch the same cell. The summation order *within* each
+//! output cell is untouched, so the result is bit-identical for any
+//! `RAYON_NUM_THREADS`, exactly as `10_grid_stride_occupancy.md` §6 argues for
+//! disjoint grid-stride writes and as `pyscf-pbc-tools`'s `transform_axis`
+//! already does for the transform batch. Gate B (D-PBC-17) therefore holds by
+//! construction, not by luck: `crates/pyscf-pbc-df/tests/fft_jk_threads.rs`
+//! asserts it on the real `get_j_kpts`/`get_k_kpts` output.
+//!
+//! Two rules for anything added here:
+//!
+//! * **Never parallelise a reduction axis.** `accumulate_rho`'s sum over `nu`
+//!   and `contract_vr_aodm`'s sum over `j` stay serial and in ascending index
+//!   order; only the axis that indexes *distinct outputs* is split.
+//! * **Never fold the `+= 0.0` short-circuits away while parallelising.** The
+//!   `if dr == 0.0 && di == 0.0 { continue; }` skips below are load-bearing for
+//!   bit-parity in one case — `-0.0 + 0.0 == +0.0` — so removing them is a
+//!   numerical change, not a cleanup.
+
+use rayon::prelude::*;
 
 use pyscf_algebra::{CTensor, oracle_dot};
 use pyscf_pbc_gto::{CoulGArgs, ExxDiv, get_coulg, get_gv};
@@ -121,33 +145,60 @@ pub fn get_j_kpts(
 /// (`fft_jk.py:81-83`), transposed into the `(nao, ngrids)` layout.
 fn accumulate_rho(rho: &mut CTensor, ao: &CTensor, dm: &CTensor, nao: usize, ngrids: usize) {
     // c0[mu, g] = sum_nu dm[nu, mu] ao[nu, g]
+    //
+    // W-02b: `mu` indexes DISJOINT output rows of `c0`, so it is the axis that
+    // is split across workers; the reduction axis `nu` stays serial and
+    // ascending, which is what makes this bit-identical to the pre-W-02b
+    // `nu`-outer nest (the same terms reach each `c0[mu, g]` in the same order).
     let mut c0_re = vec![0.0_f64; nao * ngrids];
     let mut c0_im = vec![0.0_f64; nao * ngrids];
-    for nu in 0..nao {
-        let ab = nu * ngrids;
-        for mu in 0..nao {
-            let (dr, di) = (dm.re[nu * nao + mu], dm.im[nu * nao + mu]);
-            if dr == 0.0 && di == 0.0 {
-                continue;
+    c0_re
+        .par_chunks_mut(ngrids)
+        .zip(c0_im.par_chunks_mut(ngrids))
+        .enumerate()
+        .for_each(|(mu, (crow, cirow))| {
+            for nu in 0..nao {
+                let (dr, di) = (dm.re[nu * nao + mu], dm.im[nu * nao + mu]);
+                if dr == 0.0 && di == 0.0 {
+                    continue;
+                }
+                let ab = nu * ngrids;
+                for g in 0..ngrids {
+                    let (ar, ai) = (ao.re[ab + g], ao.im[ab + g]);
+                    crow[g] += dr * ar - di * ai;
+                    cirow[g] += dr * ai + di * ar;
+                }
             }
-            let cb = mu * ngrids;
-            for g in 0..ngrids {
-                let (ar, ai) = (ao.re[ab + g], ao.im[ab + g]);
-                c0_re[cb + g] += dr * ar - di * ai;
-                c0_im[cb + g] += dr * ai + di * ar;
+        });
+    // `rho[g]` is the output cell here and `mu` is the reduction axis, so the
+    // split is over `g` (disjoint chunks) with `mu` serial and ascending inside
+    // each chunk — again the pre-W-02b order, term for term.
+    rho.re
+        .par_chunks_mut(RHO_CHUNK)
+        .zip(rho.im.par_chunks_mut(RHO_CHUNK))
+        .enumerate()
+        .for_each(|(c, (rre, rim))| {
+            let g0 = c * RHO_CHUNK;
+            for mu in 0..nao {
+                let b = mu * ngrids;
+                for t in 0..rre.len() {
+                    let g = g0 + t;
+                    let (br, bi) = (ao.re[b + g], -ao.im[b + g]);
+                    let (cr, ci) = (c0_re[b + g], c0_im[b + g]);
+                    rre[t] += br * cr - bi * ci;
+                    rim[t] += br * ci + bi * cr;
+                }
             }
-        }
-    }
-    for mu in 0..nao {
-        let b = mu * ngrids;
-        for g in 0..ngrids {
-            let (br, bi) = (ao.re[b + g], -ao.im[b + g]);
-            let (cr, ci) = (c0_re[b + g], c0_im[b + g]);
-            rho.re[g] += br * cr - bi * ci;
-            rho.im[g] += br * ci + bi * cr;
-        }
-    }
+        });
 }
+
+/// Grid points one worker owns in [`accumulate_rho`]'s second stage.
+///
+/// The split there is over the GRID, not over an AO index, so it needs an
+/// explicit chunk: one grid point per worker would be pure dispatch overhead.
+/// Large enough that a chunk is real work, small enough that a `mesh = 21` grid
+/// (9261 points) still spreads over every core.
+const RHO_CHUNK: usize = 512;
 
 /// `v[p, q] = sum_g conj(ao[p, g]) vR[g] ao[q, g]` — upstream's
 /// `aow = ao * vR; v += lib.dot(ao.conj().T, aow)` (`fft_jk.py:107-109`).
@@ -155,39 +206,51 @@ fn contract_ao_v_ao(ao: &CTensor, vr: &CTensor, nao: usize, ngrids: usize) -> CT
     // aow[q, g] = ao[q, g] * vR[g]
     let mut aow_re = vec![0.0_f64; nao * ngrids];
     let mut aow_im = vec![0.0_f64; nao * ngrids];
-    for q in 0..nao {
-        let b = q * ngrids;
-        for g in 0..ngrids {
-            let (ar, ai) = (ao.re[b + g], ao.im[b + g]);
-            let (vrr, vri) = (vr.re[g], vr.im[g]);
-            aow_re[b + g] = ar * vrr - ai * vri;
-            aow_im[b + g] = ar * vri + ai * vrr;
-        }
-    }
+    // W-02b: element-wise, so every output cell is its own partition.
+    aow_re
+        .par_chunks_mut(ngrids)
+        .zip(aow_im.par_chunks_mut(ngrids))
+        .enumerate()
+        .for_each(|(q, (wre, wim))| {
+            let b = q * ngrids;
+            for g in 0..ngrids {
+                let (ar, ai) = (ao.re[b + g], ao.im[b + g]);
+                let (vrr, vri) = (vr.re[g], vr.im[g]);
+                wre[g] = ar * vrr - ai * vri;
+                wim[g] = ar * vri + ai * vrr;
+            }
+        });
     // D-PBC-17 (W-05): `Σ_g conj(ao[p,g]) aow[q,g]` is the zdotc contraction —
     // route it through the FOUND-06 pairwise-tree `oracle_dot`, not a naive
     // sequential `+=` over `ngrids` terms. `re = dot(ar,qr) + dot(ai,qi)`,
     // `im = dot(ar,qi) - dot(ai,qr)` is the zdotc identity from
     // `pyscf_algebra::oracle_zdot`, inlined here because `oracle_zdot` takes
     // owned `CTensor` planes and this contracts row *slices* of one.
+    //
+    // W-02b: one worker per output ROW `p`. `oracle_dot`'s pairwise tree shape
+    // depends only on the input length, never on which thread runs it, so this
+    // is bit-identical to the serial nest for any thread count.
     let mut re = vec![0.0_f64; nao * nao];
     let mut im = vec![0.0_f64; nao * nao];
-    for p in 0..nao {
-        let pb = p * ngrids;
-        let ar = &ao.re[pb..pb + ngrids];
-        let ai = &ao.im[pb..pb + ngrids];
-        for q in 0..nao {
-            let qb = q * ngrids;
-            let qr = &aow_re[qb..qb + ngrids];
-            let qi = &aow_im[qb..qb + ngrids];
-            let rr = oracle_dot(ar, qr);
-            let ii = oracle_dot(ai, qi);
-            let ri = oracle_dot(ar, qi);
-            let ir = oracle_dot(ai, qr);
-            re[p * nao + q] = rr + ii;
-            im[p * nao + q] = ri - ir;
-        }
-    }
+    re.par_chunks_mut(nao)
+        .zip(im.par_chunks_mut(nao))
+        .enumerate()
+        .for_each(|(p, (rrow, irow))| {
+            let pb = p * ngrids;
+            let ar = &ao.re[pb..pb + ngrids];
+            let ai = &ao.im[pb..pb + ngrids];
+            for q in 0..nao {
+                let qb = q * ngrids;
+                let qr = &aow_re[qb..qb + ngrids];
+                let qi = &aow_im[qb..qb + ngrids];
+                let rr = oracle_dot(ar, qr);
+                let ii = oracle_dot(ai, qi);
+                let ri = oracle_dot(ar, qi);
+                let ir = oracle_dot(ai, qr);
+                rrow[q] = rr + ii;
+                irow[q] = ri - ir;
+            }
+        });
     CTensor::from_planes(re, im)
 }
 
@@ -289,14 +352,16 @@ pub fn get_k_kpts(
 
                 // fft_jk.py:286-291 — vG = fft(rho1) * coulG; vR = ifft(vG).
                 let mut vg = fft(&rho1, mesh)?;
-                for row in 0..nblk * nao {
-                    let b = row * ngrids;
-                    for g in 0..ngrids {
-                        let (xr, xi) = (vg.re[b + g], vg.im[b + g]);
-                        vg.re[b + g] = xr * coulg[g];
-                        vg.im[b + g] = xi * coulg[g];
-                    }
-                }
+                // W-02b: element-wise over `(row, g)`; one worker per row.
+                vg.re
+                    .par_chunks_mut(ngrids)
+                    .zip(vg.im.par_chunks_mut(ngrids))
+                    .for_each(|(gre, gim)| {
+                        for g in 0..ngrids {
+                            gre[g] *= coulg[g];
+                            gim[g] *= coulg[g];
+                        }
+                    });
                 let mut vr = ifft(&vg, mesh)?;
                 // fft_jk.py:292-293 — `if vR_dm.dtype == np.double: vR = vR.real`
                 if real_out {
@@ -317,15 +382,17 @@ pub fn get_k_kpts(
             // fft_jk.py:297 — vR_dm *= expmikr.conj()
             if let Some(ph) = expmikr.as_ref() {
                 for v in vr_dm.iter_mut() {
-                    for p in 0..nao {
-                        let b = p * ngrids;
-                        for g in 0..ngrids {
-                            let (xr, xi) = (v.re[b + g], v.im[b + g]);
-                            let (pr, pi) = (ph.re[g], -ph.im[g]);
-                            v.re[b + g] = xr * pr - xi * pi;
-                            v.im[b + g] = xr * pi + xi * pr;
-                        }
-                    }
+                    // W-02b: element-wise over `(p, g)`; one worker per row `p`.
+                    v.re.par_chunks_mut(ngrids)
+                        .zip(v.im.par_chunks_mut(ngrids))
+                        .for_each(|(vre, vim)| {
+                            for g in 0..ngrids {
+                                let (xr, xi) = (vre[g], vim[g]);
+                                let (pr, pi) = (ph.re[g], -ph.im[g]);
+                                vre[g] = xr * pr - xi * pi;
+                                vim[g] = xr * pi + xi * pr;
+                            }
+                        });
                 }
             }
 
@@ -358,23 +425,27 @@ pub fn get_k_kpts(
 /// `ao_dms[j, g] = sum_l dm[j, l] conj(ao2T[l, g])` — upstream's
 /// `lib.dot(dms[i,k2], ao2T.conj())` (`fft_jk.py:264`).
 fn dm_times_conj_ao(dm: &CTensor, ao2t: &CTensor, nao: usize, ngrids: usize) -> CTensor {
+    // W-02b: `j` indexes disjoint output rows; the reduction over `l` stays
+    // serial and ascending inside each of them.
     let mut re = vec![0.0_f64; nao * ngrids];
     let mut im = vec![0.0_f64; nao * ngrids];
-    for j in 0..nao {
-        let ob = j * ngrids;
-        for l in 0..nao {
-            let (dr, di) = (dm.re[j * nao + l], dm.im[j * nao + l]);
-            if dr == 0.0 && di == 0.0 {
-                continue;
+    re.par_chunks_mut(ngrids)
+        .zip(im.par_chunks_mut(ngrids))
+        .enumerate()
+        .for_each(|(j, (orow, oirow))| {
+            for l in 0..nao {
+                let (dr, di) = (dm.re[j * nao + l], dm.im[j * nao + l]);
+                if dr == 0.0 && di == 0.0 {
+                    continue;
+                }
+                let ab = l * ngrids;
+                for g in 0..ngrids {
+                    let (ar, ai) = (ao2t.re[ab + g], -ao2t.im[ab + g]);
+                    orow[g] += dr * ar - di * ai;
+                    oirow[g] += dr * ai + di * ar;
+                }
             }
-            let ab = l * ngrids;
-            for g in 0..ngrids {
-                let (ar, ai) = (ao2t.re[ab + g], -ao2t.im[ab + g]);
-                re[ob + g] += dr * ar - di * ai;
-                im[ob + g] += dr * ai + di * ar;
-            }
-        }
-    }
+        });
     CTensor::from_planes(re, im)
 }
 
@@ -392,38 +463,48 @@ fn build_rho1(
     let nblk = p1 - p0;
     let mut re = vec![0.0_f64; nblk * nao * ngrids];
     let mut im = vec![0.0_f64; nblk * nao * ngrids];
-    // `ao1T[p].conj() * expmikr` is hoisted out of the `j` loop exactly as
-    // upstream's `ao1T[p0:p1].conj()*expmikr` is.
-    let mut br = vec![0.0_f64; ngrids];
-    let mut bi = vec![0.0_f64; ngrids];
-    for (i, p) in (p0..p1).enumerate() {
-        let ab = p * ngrids;
-        match expmikr {
-            None => {
-                for g in 0..ngrids {
-                    br[g] = ao1t.re[ab + g];
-                    bi[g] = -ao1t.im[ab + g];
+    // W-02b: one worker per `i` — a contiguous `nao * ngrids` slab of the output
+    // that no other worker touches. This is pure element-wise arithmetic (no
+    // reduction anywhere), so the split cannot change a single rounding. The
+    // `br`/`bi` scratch becomes per-worker, which is also what makes the closure
+    // `Send`: it used to be one buffer reused across `i`.
+    let block = nao * ngrids;
+    re.par_chunks_mut(block)
+        .zip(im.par_chunks_mut(block))
+        .enumerate()
+        .for_each(|(i, (orow, oirow))| {
+            let p = p0 + i;
+            let ab = p * ngrids;
+            // `ao1T[p].conj() * expmikr` is hoisted out of the `j` loop exactly
+            // as upstream's `ao1T[p0:p1].conj()*expmikr` is.
+            let mut br = vec![0.0_f64; ngrids];
+            let mut bi = vec![0.0_f64; ngrids];
+            match expmikr {
+                None => {
+                    for g in 0..ngrids {
+                        br[g] = ao1t.re[ab + g];
+                        bi[g] = -ao1t.im[ab + g];
+                    }
+                }
+                Some(ph) => {
+                    for g in 0..ngrids {
+                        let (ar, ai) = (ao1t.re[ab + g], -ao1t.im[ab + g]);
+                        let (pr, pi) = (ph.re[g], ph.im[g]);
+                        br[g] = ar * pr - ai * pi;
+                        bi[g] = ar * pi + ai * pr;
+                    }
                 }
             }
-            Some(ph) => {
+            for j in 0..nao {
+                let ob = j * ngrids;
+                let jb = j * ngrids;
                 for g in 0..ngrids {
-                    let (ar, ai) = (ao1t.re[ab + g], -ao1t.im[ab + g]);
-                    let (pr, pi) = (ph.re[g], ph.im[g]);
-                    br[g] = ar * pr - ai * pi;
-                    bi[g] = ar * pi + ai * pr;
+                    let (cr, ci) = (ao2t.re[jb + g], ao2t.im[jb + g]);
+                    orow[ob + g] = br[g] * cr - bi[g] * ci;
+                    oirow[ob + g] = br[g] * ci + bi[g] * cr;
                 }
             }
-        }
-        for j in 0..nao {
-            let ob = (i * nao + j) * ngrids;
-            let jb = j * ngrids;
-            for g in 0..ngrids {
-                let (cr, ci) = (ao2t.re[jb + g], ao2t.im[jb + g]);
-                re[ob + g] = br[g] * cr - bi[g] * ci;
-                im[ob + g] = br[g] * ci + bi[g] * cr;
-            }
-        }
-    }
+        });
     CTensor::from_planes(re, im)
 }
 
@@ -437,23 +518,28 @@ fn contract_vr_aodm(
     nao: usize,
     ngrids: usize,
 ) {
-    for i in 0..nblk {
-        let ob = (p0 + i) * ngrids;
-        for g in 0..ngrids {
-            vr_dm.re[ob + g] = 0.0;
-            vr_dm.im[ob + g] = 0.0;
-        }
-        for j in 0..nao {
-            let vb = (i * nao + j) * ngrids;
-            let ab = j * ngrids;
-            for g in 0..ngrids {
-                let (xr, xi) = (vr.re[vb + g], vr.im[vb + g]);
-                let (yr, yi) = (ao_dm.re[ab + g], ao_dm.im[ab + g]);
-                vr_dm.re[ob + g] += xr * yr - xi * yi;
-                vr_dm.im[ob + g] += xr * yi + xi * yr;
+    // W-02b: `i` indexes disjoint output rows `p0+i` of `vR_dm`; the reduction
+    // over `j` stays serial and ascending inside each row.
+    let lo = p0 * ngrids;
+    let hi = (p0 + nblk) * ngrids;
+    vr_dm.re[lo..hi]
+        .par_chunks_mut(ngrids)
+        .zip(vr_dm.im[lo..hi].par_chunks_mut(ngrids))
+        .enumerate()
+        .for_each(|(i, (orow, oirow))| {
+            orow.fill(0.0);
+            oirow.fill(0.0);
+            for j in 0..nao {
+                let vb = (i * nao + j) * ngrids;
+                let ab = j * ngrids;
+                for g in 0..ngrids {
+                    let (xr, xi) = (vr.re[vb + g], vr.im[vb + g]);
+                    let (yr, yi) = (ao_dm.re[ab + g], ao_dm.im[ab + g]);
+                    orow[g] += xr * yr - xi * yi;
+                    oirow[g] += xr * yi + xi * yr;
+                }
             }
-        }
-    }
+        });
 }
 
 /// `vk[p, q] += weight * sum_g vR_dm[p, g] ao1T[q, g]` — `fft_jk.py:300`.
@@ -475,20 +561,28 @@ fn accumulate_vk(
     // differs from `oracle_zdot`'s zdotc identity because there is no
     // conjugation here (`accumulate_vk`'s own doc comment: `ao1T` is NOT
     // conjugated).
-    for p in 0..nao {
-        let pb = p * ngrids;
-        let xr = &vr_dm.re[pb..pb + ngrids];
-        let xi = &vr_dm.im[pb..pb + ngrids];
-        for q in 0..nao {
-            let qb = q * ngrids;
-            let yr = &ao1t.re[qb..qb + ngrids];
-            let yi = &ao1t.im[qb..qb + ngrids];
-            let rr = oracle_dot(xr, yr);
-            let ii = oracle_dot(xi, yi);
-            let ri = oracle_dot(xr, yi);
-            let ir = oracle_dot(xi, yr);
-            vk.re[p * nao + q] += weight * (rr - ii);
-            vk.im[p * nao + q] += weight * (ri + ir);
-        }
-    }
+    //
+    // W-02b: one worker per output ROW `p` of `vk`. Every `oracle_dot` is over
+    // the whole grid and its pairwise tree depends only on `ngrids`, so nothing
+    // about the result depends on the thread count.
+    vk.re
+        .par_chunks_mut(nao)
+        .zip(vk.im.par_chunks_mut(nao))
+        .enumerate()
+        .for_each(|(p, (vrow, virow))| {
+            let pb = p * ngrids;
+            let xr = &vr_dm.re[pb..pb + ngrids];
+            let xi = &vr_dm.im[pb..pb + ngrids];
+            for q in 0..nao {
+                let qb = q * ngrids;
+                let yr = &ao1t.re[qb..qb + ngrids];
+                let yi = &ao1t.im[qb..qb + ngrids];
+                let rr = oracle_dot(xr, yr);
+                let ii = oracle_dot(xi, yi);
+                let ri = oracle_dot(xr, yi);
+                let ir = oracle_dot(xi, yr);
+                vrow[q] += weight * (rr - ii);
+                virow[q] += weight * (ri + ir);
+            }
+        });
 }

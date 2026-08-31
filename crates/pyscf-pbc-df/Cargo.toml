@@ -27,6 +27,12 @@ cintx-ops       = { path = "../../../cintx/crates/cintx-ops" }
 cintx-rs        = { path = "../../../cintx/crates/cintx-rs" }
 cintx-runtime   = { path = "../../../cintx/crates/cintx-runtime" }
 libm            = { workspace = true }
+# W-02b (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`): the `fft_jk` contractions
+# are parallelised over DISJOINT output rows, one worker per row. Each output
+# cell's own summation order is untouched, so the result is bit-identical for
+# any `RAYON_NUM_THREADS` — the same argument `pyscf-pbc-tools`'s
+# `transform_axis` makes for the transform batch.
+rayon           = { workspace = true }
 # Plan 14-03 Task 0 — the D-07 resolution. `pyscf-pbc-df` carried a DIRECT
 # `hdf5-metno` dependency from the Phase-9 scaffolding and never used it, which
 # contradicted D-07 ("pyscf-chkfile is the sole hdf5-metno owner"). The GDF
@@ -40,4 +46,8 @@ tracing         = { workspace = true }
 [dev-dependencies]
 # PBC-MASTER-PLAN §9.2 reference cells for the integration tests.
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
+# W-02b: `tests/fft_jk_threads.rs` varies the worker count inside ONE process
+# with explicit `rayon::ThreadPool`s, which is a strictly stronger check than an
+# env-var sweep across processes.
+rayon           = { workspace = true }
 serde_json      = { workspace = true }
