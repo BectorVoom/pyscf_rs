@@ -146,6 +146,9 @@ pub struct CellBuildArgs {
     pub use_particle_mesh_ewald: bool,
     /// Consider space-group symmetry (upstream default `false`).
     pub space_group_symmetry: bool,
+    /// Whether the lattice is symmorphic (upstream default `false`,
+    /// `cell.py:1289-1293`). See [`crate::Cell::symmorphic`].
+    pub symmorphic: bool,
     /// Use the looser per-shell `rcut_by_shells` estimate for `rcut`
     /// (`cell.py:1316`, upstream default `false`).
     pub use_loose_rcut: bool,
@@ -170,6 +173,7 @@ impl Default for CellBuildArgs {
             exp_to_discard: None,
             use_particle_mesh_ewald: false,
             space_group_symmetry: false,
+            symmorphic: false,
             use_loose_rcut: false,
             pseudo: None,
         }

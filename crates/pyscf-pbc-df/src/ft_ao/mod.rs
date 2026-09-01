@@ -86,9 +86,13 @@
 //! exact answer is (Gate 1c).
 
 pub mod mcmurchie;
+pub mod rs_cell;
 pub mod single;
+pub mod supmol;
 
+pub use rs_cell::{RsCell, LOCAL_BASIS, SMOOTH_BASIS, STEEP_BASIS};
 pub use single::{fake_nuc, ft_ao_kpt, ft_ao_mol};
+pub use supmol::ExtendedMole;
 
 use pyscf_algebra::CTensor;
 use pyscf_core::raw_layout::{

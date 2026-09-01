@@ -1,0 +1,22 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+### mesh pinned to the default (non-symmetry) build for each system ###
+  si        default mesh = [36, 36, 36]
+  diamond   default mesh = [48, 48, 48]
+  lif       default mesh = [81, 81, 81]
+  he_fcc    default mesh = [59, 59, 59]
+Warning: setting symmorphic=True for low-dimensional system.
+  graphene  default mesh = [45, 45, 351]
+
+### deep grid: si, diamond -- KRHF/KRKS x gamma/monkhorst x FFTDF/GDF ###
+[si        mesh=[36, 36, 36] gamma     KRHF  FFTDF] E_sym=-7.526458914851 E_full=-7.526458914851 |dE|=2.807e-13 conv=(True,True) wall=30.0s
+[si        mesh=[36, 36, 36] gamma     KRHF  GDF  ] E_sym=-7.527414272956 E_full=-7.527414272401 |dE|=5.544e-10 conv=(True,True) wall=12.0s
+[si        mesh=[36, 36, 36] monkhorst KRHF  FFTDF] E_sym=-7.631936738032 E_full=-7.631936738032 |dE|=6.928e-14 conv=(True,True) wall=54.3s
+[si        mesh=[36, 36, 36] monkhorst KRHF  GDF  ] E_sym=-7.632393300673 E_full=-7.632393300663 |dE|=9.362e-12 conv=(True,True) wall=72.7s
+[si        mesh=[36, 36, 36] gamma     KRKS  FFTDF] E_sym=-7.772967813395 E_full=-7.772967813395 |dE|=1.545e-13 conv=(True,True) wall=26.2s
+[si        mesh=[36, 36, 36] gamma     KRKS  GDF  ] E_sym=-7.774856155056 E_full=-7.774856155075 |dE|=1.842e-11 conv=(True,True) wall=37.2s
+[si        mesh=[36, 36, 36] monkhorst KRKS  FFTDF] E_sym=-7.864456343549 E_full=-7.864456343549 |dE|=6.839e-14 conv=(True,True) wall=31.9s
+[si        mesh=[36, 36, 36] monkhorst KRKS  GDF  ] E_sym=-7.865796574125 E_full=-7.865796574285 |dE|=1.601e-10 conv=(True,True) wall=47.1s
+[diamond   mesh=[48, 48, 48] gamma     KRHF  FFTDF] E_sym=-10.930858355314 E_full=-10.930858355374 |dE|=5.985e-11 conv=(True,True) wall=119.7s

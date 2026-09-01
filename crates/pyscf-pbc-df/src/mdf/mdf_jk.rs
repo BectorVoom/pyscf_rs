@@ -47,6 +47,24 @@ pub fn get_j_kpts(
     Ok(vj)
 }
 
+/// `mdf_jk.get_j_kpts` at `kpts_band` — `mdf_jk.py:68-71` composed from the
+/// two halves' own band-k-point routes (both closed by plan 17-10 Task 4).
+///
+/// # Errors
+/// Propagates both halves.
+pub fn get_j_kpts_band(
+    df: &Mdf,
+    dms: &[KMats],
+    kpts: &[[f64; 3]],
+    kpts_band: &[[f64; 3]],
+) -> Result<Vec<KMats>, PbcDfError> {
+    let (band_gdf, union) = df.band_gdf(kpts, kpts_band)?;
+    let mut vj = crate::gdf::jk::get_j_kpts_band(&band_gdf, &union, dms, kpts, kpts_band)?;
+    let pw = crate::aft_jk::get_j_kpts_band(df.aftdf()?, dms, kpts, kpts_band, None)?;
+    add_into(&mut vj, &pw);
+    Ok(vj)
+}
+
 /// `mdf_jk.get_k_kpts` — `mdf_jk.py:74-83`.
 ///
 /// # Errors
@@ -57,6 +75,36 @@ pub fn get_k_kpts(
     kpts: &[[f64; 3]],
     exxdiv: Option<pyscf_pbc_gto::ExxDiv>,
 ) -> Result<Vec<KMats>, PbcDfError> {
+    check_exxdiv(exxdiv)?;
+    // `None` to the cderi half — see the module docs.
+    let mut vk = crate::gdf::jk::get_k_kpts(df.gdf()?, dms, kpts, None)?;
+    let pw = crate::aft_jk::get_k_kpts(df.aftdf()?, dms, kpts, exxdiv, None)?;
+    add_into(&mut vk, &pw);
+    Ok(vk)
+}
+
+/// `mdf_jk.get_k_kpts` at `kpts_band` — same composition as
+/// [`get_k_kpts`], routed through both halves' band-k-point variants.
+///
+/// # Errors
+/// Propagates both halves; refuses an `exxdiv` upstream also refuses.
+pub fn get_k_kpts_band(
+    df: &Mdf,
+    dms: &[KMats],
+    kpts: &[[f64; 3]],
+    kpts_band: &[[f64; 3]],
+    exxdiv: Option<pyscf_pbc_gto::ExxDiv>,
+) -> Result<Vec<KMats>, PbcDfError> {
+    check_exxdiv(exxdiv)?;
+    let (band_gdf, union) = df.band_gdf(kpts, kpts_band)?;
+    // `None` to the cderi half — see the module docs.
+    let mut vk = crate::gdf::jk::get_k_kpts_band(&band_gdf, &union, dms, kpts, kpts_band, None)?;
+    let pw = crate::aft_jk::get_k_kpts_band(df.aftdf()?, dms, kpts, kpts_band, exxdiv, None)?;
+    add_into(&mut vk, &pw);
+    Ok(vk)
+}
+
+pub(crate) fn check_exxdiv(exxdiv: Option<pyscf_pbc_gto::ExxDiv>) -> Result<(), PbcDfError> {
     if !matches!(exxdiv, None | Some(pyscf_pbc_gto::ExxDiv::Ewald)) {
         return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
             pyscf_core::CoreError::InvalidMolecule(format!(
@@ -65,34 +113,24 @@ pub fn get_k_kpts(
             )),
         )));
     }
-    // `None` to the cderi half — see the module docs.
-    let mut vk = crate::gdf::jk::get_k_kpts(df.gdf()?, dms, kpts, None)?;
-    let pw = crate::aft_jk::get_k_kpts(df.aftdf()?, dms, kpts, exxdiv, None)?;
-    add_into(&mut vk, &pw);
-    Ok(vk)
+    Ok(())
 }
 
 /// `MDF.get_jk` — the [`crate::traits::PeriodicDf`] entry point
 /// (`mdf.py:180-215`).
 ///
 /// # Errors
-/// Propagates both halves; refuses `kpts_band` and `omega`, which upstream
-/// reaches through `range_coulomb` and an AFTDF substitution that is Phase 17.
+/// Propagates both halves; refuses `omega`, which upstream reaches through
+/// `range_coulomb` and an AFTDF substitution (plan 14-07 owns it). `kpts_band`
+/// was closed by plan 17-10 Task 4 — both halves now rebuild what they need
+/// (GDF's `_cderi` over the k-point union; AFTDF needs no rebuild at all,
+/// since its FT loop takes an arbitrary k-point list directly).
 pub fn get_jk(
     df: &Mdf,
     dms: &[KMats],
     kpts: &[[f64; 3]],
     opts: JkOpts<'_>,
 ) -> Result<JkResult, PbcDfError> {
-    if opts.kpts_band.is_some() && !crate::df_jk::band_is_kpts(opts.kpts_band, kpts) {
-        return Err(PbcDfError::Core(
-            pyscf_core::PyscfRsError::NotYetImplemented {
-                phase: 17,
-                what: "MDF.get_jk with band k-points — upstream REBUILDS _cderi to \
-                       cover them (df_jk.py:86-92)",
-            },
-        ));
-    }
     if opts.omega.is_some() {
         return Err(PbcDfError::Core(
             pyscf_core::PyscfRsError::NotYetImplemented {
@@ -102,6 +140,21 @@ pub fn get_jk(
                        same integrator; plan 14-07 owns the omega machinery",
             },
         ));
+    }
+    if opts.kpts_band.is_some() && !crate::df_jk::band_is_kpts(opts.kpts_band, kpts) {
+        let kpts_band = opts.kpts_band.expect("checked Some above");
+        return Ok(JkResult {
+            vj: if opts.with_j {
+                Some(get_j_kpts_band(df, dms, kpts, kpts_band)?)
+            } else {
+                None
+            },
+            vk: if opts.with_k {
+                Some(get_k_kpts_band(df, dms, kpts, kpts_band, opts.exxdiv)?)
+            } else {
+                None
+            },
+        });
     }
     Ok(JkResult {
         vj: if opts.with_j {

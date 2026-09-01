@@ -1,0 +1,97 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+--- upstream Si (a=2.6935121974 Ang half-vectors) ---
+  space_group_symmetry=True                       nkpts_ibz=145  finger=2.2116408840211186
+  symmorphic=True, time_reversal_symmetry=True    nkpts_ibz=145  finger=2.2116408840211186  max|kpts_ibz - kpts0.kpts_ibz|=0.000e+00
+  symmorphic=True, time_reversal_symmetry=False   nkpts_ibz=245  finger=-2.0196383066365353
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, space_group_symmetry=True   nkpts_ibz=408  finger=-2.5811145613280138
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, symmorphic=True          nkpts_ibz=816  finger=-1.1244923995083895
+  time_reversal_symmetry=True only                nkpts_ibz=2052
+
+EXPECTED: {'A': 145, 'B': 145, 'C': 245, 'D': 408, 'E': 816, 'F': 2052}
+GOT     : {'A': 145, 'B': 145, 'C': 245, 'D': 408, 'E': 816, 'F': 2052}
+GATE A on upstream's own Si cell: REPRODUCED EXACTLY
+--- PBC-MASTER-PLAN si (a=5.4306 Ang, diamond structure) ---
+  space_group_symmetry=True                       nkpts_ibz=145  finger=2.193894485831914
+  symmorphic=True, time_reversal_symmetry=True    nkpts_ibz=145  finger=2.193894485831914  max|kpts_ibz - kpts0.kpts_ibz|=0.000e+00
+  symmorphic=True, time_reversal_symmetry=False   nkpts_ibz=245  finger=-2.003432553773723
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, space_group_symmetry=True   nkpts_ibz=408  finger=-2.5604034743209803
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, symmorphic=True          nkpts_ibz=816  finger=-1.115469375008078
+  time_reversal_symmetry=True only                nkpts_ibz=2052
+--- diamond (a=3.5668 Ang, diamond structure) ---
+  space_group_symmetry=True                       nkpts_ibz=145  finger=3.340294772557695
+  symmorphic=True, time_reversal_symmetry=True    nkpts_ibz=145  finger=3.340294772557695  max|kpts_ibz - kpts0.kpts_ibz|=0.000e+00
+  symmorphic=True, time_reversal_symmetry=False   nkpts_ibz=245  finger=-3.050308631412916
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, space_group_symmetry=True   nkpts_ibz=408  finger=-3.898319812618461
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, symmorphic=True          nkpts_ibz=816  finger=-1.698348095749378
+  time_reversal_symmetry=True only                nkpts_ibz=2052
+--- lif (rocksalt a=4.03 Ang) ---
+  space_group_symmetry=True                       nkpts_ibz=145  finger=2.956368088029476
+  symmorphic=True, time_reversal_symmetry=True    nkpts_ibz=145  finger=2.956368088029476  max|kpts_ibz - kpts0.kpts_ibz|=0.000e+00
+  symmorphic=True, time_reversal_symmetry=False   nkpts_ibz=145  finger=2.956368088029476
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, space_group_symmetry=True   nkpts_ibz=408  finger=-3.4502548654212237
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, symmorphic=True          nkpts_ibz=408  finger=-3.4502548654212237
+  time_reversal_symmetry=True only                nkpts_ibz=2052
+--- he_fcc (a=3.0 Ang, single-atom fcc) ---
+  space_group_symmetry=True                       nkpts_ibz=145  finger=3.971387798252933
+  symmorphic=True, time_reversal_symmetry=True    nkpts_ibz=145  finger=3.971387798252933  max|kpts_ibz - kpts0.kpts_ibz|=0.000e+00
+  symmorphic=True, time_reversal_symmetry=False   nkpts_ibz=145  finger=3.971387798252933
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, space_group_symmetry=True   nkpts_ibz=408  finger=-4.634842369215835
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, symmorphic=True          nkpts_ibz=408  finger=-4.634842369215835
+  time_reversal_symmetry=True only                nkpts_ibz=2052
+Warning: setting symmorphic=True for low-dimensional system.
+--- graphene (dimension=2) ---
+  space_group_symmetry=True                       nkpts_ibz=816  finger=0.0007697335227011548
+  symmorphic=True, time_reversal_symmetry=True    nkpts_ibz=417  finger=-1.4133002118944593  max|kpts_ibz - kpts0.kpts_ibz|=N/A (shape (417, 3) vs (816, 3))
+  symmorphic=True, time_reversal_symmetry=False   nkpts_ibz=816  finger=0.0007697335227011548
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, space_group_symmetry=True   nkpts_ibz=2176  finger=-1.4537908869542313
+
+WARN: k-points have lower symmetry than lattice.
+
+  with_gamma_point=False, symmorphic=True          nkpts_ibz=2176  finger=-1.4537908869542313
+  time_reversal_symmetry=True only                nkpts_ibz=2052
+
+=== SUMMARY: does the integer set travel with lattice TYPE? ===
+  upstream_si : {'A': 145, 'B': 145, 'C': 245, 'D': 408, 'E': 816, 'F': 2052}
+  si_9_2      : {'A': 145, 'B': 145, 'C': 245, 'D': 408, 'E': 816, 'F': 2052}
+  diamond     : {'A': 145, 'B': 145, 'C': 245, 'D': 408, 'E': 816, 'F': 2052}
+  lif         : {'A': 145, 'B': 145, 'C': 145, 'D': 408, 'E': 408, 'F': 2052}
+  he_fcc      : {'A': 145, 'B': 145, 'C': 145, 'D': 408, 'E': 408, 'F': 2052}
+  graphene    : {'A': 816, 'B': 417, 'C': 816, 'D': 2176, 'E': 2176, 'F': 2052}
+
+Systems matching upstream Si's exact integer set {'A': 145, 'B': 145, 'C': 245, 'D': 408, 'E': 816, 'F': 2052}: ['upstream_si', 'si_9_2', 'diamond']

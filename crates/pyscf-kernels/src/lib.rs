@@ -16,6 +16,11 @@
 // rather than the `#![forbid(unsafe_code)]` Phase 1 stub had.
 
 pub mod eval_gto;
+// Plan 17-11 — v1 multigrid's real-space collocation kernel (Task 2).
+pub mod multigrid_collocate;
+// Plan 17-12 — v2 multigrid's pair-fused real-space collocation (Task 2).
+pub mod multigrid_gspace;
+pub mod multigrid_pair;
 // Phase 9 plan 09-02 (v2.0 PBC milestone) — periodic device kernels. Seeded
 // with K-04 `zhadamard`; see PBC-MASTER-PLAN §6 for the full inventory.
 pub mod pbc;
@@ -27,6 +32,9 @@ pub use eval_gto::{
     EvalGtoBuffers, cart2sph_l_matrix, cart_powers, common_fac_sp, eval_gto_cart_deriv1,
     eval_gto_sph, eval_gto_sph_deriv1,
 };
+pub use multigrid_collocate::{PshellGridTable, collocate};
+pub use multigrid_gspace::{get_gga_vrho_gs, gradient_gs};
+pub use multigrid_pair::{PairSlotTable, collocate_pairs};
 pub use pbc::ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use pbc::gv::gv;
 pub use pbc::struct_factor::struct_factor;

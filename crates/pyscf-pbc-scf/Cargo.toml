@@ -16,8 +16,13 @@ pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
 pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
+# Plan 17-07 — the ksymm SCF adapters. D-PBC-25 verified this acyclic:
+# `pyscf-pbc-symm -> {core, algebra, pbc-lib, pbc-tools, pbc-gto}` only, so it
+# sits strictly below `pyscf-pbc-scf`.
+pyscf-pbc-symm  = { path = "../pyscf-pbc-symm" }
 pyscf-diis      = { path = "../pyscf-diis" }
 libm            = { workspace = true }
+num-complex     = "0.4.6"
 pyscf-chkfile   = { path = "../pyscf-chkfile" }
 ndarray         = { workspace = true }
 thiserror       = { workspace = true }

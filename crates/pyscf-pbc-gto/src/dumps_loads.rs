@@ -49,6 +49,12 @@ pub struct CellPack {
     pub use_particle_mesh_ewald: bool,
     /// See [`CellPack::use_particle_mesh_ewald`].
     pub space_group_symmetry: bool,
+    /// Upstream `cldic['symmorphic']` (`cell.py:1289-1293`). Previously
+    /// missing entirely — `space_group_symmetry` round-tripped without its
+    /// partner, silently dropping it on `loads`. `Cell::lattice_symmetry`
+    /// itself is NOT serialised — see its doc comment.
+    #[serde(default)]
+    pub symmorphic: bool,
     /// See [`CellPack::use_particle_mesh_ewald`].
     #[serde(default)]
     pub use_loose_rcut: bool,
@@ -79,6 +85,7 @@ pub fn pack(cell: &Cell) -> Result<CellPack, PyscfRsError> {
         use_particle_mesh_ewald: cell.use_particle_mesh_ewald,
         use_loose_rcut: cell.use_loose_rcut,
         space_group_symmetry: cell.space_group_symmetry,
+        symmorphic: cell.symmorphic,
         rcut_from_build: cell._rcut_from_build,
         mesh_from_build: cell._mesh_from_build,
     })
@@ -138,6 +145,10 @@ pub fn unpack(p: CellPack) -> Result<Cell, PyscfRsError> {
         use_particle_mesh_ewald: p.use_particle_mesh_ewald,
         use_loose_rcut: p.use_loose_rcut,
         space_group_symmetry: p.space_group_symmetry,
+        symmorphic: p.symmorphic,
+        lattice_symmetry: None,
+        symm_orb: None,
+        irrep_id: None,
         _built: true,
         _rcut_from_build: p.rcut_from_build,
         _mesh_from_build: p.mesh_from_build,

@@ -1,0 +1,61 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+default meshes: {'diamond': [65, 65, 65], 'si': [35, 35, 35]}
+--- diamond mesh=[65, 65, 65] ---
+  [diamond  mesh=[65, 65, 65] get_pp v1 vs FFTDF          ] max|diff|=2.924e-12 
+  [diamond  mesh=[65, 65, 65] get_pp v2 vs FFTDF          ] max|diff|=2.411e-08 
+  [diamond  mesh=[65, 65, 65] get_pp v1 vs v2             ] max|diff|=2.411e-08 
+  [diamond  mesh=[65, 65, 65] get_nuc v1 vs FFTDF         ] max|diff|=1.985e-13 
+  [diamond  mesh=[65, 65, 65] get_j v1 vs FFTDF           ] max|diff|=6.138e-14 
+  [diamond  mesh=[65, 65, 65] v1 nr_rks xc=lda,vwn  ] |dvxc|=9.190e-13 |dexc|=2.026e-12
+  [diamond  mesh=[65, 65, 65] v1 nr_rks xc=pbe,pbe  ] |dvxc|=9.213e-13 |dexc|=2.046e-12
+--- diamond mesh=[39, 39, 39] ---
+  [diamond  mesh=[39, 39, 39] get_pp v1 vs FFTDF          ] max|diff|=2.924e-12 
+  [diamond  mesh=[39, 39, 39] get_pp v2 vs FFTDF          ] max|diff|=2.408e-08 
+  [diamond  mesh=[39, 39, 39] get_pp v1 vs v2             ] max|diff|=2.408e-08 
+  [diamond  mesh=[39, 39, 39] get_nuc v1 vs FFTDF         ] max|diff|=1.948e-13 
+  [diamond  mesh=[39, 39, 39] get_j v1 vs FFTDF           ] max|diff|=6.875e-14 
+  [diamond  mesh=[39, 39, 39] v1 nr_rks xc=lda,vwn  ] |dvxc|=1.021e-12 |dexc|=2.251e-12
+  [diamond  mesh=[39, 39, 39] v1 nr_rks xc=pbe,pbe  ] |dvxc|=2.349e-12 |dexc|=2.963e-12
+--- si mesh=[35, 35, 35] ---
+  [si       mesh=[35, 35, 35] get_pp v1 vs FFTDF          ] max|diff|=3.120e-12 
+  [si       mesh=[35, 35, 35] get_pp v2 vs FFTDF          ] max|diff|=1.472e-07 
+  [si       mesh=[35, 35, 35] get_pp v1 vs v2             ] max|diff|=1.472e-07 
+  [si       mesh=[35, 35, 35] get_nuc v1 vs FFTDF         ] max|diff|=4.292e-13 
+  [si       mesh=[35, 35, 35] get_j v1 vs FFTDF           ] max|diff|=1.918e-13 
+  [si       mesh=[35, 35, 35] v1 nr_rks xc=lda,vwn  ] |dvxc|=2.948e-13 |dexc|=1.834e-12
+  [si       mesh=[35, 35, 35] v1 nr_rks xc=pbe,pbe  ] |dvxc|=2.953e-13 |dexc|=1.881e-12
+--- si mesh=[21, 21, 21] ---
+  [si       mesh=[21, 21, 21] get_pp v1 vs FFTDF          ] max|diff|=4.384e-09 
+  [si       mesh=[21, 21, 21] get_pp v2 vs FFTDF          ] max|diff|=1.476e-07 
+  [si       mesh=[21, 21, 21] get_pp v1 vs v2             ] max|diff|=1.472e-07 
+  [si       mesh=[21, 21, 21] get_nuc v1 vs FFTDF         ] max|diff|=2.708e-14 
+  [si       mesh=[21, 21, 21] get_j v1 vs FFTDF           ] max|diff|=1.689e-14 
+  [si       mesh=[21, 21, 21] v1 nr_rks xc=lda,vwn  ] |dvxc|=1.930e-13 |dexc|=3.868e-13
+  [si       mesh=[21, 21, 21] v1 nr_rks xc=pbe,pbe  ] |dvxc|=7.021e-08 |dexc|=1.316e-08
+
+=== converged KRKS e_tot: reference numint vs multigrid v1 vs v2 ===
+  diamond  xc=lda,vwn   E_ref=-10.2213460607 (t=13.3s) E_v1=-10.2213460607 (t=27.0s, |dE|=4.727e-12, ratio=0.49x) E_v2=-10.2213456621 (t=34.2s, |dE|=3.986e-07, ratio=0.39x)
+  si       xc=lda,vwn   E_ref=-7.1606374045 (t=2.6s) E_v1=-7.1606374045 (t=12.1s, |dE|=3.809e-12, ratio=0.21x) E_v2=-7.1606393421 (t=14.6s, |dE|=1.938e-06, ratio=0.18x)
+
+=== SUMMARY: mesh dependence (does the residual shrink with mesh?) ===
+  diamond  get_j v1 vs FFTDF           : [((65, 65, 65), 6.138145547396334e-14), ((39, 39, 39), 6.875056079991282e-14)]
+  diamond  get_nuc v1 vs FFTDF         : [((65, 65, 65), 1.98507876802978e-13), ((39, 39, 39), 1.9484414082171497e-13)]
+  diamond  get_pp v1 vs FFTDF          : [((65, 65, 65), 2.9238833576528123e-12), ((39, 39, 39), 2.9241054022577373e-12)]
+  diamond  get_pp v1 vs v2             : [((65, 65, 65), 2.4110361263041113e-08), ((39, 39, 39), 2.4082447369622173e-08)]
+  diamond  get_pp v2 vs FFTDF          : [((65, 65, 65), 2.4109199636690448e-08), ((39, 39, 39), 2.408125610031675e-08)]
+  diamond  v1 exc lda,vwn              : [((65, 65, 65), 2.0259349753359857e-12), ((39, 39, 39), 2.2506441155201173e-12)]
+  diamond  v1 exc pbe,pbe              : [((65, 65, 65), 2.0463630789890885e-12), ((39, 39, 39), 2.9629632081196178e-12)]
+  diamond  v1 vxc lda,vwn              : [((65, 65, 65), 9.190426197847046e-13), ((39, 39, 39), 1.0205170042354439e-12)]
+  diamond  v1 vxc pbe,pbe              : [((65, 65, 65), 9.212630658339549e-13), ((39, 39, 39), 2.348510275140825e-12)]
+  si       get_j v1 vs FFTDF           : [((35, 35, 35), 1.9181878307961142e-13), ((21, 21, 21), 1.6887533038634217e-14)]
+  si       get_nuc v1 vs FFTDF         : [((35, 35, 35), 4.292122213200855e-13), ((21, 21, 21), 2.7075997693915e-14)]
+  si       get_pp v1 vs FFTDF          : [((35, 35, 35), 3.1202818107090025e-12), ((21, 21, 21), 4.383633900317818e-09)]
+  si       get_pp v1 vs v2             : [((35, 35, 35), 1.4719375103500187e-07), ((21, 21, 21), 1.4719862709289266e-07)]
+  si       get_pp v2 vs FFTDF          : [((35, 35, 35), 1.471937284697189e-07), ((21, 21, 21), 1.4763374961423992e-07)]
+  si       v1 exc lda,vwn              : [((35, 35, 35), 1.8340884366807586e-12), ((21, 21, 21), 3.8680170177940454e-13)]
+  si       v1 exc pbe,pbe              : [((35, 35, 35), 1.8811618929248652e-12), ((21, 21, 21), 1.3163872658594755e-08)]
+  si       v1 vxc lda,vwn              : [((35, 35, 35), 2.9484747976482595e-13), ((21, 21, 21), 1.9301227283108346e-13)]
+  si       v1 vxc pbe,pbe              : [((35, 35, 35), 2.9534708012590727e-13), ((21, 21, 21), 7.020543285607417e-08)]

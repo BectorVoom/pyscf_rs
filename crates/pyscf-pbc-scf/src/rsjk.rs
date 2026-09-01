@@ -27,33 +27,37 @@
 //! Phase 4's Open Question A5 / cintx#11 in
 //! `crates/pyscf-gto/src/range_coulomb.rs` is answered.
 //!
-//! **cintx was necessary but NOT sufficient, and the remaining blocker is
-//! Phase 17.** Two independent things are missing, neither of them an integral
-//! flag:
+//! **cintx was necessary but NOT sufficient. Plan 17-10 closed the FIRST of
+//! two blockers; the second stands and this type still refuses.**
 //!
-//! 1. **The supermole.** `rsjk.py:150-200` builds the short-range half over
-//!    `ft_ao._RangeSeparatedCell.from_cell` + `ft_ao.ExtendedMole.from_cell`
-//!    followed by `strip_basis`, and `_get_jk_sr` (`:267-436`) indexes the
-//!    result by `supmol.bas_mask` with shape `(bvk_ncells, rs_nbas, nimgs)`.
-//!    This port has neither type — D-PBC-21 / D-PBC-23 defer both to Phase 17,
-//!    which is also what `exclude_dd_block` and `strip_basis` wait on.
-//! 2. **A periodic 4-centre `int2e` driver.** `_get_jk_sr` drives
-//!    `PBCVHF_direct_drv1`, a SCREENED direct sweep. `grep int2e` across every
-//!    `pyscf-pbc-*` crate finds one doc comment and no implementation:
-//!    [`pyscf_pbc_df::incore::aux_e2`] is 3-centre.
-//!
-//! Point 2 is why the trick that unblocked RSDF does not transfer.
-//! `_RSGDFBuilder` could be ported by treating every basis function as compact
-//! and paying for the missing compact/smooth split in grid points — a
-//! degenerate case that is merely slower. Here the screening **is** the
-//! algorithm: an unscreened 4-centre sweep over the BvK images is not slower
-//! but infeasible, so there is no correct-but-slow version to fall back on.
+//! 1. **The supermole — CLOSED by plan 17-10.** `rsjk.py:150-200` builds the
+//!    short-range half over `ft_ao._RangeSeparatedCell.from_cell` +
+//!    `ft_ao.ExtendedMole.from_cell` followed by `strip_basis`, and
+//!    `_get_jk_sr` (`:267-436`) indexes the result by `supmol.bas_mask` with
+//!    shape `(bvk_ncells, rs_nbas, nimgs)`. Both types now exist —
+//!    [`pyscf_pbc_df::ft_ao::rs_cell::RsCell`] and
+//!    [`pyscf_pbc_df::ft_ao::ExtendedMole`] — and plan 17-10 gated
+//!    `strip_basis` against upstream directly. **This alone does not unblock
+//!    `rsjk`**: nothing here has been rewired to consume them, because
+//!    blocker 2 makes that wiring pointless on its own.
+//! 2. **A periodic 4-centre `int2e` driver — STILL MISSING, no correct-but-
+//!    slow fallback.** `_get_jk_sr` drives `PBCVHF_direct_drv1`, a SCREENED
+//!    direct sweep. `grep int2e` across every `pyscf-pbc-*` crate finds one
+//!    doc comment and no implementation: [`pyscf_pbc_df::incore::aux_e2`] is
+//!    3-centre. Point 2 is why the trick that unblocked RSDF does not
+//!    transfer: `_RSGDFBuilder` could be ported by treating every basis
+//!    function as compact and paying for the missing compact/smooth split in
+//!    grid points — a degenerate case that is merely slower. Here the
+//!    screening **is** the algorithm: an unscreened 4-centre sweep over the
+//!    BvK images is not slower but infeasible, so there is still no
+//!    correct-but-slow version to fall back on.
 //!
 //! [`RangeSeparatedJkBuilder::build`] therefore still refuses (D-PBC-20), and
 //! **must not** be finished by substituting the full-range kernel: because
 //! `rsjk` is EXACT, a wrong answer would land within the DF fitting error of a
-//! correct GDF and look entirely plausible. Sequence it after Phase 17's
-//! supermole and size it as its own plan.
+//! correct GDF and look entirely plausible. **Size blocker 2 — the screened
+//! periodic 4-centre `int2e` driver — as its own plan, in a phase after 17**
+//! (`PBC-MASTER-PLAN.md` records this).
 //!
 //! # What ships anyway
 //!

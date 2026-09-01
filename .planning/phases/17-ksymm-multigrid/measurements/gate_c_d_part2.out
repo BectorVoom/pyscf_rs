@@ -1,0 +1,13 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+Warning: setting symmorphic=True for low-dimensional system.
+pinned meshes: {'si': [36, 36, 36], 'diamond': [48, 48, 48], 'lif': [81, 81, 81], 'he_fcc': [59, 59, 59], 'graphene': [45, 45, 351]}
+
+### diamond -- reduced set (already have gamma KRHF FFTDF = -10.930858355314 / -10.930858355374, |dE|=5.985e-11, wall=119.7s) ###
+[diamond   mesh=[48, 48, 48] monkhorst KRHF  FFTDF] E_sym=-11.071125075593 E_full=-11.071125075593 |dE|=1.279e-13 conv=(True,True) wall=82.9s
+[diamond   mesh=[48, 48, 48] gamma     KRHF  GDF  ] E_sym=-10.932080541544 E_full=-10.932080544977 |dE|=3.433e-09 conv=(True,True) wall=16.3s
+[diamond   mesh=[48, 48, 48] gamma     KRKS  FFTDF] E_sym=-11.240813947259 E_full=-11.240813947313 |dE|=5.400e-11 conv=(True,True) wall=24.7s
+
+### broad sweep: lif, he_fcc, graphene -- KRHF, FFTDF, gamma-centred only ###

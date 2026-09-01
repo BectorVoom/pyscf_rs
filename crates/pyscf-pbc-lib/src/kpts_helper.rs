@@ -16,7 +16,7 @@
 //!
 //! # Still missing (later plans)
 //!
-//! `is_trim`, `unique_with_wrap_around`, `members_with_wrap_around`,
+//! `unique_with_wrap_around`, `members_with_wrap_around`,
 //! `group_by_conj_pairs`, `conj_mapping`, `kk_adapted_iter`, `KptsHelper` and
 //! `get_kconserv_ria` — Phase 13/16/17 consumers, not Phase 9.
 
@@ -127,6 +127,43 @@ pub fn is_gamma_point(kpt: &[f64]) -> bool {
 /// `gamma_point` — `kpts_helper.py:37`, an alias of [`is_zero`].
 pub fn gamma_point(kpt: &[f64]) -> bool {
     is_zero(kpt)
+}
+
+/// `is_trim(cell, kpts, tol)` — `kpts_helper.py:39-63`. Whether each k-point
+/// is a time-reversal-invariant momentum (TRIM), i.e. `k == -k mod G`.
+///
+/// `khf_ksymm.py:126` needs this for the `eig_trs` branch. It was the one
+/// `kpts_helper` function still missing from this module (17-CONTEXT §5).
+///
+/// Takes `a = cell.lattice_vectors()` rather than a `Cell` — this crate is
+/// the BOTTOM of the periodic DAG and cannot name `Cell`; the scaled-k-point
+/// conversion `cell.get_scaled_kpts` performs is `abs . a.T / (2*pi)` and
+/// nothing else. `pyscf_pbc_gto::kpts_mesh::is_trim` is the `Cell`-taking
+/// wrapper, the same split `get_kconserv` already uses.
+///
+/// The rounding is upstream's, not a tolerance comparison:
+/// `logtol = ceil(-log10(tol))`, then `round(2*k_scaled, logtol+1) % 1`, and
+/// the point is a TRIM when the largest component of THAT is below `tol`.
+pub fn is_trim(a: &[[f64; 3]; 3], kpts: &[[f64; 3]], tol: f64) -> Vec<bool> {
+    // logtol = np.ceil(-np.log10(tol)).astype(int)
+    let logtol = (-tol.log10()).ceil() as i32;
+    let scale = 10.0_f64.powi(logtol + 1);
+    // scaled_kpts = cell.get_scaled_kpts(kpts) == kpts . a.T / (2*pi)
+    let inv_2pi = 1.0 / (2.0 * std::f64::consts::PI);
+    kpts.iter()
+        .map(|k| {
+            let mut worst = 0.0_f64;
+            for row in a.iter() {
+                let ks = (row[0] * k[0] + row[1] * k[1] + row[2] * k[2]) * inv_2pi;
+                // np.round(2*scaled, logtol+1) % 1 — NumPy rounds halves to
+                // even, and its `%` carries the sign of the divisor.
+                let r = (2.0 * ks * scale).round_ties_even() / scale;
+                let m = r - r.floor();
+                worst = worst.max(m);
+            }
+            worst < tol
+        })
+        .collect()
 }
 
 /// `member(kpt, kpts)` — `kpts_helper.py:90-97`. The ASCENDING indices of the

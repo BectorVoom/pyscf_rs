@@ -14,11 +14,11 @@
 mod common;
 
 use common::systems;
-use pyscf_core::{PyscfRsError, Unit};
+use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
 use pyscf_pbc_gto::kpts_mesh::{
     KIdx, WITH_GAMMA, WRAP_AROUND, get_kconserv, get_kconserv3, intersection, is_gamma_point,
-    is_zero, make_kpts, make_kpts_default, make_kpts_with_symmetry, member, unique,
+    is_zero, is_trim, make_kpts, make_kpts_default, member, unique,
 };
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs};
 
@@ -219,16 +219,53 @@ fn make_kpts_scaled_center_is_the_zeroth_point() {
 }
 
 #[test]
-fn make_kpts_rejects_a_zero_axis_and_kpoint_symmetry() {
+fn make_kpts_rejects_a_zero_axis() {
     let cell = systems::diamond();
     assert!(make_kpts_default(&cell, [2, 0, 2]).is_err());
-    // D-PBC-15 — k-point symmetry is a Phase 17 add-on layer.
-    let err =
-        make_kpts_with_symmetry(&cell, [2, 2, 2], true, false).expect_err("KPoints is Phase 17");
-    assert!(
-        matches!(err, PyscfRsError::NotYetImplemented { phase: 17, .. }),
-        "got {err:?}"
-    );
+}
+
+/// 17-05 Task 6 closed the `NotYetImplemented` Phase-17 stub that used
+/// to live at `kpts_mesh.rs:112-121`: k-point symmetry now returns a real
+/// `pyscf_pbc_symm::kpts::KPoints`, and the constructor moved to
+/// `pyscf_pbc_symm::kpts::make_kpts` because `Cell` sits BELOW
+/// `pyscf-pbc-symm` (D-PBC-25) and cannot name that type. Nothing to refuse
+/// here any more — this crate only builds the plain k-mesh.
+#[test]
+fn kpoint_symmetry_is_no_longer_refused_here() {
+    let cell = systems::diamond();
+    // The plain mesh still builds, and that is all this crate owes the caller.
+    assert_eq!(make_kpts_default(&cell, [2, 2, 2]).expect("mesh").len(), 8);
+}
+
+/// `is_trim` — `kpts_helper.py:39-63` (17-05 Task 2). On a gamma-centred
+/// `[2,2,2]` mesh EVERY point is a TRIM (each scaled coordinate is 0 or 1/2,
+/// so `2k` is an integer vector); on `[3,3,3]` only Gamma is.
+///
+/// `2052 = 4096/2 + 4` — 17-CONTEXT §2.2's Gate A decomposition — is the
+/// `[16,16,16]` case: 8 TRIM points, so
+/// `nkpts_ibz = (4096 - 8)/2 + 8 = 2052 = 4096/2 + 8/2`.
+#[test]
+fn is_trim_counts_the_time_reversal_invariant_momenta() {
+    let cell = systems::diamond();
+    let tol = pyscf_pbc_gto::KPT_DIFF_TOL;
+
+    let k222 = make_kpts_default(&cell, [2, 2, 2]).expect("mesh");
+    assert_eq!(is_trim(&cell, &k222, tol).iter().filter(|b| **b).count(), 8);
+
+    let k333 = make_kpts_default(&cell, [3, 3, 3]).expect("mesh");
+    let mask333 = is_trim(&cell, &k333, tol);
+    assert_eq!(mask333.iter().filter(|b| **b).count(), 1);
+    assert!(mask333[0], "Gamma is the zeroth point and is always a TRIM");
+
+    // The Gate A decomposition, asserted explicitly: it pins the TRIM count
+    // independently of the fold itself.
+    let k16 = make_kpts_default(&cell, [16, 16, 16]).expect("mesh");
+    let ntrim = is_trim(&cell, &k16, tol).iter().filter(|b| **b).count();
+    assert_eq!(ntrim, 8, "[16,16,16] has 2^3 TRIM points");
+    let nkpts = k16.len();
+    assert_eq!(nkpts, 4096);
+    assert_eq!((nkpts - ntrim) / 2 + ntrim, 2052);
+    assert_eq!(nkpts / 2 + ntrim / 2, 2052);
 }
 
 #[test]

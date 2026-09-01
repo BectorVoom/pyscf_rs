@@ -50,6 +50,11 @@ pub mod hcore;
 pub mod pseudo;
 pub mod types;
 
+// Plan 17-03 — plain-data lattice symmetry state for `Cell::lattice_symmetry`
+// (D-PBC-25 layering: the real `Symmetry` builder lives in `pyscf-pbc-symm`,
+// above this crate).
+pub mod symmetry_data;
+
 // PBC-MASTER-PLAN §9.2 — the five shared reference systems. Feature-gated so
 // they are not compiled into a production build; downstream PBC crates get them
 // with `pyscf-pbc-gto = { path = "...", features = ["test-systems"] }` in their
@@ -84,8 +89,8 @@ pub use gv::{
 pub use hcore::{HcoreParts, get_hcore, get_hcore_parts, get_ovlp, get_t};
 pub use kpts_mesh::{
     KCONSERV_TOL, KIdx, KPT_DIFF_TOL, Kconserv, Kconserv3, UniqueKpts, WITH_GAMMA, WRAP_AROUND,
-    gamma_point, get_kconserv, get_kconserv3, intersection, is_gamma_point, is_zero, make_kpts,
-    make_kpts_default, make_kpts_with_symmetry, member, round_to_fbz, unique,
+    gamma_point, get_kconserv, get_kconserv3, intersection, is_gamma_point, is_trim, is_zero, make_kpts,
+    make_kpts_default, member, round_to_fbz, unique,
 };
 pub use lattice::{
     check_lattice_sum_range, get_lattice_ls, get_lattice_ls_default, get_monkhorst_pack_size,
@@ -101,3 +106,4 @@ pub use pbc_intor::{
 pub use pseudo::{PseudoData, resolve_pseudo};
 pub use supercell::{cell_plus_imgs, super_cell};
 pub use types::{ALattice, CellBuildArgs, DEFAULT_PRECISION, LowDimFtType};
+pub use symmetry_data::{Dmats, LatticeSymmetry, LatticeSymmetryOp, check_mesh_symmetry_core};

@@ -438,9 +438,50 @@ pub fn add_vhubbard(
     dms: &KDms,
     cfg: &HubbardU,
 ) -> Result<f64, PbcDftError> {
+    // The uniform full-BZ weighting. Bit-exactly the pre-17-08 behaviour:
+    // `weights[k]` is the same `1.0 / nkpts` this function used to inline.
+    let weights = vec![1.0 / kpts.len() as f64; kpts.len()];
+    add_vhubbard_weighted(vxc, cell, kpts, dms, cfg, &weights)
+}
+
+/// [`add_vhubbard`] with an explicit per-k-point weight — plan 17-08 Task 4.
+///
+/// Upstream keeps ONE Hubbard routine and makes it symmetry-aware in two
+/// lines (`krkspu.py:77` and `:93`):
+///
+/// ```python
+/// if is_ibz: kpts = kpts.kpts_ibz
+/// weight = getattr(kpts_input, "weights_ibz", np.repeat(1.0/nkpts, nkpts))
+/// ```
+///
+/// So a k-symmetric DFT+U run passes `kpts_ibz` here together with
+/// `weights_ibz`, and everything else is unchanged. In particular **the local
+/// projectors are NOT rotated**: `make_minao_lo` is called with the k-points
+/// it is given, so at `kpts_ibz` it builds the projectors *directly at the
+/// IBZ points*, where they are already correct. Nothing is unfolded in the
+/// Hubbard term, so nothing needs rotating — see D-17-08-02 in
+/// `17-08-FINDING-numint.md`, which corrects 17-08-PLAN.md Task 4's premise.
+///
+/// # Errors
+/// As [`add_vhubbard`].
+///
+/// # Panics
+/// If `weights.len() != kpts.len()`.
+pub fn add_vhubbard_weighted(
+    vxc: &mut [KMats],
+    cell: &Cell,
+    kpts: &[[f64; 3]],
+    dms: &KDms,
+    cfg: &HubbardU,
+    weights: &[f64],
+) -> Result<f64, PbcDftError> {
+    assert_eq!(
+        weights.len(),
+        kpts.len(),
+        "add_vhubbard_weighted: one weight per k-point"
+    );
     let nao = cell.mol.nao_nr;
     let nkpts = kpts.len();
-    let weight = 1.0 / nkpts as f64;
 
     let pcell = reference_cell(cell, &cfg.minao_ref)?;
     let resolved = set_u(&pcell, cfg)?;
@@ -499,7 +540,7 @@ pub fn add_vhubbard(
                         tr_pp += ar * br - ai * bi;
                     }
                 }
-                e_u += weight * (val * 0.5) * (tr - tr_pp * 0.5);
+                e_u += weights[k] * (val * 0.5) * (tr - tr_pp * 0.5);
 
                 // vhub_loc = (I − P)·(U/2) [+ α·I]
                 let mut vloc = CTensor::zeros(m * m);
@@ -511,7 +552,7 @@ pub fn add_vhubbard(
                     vloc.re[i * m + i] += val * 0.5;
                 }
                 if let Some(a) = alpha {
-                    e_u += weight * a * tr;
+                    e_u += weights[k] * a * tr;
                     for i in 0..m {
                         vloc.re[i * m + i] += a;
                     }

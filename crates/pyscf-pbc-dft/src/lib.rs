@@ -7,10 +7,12 @@ pub use error::*;
 
 pub mod xc;
 pub mod gen_grid;
+pub mod multigrid;
 pub mod numint;
 pub mod numint2c;
 pub mod veff;
 pub mod krks;
+pub mod krks_ksymm;
 pub mod kuks;
 pub mod kroks;
 pub mod kgks;

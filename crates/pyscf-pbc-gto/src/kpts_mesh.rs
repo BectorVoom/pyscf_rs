@@ -42,9 +42,6 @@ pub const WITH_GAMMA: bool = true;
 /// that.
 ///
 /// # Errors
-/// * [`PyscfRsError::NotYetImplemented`] `{ phase: 17 }` for
-///   `space_group_symmetry` / `time_reversal_symmetry`, which return a
-///   `KPoints` object upstream (D-PBC-15).
 /// * [`pyscf_core::CoreError::InvalidMolecule`] if the lattice is singular, or
 ///   if any `nks` entry is zero (upstream divides by it).
 pub fn make_kpts(
@@ -102,23 +99,26 @@ pub fn make_kpts_default(cell: &Cell, nks: [usize; 3]) -> Result<Vec<[f64; 3]>, 
     make_kpts(cell, nks, WRAP_AROUND, WITH_GAMMA, None)
 }
 
-/// `make_kpts` with k-point symmetry — `cell.py:874-883`.
-///
-/// # Errors
-/// Always [`PyscfRsError::NotYetImplemented`] `{ phase: 17 }`: upstream returns
-/// a `pbc.lib.kpts.KPoints` object here, and k-point symmetry is a Phase 17
-/// add-on layer (D-PBC-15), never a fork of the Phase 11/12 drivers.
-pub fn make_kpts_with_symmetry(
-    _cell: &Cell,
-    _nks: [usize; 3],
-    _space_group_symmetry: bool,
-    _time_reversal_symmetry: bool,
-) -> Result<Vec<[f64; 3]>, PyscfRsError> {
-    Err(PyscfRsError::NotYetImplemented {
-        phase: 17,
-        what: "make_kpts with space_group_symmetry / time_reversal_symmetry \
-               returns a KPoints object (cell.py:874-883)",
-    })
+// `make_kpts` with k-point symmetry (`cell.py:874-883`) is NOT here.
+//
+// **The constructor MOVED** (17-05-PLAN.md Task 6). Upstream's
+// `cell.make_kpts(..., space_group_symmetry=True)` returns a
+// `pyscf.pbc.lib.kpts.KPoints`; in this port that type lives in
+// `pyscf-pbc-symm` (D-PBC-25 / 17-CONTEXT §4), which depends on THIS crate to
+// see `Cell`. A `Cell` method returning a `KPoints` would invert that edge, so
+// the entry point is `pyscf_pbc_symm::kpts::make_kpts(cell, kpts,
+// space_group_symmetry, time_reversal_symmetry)` — upstream's own
+// `libkpts.make_kpts` (`kpts.py:804`), which `cell.py:882` delegates to
+// anyway. Build the plain k-mesh with [`make_kpts`] here and hand it to that.
+//
+// This replaces the `NotYetImplemented` Phase-17 stub that stood here
+// from plan 09-07 until 17-05.
+
+/// `is_trim(cell, kpts, tol)` — `kpts_helper.py:39-63`. The `Cell`-taking
+/// wrapper over [`pyscf_pbc_lib::kpts_helper::is_trim`]; see there for the
+/// algorithm and for why the core takes `a` instead of a `Cell`.
+pub fn is_trim(cell: &Cell, kpts: &[[f64; 3]], tol: f64) -> Vec<bool> {
+    kh::is_trim(&cell.lattice_vectors(), kpts, tol)
 }
 
 /// `get_kconserv(cell, kpts)` — `kpts_helper.py:291-325`. See

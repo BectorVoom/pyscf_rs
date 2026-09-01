@@ -189,20 +189,46 @@ pub fn guess_eta(
 }
 
 /// `estimate_rcut(rs_cell, auxcell, precision, exclude_dd_block=False)` —
-/// `gdf_builder.py:932-1007`, the `exclude_dd_block = False` half.
+/// `gdf_builder.py:932-1007`, the `exclude_dd_block = False` half, flattened
+/// to its own maximum.
 ///
 /// The 3-centre image radius the COMPENSATED builder uses. See the module docs
-/// for why this is not `incore::estimate_rcut`. The `exclude_dd_block = True`
-/// half is D-PBC-23 and lives in Phase 17.
+/// for why this is not `incore::estimate_rcut`. See [`estimate_rcut_per_shell`]
+/// for the full per-shell array and the `exclude_dd_block = True` half
+/// (plan 17-10 Task 3).
 ///
 /// Measured targets: **16.729034885581783** (diamond), **10.750308556151602**
 /// (He-fcc), both against the FUSED auxiliary cell.
 pub fn estimate_rcut(cell: &Cell, fused: &Cell, precision: Option<f64>) -> f64 {
+    let rs = crate::ft_ao::rs_cell::RsCell::trivial_wrap(cell);
+    estimate_rcut_per_shell(&rs, fused, precision, false)
+        .into_iter()
+        .fold(0.0_f64, f64::max)
+}
+
+/// `estimate_rcut(rs_cell, auxcell, precision, exclude_dd_block)` —
+/// `gdf_builder.py:932-1007`, in full: one radius per `rs_cell` shell, with
+/// the `exclude_dd_block = True` override (`:975-1006`) that widens every
+/// SMOOTH shell's radius to match the single most diffuse COMPACT shell's.
+///
+/// Plan 17-10 Task 3 closes the "true half" — see the module docs for why
+/// this is not wired into [`crate::incore`]'s own (already MORE converged,
+/// per `14-VERIFICATION` defect (4)) flattened-maximum lattice sum.
+///
+/// # Errors
+/// Never, today; kept infallible to match [`estimate_rcut`].
+pub fn estimate_rcut_per_shell(
+    rs_cell: &crate::ft_ao::rs_cell::RsCell,
+    fused: &Cell,
+    precision: Option<f64>,
+    exclude_dd_block: bool,
+) -> Vec<f64> {
+    let cell = &rs_cell.cell;
     // `precision = rs_cell.precision * 1e-1` — upstream nudges it because the
     // measured errors come out slightly above `cell.precision`.
     let precision = precision.unwrap_or(cell.precision * 1e-1);
     if cell.mol.nbas == 0 || fused.mol.nbas == 0 {
-        return 0.0;
+        return vec![0.0];
     }
 
     let (cell_exps, cs) = pyscf_pbc_gto::extract_pgto_params(cell, pyscf_pbc_gto::PgtoOp::Min);
@@ -217,42 +243,69 @@ pub fn estimate_rcut(cell: &Cell, fused: &Cell, precision: Option<f64>) -> f64 {
         })
         .collect();
 
-    let ai_idx = argmin(&cell_exps);
     let ak_idx = argmin(&aux_exps);
-    let ai = cell_exps[ai_idx];
     let ak = aux_exps[ak_idx];
-    let li = f64::from(ls[ai_idx]);
     let lk_i = fused.mol._bas[ak_idx * BAS_SLOTS + ANG_OF].max(0);
-    let ci = cs[ai_idx];
     let ck = 1.0 / (4.0 * PI) / gaussian_int(lk_i + 2, ak);
     let lk = f64::from(lk_i);
 
     let vol = cell.vol();
     let r_start = cell.try_rcut().unwrap_or(20.0);
 
-    let mut rcut = 0.0_f64;
-    for (&aj, (&cj, &lj_i)) in cell_exps.iter().zip(cs.iter().zip(ls.iter())) {
-        let lj = f64::from(lj_i);
-        let aij = ai + aj;
-        let lij = li + lj;
-        let l3 = lij + lk;
-        let theta = 1.0 / (1.0 / aij + 1.0 / ak);
-        let norm_ang = ((2.0 * li + 1.0) * (2.0 * lj + 1.0)).sqrt() / (4.0 * PI);
-        let c1 = ci * cj * ck * norm_ang;
-        let sfac = aij * aj / (aij * aj + ai * theta);
-        let fl = 2.0_f64;
-        // fac = 2**li * pi**2.5 * c1 * theta**(l3-.5)
-        let mut fac = 2.0_f64.powf(li) * PI.powf(2.5) * c1 * theta.powf(l3 - 0.5);
-        fac *= 2.0 * PI / vol / theta;
-        fac /= aij.powf(li + 1.5) * ak.powf(lk + 1.5) * aj.powf(lj);
-        fac *= fl / precision;
+    // One `(ai, li, ci)` "bra" against a VECTOR of `(aj, lj, cj)` "kets" —
+    // `gdf_builder.py:952-966` and `:988-1000` share this exact shape.
+    let one_pass = |ai: f64, li: f64, ci: f64, targets: &[usize]| -> Vec<f64> {
+        targets
+            .iter()
+            .map(|&j| {
+                let aj = cell_exps[j];
+                let cj = cs[j];
+                let lj = f64::from(ls[j]);
+                let aij = ai + aj;
+                let lij = li + lj;
+                let l3 = lij + lk;
+                let theta = 1.0 / (1.0 / aij + 1.0 / ak);
+                let norm_ang = ((2.0 * li + 1.0) * (2.0 * lj + 1.0)).sqrt() / (4.0 * PI);
+                let c1 = ci * cj * ck * norm_ang;
+                let sfac = aij * aj / (aij * aj + ai * theta);
+                let fl = 2.0_f64;
+                let mut fac = 2.0_f64.powf(li) * PI.powf(2.5) * c1 * theta.powf(l3 - 0.5);
+                fac *= 2.0 * PI / vol / theta;
+                fac /= aij.powf(li + 1.5) * ak.powf(lk + 1.5) * aj.powf(lj);
+                fac *= fl / precision;
+                // NOTE the `(sfac*r0)**(l3-1)` exponent — `incore` uses `l3-2`.
+                let step = |r0: f64| {
+                    ((fac * r0 * (sfac * r0).powf(l3 - 1.0) + 1.0).ln() / (sfac * theta)).sqrt()
+                };
+                step(step(r_start))
+            })
+            .collect()
+    };
 
-        // NOTE the `(sfac*r0)**(l3 - 1)` exponent — `incore` uses `l3 - 2`.
-        let step =
-            |r0: f64| ((fac * r0 * (sfac * r0).powf(l3 - 1.0) + 1.0).ln() / (sfac * theta)).sqrt();
-        let r0 = step(step(r_start));
-        if r0.is_finite() && r0 > rcut {
-            rcut = r0;
+    let ai_idx = argmin(&cell_exps);
+    let all: Vec<usize> = (0..cell.mol.nbas).collect();
+    let mut rcut = one_pass(cell_exps[ai_idx], f64::from(ls[ai_idx]), cs[ai_idx], &all);
+
+    if exclude_dd_block {
+        // `compact_mask = bas_type != SMOOTH_BASIS`; `if 0 < |compact| < nbas`.
+        let compact_idx: Vec<usize> = (0..cell.mol.nbas)
+            .filter(|&j| rs_cell.bas_type[j] != crate::ft_ao::rs_cell::SMOOTH_BASIS)
+            .collect();
+        if !compact_idx.is_empty() && compact_idx.len() < cell.mol.nbas {
+            // `compact_idx[cell_exps[compact_idx].argmin()]` — the single most
+            // diffuse COMPACT shell becomes the new bra.
+            let best = *compact_idx
+                .iter()
+                .min_by(|&&a, &&b| cell_exps[a].partial_cmp(&cell_exps[b]).expect("finite"))
+                .expect("non-empty");
+            let smooth_idx: Vec<usize> = (0..cell.mol.nbas)
+                .filter(|&j| rs_cell.bas_type[j] == crate::ft_ao::rs_cell::SMOOTH_BASIS)
+                .collect();
+            let overridden =
+                one_pass(cell_exps[best], f64::from(ls[best]), cs[best], &smooth_idx);
+            for (j, r) in smooth_idx.into_iter().zip(overridden) {
+                rcut[j] = r;
+            }
         }
     }
     rcut

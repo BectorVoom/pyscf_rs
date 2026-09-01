@@ -50,6 +50,7 @@ use rayon::prelude::*;
 use pyscf_algebra::{CTensor, oracle_sum};
 use pyscf_pbc_gto::{Cell, EvalAoKptsOutput, eval_ao_kpts};
 use pyscf_pbc_scf::types::{KDms, KMats};
+use pyscf_pbc_symm::kpts::KPoints;
 
 use crate::error::PbcDftError;
 use crate::gen_grid::PeriodicGrids;
@@ -135,6 +136,54 @@ pub struct XcKernelCache {
 /// size and a content hash of the coordinates.
 type AoKey = (Vec<[u64; 3]>, u32, usize, u64);
 
+/// Which k-set [`KNumInt`] integrates over — plan 17-08 Task 1.
+///
+/// Upstream branches on `isinstance(kpts, KPoints)` at **seven** sites
+/// (`pbc/dft/numint.py:328, 431, 647, 779, 859, 908, 956`). They do **two**
+/// different things, and neither is a symmetrization:
+///
+/// * **Five** (`:328, :431, :859, :908, :956`) unfold to the **full BZ** —
+///   `dms = kpts.transform_dm(dms)` (or `transform_mo_coeff`/`transform_mo_occ`
+///   at `:859`), then `kpts = kpts.kpts` — and run the ordinary full-BZ path
+///   unchanged.
+/// * **Two** (`:647` `nr_rks_fxc`, `:779` `nr_uks_fxc`) take
+///   `kpts = kpts.kpts_ibz` directly, with no transform.
+///
+/// # 17-08-PLAN.md Task 1's premise was wrong — see `17-08-FINDING-numint.md`
+///
+/// The plan asserted that all seven "evaluate the density at the IBZ points,
+/// then symmetrize the real-space density through `kpts.symmetrize_density`".
+/// None of them do, and `symmetrize_density` has **no caller anywhere in
+/// `pyscf/pbc/` except its own unit test**. Implementing the plan literally
+/// also fights this file's block loop, because `symmetrize_density` rotates
+/// grid *indices* across the whole mesh while the density is built per
+/// block — a wall upstream never hits, because upstream never does this.
+///
+/// The consequence is worth knowing: under symmetry, `numint` does the
+/// full-BZ amount of work **plus** an unfold. It is a convenience interface,
+/// not an optimisation; the IBZ saving in a ksymm DFT run comes from the SCF
+/// side (D-PBC-26), not the XC quadrature.
+///
+/// # Why a field rather than the plan's threaded parameter
+///
+/// The plan asked for `KSet<'a>` as a parameter on every builder. As a field
+/// defaulted to [`KSet::Full`] by [`KNumInt::new`], the `Full` path is not
+/// merely unedited — both arms reach the **same** code, since `Ibz` unfolds
+/// and then joins it. The required bit-identity therefore holds by
+/// construction rather than by assertion. The plan's real requirement, "one
+/// enum, one match, not a `KPoints` field bolted onto each function", is met.
+#[derive(Debug, Default)]
+pub enum KSet {
+    /// Every sampling k-point; `KNumInt::kpts` is the full BZ. The
+    /// pre-17-08 behaviour, unchanged.
+    #[default]
+    Full,
+    /// Built from a `KPoints`. `KNumInt::kpts` is still the **full BZ**
+    /// (upstream's Group-A `kpts = kpts.kpts`); the folding is reached through
+    /// [`KNumInt::unfold_dms`] and [`KNumInt::kpts_ibz`].
+    Ibz(Box<KPoints>),
+}
+
 /// `pbc/dft/numint.py:KNumInt` — the k-point numerical-integration driver.
 ///
 /// Holds the sampling k-points and an AO cache, nothing else; the functional is
@@ -142,7 +191,11 @@ type AoKey = (Vec<[u64; 3]>, u32, usize, u64);
 #[derive(Debug)]
 pub struct KNumInt {
     /// Sampling k-points. Empty is normalised to the single gamma point.
+    ///
+    /// Under [`KSet::Ibz`] these are the **IBZ** points, not the full BZ.
     pub kpts: Vec<[f64; 3]>,
+    /// Full BZ, or an IBZ set plus the symmetry needed to unfold it.
+    pub kset: KSet,
     /// Memory budget in MB — sizes the grid block and caps the AO cache.
     pub max_memory: f64,
     /// Largest `|Im ρ|` seen by the last [`KNumInt::eval_rho`]. Upstream drops
@@ -162,10 +215,161 @@ impl KNumInt {
         };
         Self {
             kpts,
+            kset: KSet::Full,
             max_memory: default_max_memory(),
             last_imag: std::cell::Cell::new(0.0),
             ao_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// A `KNumInt` over an IBZ k-set — plan 17-08 Task 1.
+    ///
+    /// **`kpts` here is the FULL BZ**, matching upstream's five Group-A sites,
+    /// which set `kpts = kpts.kpts` after unfolding the density. The IBZ
+    /// points are reached through [`KNumInt::kpts_ibz`] for the two Group-B
+    /// (`*_fxc`) sites that want them. See `KSet`'s doc and
+    /// `17-08-FINDING-numint.md`.
+    pub fn with_symmetry(kpts: &KPoints) -> Self {
+        let mut ni = Self::new(&kpts.kpts);
+        ni.kset = KSet::Ibz(Box::new(kpts.clone()));
+        ni
+    }
+
+    /// The `KPoints` when built over a symmetric k-set, else `None`.
+    pub fn ksymm(&self) -> Option<&KPoints> {
+        match &self.kset {
+            KSet::Full => None,
+            KSet::Ibz(k) => Some(k),
+        }
+    }
+
+    /// The IBZ k-points — upstream's Group-B branches (`numint.py:647` in
+    /// `nr_rks_fxc`, `:779` in `nr_uks_fxc`), which use `kpts.kpts_ibz`
+    /// directly with no transform.
+    ///
+    /// Falls back to the full k-set under [`KSet::Full`], so a caller written
+    /// against it needs no branch.
+    pub fn kpts_ibz(&self) -> &[[f64; 3]] {
+        match &self.kset {
+            KSet::Full => &self.kpts,
+            KSet::Ibz(k) => &k.kpts_ibz,
+        }
+    }
+
+    /// [`KNumInt::unfold_dms`] over every density-matrix set — the `KDms`
+    /// shape `nr_rks` / `nr_uks` / `nr_*_fxc` carry.
+    ///
+    /// # Errors
+    /// As [`KNumInt::unfold_dms`].
+    pub fn unfold_kdms(&self, cell: &Cell, dms: &KDms, nao: usize) -> Result<KDms, PbcDftError> {
+        if self.ksymm().is_none() {
+            return Ok(dms.clone());
+        }
+        dms.iter().map(|s| self.unfold_dms(cell, s, nao)).collect()
+    }
+
+    /// Unfold IBZ-length MO coefficients and occupations to the full BZ —
+    /// upstream's `numint.py:859-863`, the one Group-A site that transforms
+    /// the orbitals rather than the density.
+    ///
+    /// Faithful to upstream (RULE 2) rather than the equivalent
+    /// "build the DM, then unfold it": `make_rdm1 ∘ transform_mo_coeff` and
+    /// `transform_dm ∘ make_rdm1` agree mathematically, but upstream
+    /// transforms the orbitals here and this port follows it, so a future
+    /// reader diffing the two files finds the same call.
+    ///
+    /// # Errors
+    /// Propagates [`KPoints::transform_mo_coeff`] / [`KPoints::transform_mo_occ`].
+    #[allow(clippy::type_complexity)]
+    pub fn unfold_mos(
+        &self,
+        cell: &Cell,
+        mo_coeff: &[Vec<CTensor>],
+        mo_occ: &[Vec<Vec<f64>>],
+        nao: usize,
+    ) -> Result<(Vec<Vec<CTensor>>, Vec<Vec<Vec<f64>>>), PbcDftError> {
+        let Some(kpts) = self.ksymm() else {
+            return Ok((mo_coeff.to_vec(), mo_occ.to_vec()));
+        };
+        let mut cs = Vec::with_capacity(mo_coeff.len());
+        let mut os = Vec::with_capacity(mo_occ.len());
+        for (c, o) in mo_coeff.iter().zip(mo_occ.iter()) {
+            if c.len() == kpts.nkpts() {
+                cs.push(c.clone());
+                os.push(o.clone());
+                continue;
+            }
+            // `mo_coeff[k]` is `nao x nmo`, so `nmo` comes from its length.
+            let nmo = c.first().map_or(0, |t| t.re.len() / nao.max(1));
+            let c_c: Vec<Vec<num_complex::Complex64>> = c
+                .iter()
+                .map(|t| {
+                    t.re.iter()
+                        .zip(t.im.iter())
+                        .map(|(&re, &im)| num_complex::Complex64::new(re, im))
+                        .collect()
+                })
+                .collect();
+            let bz = kpts
+                .transform_mo_coeff(cell, &c_c, nao, nmo)
+                .map_err(|e| err(&format!("pbc NumInt: transform_mo_coeff: {e}")))?;
+            cs.push(
+                bz.iter()
+                    .map(|m| CTensor {
+                        re: m.iter().map(|z| z.re).collect(),
+                        im: m.iter().map(|z| z.im).collect(),
+                    })
+                    .collect(),
+            );
+            os.push(
+                kpts.transform_mo_occ(o)
+                    .map_err(|e| err(&format!("pbc NumInt: transform_mo_occ: {e}")))?,
+            );
+        }
+        Ok((cs, os))
+    }
+
+    /// Unfold IBZ-length density matrices to the full BZ — upstream's
+    /// Group-A branches (`dms = kpts.transform_dm(dms)`, `numint.py:330` and
+    /// four siblings).
+    ///
+    /// A no-op under [`KSet::Full`], and a no-op under [`KSet::Ibz`] when the
+    /// input is already full-BZ length, so callers need no branch of their
+    /// own. Upstream guards the same way with `if kpts.kpts.size > 3`.
+    ///
+    /// # Errors
+    /// Propagates [`KPoints::transform_dm`] (17-05 Task 3, gated at 1e-12).
+    pub fn unfold_dms(
+        &self,
+        cell: &Cell,
+        dms: &KMats,
+        nao: usize,
+    ) -> Result<KMats, PbcDftError> {
+        let Some(kpts) = self.ksymm() else {
+            return Ok(dms.clone());
+        };
+        if dms.len() == kpts.nkpts() {
+            return Ok(dms.clone());
+        }
+        let as_c: Vec<Vec<num_complex::Complex64>> = dms
+            .iter()
+            .map(|t| {
+                t.re.iter()
+                    .zip(t.im.iter())
+                    .map(|(&re, &im)| num_complex::Complex64::new(re, im))
+                    .collect()
+            })
+            .collect();
+        let bz = kpts
+            .transform_dm(cell, &as_c, nao)
+            .map_err(|e| err(&format!("pbc NumInt: transform_dm: {e}")))?;
+        Ok(bz
+            .iter()
+            .map(|m| CTensor {
+                re: m.iter().map(|c| c.re).collect(),
+                im: m.iter().map(|c| c.im).collect(),
+            })
+            .collect())
     }
 
     /// Number of sampling k-points.
@@ -332,6 +536,10 @@ impl KNumInt {
     ) -> Result<NrKResult, PbcDftError> {
         require_hermitian(hermi, "nr_rks")?;
         let ty = XcType::of(xc_code)?;
+        // Group A (`numint.py:328-331`): a symmetric k-set unfolds the density
+        // to the full BZ and then runs this path unchanged. No-op under
+        // `KSet::Full`. See `KSet`'s doc / `17-08-FINDING-numint.md`.
+        let dms = &self.unfold_kdms(cell, dms, cell.mol.nao_nr)?;
         let nset = dms.len();
         let coords = grids.coords()?;
         let weights = grids.weights()?;
@@ -409,6 +617,11 @@ impl KNumInt {
         kpts_band: Option<&[[f64; 3]]>,
     ) -> Result<NrKUksResult, PbcDftError> {
         require_hermitian(hermi, "nr_uks")?;
+        // Group A (`numint.py:431-435`), per spin channel.
+        let dms = &[
+            self.unfold_kdms(cell, &dms[0], cell.mol.nao_nr)?,
+            self.unfold_kdms(cell, &dms[1], cell.mol.nao_nr)?,
+        ];
         let ty = XcType::of(xc_code)?;
         let nset = dms[0].len();
         if dms[1].len() != nset {
@@ -507,6 +720,8 @@ impl KNumInt {
         dms: &KMats,
         grids: &PeriodicGrids,
     ) -> Result<Vec<f64>, PbcDftError> {
+        // Group A (`numint.py:956-959`).
+        let dms = &self.unfold_dms(cell, dms, cell.mol.nao_nr)?;
         let coords = grids.coords()?;
         let ngrids = coords.len();
         let mut rho = vec![0.0_f64; ngrids];
@@ -533,6 +748,11 @@ impl KNumInt {
         dms: &[KMats],
         spin: i32,
     ) -> Result<XcKernelCache, PbcDftError> {
+        // Group A (`numint.py:908-911`).
+        let dms = &dms
+            .iter()
+            .map(|d| self.unfold_dms(cell, d, cell.mol.nao_nr))
+            .collect::<Result<Vec<_>, _>>()?;
         let ty = XcType::of(xc_code)?;
         let coords = grids.coords()?;
         let ngrids = coords.len();
@@ -606,9 +826,13 @@ impl KNumInt {
         spin: i32,
     ) -> Result<XcKernelCache, PbcDftError> {
         let nao = cell.mol.nao_nr;
+        // Group A (`numint.py:859-863`) — the one site that unfolds the
+        // ORBITALS rather than the density. The resulting `dms` are then
+        // full-BZ length, so `cache_xc_kernel1`'s own unfold is a no-op.
+        let (mo_coeff, mo_occ) = self.unfold_mos(cell, mo_coeff, mo_occ, nao)?;
         let dms: Vec<KMats> = mo_coeff
             .iter()
-            .zip(mo_occ)
+            .zip(&mo_occ)
             .map(|(c, o)| pyscf_pbc_scf::krdm::make_rdm1(c, o, nao))
             .collect();
         self.cache_xc_kernel1(cell, grids, xc_code, &dms, spin)
@@ -645,6 +869,11 @@ impl KNumInt {
         v_hermi: bool,
     ) -> Result<Vec<KMats>, PbcDftError> {
         require_hermitian(hermi, "nr_rks_fxc")?;
+        // Group B (`numint.py:647-649` / `:779-781`): a symmetric k-set uses
+        // `kpts.kpts_ibz` DIRECTLY here — no unfold, unlike the five Group-A
+        // sites. Falls back to the full set under `KSet::Full`.
+        let kset = self.kpts_ibz();
+        let nk = kset.len();
         let ty = XcType::of(xc_code)?;
         let owned;
         let fxc = match fxc {
@@ -666,10 +895,10 @@ impl KNumInt {
         let nset = dms.len();
         let nvar = ty.nvar();
         let mut vmat: Vec<KMats> =
-            vec![vec![CTensor::zeros(nao * nao); self.nkpts()]; nset];
+            vec![vec![CTensor::zeros(nao * nao); nk]; nset];
 
-        for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
-            let ao = self.eval_ao(cell, &coords[p0..p1], &self.kpts, ty)?;
+        for (p0, p1) in self.block_ranges(ngrids, ty, nk) {
+            let ao = self.eval_ao(cell, &coords[p0..p1], kset, ty)?;
             let w = &weights[p0..p1];
             let block = fxc.slice(p0, p1);
             for i in 0..nset {
@@ -721,6 +950,11 @@ impl KNumInt {
         v_hermi: bool,
     ) -> Result<[Vec<KMats>; 2], PbcDftError> {
         require_hermitian(hermi, "nr_uks_fxc")?;
+        // Group B (`numint.py:647-649` / `:779-781`): a symmetric k-set uses
+        // `kpts.kpts_ibz` DIRECTLY here — no unfold, unlike the five Group-A
+        // sites. Falls back to the full set under `KSet::Full`.
+        let kset = self.kpts_ibz();
+        let nk = kset.len();
         let ty = XcType::of(xc_code)?;
         let owned;
         let fxc = match fxc {
@@ -742,12 +976,12 @@ impl KNumInt {
         let nset = dms[0].len();
         let nvar = ty.nvar();
         let mut vmat: [Vec<KMats>; 2] = [
-            vec![vec![CTensor::zeros(nao * nao); self.nkpts()]; nset],
-            vec![vec![CTensor::zeros(nao * nao); self.nkpts()]; nset],
+            vec![vec![CTensor::zeros(nao * nao); nk]; nset],
+            vec![vec![CTensor::zeros(nao * nao); nk]; nset],
         ];
 
-        for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
-            let ao = self.eval_ao(cell, &coords[p0..p1], &self.kpts, ty)?;
+        for (p0, p1) in self.block_ranges(ngrids, ty, nk) {
+            let ao = self.eval_ao(cell, &coords[p0..p1], kset, ty)?;
             let w = &weights[p0..p1];
             let block = fxc.slice(p0, p1);
             for i in 0..nset {

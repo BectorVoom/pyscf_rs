@@ -192,6 +192,16 @@ fn build_supcell(
         fractional: false,
         use_particle_mesh_ewald: cell.use_particle_mesh_ewald,
         space_group_symmetry: cell.space_group_symmetry,
+        symmorphic: cell.symmorphic,
+        // A supercell is a different lattice; any `lattice_symmetry` computed
+        // for the primitive cell does not apply to it (`super_cell` with
+        // symmetry refuses upstream too, `pbc.py:784-785` — see
+        // `crate::supercell`'s module doc / 17-CONTEXT §5).
+        lattice_symmetry: None,
+        // Ditto for the symmetry-adapted AO basis: it is a function of the
+        // primitive cell's little co-groups, which do not carry over.
+        symm_orb: None,
+        irrep_id: None,
         use_loose_rcut: cell.use_loose_rcut,
         _built: true,
         _rcut_from_build: cell._rcut_from_build,

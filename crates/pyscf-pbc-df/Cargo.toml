@@ -43,6 +43,14 @@ pyscf-chkfile   = { path = "../pyscf-chkfile" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
 
+# D-PBC-25 point 3 (17-CONTEXT §4, 17-05-PLAN.md Task 6): TYPE VISIBILITY
+# ONLY. `pyscf_pbc_symm::kpts::KPoints` is what upstream's seven
+# `isinstance(kpts, KPoints)` branches in `pbc/dft/numint.py` and the DF
+# builders switch on; this edge lets those branches NAME the type when 17-08
+# writes them. **No DF or numint behaviour changes here.** Verified acyclic:
+# `pyscf-pbc-symm -> {core, algebra, pbc-lib, pbc-tools, pbc-gto}` only.
+pyscf-pbc-symm  = { path = "../pyscf-pbc-symm" }
+
 [dev-dependencies]
 # PBC-MASTER-PLAN §9.2 reference cells for the integration tests.
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto", features = ["test-systems"] }

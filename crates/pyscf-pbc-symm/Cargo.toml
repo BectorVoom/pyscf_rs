@@ -16,3 +16,58 @@ pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+# Plan 17-02 Task 4: `group.py:character_table` (group.py:313-360) is a
+# Burnside/eigenvector computation over the (generally non-symmetric) class
+# algebra matrix `M`, which can have genuinely complex eigenpairs for point
+# groups with complex irreps (e.g. pure C3/C4/C6). `pyscf-algebra` only
+# exposes symmetric `eigh_gen` (ALG-05); this crate never touches cubecl or a
+# device tensor, so a direct host-only `faer` dependency (already pinned at
+# workspace level, used the same way by `pyscf-algebra`/`pyscf-gto`) is not an
+# ALG-06 wall violation. `num-complex` is `faer::c64`'s own underlying type
+# (faer-0.24.0 pins `num-complex = "0.4.6"`), pulled in directly so this
+# crate can construct/inspect `Complex<f64>` character values without an
+# `unsafe` transmute through faer's alias.
+faer            = { workspace = true }
+num-complex     = "0.4.6"
+# 17-05-PLAN.md Tasks 1/3/4: the star search (`O(nkpts x nop)`) and the
+# IBZ->BZ unfolds parallelise over disjoint output slots. At Gate A's
+# `nkpts = 4096` this is the difference between a fixture that runs in the
+# test suite and one that does not. Host-only rayon; no cubecl, so no ALG-06
+# wall implication.
+rayon           = { workspace = true }
+# 17-06-PLAN.md Task 1: `KsymmArray`'s out-of-core branch (`ktensor.py:78-80`,
+# upstream's `lib.H5TmpFile()`). D-07 — the HDF5 handle comes from
+# `pyscf-chkfile`, the workspace's SOLE owner of the raw HDF5 crate;
+# `pyscf-pbc-df` had a direct dependency on that crate removed for exactly this
+# reason in plan 14-03 Task 0, and 17-06's verification greps this file for it. `ndarray` is `pyscf-chkfile`'s dataset I/O array type (the same
+# dep `pyscf-ao2mo::outcore` takes). Neither pulls cubecl.
+pyscf-chkfile   = { path = "../pyscf-chkfile" }
+ndarray         = { workspace = true }
+
+[dev-dependencies]
+# PBC-MASTER-PLAN §9.2 reference cells for the integration tests — do not
+# redefine them per crate.
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
+# `tests/geom.rs`'s "simple cubic" control cell (not one of the §9.2
+# fixtures) is built directly against `pyscf-gto`'s `Mole` builder types.
+pyscf-gto       = { path = "../pyscf-gto" }
+pyscf-core      = { path = "../pyscf-core" }
+# 17-03-PLAN.md Task 6: `tests/symmetry.rs` needs ONE converged Gamma-only
+# KRHF to test `transform_mo_coeff`/`transform_dm`/`transform_1e_operator`
+# against. Dev-only — `pyscf-pbc-symm`'s real dependency graph stays exactly
+# as the module doc / D-PBC-25 describes.
+#
+# **Updated by plan 17-07:** `pyscf-pbc-scf` now DOES depend on this crate
+# (the ksymm SCF adapters, `khf_ksymm.rs`), so this dev-dependency and that
+# normal dependency form a cycle. Cargo permits it — a dev-dependency edge is
+# excluded from the build graph used to order compilation, so `cargo metadata`
+# and `cargo build` both resolve — and the LIBRARY dependency direction stays
+# exactly as D-PBC-25 ruled: `pyscf-pbc-symm` never depends on
+# `pyscf-pbc-scf` for its own compilation, only for its tests.
+pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
+pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
+num-complex     = "0.4.6"
+# 17-05: `tests/kpts_ibz.rs` / `tests/kpts_transform.rs` vary the worker
+# count inside ONE process with explicit `rayon::ThreadPool`s — a strictly
+# stronger determinism check than an env-var sweep across processes.
+rayon           = { workspace = true }

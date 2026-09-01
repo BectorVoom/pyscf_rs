@@ -97,6 +97,11 @@ pub struct Gdf {
     /// Built lazily too, and much cheaper than `cderi` — `mesh()` needs only
     /// this.
     builder: std::sync::OnceLock<CcGdfBuilder>,
+    /// Override [`CcGdfBuilder::exclude_dd_block`] / [`crate::rsdf_builder::RsGdfBuilder::exclude_dd_block`]
+    /// on whichever builder [`Gdf::prefer_ccdf`] selects. `None` keeps each
+    /// builder's own default (`false`, this port's own choice — see
+    /// `crate::gdf_builder`'s module docs; plan 17-10 Task 3).
+    pub exclude_dd_block: Option<bool>,
     /// Override the range-separated 3-centre image radius. `None` estimates it.
     pub rs_rcut: Option<f64>,
     /// Override the range-separated long-range mesh. `None` lets `_guess_omega`
@@ -124,6 +129,7 @@ impl Gdf {
             j_only: false,
             // Task 7d — upstream's default. See the field's docs.
             prefer_ccdf: false,
+            exclude_dd_block: None,
             j2c_eig_always: false,
             cderi_to_save: None,
             cderi: std::sync::OnceLock::new(),
@@ -174,6 +180,9 @@ impl Gdf {
         b.auxbasis = self.auxbasis.clone();
         b.rcut = self.rs_rcut;
         b.mesh = self.rs_mesh;
+        if let Some(v) = self.exclude_dd_block {
+            b.exclude_dd_block = v;
+        }
         b.build()?;
         let _ = self.rs_builder.set(b);
         self.rs_builder.get().ok_or_else(|| {
@@ -196,6 +205,9 @@ impl Gdf {
         let mut b = CcGdfBuilder::new(self.cell.clone(), &self.kpts);
         b.auxbasis = self.auxbasis.clone();
         b.j2c_eig_always = self.j2c_eig_always;
+        if let Some(v) = self.exclude_dd_block {
+            b.exclude_dd_block = v;
+        }
         b.build()?;
         let _ = self.builder.set(b);
         self.builder.get().ok_or_else(|| {

@@ -1,0 +1,17 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+Warning: setting symmorphic=True for low-dimensional system.
+capped meshes (cap=25 per axis): {'lif': [25, 25, 25], 'he_fcc': [25, 25, 25], 'graphene': [25, 25, 25]}
+true default meshes: {'lif': [81, 81, 81], 'he_fcc': [59, 59, 59], 'graphene': [45, 45, 351]}
+
+### broad sweep: lif, he_fcc, graphene -- KRHF, FFTDF, gamma-centred, CAPPED mesh ###
+[lif       mesh=[25, 25, 25] gamma     KRHF  FFTDF] E_sym=-31.513445206955 E_full=-31.513591272289 |dE|=1.461e-04 conv=(True,True) wall=24.9s
+[he_fcc    mesh=[25, 25, 25] gamma     KRHF  FFTDF] E_sym=-2.855647922058 E_full=-2.855647922336 |dE|=2.779e-10 conv=(True,True) wall=2.3s
+Warning: setting symmorphic=True for low-dimensional system.
+[graphene  mesh=[25, 25, 25] gamma     KRHF  FFTDF] E_sym=-15.729582802529 E_full=-16.368635608140 |dE|=6.391e-01 conv=(False,True) wall=33.7s
+
+### mesh-unpinning demonstration (17-CONTEXT §3.3), all 5 systems, CAPPED mesh baseline ###
+  si        pinned_mesh=[36, 36, 36]  natural_unpinned_mesh=[36, 36, 36]  E(pinned)=-7.526458914851  E(natural)=-7.526458914851  |dE from mesh alone|=1.776e-15
+  diamond   pinned_mesh=[48, 48, 48]  natural_unpinned_mesh=[48, 48, 48]  E(pinned)=-10.930858355314  E(natural)=-10.930858355314  |dE from mesh alone|=0.000e+00

@@ -231,6 +231,68 @@ impl Mdf {
         })
     }
 
+    /// The Gaussian half rebuilt over `kpts ∪ kpts_band` — mirrors
+    /// [`crate::gdf::jk::build_band_gdf`] but keeps MDF's OWN recipe
+    /// (`Scheme::Mixed` on the CC route, `RsGdfBuilder::new_mixed` on the RS
+    /// route). **A generic `Gdf::builder()` rebuild would be wrong here**:
+    /// MDF's Gaussian half is only ever the SHORT-range residual
+    /// `Scheme::Mixed` leaves for the plane-wave half ([`Mdf::aftdf`]) to
+    /// complete — substituting the FULL Coulomb kernel double-counts the
+    /// short/long overlap. Caught by `tests/band_kpoints.rs`'s
+    /// `mdf_get_jk_at_band_kpoints_matches_upstream` oracle gate during
+    /// 17-10's follow-up completion (a ~0.48 `vj` mismatch before this fix —
+    /// `mdf_jk`'s FIRST cut called `crate::gdf::jk::get_j_kpts_band` directly
+    /// on `self.gdf()`, which internally rebuilds with the generic recipe).
+    /// The plane-wave half needs no such care: `aft_jk::get_j_kpts_band` /
+    /// `get_k_kpts_band` take an arbitrary k-point list directly, no rebuild.
+    /// Plan 17-10 Task 4.
+    ///
+    /// # Errors
+    /// Propagates the auxiliary-cell build, as [`Mdf::gdf`].
+    fn band_gdf(
+        &self,
+        kpts: &[[f64; 3]],
+        kpts_band: &[[f64; 3]],
+    ) -> Result<(Gdf, Vec<[f64; 3]>), PbcDfError> {
+        let union = crate::gdf::jk::kpts_union(kpts, kpts_band);
+        let mesh = self.resolved_mesh()?;
+        self.refuse_unsupported()?;
+        let cderi: Cderi = if self.prefer_ccdf {
+            let mut b = CcGdfBuilder::new(self.cell.clone(), &union);
+            b.auxbasis = self.auxbasis.clone();
+            b.j2c_eig_always = true;
+            b.build()?;
+            let (Some(fused), Some(_eta)) = (b.fused.as_ref(), b.eta) else {
+                return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                    pyscf_core::CoreError::InvalidMolecule(
+                        "MDF: band builder did not build".into(),
+                    ),
+                )));
+            };
+            let rcut = crate::gdf_builder::estimate_rcut(&self.cell, &fused.fused.cell, None);
+            // `j_only = false` — K's band route always needs off-diagonal
+            // `(ki, kj)` pairs, same reasoning as `build_band_gdf`.
+            make_j3c_scheme(
+                &self.cell,
+                fused,
+                &union,
+                self.aosym,
+                mesh,
+                false,
+                true,
+                Some(rcut),
+                Scheme::Mixed,
+            )?
+        } else {
+            let mut b = crate::rsdf_builder::RsGdfBuilder::new_mixed(self.cell.clone(), &union);
+            b.auxbasis = self.auxbasis.clone();
+            b.mesh = Some(mesh);
+            b.build()?;
+            b.make_j3c(self.aosym, false)?
+        };
+        Ok((Gdf::with_cderi(self.cell.clone(), cderi), union))
+    }
+
     /// The plane-wave half: an [`Aftdf`] at MDF's mesh, with MDF's edge screen.
     ///
     /// # Errors

@@ -1,0 +1,216 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+#INFO: **** input file is /home/user/Documents/workspace/pyscf_rs/.planning/phases/17-ksymm-multigrid/measurements/gate_b.py ****
+#!/usr/bin/env python
+"""Gate B -- the transform floor, against ONE converged SCF.
+17-CONTEXT §2.2 Gate B / 17-01-PLAN.md Task 2.
+
+si (PBC-MASTER-PLAN §9.2, diamond structure, a=5.4306 Ang), gth-szv/gth-pade,
+KRKS(LDA,VWN), [3,3,3] k-mesh, conv_tol=1e-11.  transform_dm,
+transform_mo_occ, transform_mo_energy, transform_1e_operator (via get_fock),
+symmetrize_density, and make_rdm1(transform_mo_coeff(...)) against the SAME
+converged run's full-BZ arrays -- no second SCF, so no convergence noise.
+
+Do NOT compare mo_coeff elementwise (17-CONTEXT §3.1) -- recorded anyway as a
+demonstration that it IS large.
+"""
+import sys
+import numpy as np
+import pyscf
+assert pyscf.__version__ == "2.12.1", pyscf.__version__
+from pyscf.pbc import gto, scf
+from pyscf.pbc.scf import khf
+from pyscf.pbc.lib import kpts as libkpts
+
+cell = gto.Cell()
+half = 5.4306 / 2.0
+quarter = 5.4306 / 4.0
+cell.atom = f"Si 0. 0. 0.\nSi {quarter} {quarter} {quarter}"
+cell.a = [[0., half, half], [half, 0., half], [half, half, 0.]]
+cell.basis = 'gth-szv'
+cell.pseudo = 'gth-pade'
+cell.verbose = 4
+cell.build()
+
+kpts0 = cell.make_kpts([3, 3, 3])
+kmf = scf.KRKS(cell, kpts0)
+kmf.xc = 'lda,vwn'
+kmf.conv_tol = 1e-11
+kmf.kernel()
+print(f"e_tot = {kmf.e_tot!r}")
+print(f"converged = {kmf.converged}")
+
+kpts = libkpts.make_kpts(cell, kpts0, space_group_symmetry=True, time_reversal_symmetry=True)
+print(f"nkpts = {kpts.nkpts}  nkpts_ibz = {kpts.nkpts_ibz}")
+
+results = {}
+
+# transform_dm
+dms_ibz = kmf.make_rdm1()[kpts.ibz2bz]
+dms_bz = kpts.transform_dm(dms_ibz)
+results['transform_dm'] = abs(dms_bz - kmf.make_rdm1()).max()
+
+# transform_mo_coeff -> make_rdm1 (the correct comparison per 17-CONTEXT §3.1)
+mo_coeff_ibz = np.asarray(kmf.mo_coeff)[kpts.ibz2bz]
+mo_coeff_bz = kpts.transform_mo_coeff(mo_coeff_ibz)
+dms_bz2 = khf.make_rdm1(mo_coeff_bz, kmf.mo_occ)
+results['make_rdm1(transform_mo_coeff)'] = abs(dms_bz2 - kmf.make_rdm1()).max()
+
+# DEMONSTRATION ONLY -- elementwise mo_coeff comparison, expected to be LARGE
+results['mo_coeff_elementwise_DEMO_ONLY'] = abs(np.asarray(kmf.mo_coeff) - mo_coeff_bz).max()
+
+# transform_mo_occ
+mo_occ_ibz = kpts.check_mo_occ_symmetry(kmf.mo_occ)
+mo_occ_bz = kpts.transform_mo_occ(mo_occ_ibz)
+results['transform_mo_occ'] = abs(mo_occ_bz - np.asarray(kmf.mo_occ)).max()
+
+# transform_mo_energy
+mo_energy_ibz = np.asarray(kmf.mo_energy)[kpts.ibz2bz]
+mo_energy_bz = kpts.transform_mo_energy(mo_energy_ibz)
+results['transform_mo_energy'] = abs(mo_energy_bz - np.asarray(kmf.mo_energy)).max()
+
+# transform_1e_operator (fock) -- via transform_fock which calls transform_1e_operator
+fock_ibz = kmf.get_fock()[kpts.ibz2bz]
+fock_bz = kpts.transform_fock(fock_ibz)
+results['transform_1e_operator(fock)'] = abs(fock_bz - kmf.get_fock()).max()
+
+# symmetrize_density
+rho0 = kmf.get_rho()
+dms_ibz2 = kmf.make_rdm1()[kpts.ibz2bz]
+nao = dms_ibz2.shape[-1]
+rho = 0.
+for k in range(kpts.nkpts_ibz):
+    rho_k = khf.get_rho(kmf, dms_ibz2[k].reshape((-1, nao, nao)),
+                         kpts=kpts.kpts_ibz[k].reshape((-1, 3)))
+    rho += kpts.symmetrize_density(rho_k, k, cell.mesh)
+rho *= 1.0 / kpts.nkpts
+results['symmetrize_density'] = abs(rho - rho0).max()
+
+print()
+print("=== Gate B residuals (abs().max(), against the SAME converged run) ===")
+for k, v in results.items():
+    print(f"  {k:35s} {v:.6e}")
+
+print()
+expect_tight = [k for k in results if k not in ('mo_coeff_elementwise_DEMO_ONLY',)]
+worst = max(results[k] for k in expect_tight)
+print(f"worst (excluding the DEMO row) = {worst:.6e}")
+if worst < 1e-12:
+    print("All linear-map transforms land at >=1e-12 as 17-CONTEXT §2.2 expects.")
+else:
+    print("WARNING: at least one transform did NOT reach 1e-12 -- investigate before writing the gate.")
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Linux', node='fedora', release='7.1.9-200.fc44.x86_64', version='#1 SMP PREEMPT_DYNAMIC Wed Aug 19 17:41:40 UTC 2026', machine='x86_64')  Threads 16
+Python 3.13.14 (main, Jun 23 2026, 15:18:27) [Clang 22.1.3 ]
+numpy 1.26.4  scipy 1.17.1  h5py 3.16.0
+Date: Tue Sep  1 10:43:41 2026
+PySCF version 2.12.1
+PySCF path  /home/user/Documents/workspace/pyscf_rs
+GIT ORIG_HEAD f3b1e9b5695f74bc58e6b03baaf98f3ea022120f
+GIT HEAD (branch main) 0c46d3c573bfddf054c22268ee997fbf3c092f10
+
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = angstrom
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 Si     0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 Si     1.357650000000   1.357650000000   1.357650000000 AA    2.565586673016   2.565586673016   2.565586673016 Bohr   0.0
+
+nuclear repulsion = -8.39854385088435
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         2.21
+lattice vectors  a1 [0.000000000, 5.131173346, 5.131173346]
+                 a2 [5.131173346, 0.000000000, 5.131173346]
+                 a3 [5.131173346, 5.131173346, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 270.197
+rcut = 29.960198598827567 (nimgs = [6 6 6])
+precision = 1e-08
+pseudo = gth-pade
+ke_cutoff = 108.20807384760171
+    = [35 35 35] mesh (42875 PWs)
+
+
+******** <class 'pyscf.pbc.dft.krks.KRKS'> ********
+method = KRKS
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-11
+SCF conv_tol_grad = None
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /tmp/tmpaq4qwhfa
+max_memory 4000 MB (current use 103 MB)
+
+
+******** PBC SCF flags ********
+N kpts = 27
+Exchange divergence treatment (exxdiv) = ewald
+    madelung (= occupied orbital energy shift) = 0.1489218210898997
+    Total energy shift due to Ewald probe charge = -1/2 * Nelec*madelung = -0.59568728436
+DF object = <pyscf.pbc.df.fft.FFTDF object at 0x7f589aa25010>
+XC functionals = lda,vwn
+small_rho_cutoff = 1e-07
+Uniform grid, mesh = [35 35 35]
+Set gradient conv threshold to 3.16228e-06
+nelec by numeric integration = 7.999941033355826
+init E= -8.10312621131009
+HOMO = 0.224325991337  LUMO = 0.297497490059
+nelec by numeric integration = 7.999999999999788
+cycle= 1 E= -7.848761707064  delta_E= 0.254  |g|= 0.0244  |ddm|= 15.2
+HOMO = 0.23170686496  LUMO = 0.301363401982
+nelec by numeric integration = 7.999999999999789
+cycle= 2 E= -7.84878829076514  delta_E= -2.66e-05  |g|= 0.00116  |ddm|= 0.153
+HOMO = 0.231429917038  LUMO = 0.301235439966
+nelec by numeric integration = 7.9999999999997895
+cycle= 3 E= -7.84878835134618  delta_E= -6.06e-08  |g|= 3.24e-07  |ddm|= 0.00684
+HOMO = 0.231429987383  LUMO = 0.301235475327
+nelec by numeric integration = 7.999999999999788
+cycle= 4 E= -7.84878835134623  delta_E= -5.51e-14  |g|= 8.49e-08  |ddm|= 2e-06
+HOMO = 0.231429987376  LUMO = 0.301235475327
+nelec by numeric integration = 7.999999999999787
+Extra cycle  E= -7.84878835134621  delta_E= 2.22e-14  |g|= 9.73e-08  |ddm|= 7.57e-07
+converged SCF energy = -7.84878835134621
+e_tot = -7.848788351346209
+converged = True
+time reversal: True
+k-points in IBZ                         weights
+  0:  0.000000,  0.000000,  0.000000    1/27
+  1:  0.666667,  0.666667,  0.000000    6/27
+  2:  0.666667,  0.666667,  0.333333    12/27
+  3:  0.666667,  0.666667,  0.666667    8/27
+nkpts = 27  nkpts_ibz = 4
+nelec by numeric integration = 7.999999999999787
+nelec by numeric integration = 7.999999999999787
+
+=== Gate B residuals (abs().max(), against the SAME converged run) ===
+  transform_dm                        4.481327e-10
+  make_rdm1(transform_mo_coeff)       4.481327e-10
+  mo_coeff_elementwise_DEMO_ONLY      2.296247e+00
+  transform_mo_occ                    0.000000e+00
+  transform_mo_energy                 5.330547e-11
+  transform_1e_operator(fock)         2.931082e-11
+  symmetrize_density                  6.606521e-13
+
+worst (excluding the DEMO row) = 4.481327e-10
+WARNING: at least one transform did NOT reach 1e-12 -- investigate before writing the gate.

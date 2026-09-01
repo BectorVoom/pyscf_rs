@@ -1,0 +1,8 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+threads=1 run=0 e_tot=-7.526458914850943 converged=True
+threads=1 run=1 e_tot=-7.526458914850944 converged=True
+threads=8 run=0 e_tot=-7.526458914850945 converged=True
+threads=8 run=1 e_tot=-7.526458914850943 converged=True

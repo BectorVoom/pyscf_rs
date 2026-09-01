@@ -27,7 +27,7 @@
 //! once from live PySCF 2.12.1 and committed. See `tests/cell_build.rs`.
 
 use crate::cell::Cell;
-use crate::types::{ALattice, CellBuildArgs, LowDimFtType};
+use crate::types::{ALattice, CellBuildArgs, DEFAULT_PRECISION, LowDimFtType};
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
 
@@ -39,12 +39,30 @@ fn fcc(a0: f64) -> ALattice {
     ALattice::Matrix([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]])
 }
 
-/// Build a cell from Cartesian Angstrom coordinates and a `gth-szv` basis.
+/// Build a cell from Cartesian Angstrom coordinates and a `gth-szv` basis,
+/// at the default `cell.precision` (`DEFAULT_PRECISION`, 1e-8).
 fn gth_szv_cell(
     a: ALattice,
     atoms: Vec<(String, [f64; 3])>,
     pseudo: Option<&str>,
     dimension: u8,
+) -> Cell {
+    gth_szv_cell_precision(a, atoms, pseudo, dimension, DEFAULT_PRECISION)
+}
+
+/// [`gth_szv_cell`] with an explicit `cell.precision`.
+///
+/// **Always go through [`CellBuildArgs`], never through mutating
+/// `cell.precision` on an already-built cell and calling `Cell::build` the
+/// METHOD** — that path silently drops the pseudopotential and the run then
+/// dies with `Nocc (112) > Nmo (64)`. Recorded in
+/// `.planning/phases/17-ksymm-multigrid/17-04-MEASUREMENT.md` §2.
+fn gth_szv_cell_precision(
+    a: ALattice,
+    atoms: Vec<(String, [f64; 3])>,
+    pseudo: Option<&str>,
+    dimension: u8,
+    precision: f64,
 ) -> Cell {
     let mole = MoleBuildArgs {
         atom: AtomInput::Tuples(atoms),
@@ -58,6 +76,7 @@ fn gth_szv_cell(
         dimension,
         low_dim_ft_type: LowDimFtType::None,
         pseudo: pseudo.map(str::to_string),
+        precision,
         ..Default::default()
     };
     Cell::build(args).expect("reference system must build")
@@ -68,26 +87,45 @@ fn gth_szv_cell(
 /// The second carbon sits at scaled `(0.25, 0.25, 0.25)`, which for the fcc
 /// primitive lattice above is Cartesian `(a0/4, a0/4, a0/4)`.
 pub fn diamond() -> Cell {
+    diamond_precision(DEFAULT_PRECISION)
+}
+
+/// [`diamond`] at an explicit `cell.precision` (the default is
+/// `DEFAULT_PRECISION` = 1e-8).
+///
+/// Tests that assert a property of a CONVERGED SCF quantity generally need a
+/// tighter integral precision than the default: see
+/// `.planning/phases/17-ksymm-multigrid/17-04-MEASUREMENT.md`, which measured
+/// a Fock block-diagonality residual of 4.0e-10 at the default 1e-8 and
+/// 5.5e-13 at 1e-10 (with `conv_tol_grad = 1e-10`).
+pub fn diamond_precision(precision: f64) -> Cell {
     let a0 = 3.5668;
     let q = a0 / 4.0;
-    gth_szv_cell(
+    gth_szv_cell_precision(
         fcc(a0),
         vec![("C".into(), [0.0, 0.0, 0.0]), ("C".into(), [q, q, q])],
         Some("gth-pade"),
         3,
+        precision,
     )
 }
 
 /// Si2, fcc `a = 5.4306 A`, `gth-szv` / `gth-pade`. Same structure as
 /// [`diamond`]; the narrow gap exercises occupation edge cases.
 pub fn si() -> Cell {
+    si_precision(DEFAULT_PRECISION)
+}
+
+/// [`si`] at an explicit `cell.precision` — see [`diamond_precision`].
+pub fn si_precision(precision: f64) -> Cell {
     let a0 = 5.4306;
     let q = a0 / 4.0;
-    gth_szv_cell(
+    gth_szv_cell_precision(
         fcc(a0),
         vec![("Si".into(), [0.0, 0.0, 0.0]), ("Si".into(), [q, q, q])],
         Some("gth-pade"),
         3,
+        precision,
     )
 }
 

@@ -539,6 +539,57 @@ fn dumps_loads_round_trip_preserves_the_periodic_state() {
     }
 }
 
+/// 17-03-PLAN.md Task 7: `dumps_loads` carries `space_group_symmetry` but
+/// would previously drop its `symmorphic` partner silently (the field did
+/// not exist at all before this plan). Pin the round trip explicitly on a
+/// cell with `symmorphic = true` — none of the §9.2 fixtures set it, so the
+/// blanket round-trip test above cannot distinguish `true` from the
+/// (default) `false`.
+#[test]
+fn dumps_loads_round_trips_symmorphic() {
+    let args = CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![("He".into(), [0.0, 0.0, 0.0])]),
+            basis: BasisInput::Name("gth-szv".into()),
+            unit: Unit::Ang,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0]]),
+        pseudo: Some("gth-pade".to_string()),
+        symmorphic: true,
+        ..Default::default()
+    };
+    let cell = Cell::build(args).expect("cell must build");
+    assert!(cell.symmorphic);
+
+    let json = dumps(&cell).expect("dumps");
+    let back = loads(&json).expect("loads");
+    assert!(back.symmorphic, "symmorphic=true must survive dumps/loads");
+    // `lattice_symmetry` is derived, build-time-only state (see
+    // `symmetry_data`'s module doc) — it is NOT serialised, and `loads`
+    // always comes back with `None`, even if the original cell had one set.
+    assert!(back.lattice_symmetry.is_none());
+
+    // And the default (`false`) also survives — this is what every other
+    // fixture in `dumps_loads_round_trip_preserves_the_periodic_state`
+    // already exercises implicitly, made explicit here.
+    let args_default = CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![("He".into(), [0.0, 0.0, 0.0])]),
+            basis: BasisInput::Name("gth-szv".into()),
+            unit: Unit::Ang,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[3.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 0.0, 3.0]]),
+        pseudo: Some("gth-pade".to_string()),
+        ..Default::default()
+    };
+    let cell2 = Cell::build(args_default).expect("cell must build");
+    assert!(!cell2.symmorphic);
+    let back2 = loads(&dumps(&cell2).expect("dumps")).expect("loads");
+    assert!(!back2.symmorphic);
+}
+
 #[test]
 fn loads_rejects_garbage() {
     assert!(loads("not json").is_err());

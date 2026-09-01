@@ -120,7 +120,13 @@ pub struct RsGdfBuilder {
     pub mesh: Option<[usize; 3]>,
     /// The kinetic-energy cutoff `mesh` implies.
     pub ke_cutoff: Option<f64>,
-    /// **D-PBC-23.** `false` here as everywhere in this phase.
+    /// **D-PBC-23, plan 17-10 Task 3.** `false` is this port's OWN default
+    /// (deliberately not upstream's `true` — see
+    /// `crate::gdf_builder`'s module docs for why). `true` re-routes the
+    /// smooth-smooth block through
+    /// [`crate::gdf_builder::dd_block::fft_dd_block`], as for
+    /// [`crate::gdf_builder::CcGdfBuilder`], and is a fully-working, gated
+    /// opt-in.
     pub exclude_dd_block: bool,
     /// The short-range 3-centre image radius — upstream's `Int3cBuilder.rcut`.
     /// `None` uses [`omega::estimate_rcut`].
@@ -132,6 +138,9 @@ pub struct RsGdfBuilder {
     /// rather than two copies of `make_j3c`. See
     /// [`crate::gdf_builder::j3c::Scheme::RangeSeparated`] for what it changes.
     pub mixed: bool,
+    /// The decontracted cell — built only when [`Self::exclude_dd_block`] is
+    /// set. `None` until [`Self::build`].
+    pub rs_cell: Option<crate::ft_ao::rs_cell::RsCell>,
 }
 
 impl RsGdfBuilder {
@@ -151,6 +160,7 @@ impl RsGdfBuilder {
             exclude_dd_block: false,
             rcut: None,
             mixed: false,
+            rs_cell: None,
         }
     }
 
@@ -187,17 +197,8 @@ impl RsGdfBuilder {
     /// [`omega::estimate_rcut`].
     ///
     /// # Errors
-    /// [`PyscfRsError::NotYetImplemented`] `{ phase: 17 }` when
-    /// [`Self::exclude_dd_block`] is set, and propagates [`guess_omega`] and
-    /// the auxiliary-cell build.
+    /// Propagates [`guess_omega`] and the auxiliary-cell build.
     pub fn build(&mut self) -> Result<(), PbcDfError> {
-        if self.exclude_dd_block {
-            return Err(PbcDfError::Core(pyscf_core::PyscfRsError::NotYetImplemented {
-                phase: 17,
-                what: "exclude_dd_block — ft_ao._RangeSeparatedCell + _int_dd_block \
-                       (D-PBC-23), as for the compensated-charge builder",
-            }));
-        }
         // `rsdf_builder.py:137-152`. An omega set by the caller keeps its mesh
         // from `estimate_ke_cutoff_for_omega`; an unset one lets `_guess_omega`
         // balance the real-space and reciprocal-space halves against each other.
@@ -280,6 +281,15 @@ impl RsGdfBuilder {
                 (Some(_), Some(_)) => {}
             },
         }
+        if self.exclude_dd_block {
+            let ke_cutoff = self.ke_cutoff.expect("just set above");
+            self.rs_cell = Some(crate::ft_ao::rs_cell::RsCell::from_cell(
+                &self.cell,
+                Some(ke_cutoff),
+                Some(RCUT_THRESHOLD),
+                false,
+            )?);
+        }
         Ok(())
     }
 
@@ -313,7 +323,7 @@ impl RsGdfBuilder {
                 .into_iter()
                 .fold(0.0_f64, f64::max)
         });
-        crate::gdf_builder::j3c::make_j3c_scheme(
+        crate::gdf_builder::j3c::make_j3c_scheme_dd(
             &self.cell,
             &fused,
             &self.kpts,
@@ -333,6 +343,7 @@ impl RsGdfBuilder {
                 omega,
                 mixed: self.mixed,
             },
+            self.rs_cell.as_ref(),
         )
     }
 }

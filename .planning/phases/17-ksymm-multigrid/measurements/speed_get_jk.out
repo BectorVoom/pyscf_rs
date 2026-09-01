@@ -1,0 +1,13 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+nkpts = 64   nkpts_ibz = 8   ratio nkpts/nkpts_ibz = 8.000
+building FFTDF...
+[FFTDF] get_jk(full 64 kpts)  = 26.2724 s
+[FFTDF] get_jk(ibz  8 kpts)  = 0.1176 s
+[FFTDF] wall-time ratio full/ibz = 223.348x   (ideal bound nkpts/nkpts_ibz = 8.000x)
+building GDF...
+[GDF] get_jk(full 64 kpts)  = 4.5471 s
+[GDF] get_jk(ibz  8 kpts)  = 0.1136 s
+[GDF] wall-time ratio full/ibz = 40.043x   (ideal bound nkpts/nkpts_ibz = 8.000x)

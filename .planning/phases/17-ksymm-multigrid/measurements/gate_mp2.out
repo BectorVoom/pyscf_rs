@@ -1,0 +1,24 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+=== He cell, test_ksym.py's own settings ===
+e_corr (ksymm)  = -0.006584297496527223
+e_corr (full BZ) = -0.006584297496526914
+|d e_corr| = 3.096481e-16
+rdm1 max residual (ibz vs corresponding full-BZ) = 1.332268e-15
+|d E_scf| (same run) = 4.440892e-16
+
+=== si at [2,2,2], gth-szv/gth-pade, KRHF(exxdiv=None) + KMP2, density_fit ===
+e_corr (ksymm)  = -0.07857754241020318
+e_corr (full BZ) = -0.07857754347755795
+|d e_corr| = 1.067355e-09
+rdm1 max residual (ibz vs corresponding full-BZ) = 5.028450e-09
+|d E_scf| (same run) = 5.543876e-10
+
+=== ordering check: post-SCF tighter than SCF ===
+He:  |d e_corr|=3.096e-16  vs  |d E_scf|=4.441e-16  ->  post-SCF tighter: True
+si:  |d e_corr|=1.067e-09  vs  |d E_scf|=5.544e-10  ->  post-SCF tighter: False
+
+=== KRCCSD (test_kccsd_ksymm.py) ===
+unmeasured, Phase 16 not shipped -- crates/pyscf-pbc-cc/src is a 13-line stub (lib.rs + error.rs) as of this measurement (2026-09-01).

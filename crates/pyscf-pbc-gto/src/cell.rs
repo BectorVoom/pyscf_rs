@@ -25,6 +25,7 @@
 
 use crate::pseudo::PseudoData;
 use crate::types::{CellBuildArgs, LowDimFtType};
+use pyscf_algebra::CTensor;
 use pyscf_core::{CoreError, Mole, PyscfRsError};
 use std::f64::consts::PI;
 
@@ -80,8 +81,55 @@ pub struct Cell {
     pub fractional: bool,
     /// Use particle-mesh Ewald for the nuclear repulsion.
     pub use_particle_mesh_ewald: bool,
-    /// Consider space-group symmetry (not implemented before Phase 12).
+    /// Consider space-group symmetry (`cell.py:1286-1288`).
+    ///
+    /// Plan 17-03 wires this up: [`crate::symmetry_data::LatticeSymmetry`]
+    /// (produced by `pyscf_pbc_symm::symmetry::Symmetry`, which cannot live
+    /// on `Cell` directly — `pyscf-pbc-gto` sits BELOW `pyscf-pbc-symm`, so
+    /// storing a `Symmetry` here would invert that dependency) is what a
+    /// caller reads once this flag is honoured. Turning it on can also
+    /// SILENTLY CHANGE [`Cell::mesh`] (`Cell::symmetrize_mesh` may enlarge it
+    /// so it carries the lattice symmetry) and therefore the energy, for
+    /// reasons unrelated to the IBZ reduction itself — see
+    /// [`Cell::symmetrize_mesh`]'s doc comment and 17-CONTEXT §3.3.
     pub space_group_symmetry: bool,
+    /// Whether the lattice is symmorphic. If `true`, even a non-symmorphic
+    /// lattice is restricted to its symmorphic subgroup (zero fractional
+    /// translation). If `false` (the default), the space group is used as
+    /// detected — symmorphic or not. Ports `cell.py:1289-1293`; previously
+    /// missing from this port entirely.
+    pub symmorphic: bool,
+    /// The lattice symmetry info, filled by whichever caller invokes
+    /// `pyscf_pbc_symm::symmetry::build_lattice_symmetry` (that function, not
+    /// a `Cell` method, is where the layering forces it to live — see
+    /// [`Cell::space_group_symmetry`]'s doc comment). `None` until then, and
+    /// after a `dumps`/`loads` round trip (this field is NOT serialised —
+    /// see [`crate::dumps_loads`] — it is derived, build-time-only state,
+    /// like a cache, not input).
+    pub lattice_symmetry: Option<crate::symmetry_data::LatticeSymmetry>,
+    /// `cell.py:1294` (via `Mole._build_symmetry`) — symmetry-adapted AO
+    /// basis, one entry per IBZ k-point. Filled by
+    /// `pyscf_pbc_symm::basis::build_symmetry` (17-04) — the same layering
+    /// reason as [`Cell::lattice_symmetry`] keeps the producer in
+    /// `pyscf-pbc-symm`, above this crate.
+    ///
+    /// **Not a direct mirror of upstream's per-irrep `List[List[ndarray]]`.**
+    /// `symm_orb[k]` here is ONE `nao x nao` COLUMN-MAJOR (F-order) complex
+    /// matrix per IBZ k-point, with columns grouped by surviving irrep in
+    /// the order `pyscf_pbc_symm::basis::symm_adapted_basis_at_k` discovers
+    /// them (matching upstream's per-k `for ir in range(nirrep)` order).
+    /// [`Cell::irrep_id`] carries ONE entry per COLUMN (not per irrep block)
+    /// naming that column's irrep id, which makes this pair self-describing
+    /// — block boundaries are exactly the maximal runs of equal
+    /// `irrep_id[k][c]` — without needing a separate per-block width array.
+    /// See `pyscf_pbc_symm::basis`'s module doc for the full rationale
+    /// (17-04-SUMMARY.md).
+    pub symm_orb: Option<Vec<CTensor>>,
+    /// `cell.py:1295` (via `Mole._build_symmetry`) — `irrep_id[k][c]` is the
+    /// irrep index of column `c` of `symm_orb[k]`. See [`Cell::symm_orb`]'s
+    /// doc for why this is per-COLUMN rather than upstream's per-irrep-block
+    /// shape.
+    pub irrep_id: Option<Vec<Vec<i32>>>,
     /// Use the looser per-shell `rcut_by_shells` estimate instead of the
     /// most-diffuse-primitive one (`cell.py:1316`, default `false`).
     /// Read by [`crate::cutoff::estimate_rcut`].
@@ -129,6 +177,10 @@ impl Default for Cell {
             fractional: false,
             use_particle_mesh_ewald: false,
             space_group_symmetry: false,
+            symmorphic: false,
+            lattice_symmetry: None,
+            symm_orb: None,
+            irrep_id: None,
             use_loose_rcut: false,
             _built: false,
             _rcut_from_build: false,
@@ -296,6 +348,60 @@ impl Cell {
         let z: i64 = self.mol.atom_charges().iter().map(|c| *c as i64).sum();
         let n = z * nkpts as i64 - self.mol.charge as i64;
         n.max(0) as usize
+    }
+
+    /// `cell.py:1529-1550` — `symmetrize_mesh`. Returns the smallest mesh
+    /// (component-wise, no smaller than `mesh` / [`Cell::mesh`]) that carries
+    /// [`Cell::lattice_symmetry`]'s fractional translations, i.e. the mesh
+    /// [`crate::symmetry_data::check_mesh_symmetry_core`] would settle on for
+    /// EVERY op — a no-op (`self.mesh` unchanged) when `space_group_symmetry`
+    /// is off or every kept operation is symmorphic.
+    ///
+    /// # This can SILENTLY CHANGE the mesh, and therefore the energy
+    ///
+    /// A non-symmorphic space group's fractional translation is only exactly
+    /// representable on an FFT mesh compatible with it (17-CONTEXT §3.3): a
+    /// user-chosen `mesh` that is not may get ENLARGED here so
+    /// `Cell::lattice_symmetry`'s kept ops stay honest. Upstream warns loudly
+    /// when the mesh grows more than 8x AND by more than 1000 points — ported
+    /// verbatim below. **Every caller that compares two runs — with and
+    /// without `space_group_symmetry` — MUST pin the mesh on both sides**, or
+    /// the comparison measures this mesh change, not the symmetry algebra.
+    /// This applies to [`Cell::build`] itself: turning `space_group_symmetry`
+    /// on can change [`Cell::mesh`] for reasons that have nothing to do with
+    /// the IBZ reduction.
+    ///
+    /// Returns `mesh` unchanged (with no warning) when
+    /// [`Cell::lattice_symmetry`] is `None` — mirrors upstream's early return
+    /// when `not self.space_group_symmetry`.
+    pub fn symmetrize_mesh(&self, mesh: Option<[usize; 3]>) -> [usize; 3] {
+        let mesh = mesh.unwrap_or(self.mesh);
+        let Some(sym) = &self.lattice_symmetry else {
+            return mesh;
+        };
+        let ops: Vec<(bool, [f64; 3])> = sym
+            .ops
+            .iter()
+            .map(|op| (op.trans_is_zero(crate::symmetry_data::SYMPREC), op.trans))
+            .collect();
+        let (_, mesh1) = crate::symmetry_data::check_mesh_symmetry_core(
+            &ops,
+            mesh,
+            crate::symmetry_data::SYMPREC,
+        );
+        let m1size: u64 = mesh1.iter().map(|&x| x as u64).product();
+        let msize: u64 = mesh.iter().map(|&x| x as u64).product();
+        // cell.py:1541-1549 — ported verbatim.
+        if m1size > 8 * msize && m1size > 1000 + msize {
+            eprintln!(
+                "WARNING!\n  Symmetrization significantly increased the mesh size,\n  \
+                 from {mesh:?} to {mesh1:?}. This might indicate a nearly symmetric input\n  \
+                 structure, and it might cause memory issues. Consider symmetrizing your\n  \
+                 structure, increasing the symmetry tolerance `pbc_symm_space_group_symprec`,\n  \
+                 or turning off symmetry.\n\n"
+            );
+        }
+        mesh1
     }
 
     /// `rcut`, estimating it on demand when the field still carries the
@@ -541,6 +647,10 @@ impl Cell {
             fractional: args.fractional,
             use_particle_mesh_ewald: args.use_particle_mesh_ewald,
             space_group_symmetry: args.space_group_symmetry,
+            symmorphic: args.symmorphic,
+            lattice_symmetry: None,
+            symm_orb: None,
+            irrep_id: None,
             use_loose_rcut: args.use_loose_rcut,
             _built: false,
             _rcut_from_build: args.rcut.is_none(),

@@ -531,27 +531,29 @@ fn naoaux_is_uniform_across_k_pairs() {
 
 use pyscf_pbc_df::gdf_builder::CcGdfBuilder;
 
-/// D-PBC-23: the port takes the `exclude_dd_block = false` branch and REFUSES
-/// the `true` one rather than silently ignoring it. The deferral is priced —
-/// 1.835e-8 Ha on diamond, exactly 0 on He-fcc (`measurements/ddblock.py`) —
-/// and a caller who needs the last 1.8e-8 has to be told, not surprised.
+/// **Plan 17-10 Task 3 closed this.** `exclude_dd_block = true` now BUILDS
+/// and produces a correct result — see `tests/exclude_dd_block.rs` for the
+/// numeric gates (both routes against their own upstream numbers, He-fcc's
+/// exact 0). **This port's OWN default stays `false`**, deliberately not
+/// matching upstream's `true` (see `gdf_builder`'s module docs: existing
+/// oracle gates tighter than 1e-8 were built against the `false` route, and
+/// this plan did not have the budget to re-verify all of them against
+/// `true`'s slightly different numbers). This test pins the seam: both
+/// values of the flag build without error.
 #[test]
-fn exclude_dd_block_is_refused_not_ignored() {
+fn exclude_dd_block_both_routes_build() {
     let cell = common::he_all_electron();
     let k = kpts(&cell, [1, 1, 1]);
     let mut b = CcGdfBuilder::new(cell, &k);
-    assert!(!b.exclude_dd_block, "the port's default is false");
-    assert!(b.build().is_ok(), "the false branch builds");
+    assert!(!b.exclude_dd_block, "this port's own default is false");
+    assert!(b.build().is_ok(), "the false (default) branch builds");
+    assert!(b.make_j3c(Aosym::S1, false).is_ok());
 
     let cell = common::he_all_electron();
     let mut b = CcGdfBuilder::new(cell, &k);
     b.exclude_dd_block = true;
-    let e = b.build().expect_err("the true branch must be refused");
-    let msg = format!("{e}");
-    assert!(
-        msg.contains("exclude_dd_block") || msg.contains("not yet implemented"),
-        "the refusal must name what is missing, got: {msg}"
-    );
+    assert!(b.build().is_ok(), "the true (opt-in) branch also builds");
+    assert!(b.make_j3c(Aosym::S1, false).is_ok());
 }
 
 /// The builder wires `guess_eta` off the AUXCELL and reproduces the standalone

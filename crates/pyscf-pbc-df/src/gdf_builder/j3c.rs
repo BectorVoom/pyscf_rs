@@ -515,6 +515,39 @@ pub fn make_j3c_scheme(
     rcut: Option<f64>,
     scheme: Scheme,
 ) -> Result<Cderi, PbcDfError> {
+    make_j3c_scheme_dd(
+        cell, fused, kpts, aosym, mesh, j_only, j2c_eig_always, rcut, scheme, None,
+    )
+}
+
+/// [`make_j3c_scheme`] plus D-PBC-23's `exclude_dd_block` correction — plan
+/// 17-10 Task 3. `dd_correction = Some(rs_cell)` re-routes the smooth-smooth
+/// block of the real-space pass through [`crate::gdf_builder::dd_block`]:
+/// subtract what the direct lattice sum computed for that block and add back
+/// what upstream's FFT route computes instead. `dd_correction = None`
+/// reproduces [`make_j3c_scheme`] exactly (this port's previous, still-valid,
+/// `exclude_dd_block = false` behaviour).
+///
+/// A `rs_cell` with no SMOOTH shell at all (He-fcc/`sto-3g`, D-PBC-23's
+/// all-electron control) makes [`crate::gdf_builder::dd_block::fft_dd_block`]
+/// return an empty correction, so the two routes are bit-identical there BY
+/// CONSTRUCTION — not merely close.
+///
+/// # Errors
+/// As [`make_j3c_scheme`], plus the smooth-cell real-space and FFT passes.
+#[allow(clippy::too_many_arguments)]
+pub fn make_j3c_scheme_dd(
+    cell: &Cell,
+    fused: &FusedCell,
+    kpts: &[[f64; 3]],
+    aosym: Aosym,
+    mesh: [usize; 3],
+    j_only: bool,
+    j2c_eig_always: bool,
+    rcut: Option<f64>,
+    scheme: Scheme,
+    dd_correction: Option<&crate::ft_ao::rs_cell::RsCell>,
+) -> Result<Cderi, PbcDfError> {
     let nkpts = kpts.len();
     let naux = fused.naux();
     let nao = cell.mol.nao_nr;
@@ -627,8 +660,46 @@ pub fn make_j3c_scheme(
         Scheme::CompensatedCharge | Scheme::Mixed => None,
         Scheme::RangeSeparated { omega, .. } => Some(-omega),
     };
-    let realspace_all =
+    let mut realspace_all =
         outcore_auxe2(cell, fused, aosym, &flat_pairs, rcut, realspace_omega)?;
+
+    // D-PBC-23's `exclude_dd_block` correction (plan 17-10 Task 3): re-route
+    // the smooth-smooth block from the real-space sum above into an FFT.
+    if let Some(rs_cell) = dd_correction {
+        let smooth = rs_cell.smooth_basis_cell()?;
+        if smooth.mol.nao_nr > 0 {
+            let smooth_ao_idx = rs_cell.smooth_ao_indices();
+            let dd_rs = outcore_auxe2(&smooth, fused, aosym, &flat_pairs, rcut, realspace_omega)?;
+            let dd_fft = crate::gdf_builder::dd_block::fft_dd_block(
+                &smooth,
+                &fused.auxcell.cell,
+                aosym,
+                &flat_pairs,
+                realspace_omega,
+            )?;
+            let nao_d = smooth.mol.nao_nr;
+            for p in 0..flat_pairs.len() {
+                for mu_d in 0..nao_d {
+                    for nu_d in 0..nao_d {
+                        let Some(row_d) = pair_row(aosym, nao_d, mu_d, nu_d) else {
+                            continue;
+                        };
+                        let mu = smooth_ao_idx[mu_d];
+                        let nu = smooth_ao_idx[nu_d];
+                        let Some(row_full) = pair_row(aosym, nao, mu, nu) else {
+                            continue;
+                        };
+                        for c in 0..naux {
+                            realspace_all[p].re[row_full * naux + c] +=
+                                dd_fft[p].re[row_d * naux + c] - dd_rs[p].re[row_d * naux + c];
+                            realspace_all[p].im[row_full * naux + c] +=
+                                dd_fft[p].im[row_d * naux + c] - dd_rs[p].im[row_d * naux + c];
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let uniq_kpts: Vec<[f64; 3]> = groups.iter().map(|g| g.kpt).collect();
     let j2c_all = match scheme {

@@ -19,6 +19,13 @@ pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
+# Plan 17-11: the multigrid collocation kernel lives in pyscf-kernels
+# (D-PBC-25 corollary / ALG-06) — this crate calls its plain host-facing
+# launcher (`pyscf_kernels::collocate`), never a `cubecl::*` type directly, so
+# `check_dependency_wall` (which polices `cubecl-*` deps only) stays green.
+# Same pattern `pyscf-pbc-df` (`ft_aopair`) and `pyscf-pbc-gto` (`eval_ao_k`)
+# already use.
+pyscf-kernels   = { path = "../pyscf-kernels" }
 thiserror       = { workspace = true }
 # W-06 (`.planning/pbc/KRKS-OPTIMISATION-PLAN.md`): the `numint` grid
 # contractions are parallelised over DISJOINT output rows. Each output cell's
@@ -26,6 +33,15 @@ thiserror       = { workspace = true }
 # it D-PBC-17's thread-count invariance — is preserved exactly.
 rayon           = { workspace = true }
 tracing         = { workspace = true }
+
+# D-PBC-25 point 3 (17-CONTEXT §4, 17-05-PLAN.md Task 6): TYPE VISIBILITY
+# ONLY. `pyscf_pbc_symm::kpts::KPoints` is what upstream's seven
+# `isinstance(kpts, KPoints)` branches in `pbc/dft/numint.py` and the DF
+# builders switch on; this edge lets those branches NAME the type when 17-08
+# writes them. **No DF or numint behaviour changes here.** Verified acyclic:
+# `pyscf-pbc-symm -> {core, algebra, pbc-lib, pbc-tools, pbc-gto}` only.
+pyscf-pbc-symm  = { path = "../pyscf-pbc-symm" }
+num-complex     = "0.4.6"
 
 [dev-dependencies]
 pyscf-gto       = { path = "../pyscf-gto" }

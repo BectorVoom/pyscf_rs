@@ -5865,6 +5865,7 @@ dependencies = [
  "pyscf-kernels",
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
+ "pyscf-pbc-symm",
  "pyscf-pbc-tools",
  "rayon",
  "serde_json",
@@ -5876,15 +5877,18 @@ dependencies = [
 name = "pyscf-pbc-dft"
 version = "0.1.0"
 dependencies = [
+ "num-complex",
  "pyscf-algebra",
  "pyscf-core",
  "pyscf-dft",
  "pyscf-grids",
  "pyscf-gto",
+ "pyscf-kernels",
  "pyscf-pbc-df",
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
  "pyscf-pbc-scf",
+ "pyscf-pbc-symm",
  "pyscf-pbc-tools",
  "rayon",
  "serde_json",
@@ -6033,6 +6037,7 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "ndarray",
+ "num-complex",
  "pyscf-algebra",
  "pyscf-chkfile",
  "pyscf-core",
@@ -6041,6 +6046,7 @@ dependencies = [
  "pyscf-pbc-df",
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
+ "pyscf-pbc-symm",
  "pyscf-pbc-tools",
  "pyscf-scf",
  "serde_json",
@@ -6052,11 +6058,19 @@ dependencies = [
 name = "pyscf-pbc-symm"
 version = "0.1.0"
 dependencies = [
+ "faer",
+ "ndarray",
+ "num-complex",
  "pyscf-algebra",
+ "pyscf-chkfile",
  "pyscf-core",
+ "pyscf-gto",
+ "pyscf-pbc-df",
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
+ "pyscf-pbc-scf",
  "pyscf-pbc-tools",
+ "rayon",
  "thiserror 2.0.18",
  "tracing",
 ]
