@@ -35,5 +35,11 @@ This protocol is activated immediately upon detecting any failure related to `cu
 3.  **Align Communication:** When reporting the issue or proposing a fix, format your explanation to strictly align with the structure and terminology defined in the manual.
 4.  **Document and Prevent:** Once resolved, document the root cause, specific resolution steps, verification results, and prevention measures in strict accordance with the manual's template.
 
+## treefinder cli
+The `treefinder` cli tool is used to find cubecl manuals
+
+
 ## Cubecl manual
 /home/user/Documents/workspace/cubecl_manual/manual/Cubecl
+
+Do not need to check FMA
