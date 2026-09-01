@@ -702,3 +702,104 @@ ALG-06   check-dependency-wall PASS
 Suites   cargo test -p pyscf-pbc-df -p pyscf-pbc-dft -p pyscf-pbc-scf --release
          — 0 failures
 ```
+
+
+---
+
+# The 2-ulp PBE0 wobble — RESOLVED (2026-09-01)
+
+Erratum E-10 recorded an unexplained 2-ulp move in `KRKS Si 2×2×2 PBE0`:
+`-7.796816043923375` in the earlier gate runs of 2026-08-31,
+`-7.796816043923377` afterwards. It is now explained, and **nothing in this
+repository caused it.**
+
+## The instrument
+
+`crates/pyscf-bench/src/bin/krks_repro.rs` — the gate is the wrong tool for
+this: it spends most of its wall time shelling out to upstream PySCF, runs
+seven SCFs concurrently, and prints one number per case. The probe reproduces
+`gate.rs::krks_si_222_pbe0_matches_upstream` exactly (`tight()`:
+`conv_tol = 1e-12`, `conv_tol_grad = 1e-8`, `max_cycle = 60`) with no oracle,
+and prints raw bits for `e_tot`/`e_elec`/`e_coul`/`e_nuc`, the `mo_energy`
+fingerprint, **and the SCF cycle count** — the first thing to rule out, because
+one extra iteration explains a last-digit move without any reduction being at
+fault.
+
+## What it ruled out, in order
+
+1. **Run-to-run nondeterminism — NO.** Three sequential runs in one process and
+   three *concurrent* runs on separate threads (the gate's own shape) are all
+   bit-identical: `cycles = 6`, `e_tot` bits `0xc01f2ff08b8650e6`. D-PBC-17 is
+   not violated.
+2. **Anything in `pyscf_rs` — NO.** Bisected with the probe by checking out
+   `crates/` + `xtask/` at each commit: **`d548af4` (pre-session), `9bf0fb2`
+   (W-02b) and HEAD all give `…377` today.** Every commit of that session is
+   PBE0-neutral. The earlier `…375` builds differed from these only in the
+   *external* dependencies.
+3. **FMA contraction — NO.** `check-no-fma` was extended to `pyscf-pbc-gto`,
+   `-df` and `-tools`; all clean.
+4. **The `Tr(dm·v)` reductions — NO.** Routing them through `oracle_sum` is
+   provably bit-identical at `nao = 8` (see the previous section), and PBE0
+   still reads `…377`.
+
+## The cause
+
+**`libxc_rs` is an unpinned path dependency on a sibling working tree that was
+under active development throughout the session, and it is the XC evaluator the
+gate runs through.**
+
+`crates/pyscf-dft/Cargo.toml` has `default = ["libxc"]`, so:
+
+```
+cargo tree -p pyscf-pbc-dft -i libxc-reval
+libxc-reval <- libxc-compat <- libxc_rs <- pyscf-dft <- pyscf-pbc-dft
+```
+
+The root `Cargo.toml` asserted the exact opposite — *"Nothing in the default dep
+graph names libxc_rs … PROVEN by `cargo tree -p pyscf-dft` (0 libxc_rs)"* — and
+that claim is false. **Corrected in this commit**, with the verification command
+inline, because believing it is what made the external tree invisible as a
+suspect for a day.
+
+The change itself: `libxc_rs` gained
+`4395787e90 "fix(math): close approximate-rmath hole; enforce bit-exact
+transcendentals"` (2026-08-31 22:01), whose own commit message reports that the
+kernels had been calling rmath's **Fast** transcendentals against a 1e-12
+contract, diverging from glibc by **up to 4 ulp on `ln` (22 % of inputs), 2 ulp
+on `atan` (25 %)**, plus `exp` and `cbrt`. `target/release`'s `liblibxc_reval`
+was rebuilt 08-31 17:19 and `liblibxc_rkernel_math` 09-01 08:02/08:45 — inside
+the session. A few-ulp change inside the functional, propagated through six SCF
+cycles, is exactly a 2-ulp move in the total.
+
+**The discriminator across the gate cases fits.** `KRHF` is the only case with
+no XC evaluation at all, and it is the only case whose energy did not move.
+
+**Why PBE0 and not PBE.** The gate's `conv_tol` is 1e-12, so the last three
+digits of a converged energy are not pinned by the convergence criterion; PBE0
+is the only gate case that combines a GGA functional with exact exchange, so it
+has the most amplification. PBE moved by less than an ulp; LDA moved by one.
+
+## What could not be shown
+
+A direct A/B against `libxc_rs`'s parent commit. `4395787e90^` is
+`31fd1ff47f` (2026-08-21), ten days earlier, and its `libxc-reval` does not
+compile the GGA kernel family at all (`UnsupportedFunctional … "GGA family not
+compiled in this build"`), so it cannot run PBE0. The `…375` build therefore
+used an intermediate *uncommitted* state of `libxc_rs` that no longer exists.
+That is the finding, not a gap in it: **an unpinned path dependency's
+intermediate states are unrecoverable, so a residual measured against one is
+not reproducible.**
+
+## Consequences
+
+* The gate's residuals are only meaningful together with the sibling revisions
+  that produced them. `krks_repro` now prints `libxc_rs`, `cintx` and
+  `xcfun_rs` HEAD plus their uncommitted-file counts on every run. **The gate
+  itself should print the same three lines** — a four-line change to
+  `tests/common/mod.rs`, not made here because it changes gate output and that
+  is the user's call.
+* When a residual moves and nothing here changed, check
+  `git -C ../libxc_rs log`, `../cintx`, `../xcfun_rs` **first**.
+* Longer term the honest fix is to pin these (submodule, or a vendored
+  revision), because "our 1e-11 gate" currently means "our 1e-11 gate against
+  whatever is in the neighbouring directory today".

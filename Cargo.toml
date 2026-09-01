@@ -156,16 +156,40 @@ debug = 1
 # upstream-fix path) and Phase 2/3 needs CI parity.
 [patch.crates-io]
 cintx     = { path = "../cintx" }
-# Re-enabled behind the `libxc` feature (Phase 4 plan 04-10, Pitfall 5). This
-# entry is INERT in the default build: the only consumer is `pyscf-dft`'s
-# `libxc_rs = { ..., optional = true }` dep, gated by the off-by-default
-# `libxc` feature (crates/pyscf-dft/Cargo.toml). Nothing in the default dep
+# Re-enabled behind the `libxc` feature (Phase 4 plan 04-10, Pitfall 5).
+#
+# ### CORRECTION 2026-09-01 — this entry is NOT inert, and libxc IS in the
+# ### default dependency graph.
+#
+# The comment that stood here claimed the opposite: "Nothing in the default dep
 # graph names libxc_rs, so `cargo build --workspace` (default) compiles ZERO
-# `libxc-kernel-*` crates — PROVEN by `cargo tree -p pyscf-dft` (0 libxc_rs)
-# in CI. The ~6h/266-kernel libxc compile runs ONLY in the dedicated cached
-# `dft-libxc-bitexact` CI job (`--features libxc`), which itself stays DISABLED
-# (workflow_dispatch / if:false) until 04-02's PENDING_LIBXC_RS_FEATURE_GATE
-# lands the per-functional feature gate. NEVER run a default `cargo build` that
-# names libxc_rs locally.
+# `libxc-kernel-*` crates — PROVEN by `cargo tree -p pyscf-dft` (0 libxc_rs)".
+# That is false, and was false at the time: `crates/pyscf-dft/Cargo.toml` has
+# `default = ["libxc"]`, so the optional dep is enabled by DEFAULT. Verify with
+#
+#     cargo tree -p pyscf-pbc-dft -i libxc-reval
+#     # libxc-reval <- libxc-compat <- libxc_rs <- pyscf-dft <- pyscf-pbc-dft
+#
+# This matters because `libxc_rs` is an UNPINNED PATH DEPENDENCY on a sibling
+# working tree, and it is the XC evaluator the Phase-12 accuracy gate runs
+# through. Anything that changes there changes the gate's residuals with no
+# corresponding commit in THIS repository. That is not hypothetical: chasing a
+# 2-ulp move in `KRKS Si 2x2x2 PBE0` on 2026-08-31/09-01 established that no
+# commit in this repo caused it (every commit of that session reproduces the
+# same energy today) and that `libxc_rs` had gained
+# `4395787e90 "fix(math): close approximate-rmath hole; enforce bit-exact
+# transcendentals"` — whose own message reports the previous kernels diverged
+# from glibc by up to 4 ulp on `ln` and 2 ulp on `atan`. Write-up:
+# `.planning/pbc/SUMMARY.md` §"The 2-ulp PBE0 wobble".
+#
+# So: when a gate residual moves and nothing here changed, check the sibling
+# trees FIRST (`git -C ../libxc_rs log`, `../cintx`, `../xcfun_rs`).
+# `cargo run -p pyscf-bench --release --bin krks_repro` prints their revisions
+# alongside the energy for exactly this reason.
+#
+# The ~6h/266-kernel FULL libxc compile still runs only in the dedicated cached
+# `dft-libxc-bitexact` CI job; the default build compiles the far smaller
+# `libxc-reval` rayon kernel set, which is what the ~5-minute rebuild in a
+# normal `cargo test -p pyscf-pbc-dft` actually is.
 libxc_rs  = { path = "../libxc_rs" }
 xcfun_rs  = { path = "../xcfun_rs/crates/xcfun-rs", package = "xcfun-rs" }

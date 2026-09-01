@@ -1042,4 +1042,22 @@ energies did not move; 1.3–7.9× better mean accuracy past that, measured over
 400 ill-conditioned trials per size. See `SUMMARY.md` §"Follow-up".
 
 **It did not explain the 2-ulp wobble** — being bit-identical at `nao = 8`, it
-could not have. That observation remains open.
+could not have.
+
+### E-10a — the wobble, RESOLVED 2026-09-01: it was not this repository
+
+Chased with `crates/pyscf-bench/src/bin/krks_repro.rs`. It is **not**
+run-to-run nondeterminism (three sequential and three concurrent SCFs in one
+process are bit-identical, `cycles = 6`), and **not** anything in `pyscf_rs`:
+bisected with the probe, `d548af4` (pre-session), `9bf0fb2` and HEAD all give
+`…377` today.
+
+The cause is that **`libxc_rs` is an unpinned path dependency on a sibling
+working tree under active development, and it IS in the default dependency
+graph** (`pyscf-dft` has `default = ["libxc"]`;
+`cargo tree -p pyscf-pbc-dft -i libxc-reval` shows the edge). The root
+`Cargo.toml` claimed the opposite; that claim was false and is now corrected.
+`libxc_rs` gained `4395787e90 "enforce bit-exact transcendentals"` mid-session,
+whose own message reports the previous kernels diverged from glibc by up to
+**4 ulp on `ln`**. `KRHF` — the only gate case with no XC — is the only one
+that did not move. Full write-up in `SUMMARY.md` §"The 2-ulp PBE0 wobble".
