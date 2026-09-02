@@ -321,13 +321,82 @@ fn get_gga_vrho_gs_matches_documented_formula() {
         let sub_im = fac * dot_re;
         let expect_re = (v_orig.re[p] - sub_re) * weight;
         let expect_im = (v_orig.im[p] - sub_im) * weight;
+        assert!((v.re[p] - expect_re).abs() < 1e-14, "re mismatch at p={p}");
+        assert!((v.im[p] - expect_im).abs() < 1e-14, "im mismatch at p={p}");
+    }
+}
+
+/// The grouped (one `exp` per instance × point) kernel [`collocate_pairs`]
+/// dispatches to for instance-grouped tables must be BIT-IDENTICAL to the
+/// per-slot reference kernel — same operations in the same order per output
+/// element. This is what lets `pyscf-pbc-dft`'s v2 driver take the ~`slots
+/// per instance` speedup without a numerical seam.
+#[test]
+fn grouped_kernel_is_bit_identical_to_per_slot() {
+    let client = pyscf_algebra::select_backend().expect("backend").client;
+    let mut rng = Xs(0x5EED_1234_ABCD_0001);
+    let (table, _ci, _cj) = random_table(&mut rng, 7, 5, 4, 6);
+    let grouped = pyscf_kernels::collocate_pairs(&client, &table).expect("grouped");
+    let per_slot = pyscf_kernels::collocate_pairs_per_slot(&client, &table).expect("per-slot");
+    assert_eq!(grouped.len(), per_slot.len());
+    assert_eq!(
+        grouped, per_slot,
+        "grouped kernel diverged from the per-slot reference"
+    );
+}
+
+/// The fused-reduction kernels against the materialised per-slot values:
+/// `rho[g] == Σ_slot vals[slot,g]` and `I[slot] == Σ_g w[g]·vals[slot,g]`.
+/// The summation ORDER differs (sequential in-kernel vs host), so this is
+/// a rounding-level tolerance, not bit identity; the adjoint identity below
+/// then ties the two fused kernels to each other with no reference at all.
+#[test]
+fn fused_rho_and_integrate_match_per_slot_values() {
+    let client = pyscf_algebra::select_backend().expect("backend").client;
+    let mut rng = Xs(0x0F0F_1234_5678_9ABC);
+    let (table, _ci, _cj) = random_table(&mut rng, 9, 4, 3, 5);
+    let ngrids = table.coords.len() / 3;
+    let nslots = table.slot_pow.len() / 3;
+    let vals = pyscf_kernels::collocate_pairs(&client, &table).expect("per-slot");
+    let rho = pyscf_kernels::collocate_pairs_rho(&client, &table).expect("rho");
+    assert_eq!(rho.len(), ngrids);
+    for g in 0..ngrids {
+        let want: f64 = (0..nslots).map(|s| vals[s * ngrids + g]).sum();
         assert!(
-            (v.re[p] - expect_re).abs() < 1e-14,
-            "re mismatch at p={p}"
-        );
-        assert!(
-            (v.im[p] - expect_im).abs() < 1e-14,
-            "im mismatch at p={p}"
+            (rho[g] - want).abs() <= 1e-13 * (1.0 + want.abs()),
+            "rho[{g}] = {} vs {want}",
+            rho[g]
         );
     }
+    let w: Vec<f64> = (0..ngrids).map(|_| rng.f64_in(-1.0, 1.0)).collect();
+    let integ = pyscf_kernels::collocate_pairs_integrate(&client, &table, &w).expect("integrate");
+    assert_eq!(integ.len(), nslots);
+    for s in 0..nslots {
+        let want: f64 = (0..ngrids).map(|g| w[g] * vals[s * ngrids + g]).sum();
+        assert!(
+            (integ[s] - want).abs() <= 1e-13 * (1.0 + want.abs()),
+            "I[{s}] = {} vs {want}",
+            integ[s]
+        );
+    }
+}
+
+/// `<integrate(w), 1> == <w, rho>` for the FUSED kernels — the same
+/// oracle-free adjoint identity Task 2 wrote first, now on the pair that
+/// the v2 driver actually launches.
+#[test]
+fn fused_kernels_satisfy_adjoint_identity() {
+    let client = pyscf_algebra::select_backend().expect("backend").client;
+    let mut rng = Xs(0xADD0_1234_0000_7777);
+    let (table, _ci, _cj) = random_table(&mut rng, 11, 6, 3, 6);
+    let ngrids = table.coords.len() / 3;
+    let w: Vec<f64> = (0..ngrids).map(|_| rng.f64_in(-1.0, 1.0)).collect();
+    let rho = pyscf_kernels::collocate_pairs_rho(&client, &table).expect("rho");
+    let integ = pyscf_kernels::collocate_pairs_integrate(&client, &table, &w).expect("integrate");
+    let lhs: f64 = integ.iter().sum();
+    let rhs: f64 = w.iter().zip(&rho).map(|(a, b)| a * b).sum();
+    assert!(
+        (lhs - rhs).abs() <= 1e-13 * (1.0 + lhs.abs()),
+        "adjoint identity broken: {lhs} vs {rhs}"
+    );
 }

@@ -167,7 +167,8 @@ impl KOverrideHooks for Kghf {
             1,
             mode,
             &scalar_s,
-            self.cell().tot_electrons(nkpts) as f64,
+            &[self.cell().tot_electrons(nkpts) as f64],
+            0,
         )?;
         let _ = s1e;
         let mut out = Vec::with_capacity(nkpts);

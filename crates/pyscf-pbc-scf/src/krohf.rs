@@ -234,13 +234,18 @@ impl KOverrideHooks for Krohf {
 
     fn get_init_guess(&self, mode: &KInitGuess, s1e: &KMats) -> Result<KDms, PyscfRsError> {
         let (na, nb) = self.nelec()?;
+        // `krohf.py:265` reuses `kuhf.KUHF.get_init_guess`, so the PER-CHANNEL
+        // renormalisation applies — but `:267-270` route minao/atom/huckel
+        // through `pbcrohf.ROHF.*`, which never breaks the spin symmetry.
+        // Hence `breaksym = 0`.
         crate::init_guess::get_init_guess(
             self.cell(),
             self.kpts().len(),
             2,
             mode,
             s1e,
-            (na + nb) as f64,
+            &[na as f64, nb as f64],
+            0,
         )
     }
 

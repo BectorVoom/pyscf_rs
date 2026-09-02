@@ -233,3 +233,147 @@ fn ao_symmetry_eig_matches_the_plain_route_on_identical_inputs() {
         worst_at.1
     );
 }
+
+// ---------------------------------------------------------------------------
+// S-02 — the `get_jk` routes.
+//
+// `.planning/pbc/KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md` §2.2.3. 17-07 Task
+// 6 shipped `JkRoute` with a second route and recorded that its equivalence
+// test "is NOT yet validated"; these two tests are that validation, and they
+// come to opposite conclusions about the two candidate routes. Both compare
+// route against route on ONE density inside one process (RULE K, and the
+// 17-10 Task 4 idiom) — never two SCFs, and never against upstream.
+// ---------------------------------------------------------------------------
+
+/// A converged IBZ density to feed both routes. Converged with the REFERENCE
+/// route, so neither candidate route influenced the state they are compared
+/// on.
+fn converged_ibz_density(cell: &Cell, kpts: &KPoints) -> Vec<Vec<pyscf_algebra::CTensor>> {
+    let mf = adapter(cell, kpts, true);
+    let r = mf.kernel(&cfg()).expect("reference-route SCF");
+    assert!(r.converged, "the fixture SCF must converge");
+    r.dm
+}
+
+/// **The saving that is real.** `kpts_band = kpts_ibz` computes
+/// `nkpts * nkpts_ibz` exchange pairs instead of `nkpts^2` and must return
+/// exactly what the reference route returned after its fold — the same terms,
+/// in the same order, at the same output points.
+///
+/// Asserted at `to_bits()` rather than at 1e-13: this is not "two routes that
+/// should agree numerically", it is the same arithmetic with `nkpts -
+/// nkpts_ibz` output points that were being computed and discarded no longer
+/// computed. Anything other than bit-identity is a `kpts_band` defect, and a
+/// 1e-13 gate would hide it.
+#[test]
+fn band_route_matches_reference_route_bit_exact() {
+    use pyscf_pbc_scf::KOverrideHooks;
+    use pyscf_pbc_scf::khf_ksymm::JkRoute;
+
+    let (cell, kpts) = build([2, 2, 2]);
+    let dms = converged_ibz_density(&cell, &kpts);
+
+    let mut mf = adapter(&cell, &kpts, true);
+    mf.jk_route = JkRoute::Reference;
+    let reference = mf.get_veff(&dms).expect("reference get_veff");
+    mf.jk_route = JkRoute::Band;
+    let band = mf.get_veff(&dms).expect("band get_veff");
+
+    assert_eq!(reference.len(), band.len(), "channel count differs");
+    assert_eq!(
+        reference[0].len(),
+        kpts.nkpts_ibz(),
+        "the reference route must return IBZ-length matrices"
+    );
+    assert_eq!(
+        band[0].len(),
+        kpts.nkpts_ibz(),
+        "the band route must return IBZ-length matrices with no fold"
+    );
+
+    let mut worst = 0.0_f64;
+    for (k, (a, b)) in reference[0].iter().zip(&band[0]).enumerate() {
+        for i in 0..a.re.len() {
+            worst = worst
+                .max((a.re[i] - b.re[i]).abs())
+                .max((a.im[i] - b.im[i]).abs());
+            assert_eq!(
+                a.re[i].to_bits(),
+                b.re[i].to_bits(),
+                "veff[{k}].re[{i}] differs between the reference and band \
+                 routes ({} vs {}). The band route computes the SAME terms for \
+                 a subset of the OUTPUT points, so this is a kpts_band defect, \
+                 not a tolerance question.",
+                a.re[i],
+                b.re[i]
+            );
+            assert_eq!(a.im[i].to_bits(), b.im[i].to_bits(), "veff[{k}].im[{i}] differs");
+        }
+    }
+    println!(
+        "band vs reference: BIT-IDENTICAL over {} IBZ k-points (max |d| = {worst:e}); \
+         pair count {} -> {} ({}x fewer)",
+        kpts.nkpts_ibz(),
+        kpts.nkpts() * kpts.nkpts(),
+        kpts.nkpts() * kpts.nkpts_ibz(),
+        kpts.nkpts() as f64 / kpts.nkpts_ibz() as f64
+    );
+}
+
+/// **The saving that is not real** — the measurement that disproves D-PBC-26
+/// point 1, recorded so it cannot be re-adopted on a loose gate.
+///
+/// 17-CONTEXT §8 point 1 rules that `get_jk` should be called at `kpts_ibz`
+/// only and the result unfolded with `transform_1e_operator`, citing a
+/// measured 40x/223x. That measurement compared a full-BZ `get_jk` against an
+/// IBZ-only `get_jk` **that computes a different quantity**: the Coulomb
+/// density built from an IBZ k-list is `Σ_{k∈IBZ} rho_k / N_ibz`, while the
+/// true density is `Σ_{k∈IBZ} w_k <rho_k>_star`, and `rho_k(r)` is not
+/// point-group invariant. See `JkRoute::IbzOnly`'s doc for the full argument.
+///
+/// This test asserts the disagreement is LARGE — a lower bound, deliberately,
+/// so that "it got closer" can never be mistaken for "it works".
+#[test]
+fn ibz_only_get_jk_is_not_an_identity() {
+    use pyscf_pbc_scf::KOverrideHooks;
+    use pyscf_pbc_scf::khf_ksymm::JkRoute;
+
+    let (cell, kpts) = build([2, 2, 2]);
+    // The fixture must have unequal stars, or the two quantities coincide by
+    // accident and this test would pass for the wrong reason. `si [2,2,2]`
+    // measures [1, 3, 4] of 8.
+    let sizes: Vec<usize> = kpts.stars.iter().map(Vec::len).collect();
+    assert!(
+        sizes.iter().any(|&n| n != sizes[0]),
+        "the fixture's stars are all the same size {sizes:?} — the IBZ-only \
+         route degenerates to the correct one there and this test would be \
+         vacuous"
+    );
+
+    let dms = converged_ibz_density(&cell, &kpts);
+    let mut mf = adapter(&cell, &kpts, true);
+    mf.jk_route = JkRoute::Reference;
+    let reference = mf.get_veff(&dms).expect("reference get_veff");
+    mf.jk_route = JkRoute::IbzOnly;
+    let ibz_only = mf.get_veff(&dms).expect("ibz-only get_veff");
+
+    let mut worst = 0.0_f64;
+    for (a, b) in reference[0].iter().zip(&ibz_only[0]) {
+        for i in 0..a.re.len() {
+            worst = worst
+                .max((a.re[i] - b.re[i]).abs())
+                .max((a.im[i] - b.im[i]).abs());
+        }
+    }
+    println!(
+        "MEASUREMENT (S-02): IBZ-only get_jk vs the reference route, si [2,2,2], \
+         stars {sizes:?}  ->  max |d veff| = {worst:e}"
+    );
+    assert!(
+        worst > 1e-6,
+        "the IBZ-only route agreed with the reference route to {worst:e}. \
+         S-02's derivation says it must not, so either the derivation is wrong \
+         or this fixture cannot see the difference — STOP and re-derive before \
+         changing anything. Do not relax this bound."
+    );
+}

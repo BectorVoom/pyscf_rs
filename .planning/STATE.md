@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Periodic Boundary Conditions
 status: in_progress
-last_updated: "2026-09-01T00:00:00.000Z"
-last_activity: 2026-09-01
+last_updated: "2026-09-02T00:00:00.000Z"
+last_activity: 2026-09-02
 progress:
   total_phases: 5
   completed_phases: 5
@@ -26,6 +26,82 @@ plan with no dependencies). Phase 14 is CLOSED (2026-08-29); its one
 outstanding gate was REOPENED and MET on 2026-08-30 (see below).
 
 ## Current Position
+
+**Phase 16 PLANNED + REVIEWED, 2026-09-02 (no Rust written).**
+`.planning/phases/16-periodic-cc-ci/` — `16-CONTEXT.md`, fourteen plan files
+(`16-01`..`16-14`) and `16-REVIEW.md`, the speed + memory pass that produced
+**D-PBC-29**. `PBC-MASTER-PLAN §8.8` sized the phase at ten plans and was
+wrong about the starting state in **seven** ways, all found before any code:
+
+* **HARD-BLOCKED on Phase 15.** All nine k-point CC/CI modules import
+  `padding_k_idx`/`padded_mo_coeff`/`padded_mo_energy`/`get_nocc`/`get_nmo`/
+  `get_frozen_mask` from `pbc.mp.kmp2`/`kump2` (nine file:line citations in
+  `16-CONTEXT §1.1`) and `crates/pyscf-pbc-mp` is a **13-line stub**. Same
+  block that stopped 17-09. Waves 0 (16-01/02/03) have no such dependency and
+  start immediately; wave 1 onward defers explicitly rather than writing a
+  second padding implementation — the convention is virtual-**TOP**-aligned
+  (`kmp2.py:262-263`) and two of them is how a plausible wrong number ships.
+* **Four molecular prerequisites costed at zero and absent**: `cc/gccsd.py`,
+  `cc/rccsd.py`, `cc/eom_rccsd.py`'s `EOM`/`EOMIP`/`EOMEA` bases, and
+  **`lib.davidson_nosym1`** — an iterative NON-symmetric Davidson required at
+  `eom_kccsd_ghf.py:128`/`:1352` and `kcis_rhf.py:97`, of which this workspace
+  has **none** (`eigh_gen` is symmetric; 17-02's `faer` path is dense). Four
+  plans are dead without it, so it is its own wave-0 plan (16-03). Each
+  molecular base is ported NARROWLY, to the entry points actually consumed.
+* **The `§8.8` Reuse note cannot be followed literally.** `WorkspacePool` is
+  in `pyscf-runtime`, not `pyscf-ccsd`; `pyscf-ccsd` has **zero** complex
+  arithmetic; and the pool is f64 all the way down (`shape_bytes = product*8`
+  `:278-280`, `InMemory(Box<[f64]>)`, `as_slice -> Vec<f64>` `:397`). Every
+  k-point CC tensor is `complex128`.
+* **`§8.8` builds the EOM base class LAST** — `eom_kccsd_rhf.py:25` and
+  `eom_kccsd_uhf.py:29` both inherit from `eom_kccsd_ghf`. GHF ships first.
+* **EOM-EE does not exist for UHF and is SINGLET-ONLY for RHF** — no `EOMEE`
+  class in `eom_kccsd_uhf.py` at all, `_IMDS.make_ee` (`:1120`) raises;
+  `EOMEETriplet` (`eom_kccsd_rhf.py:1483`) / `EOMEESpinFlip` (`:1489`) are
+  shells whose only body is `vector_size -> None`. **`ROADMAP.md`'s own
+  "IP/EA/EE (RHF/UHF/GHF)" claim was the error**; the port ships upstream's
+  surface and upstream's refusals with oracle-gated tests (RULE 2, the
+  `15-CONTEXT §1.3` discipline).
+* **`pbc/ci/cisd.py` is a Γ-only shim** over molecular RCISD/UCISD/GCISD
+  (`:24`, `:47`), and this port has **no molecular CI crate**. Deferred
+  explicitly (16-13 Task 1). `kcis_rhf.py` — k-point CI **singles** — ships.
+* **`kccsd_t_rhf.py:236` runs on a C kernel** (`CCsd_zcontract_t3T`, 24 raw
+  pointers). Ported to Rust and gated against **`kccsd_t_rhf_slow.py`, the one
+  `pbc/cc` file `§8.8`'s table omits entirely**.
+
+**The gate was the fourth instance of the project's recurring defect.**
+`ROADMAP` said **1e-14**, `PBC-MASTER-PLAN §7` said **1e-8** for the same
+number, neither measured — and upstream's own suite asserts `KRCCSD` `e_corr`
+at **6 decimals** (`test_krccsd.py:180`/`:226`/`:232`/`:338`/`:356`) and EOM
+roots at **3** (`:359-366`). 1e-14 is eight orders tighter than upstream's own
+tests. **16-01 measures the floor before the gate is written**, per DF route
+(`kccsd_rhf.py:37` branches on `isinstance(with_df, GDF)`). Both old numbers
+are struck through, not deleted, in all four documents.
+
+**D-PBC-29 (`16-REVIEW.md §6`), four clauses, all derived with the line that
+proves them** — `D-PBC-28` was already Phase 15's, so this is 29:
+(1) the complex arena is a **new type**, never a reinterpretation of
+`Box<[f64]>` — that would halve the number reaching the HARD refusal; the f64
+pool also **copies on every `as_slice`** (`:397`) and **holds its global mutex
+across the caller's closure** (`:461-483`), which would cap the phase at one
+core; (2) contractions are host rayon loops with `oracle_*`, not
+`zgemm_dense` (6-12× slower, 1.35e-10 off), every site naming its primitive;
+(3) **`symm_map` is a genuine ~4×** that `§8.8` never mentions — and
+`15-REVIEW D-15-R-04`'s ≤2× ruling explicitly does **not** carry over, because
+KCCSD's `_ERIS` wants the full general block where KMP2 wanted only `(ov|ov)`;
+(4) storage tiers come from an exact per-tensor byte count, never upstream's
+`_mem_usage`, which over-estimates **6.2-9.1×** and would refuse jobs that fit.
+Derived `vvvv`: `gth-szv` 2×2×2 **2.0 MiB** → `gth-dzvp` 3×3×3 **68.7 GiB**,
+×16 for KGCCSD. **Every §9.2 fixture is `gth-szv`**, so a gate on those alone
+would ship the HDF5 spill path never once executed — 17-12's exit-137 shape —
+hence 16-01 Task 5 finds a tier-crossing fixture and 16-05 test 4 asserts which
+tier each side used. On EOM the wall is the **Davidson subspace** (`2·max_space
+·nroots` vectors), 16 MiB on `gth-szv` 2×2×2 but **5.4 GiB** for EA on
+`gth-dzvp` 3×3×3; on (T) it is streaming — `t3` is per-k-triple and the
+blocking IS the algorithm.
+
+**Nothing is implemented.** Phase 15 remains the next phase in sequence and is
+Phase 16's blocker.
 
 **Phase 17 plan 01 — MEASURED, 2026-09-01 (no Rust written).**
 `.planning/phases/17-ksymm-multigrid/17-01-PLAN.md` ran upstream PySCF 2.12.1
@@ -419,7 +495,27 @@ speed: `17-06-MEASUREMENT.md`.
   `basis.rs`, 17-05's `kpts.rs` or 17-10's `pyscf-pbc-df/src`.
   `.planning/STATE.md` re-read immediately before this additive edit.
 
-**Phase 17 plan 10 — Tasks 1/2/3/5 SHIPPED, Task 4 CARRIED OVER, 2026-09-01.**
+**Phase 17 plan 10 — Tasks 1/2/3/5 SHIPPED 2026-09-01; Task 4 LANDED in a follow-up session (band k-points + MO-factorised `get_k`), its test EVIDENCE lost to restarts — and its band route was independently proven BIT-IDENTICAL to the direct route on 2026-09-02.**
+
+*Update 2026-09-02 (supersedes "Task 4 CARRIED OVER" below):* a follow-up
+session closed both band-k-point refusals (`gdf/jk.rs` and `mdf/mdf_jk.rs` now
+build a band GDF/MDF over `kpts ∪ kpts_band` via `build_band_gdf` and proceed;
+the only `NotYetImplemented` left in those functions is the pre-existing
+Phase-14 `omega` one) and shipped the MO-factorised `get_k_kpts` behind
+upstream's flag, with `tests/band_kpoints.rs` and `tests/gdf_mo_k.rs`. That
+session was killed by the environment's restart cadence before it could record
+the run results, so the band-k-point gate vs upstream `get_bands` and the
+MO-route 1e-13 agreement + speedup are **written but unrecorded**. What IS
+recorded, from 17-08's diagnostic `gdf_band_route_matches_the_direct_route`:
+GDF's band route against its direct route, same `_cderi`, same density, at a
+STRICT-SUBSET band set — **`max |dvj| = 0e0, max |dvk| = 0e0`**, bit-identical.
+The `grep -rn "phase: 17" crates/pyscf-pbc-df/` check the plan asked for now
+returns only historical doc-comment references, no live refusal. The
+`exclude_dd_block` default remains `false` (deviation 5 stands) and the
+diamond Ha-level oracle run remains `#[ignore]`d and unconfirmed on this
+port's own code (deviation 6 stands). Original entry follows.
+
+
 `.planning/phases/17-ksymm-multigrid/17-10-PLAN.md` — the independent
 DF-accuracy track 17-CONTEXT §1.1 flagged as omitted from §8.9's original
 eight-plan table. Full detail: `17-10-SUMMARY.md`.
@@ -693,6 +789,263 @@ shims.
    **the port is the MORE converged of the two.**
 5. Both of 14-06's stated premises (above).
 6. `_ao2mo.r_e2`'s conjugation convention (above).
+
+**Phase 17 plan 07 — Tasks 0/1/2 + the `use_ao_symmetry` eig branch SHIPPED, 2026-09-01; `eig_trs`/KUHF/KGHF/fast-`get_jk` validation/Gates C-D CARRIED OVER.**
+`.planning/phases/17-ksymm-multigrid/17-07-PLAN.md` — `khf_ksymm.py`.
+Full detail: `17-07-SUMMARY.md`; reconnaissance in `17-07-BLUEPRINT.md`.
+
+* **Written directly by the orchestrator session, not by an agent** — four
+  consecutive agent sessions were killed by the ~20-40 min environment
+  restart cadence during their READING phase, before writing a line. The
+  reconnaissance was extracted into `17-07-BLUEPRINT.md` (the verbatim
+  `KOverrideHooks` trait shape, the `krhf.rs` template, prerequisites, the
+  phase's traps) so any successor starts at "write code".
+* `crates/pyscf-pbc-scf/src/khf_ksymm.rs` (new) — `KsymAdaptedKrhf`, a
+  `KOverrideHooks` implementation over an IBZ k-set. **D-PBC-15's central
+  claim holds literally: `git diff crates/pyscf-pbc-scf/src/kscf.rs` is
+  EMPTY** — the driver was not forked, copied or edited. The k-set
+  indirection is one method: `kpts()` returns an owned `kpts_ibz`. The DF
+  object is built over the FULL BZ (every DF entry point takes its k-points
+  explicitly, `fftdf.rs:447`), so one object serves both the IBZ-length
+  one-electron hooks and the full-BZ reference `get_veff`; the DF layer
+  never learns about symmetry.
+* `get_occ` computes ONE Fermi level over the UNFOLDED BZ (17-CONTEXT §3.4)
+  with `nelectron = cell.tot_electrons(kpts.nkpts())` — the BZ count, not
+  the IBZ one — and folds back through `check_mo_occ_symmetry`, whose failure
+  is a typed error naming both k-points (a symmetry-broken state is
+  physical, not internal). Every weighted sum is tabulated in the module doc
+  (`weights_ibz` vs `1/nkpts` vs bare, per 17-CONTEXT §3.5).
+* `eig_symm_adapted` — block-diagonalises the Fock one irrep at a time in
+  17-04's `symm_orb`, with the layout contract (`symm_orb` column-major, Fock
+  row-major, output column-major) written at the function because it is the
+  exact shape of 14-05's +6 306 866 Ha defect. Made `pub` so 17-08's DFT
+  adapters SHARE it rather than copy it.
+* **Tests 4/4 green** (`--release`, 222 s): IBZ set is 3 of 8 BZ points;
+  `weights_ibz` sums to 1 and matches every star size; the two `eig` routes
+  agree on `e_tot` to **1.703e-11** (two converged SCFs) and, on IDENTICAL
+  inputs, on every eigenvalue to **9.186e-11**. The first version of that
+  eigenvalue test compared two independently converged SCFs and reported
+  4.4e-9 — convergence noise, exactly what 17-05's plan warns against
+  ("never two SCFs"); rerun on one SCF's Fock it tightened ~48x. The 9.2e-11
+  residual is the off-block Fock leakage 17-04 measured at default
+  `cell.precision`, not slack in the implementation.
+* **D-17-07-01 — a latent UPSTREAM bug found**: `little_cogroup_ops` is
+  filled from `np.where(k2opk[ki] == ki)[0]` (`kpts.py:112`), indices into
+  `k2opk`'s `2*nop` columns when time-reversal is on, but its consumer
+  indexes `kpts.ops[iop]` directly (`basis.py:113`). At Γ and every TRIM
+  the second half is reachable, so **upstream would `IndexError`**. This
+  port refuses with a typed `KptsSymmInputMismatch`, which is how it was
+  found. NOT patched around — the test builds `KPoints` with
+  `time_reversal_symmetry = false` and says why. It gates
+  `use_ao_symmetry = true` + time reversal, which is upstream's DEFAULT
+  combination, so it must be closed before the adapter is recommended at
+  its defaults.
+* Dependency: `pyscf-pbc-scf` now depends on `pyscf-pbc-symm`, which
+  dev-depends on `pyscf-pbc-scf` — a cycle cargo permits (dev edges are
+  excluded from build ordering), with the library direction still as
+  D-PBC-25 ruled. The now-false comment in `pyscf-pbc-symm/Cargo.toml`
+  ("no build-graph cycle since `pyscf-pbc-scf` does not depend on this
+  crate") was corrected in place.
+* **Carried over**: `eig_trs` (real `mo_coeff` at TRIMs — its TRIM test is
+  the only proof the branch was taken); Task 4 (`get_rho`, chkfile
+  round-trip incl. the k-count refusal, `to_khf`); Task 5 (KUHF/KGHF; KROHF
+  has no upstream `*_ksymm` and is not invented); Task 6's fast-`get_jk`
+  1e-13 validation against the reference route (the route is written
+  behind `JkRoute`, reference is the default); Task 7's Gates C/D and the
+  speed gate; plan 11-09's metal-occupancy test extended to ksymm.
+  17-06's `KsymmArray` acceptance handoff was CLOSED on 2026-09-02 (see
+  17-06's entry update below).
+
+**Phase 17 plan 08 — Tasks 1/2/3/4 + `kukspu_ksymm` SHIPPED, 2026-09-02; Task 5 PARTIAL. TWO of the plan's premises were wrong and were corrected before building.**
+`.planning/phases/17-ksymm-multigrid/17-08-PLAN.md` — `krks_ksymm.py`,
+`kuks_ksymm.py`, `krkspu_ksymm.py`, `kukspu_ksymm.py`, and the seven
+`isinstance(kpts, KPoints)` sites in `numint.py`. Full detail:
+`17-08-SUMMARY.md`; the premise corrections in `17-08-FINDING-numint.md`.
+
+* **D-17-08-01 — the plan's Task 1 premise is factually wrong.** It said all
+  seven `numint` sites "evaluate the density at the IBZ points, then
+  symmetrize the real-space density through `kpts.symmetrize_density`".
+  Verified against vendored 2.12.1: **five** (`:328, :431, :859, :908,
+  :956`) unfold to the FULL BZ via `transform_dm` and run the ordinary path;
+  **two** (`:647`, `:779`) take `kpts_ibz` directly; and `symmetrize_density`
+  has **no caller in `pyscf/pbc/` outside its own unit test**. Caught not by
+  reading but by hitting the wall the wrong premise implies — the density is
+  built per grid BLOCK and `symmetrize_density` rotates indices across the
+  whole mesh, a fight upstream never has because upstream never does this.
+  Consequence stated plainly: under symmetry `numint` does full-BZ work PLUS
+  an unfold — a convenience interface, not an optimisation; the IBZ saving
+  comes from the SCF side (D-PBC-26) only. That is the phase's THIRD speed
+  assumption to fail in the same direction (after 17-01's upstream-multigrid
+  0.18-0.49x and 17-05's 0.99x star-search parallelism).
+* **Task 1, faithful**: `pub enum KSet { Full, Ibz(Box<KPoints>) }` on
+  `KNumInt` (a field, not the plan's threaded parameter — so the `Full` path
+  is not merely unedited, BOTH arms reach the same code, and bit-identity
+  holds by construction). `unfold_dms`/`unfold_kdms`/`unfold_mos` (Group A)
+  and `kpts_ibz()` (Group B) are wired at all seven sites, each carrying its
+  upstream line. `cache_xc_kernel` unfolds the ORBITALS not the density, as
+  `:859-863` does (RULE 2). The `Full` path's pre-existing suites are
+  unchanged: `numint_blocking` 3/3, `numint_threads` 1/1, `modules` 8/8.
+  Gate: unfolded-IBZ density vs full-BZ density **1.054e-13** (tol 1e-11) on
+  a tight fixture — first measured 1.807e-10 at default precision; the
+  FIXTURE was tightened (not the tolerance), the residual fell 1714x, and
+  the tolerance was then set TIGHTER than the value that first failed. Third
+  appearance of the joint precision/convergence floor in the phase, first
+  predicted before being measured.
+* **Task 2** `KsymAdaptedKrks` — the line that makes the shapes work is
+  upstream's `kpts_band = kpts.kpts_ibz` (`krks_ksymm.py:41-42`): `nr_rks`
+  evaluates rho over the full zone but builds the potential AT the band
+  k-points, so both halves return `nkpts_ibz` matrices with nothing folded
+  by hand. `eig`/`get_occ` SHARED with 17-07 (`pub` helpers, not copies;
+  `KsymAdaptedKrhf` now routes through the same `ksymm_get_occ_restricted`).
+  **Gate C for DFT, FFTDF: 3.109e-14 / 2.842e-14** (both `use_ao_symmetry`
+  branches). A separate test asserts si `[2,2,2]`'s stars are UNEQUAL
+  (`[1,3,4]`, `weights_ibz = [0.125,0.375,0.5]`) so a mistaken `1/nkpts`
+  cannot coincide with `weights_ibz` and pass silently — the guard
+  15-CONTEXT §3's KMP2 trap earned.
+* **D-17-08-02 — Task 4's premise is wrong too.** The plan said the local
+  projectors `C_ao_lo` "must be rotated with the space group". They must
+  not: upstream's whole ksymm DFT+U is `krks_ksymm.get_veff` + the SHARED
+  `krkspu._add_Vhubbard`, whose only symmetry-aware lines are
+  `kpts = kpts.kpts_ibz` (`:77`) and `weight = weights_ibz` (`:93`); the
+  projectors are built DIRECTLY at the IBZ points and nothing is unfolded.
+  Same for `kukspu` (`:59`, `:78`), which also applies ONE `C_ao_lo` to both
+  spins (`:68-70`). Shipped as `add_vhubbard_weighted` (existing
+  `add_vhubbard` delegates with uniform `1/nkpts`, bit-exact pre-17-08
+  behaviour) + `KsymAdaptedKrkspu` + `KsymAdaptedKukspu`.
+  **Gate: `E_U` IBZ vs full BZ 6.939e-18**, with NO SCF — a Hermitian IBZ
+  density pushed through `transform_dm` is symmetric BY CONSTRUCTION, so the
+  residual is the weighting alone and the test runs in 0.29 s. Two fixture
+  constraints were each found by a test refusing to pass vacuously: a `gth`
+  cell gives a singular MINAO metric (must be all-electron), and `E_U`
+  VANISHES on a filled shell — a converged He 1s gave `E_U = -2.04e-17`,
+  agreeing to 2e-17 only because both sides were zero; an
+  `assert!(e_u.abs() > 1e-6)` guard caught it and the fixture now uses
+  fractional occupancy. Pre-existing asymmetry recorded, not fixed: Phase
+  12's `Krkspu` has NO `KOverrideHooks` impl (U-08), so the plain DFT+U is
+  not SCF-drivable while the k-symmetric one now is.
+* **Task 3** `KsymAdaptedKuks` — shipped with `nset() == 2`, two Fermi
+  levels each over the unfolded BZ (new shared `ksymm_get_occ_unrestricted`),
+  `nr_uks` at `kpts_band = kpts_ibz`, a `weighted_trace_uks`; its
+  `get_veff_tagged` deliberately mirrors `Kuks::veff_from_parts` rather than
+  calling it, because that body derives `nkpts` from `with_df.kpts().len()`
+  and forms `1/nkpts`, which come apart here. **D-17-08-03 — a Gate C
+  precondition nobody had stated**: an IBZ-vs-full-BZ energy comparison is
+  only valid if the FULL-BZ solution is itself symmetric. The IBZ run is
+  constrained to symmetric occupations; an unconstrained full-BZ run is not.
+  Measured on the open-shell fixture (RULE U satisfied, `|dm_a-dm_b| =
+  1.19`): full-BZ occupations star-symmetric `alpha = true, beta = FALSE`,
+  `|dE| = 4.533e-02` with the IBZ energy LOWER — a different, better state,
+  physical, not a defect, and NOT absorbed by relaxing the tolerance. The
+  energy gate now ASSERTS the precondition and is `#[ignore]`d pending a
+  fixture whose full-BZ solution is symmetric in both channels; the
+  machinery test (`kuks_ibz_runs_and_stays_symmetric`) passes.
+* **Task 5, per DF route**: FFTDF Gate C PASS (above). **GDF Gate C RUN and
+  FAILS at 1.432e-06** (tol 1e-8; e_full -7.774590218592, e_ibz
+  -7.774588786147; 1381 s) — ~3 orders above GDF's measured floor and ~8
+  orders worse than FFTDF on the identical comparison; recorded, not
+  absorbed. The first hypothesis (GDF's `kpts_band` route rebuilds `_cderi`)
+  was **tested and was WRONG**: `gdf_band_route_matches_the_direct_route`
+  measured the band route against the direct one on the same `_cderi` and
+  density at a STRICT-SUBSET band set — `max |dvj| = 0e0, max |dvk| = 0e0`,
+  bit-identical. **The GDF band route is exonerated; 17-10's Task 4 work is
+  correct.** (The diagnostic's first version passed the FULL k-set as
+  `kpts_band`, and `band_is_kpts` short-circuits to the direct path when the
+  two coincide — it would have compared direct-vs-direct and reported a
+  false all-clear; fixed to use `kpts_ibz`.) `build_band_gdf` was also
+  checked mechanically: every numeric `Gdf` field is copied, only the
+  filesystem `cderi_to_save` is not. Current leading hypothesis, UNTESTED:
+  GDF's `_cderi` is fit on a k-set with no symmetry adaptation, so the
+  full-BZ GDF solution may be slightly symmetry-broken — the D-17-08-03
+  class, GDF-specific because FFTDF is analytic; the check is
+  `check_mo_occ_symmetry` on the full-BZ GDF solution. Erratum against the
+  plan's Task 5: "upstream gates GDF TIGHTER than FFTDF" describes
+  upstream's chosen test tolerances and points opposite to the measured
+  floors (GDF is the looser route by ~3 orders); tolerances here follow the
+  measurement. Gate D (port vs upstream) not attempted — needs the oracle
+  harness; 17-01 already measured upstream's side per route; owned by
+  17-13. RSH remains blocked on the Phase-14 `omega` carry-over at
+  `gdf/jk.rs:674`, per the plan's own instruction to record rather than
+  work around.
+* Default suite: `cargo test -p pyscf-pbc-dft --release --test krks_ksymm
+  -- --test-threads=1` — **7 passed, 0 failed**, 2 `#[ignore]`d with their
+  reasons in the doc comments (GDF Gate C on cost+failure; KUKS Gate C on
+  the D-17-08-03 precondition).
+
+**Phase 17 plan 06 — handoff item 1 CLOSED, 2026-09-02** (the plan itself
+SHIPPED 2026-09-01, above). `crates/pyscf-pbc-symm/tests/ktensor_ksymm_scf.rs`
+fills a `KsymmArray` from `KsymAdaptedKrhf`'s OWN IBZ output via `set_2d_at`
+at the irreducible representatives and reads back every BZ k-point. The
+obvious comparison — against MO blocks from a SEPARATE full-BZ KRHF — is not
+sound (orbitals are gauge-free within degenerate subspaces, 17-CONTEXT §3.1;
+17-06 met the same wall via Schur's lemma), so both sides start from ONE
+SCF's orbitals and two independent unfolds are compared: `KsymmArray::get_2d`
+(17-06's `transform_2d` + `MORotationMatrix`) vs projecting with
+`KPoints::transform_mo_coeff` (17-05). They share no code below `KPoints`.
+`hcore` blocks, not the Fock — the MO-basis Fock is diagonal by construction
+and could not see a wrong rotation. Measured `oo` 8.255e-14, `ov` 3.842e-13,
+`vv` **3.318e-12** against the 1e-9 Gate-B floor. 17-06's own stand-in test is
+kept, as its handoff asked. Items 2-4 of that handoff are 17-09's and remain
+externally blocked.
+
+**Phase 17 plan 12 — COMPLETE: kernel gates 8/8 and host-side Gate E 10/10 GREEN on this machine, 2026-09-02 (later session; supersedes the "UNVERIFIED" entry below).**
+
+*Update 2026-09-02:* the exit-137 was not the machine, it was the port —
+`collocate_pair_level` materialised one f64 per `(image × monomial × ci ×
+cj) × grid point`, **192 GiB (si) / 231 GiB (diamond)** on the 25³ cells.
+Replaced by density-contracted fused terms, kernels that reduce in-lane
+(`collocate_pairs_rho` / `collocate_pairs_integrate`, gated vs the per-slot
+values at 1e-13 and by the adjoint identity), and 5³-point spatial blocks
+that see only the images reaching them: peak RSS 0.46 GiB, 7–9 s per
+density. Running the suite then found three defects the OOM had hidden —
+`p.coef·q.coef` applied twice on top of `E` (∫rho = 0.53 of 8.73 e), no
+periodic wrap of the fused Gaussian (and, once added, a `[0,1)³` box on a
+grid that is origin-centred in `[-0.5,0.5)`), and a polynomial-blind image
+pre-screen that dropped negative far `p-p` terms — each located by the new
+per-pair brute-force gate and fixed. **Gate E:** v2 `get_j` vs FFTDF
+1.24e-8 diamond / 6.80e-8 si; v1-vs-v2 1.46e-8 / 7.41e-8 — at 17-01's
+upstream floors (2e-8 / 1.5e-7). `nr_rks(lda,vwn)` Δnelec ≤ 1.5e-6, Δexc ≤
+7.9e-7. Bit-identical at 1/2/3/8 threads. **Speed:** v2 `get_j` 21.8 s /
+16.5 s vs reference 0.51 s / 0.46 s and v1 0.34 s / 0.37 s — 0.023× /
+0.028×, ~10× worse than upstream's own 0.18–0.39× v2 floor; Phase 18 needs
+v2 for `isinstance` only. `oracle_sum` deviation (in-kernel sequential
+sums, still thread-invariant) recorded in `17-12-SUMMARY.md`. §8.10 of
+`PBC-MASTER-PLAN` now carries the `MultiGridNumInt2` ↔ Phase 18 note.
+Original entry follows.
+
+**Phase 17 plan 12 — code SHIPPED and compiling, kernel gates GREEN, host-side Gate E UNVERIFIED, 2026-09-02 (earlier session).**
+`.planning/phases/17-ksymm-multigrid/17-12-PLAN.md` — `multigrid_pair.py` +
+`pp.py` + `utils.py`, `MultiGridNumInt2`, the twelve-entry-point half of
+multigrid and the one Phase 18's `grad/rhf.py:44`/`grad/uhf.py:40` assert on.
+Full detail: `17-12-SUMMARY.md` (reconstructed by the orchestrator; the
+implementing agent was killed by a restart before writing it).
+
+* Shipped: `crates/pyscf-kernels/src/{multigrid_pair,multigrid_gspace}.rs`,
+  `crates/pyscf-pbc-dft/src/multigrid/{pair,pp,utils}.rs`, and both test
+  files. ALG-06 held; the four C destructors are `Drop` by design.
+* **Kernel side 5/5 green** (`pyscf-kernels --release --test multigrid_pair`,
+  0.23 s): the collocate/integrate ADJOINT IDENTITY (the plan's "strongest
+  oracle-free test", written first) at two sizes, `single_slot` vs a direct
+  formula, `gradient_gs` vs its own documented einsum (the "free, exact
+  oracle"), `get_gga_vrho_gs` vs its documented formula.
+* **Host side PARTIAL**: `pair_task_list_is_sane` PASSES (diamond: 16
+  pshells, 256/256 pairs, per-level `[0,4,12,240]`) — the load-bearing task
+  list the plan says to gate before any number computed from it. Every
+  SCF-bearing host test (`int_rho_matches_tr_dm_s_v2`,
+  `gate_e_get_j_vs_reference_v2`, and the four not reached) is killed with
+  **exit 137 (SIGKILL)** — as a suite, serialized, and individually in
+  release. Not a timeout (124), not a panic (101): the process is killed,
+  consistent with the OOM this session hit repeatedly on the shared machine.
+  **No assertion has been observed to fail, and none has been observed to
+  pass; this entry claims neither.**
+* Gate E and the v1-vs-v2 ratio are therefore NOT confirmed by this plan's
+  own run. The reference numbers exist (17-01: upstream v2 carries a
+  mesh-independent ~2e-8 diamond / 1.5e-7 si floor vs FFTDF; upstream's v1
+  and v2 both run 0.18-0.49x SLOWER than reference `numint`); the run is the
+  carry-over, on a machine with enough memory or with reduced fixtures.
+* `MultiGridNumInt2` ↔ Phase 18 is already recorded in `PBC-MASTER-PLAN`'s
+  Phase-17 table (the 17-12 row). Inherits 17-11's stated reductions
+  (gamma only; not yet a selectable SCF `numint`); `pp.rs`'s IBZ path is not
+  yet connected to 17-05's `KPoints`, which now exists.
 
 ## Carry-overs
 

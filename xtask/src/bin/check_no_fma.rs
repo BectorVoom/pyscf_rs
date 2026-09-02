@@ -92,6 +92,15 @@ const SCAN_TARGETS: &[(&str, &str)] = &[
     // crates now carry arithmetic that reaches a gated energy, so all three are
     // scanned. Verified clean when added; keeping them here is what stops a
     // future contraction from moving a 1e-11 gate silently.
+    // M-03 (`KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md`): the multigrid
+    // kernels' fused reductions land directly in `ecoul`/`exc` — the batched
+    // `collocate_pairs_rho`/`collocate_pairs_integrate` accumulate a whole
+    // level's contribution inside one lane — so this crate now carries
+    // arithmetic that reaches a gated energy, which is the same criterion the
+    // three entries below were added under. Unlike `pyscf-pbc-dft` it does not
+    // pull in the `libxc_rs` rayon kernels, so the rustc segfault documented
+    // below does not apply.
+    ("pyscf-kernels", "pyscf_kernels"),
     ("pyscf-pbc-gto", "pyscf_pbc_gto"),
     ("pyscf-pbc-df", "pyscf_pbc_df"),
     ("pyscf-pbc-tools", "pyscf_pbc_tools"),

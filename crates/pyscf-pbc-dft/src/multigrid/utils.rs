@@ -107,3 +107,65 @@ pub fn takebak_4d(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// M-02 — the geometry cache key.
+//
+// `.planning/pbc/KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md` §2.3.2/§2.3.3:
+// both multigrid drivers rebuild their entire geometry — decontraction, task
+// list, per-level collocation tables, grid-block partition, per-block reach
+// lists — on EVERY call, and the v1 driver does it twice per call (once for
+// the density, once for `pass2`). None of it depends on the density, so all of
+// it is recomputed identically every SCF cycle.
+//
+// The drivers take `&Cell` per call rather than owning one, so a cache needs a
+// key. This is that key.
+// ---------------------------------------------------------------------------
+
+/// A fingerprint of everything the multigrid geometry reads out of a [`Cell`].
+///
+/// # What it must cover, and why each entry is here
+///
+/// `build_pshells` reads `mol._bas`, `mol._env` (which is where the exponents,
+/// the contraction coefficients AND the atom coordinates live), `mol.cart`,
+/// `cell.precision`, `cell.rcut`, `cell.vol()` and `omega(cell)`;
+/// `multi_grids_tasks_for_ke_cut` and `pair_grid_levels` additionally read
+/// `cell.lattice_vectors()`, `cell.mesh` and `cell.ke_cutoff`. Hashing all of
+/// them means a cache hit implies identical geometry.
+///
+/// **Bit patterns, not values** — `to_bits()` on every float, so `-0.0` and
+/// `0.0` are distinct keys and no rounding can collide two different cells.
+///
+/// This is a HASH, so a collision is possible in principle. It is used the way
+/// `KNumInt`'s AO cache uses `coord_hash`: as a fast identity check on a cell
+/// the caller is re-passing, not as a security boundary.
+pub fn cell_fingerprint(cell: &pyscf_pbc_gto::Cell) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+
+    for row in cell.lattice_vectors() {
+        for v in row {
+            v.to_bits().hash(&mut h);
+        }
+    }
+    cell.mesh.hash(&mut h);
+    cell.precision.to_bits().hash(&mut h);
+    cell.rcut.to_bits().hash(&mut h);
+    match cell.ke_cutoff {
+        Some(k) => (1u8, k.to_bits()).hash(&mut h),
+        None => 0u8.hash(&mut h),
+    }
+    cell.dimension.hash(&mut h);
+
+    let mol = &cell.mol;
+    mol.cart.hash(&mut h);
+    mol.nbas.hash(&mut h);
+    mol.nao_nr.hash(&mut h);
+    mol._bas.hash(&mut h);
+    // `_env` carries the atom coordinates, the primitive exponents and the
+    // contraction coefficients — every float `build_pshells` reads.
+    for v in &mol._env {
+        v.to_bits().hash(&mut h);
+    }
+    h.finish()
+}

@@ -261,11 +261,40 @@ impl KNumInt {
     ///
     /// # Errors
     /// As [`KNumInt::unfold_dms`].
-    pub fn unfold_kdms(&self, cell: &Cell, dms: &KDms, nao: usize) -> Result<KDms, PbcDftError> {
-        if self.ksymm().is_none() {
-            return Ok(dms.clone());
+    ///
+    /// # U-06 — returns a [`Cow`], and the borrow is the common case
+    ///
+    /// Under [`KSet::Full`] — every non-symmetric driver, i.e. the default —
+    /// this used to `clone()` the entire `(nset, nkpts, nao^2)` density stack
+    /// on EVERY `nr_rks`/`nr_uks` call, purely to hand back an owned value that
+    /// the symmetric branch needs and the common branch does not. For the
+    /// `MESH_GATE` reference cell that is `2 x 8 x 64` complex entries per SCF
+    /// cycle in KUKS, twice what KRKS pays, and it is pure allocate-and-copy.
+    /// `Cow::Borrowed` removes it with no change to any number.
+    pub fn unfold_kdms<'a>(
+        &self,
+        cell: &Cell,
+        dms: &'a KDms,
+        nao: usize,
+    ) -> Result<std::borrow::Cow<'a, KDms>, PbcDftError> {
+        let Some(kpts) = self.ksymm() else {
+            return Ok(std::borrow::Cow::Borrowed(dms));
+        };
+        // S-01: already full-BZ — upstream's `if kpts.kpts.size > 3` guard,
+        // which `unfold_dms` also carries per set. Borrowing here rather than
+        // letting `unfold_dms` clone matters because S-01 makes the ksymm
+        // drivers unfold ONCE and then hand the full-BZ stack to `nr_rks` /
+        // `nr_uks`, whose own unfold must therefore cost nothing at all rather
+        // than a full k-stack copy. A needless round trip would also perturb
+        // the density, which is why upstream guards it too.
+        if dms.iter().all(|s| s.len() == kpts.nkpts()) {
+            return Ok(std::borrow::Cow::Borrowed(dms));
         }
-        dms.iter().map(|s| self.unfold_dms(cell, s, nao)).collect()
+        let out: KDms = dms
+            .iter()
+            .map(|s| self.unfold_dms(cell, s, nao))
+            .collect::<Result<_, _>>()?;
+        Ok(std::borrow::Cow::Owned(out))
     }
 
     /// Unfold IBZ-length MO coefficients and occupations to the full BZ —
@@ -492,6 +521,26 @@ impl KNumInt {
         dms: &KMats,
         ty: XcType,
     ) -> Result<RhoEff, PbcDftError> {
+        self.eval_rho_into(ao, dms, ty, &mut Scratch::default())
+    }
+
+    /// [`KNumInt::eval_rho`] against a caller-owned scratch — U-10.
+    ///
+    /// The public entry point above allocates one [`Scratch`] per call, which
+    /// already removes the per-k-point allocation it used to do. `nr_rks` and
+    /// `nr_uks` take this variant instead and hold ONE scratch for the whole
+    /// grid-block loop, so a KUKS cycle allocates these buffers once rather
+    /// than `nblocks * nset * nkpts * 2` times.
+    ///
+    /// # Errors
+    /// As [`KNumInt::eval_rho`].
+    pub(crate) fn eval_rho_into(
+        &self,
+        ao: &EvalAoKptsOutput,
+        dms: &KMats,
+        ty: XcType,
+        sc: &mut Scratch,
+    ) -> Result<RhoEff, PbcDftError> {
         let nkpts = ao.nkpts();
         if dms.len() != nkpts {
             return Err(err(format!(
@@ -504,7 +553,7 @@ impl KNumInt {
         let mut rho = RhoEff::zeros(ty, ngrids);
         let mut imag = 0.0_f64;
         for k in 0..nkpts {
-            let (block, im) = eval_rho_one(ao.at(k), &dms[k], ngrids, nao, ty)?;
+            let (block, im) = eval_rho_one(ao.at(k), &dms[k], ngrids, nao, ty, sc)?;
             rho.add_assign(&block);
             imag = imag.max(im);
         }
@@ -539,7 +588,7 @@ impl KNumInt {
         // Group A (`numint.py:328-331`): a symmetric k-set unfolds the density
         // to the full BZ and then runs this path unchanged. No-op under
         // `KSet::Full`. See `KSet`'s doc / `17-08-FINDING-numint.md`.
-        let dms = &self.unfold_kdms(cell, dms, cell.mol.nao_nr)?;
+        let dms = &*self.unfold_kdms(cell, dms, cell.mol.nao_nr)?;
         let nset = dms.len();
         let coords = grids.coords()?;
         let weights = grids.weights()?;
@@ -561,6 +610,13 @@ impl KNumInt {
         let mut vmat: Vec<KMats> =
             vec![vec![CTensor::zeros(nao * nao); band.len()]; nset];
 
+        // U-10: ONE scratch for the whole grid-block loop instead of a fresh
+        // `vec![0.0; ..]` inside `eval_rho_one` / `vxc_mat_one` per k-point per
+        // set per block. Bit-exact — see `Scratch`.
+        let mut sc = Scratch::default();
+        let mut den: Vec<f64> = Vec::new();
+        let mut terms: Vec<f64> = Vec::new();
+
         for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
             let chunk = &coords[p0..p1];
             let w = &weights[p0..p1];
@@ -571,17 +627,21 @@ impl KNumInt {
                 self.eval_ao(cell, chunk, band, ty)?
             };
             for i in 0..nset {
-                let rho = self.eval_rho(&ao2, &dms[i], ty)?;
+                let rho = self.eval_rho_into(&ao2, &dms[i], ty, &mut sc)?;
                 let out = eval_xc_eff_rks(xc_code, &rho)?;
                 // numint.py:363-368 — den = rho[0]*weight.
-                let den: Vec<f64> = rho.row(0).iter().zip(w).map(|(r, wg)| r * wg).collect();
+                //
+                // U-10: `clear` + `extend` reuses the allocation and produces
+                // the identical values in the identical order.
+                den.clear();
+                den.extend(rho.row(0).iter().zip(w).map(|(r, wg)| r * wg));
                 nelec_parts[i].push(oracle_sum(&den));
-                let terms: Vec<f64> =
-                    den.iter().zip(&out.exc).map(|(d, e)| d * e).collect();
+                terms.clear();
+                terms.extend(den.iter().zip(&out.exc).map(|(d, e)| d * e));
                 excsum_parts[i].push(oracle_sum(&terms));
                 // numint.py:369 — wv = weight * vxc.
                 let wv = weighted(&out, 0, w);
-                self.accumulate_vxc(&mut vmat[i], &ao1, &wv, ty);
+                self.accumulate_vxc_into(&mut vmat[i], &ao1, &wv, ty, &mut sc);
             }
         }
 
@@ -634,12 +694,35 @@ impl KNumInt {
         let band = kpts_band.unwrap_or(&self.kpts);
 
         self.last_imag.set(0.0);
-        let mut nelec = vec![(0.0_f64, 0.0_f64); nset];
-        let mut excsum = vec![0.0_f64; nset];
+        // W-07 / U-03 step 3: `nelec` and `excsum` used to be accumulated with
+        // a running `+=` over the grid blocks — a naive sequential sum on the
+        // two quantities that land straight in the total energy, which is what
+        // D-PBC-17 forbids. `nr_rks` was converted by W-07 and `nr_uks` was
+        // not; this is the open-shell half. Collect one partial per block and
+        // reduce THOSE through `oracle_sum`.
+        //
+        // It also makes `excsum`/`nelec` BIT-STABLE across `max_memory`: the
+        // tree shape now depends only on the block COUNT through a single
+        // ordered reduction rather than on the fold order of a running sum.
+        // (`block_ranges` derives `blksize` from `max_memory`, `ty.ncomp()` and
+        // `nkpts` — never from `nset` — so KRKS and KUKS partition identically.)
+        let mut nelec_a_parts: Vec<Vec<f64>> = vec![Vec::new(); nset];
+        let mut nelec_b_parts: Vec<Vec<f64>> = vec![Vec::new(); nset];
+        let mut excsum_parts: Vec<Vec<f64>> = vec![Vec::new(); nset];
         let mut vmat: [Vec<KMats>; 2] = [
             vec![vec![CTensor::zeros(nao * nao); band.len()]; nset],
             vec![vec![CTensor::zeros(nao * nao); band.len()]; nset],
         ];
+
+        // U-10: ONE scratch for the whole block loop, shared by BOTH spin
+        // channels — the open-shell path allocated these buffers twice as
+        // often as the closed-shell one did, which is what made this the
+        // larger of the two wins. Bit-exact; see `Scratch`.
+        let mut sc = Scratch::default();
+        let mut dena: Vec<f64> = Vec::new();
+        let mut denb: Vec<f64> = Vec::new();
+        let mut ta: Vec<f64> = Vec::new();
+        let mut tb: Vec<f64> = Vec::new();
 
         for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
             let chunk = &coords[p0..p1];
@@ -651,21 +734,33 @@ impl KNumInt {
                 self.eval_ao(cell, chunk, band, ty)?
             };
             for i in 0..nset {
-                let rho_a = self.eval_rho(&ao2, &dms[0][i], ty)?;
-                let rho_b = self.eval_rho(&ao2, &dms[1][i], ty)?;
+                let rho_a = self.eval_rho_into(&ao2, &dms[0][i], ty, &mut sc)?;
+                let rho_b = self.eval_rho_into(&ao2, &dms[1][i], ty, &mut sc)?;
                 let out = eval_xc_eff_uks(xc_code, &rho_a, &rho_b)?;
-                let dena: Vec<f64> =
-                    rho_a.row(0).iter().zip(w).map(|(r, wg)| r * wg).collect();
-                let denb: Vec<f64> =
-                    rho_b.row(0).iter().zip(w).map(|(r, wg)| r * wg).collect();
-                nelec[i].0 += oracle_sum(&dena);
-                nelec[i].1 += oracle_sum(&denb);
-                let ta: Vec<f64> = dena.iter().zip(&out.exc).map(|(d, e)| d * e).collect();
-                let tb: Vec<f64> = denb.iter().zip(&out.exc).map(|(d, e)| d * e).collect();
-                excsum[i] += oracle_sum(&ta) + oracle_sum(&tb);
+                // U-10: `clear` + `extend` reuses each allocation and produces
+                // the identical values in the identical order.
+                dena.clear();
+                dena.extend(rho_a.row(0).iter().zip(w).map(|(r, wg)| r * wg));
+                denb.clear();
+                denb.extend(rho_b.row(0).iter().zip(w).map(|(r, wg)| r * wg));
+                nelec_a_parts[i].push(oracle_sum(&dena));
+                nelec_b_parts[i].push(oracle_sum(&denb));
+                ta.clear();
+                ta.extend(dena.iter().zip(&out.exc).map(|(d, e)| d * e));
+                tb.clear();
+                tb.extend(denb.iter().zip(&out.exc).map(|(d, e)| d * e));
+                // U-03 step 4: `numint.py:485-486` performs TWO separate
+                // accumulations, `excsum[i] += dena.dot(exc)` then
+                // `excsum[i] += denb.dot(exc)`. Folding them as
+                // `E + (Sa + Sb)` instead of `(E + Sa) + Sb` is ~1 ulp per
+                // block — harmless against a 1e-11 gate, but a real KUKS-only
+                // bit-parity divergence from the oracle. Pushing them as two
+                // partials keeps upstream's association AND the ordered tree.
+                excsum_parts[i].push(oracle_sum(&ta));
+                excsum_parts[i].push(oracle_sum(&tb));
                 for (s, vm) in vmat.iter_mut().enumerate() {
                     let wv = weighted(&out, s, w);
-                    self.accumulate_vxc(&mut vm[i], &ao1, &wv, ty);
+                    self.accumulate_vxc_into(&mut vm[i], &ao1, &wv, ty, &mut sc);
                 }
             }
         }
@@ -677,6 +772,12 @@ impl KNumInt {
                 }
             }
         }
+        let nelec: Vec<(f64, f64)> = nelec_a_parts
+            .iter()
+            .zip(&nelec_b_parts)
+            .map(|(a, b)| (oracle_sum(a), oracle_sum(b)))
+            .collect();
+        let excsum: Vec<f64> = excsum_parts.iter().map(|p| oracle_sum(p)).collect();
         Ok(NrKUksResult {
             nelec,
             excsum,
@@ -696,11 +797,24 @@ impl KNumInt {
         wv: &[Vec<f64>],
         ty: XcType,
     ) {
+        self.accumulate_vxc_into(out, ao, wv, ty, &mut Scratch::default());
+    }
+
+    /// [`KNumInt::accumulate_vxc`] against a caller-owned scratch — U-10, and
+    /// the same reasoning as [`KNumInt::eval_rho_into`].
+    fn accumulate_vxc_into(
+        &self,
+        out: &mut KMats,
+        ao: &EvalAoKptsOutput,
+        wv: &[Vec<f64>],
+        ty: XcType,
+        sc: &mut Scratch,
+    ) {
         let nao = ao.nao;
         let ngrids = ao.ngrids;
         let nvar = ty.nvar();
         for (k, m) in out.iter_mut().enumerate() {
-            vxc_mat_one(m, ao.at(k), wv, nao, ngrids, nvar);
+            vxc_mat_one(m, ao.at(k), wv, nao, ngrids, nvar, sc);
         }
     }
 
@@ -1026,6 +1140,113 @@ impl KNumInt {
 // free helpers
 // ---------------------------------------------------------------------------
 
+/// Reusable per-call scratch for [`eval_rho_one`] and [`vxc_mat_one`] —
+/// plan item U-10 (`.planning/pbc/KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md`),
+/// which is `KUKS-OPTIMISATION-PLAN` U-06 step 6 and U-05 step 2 closed.
+///
+/// # What this replaces, and why it was worth closing
+///
+/// Every one of these buffers used to be a fresh `vec![0.0; n]` INSIDE the
+/// grid-block loop. Per block, `nr_uks` calls `eval_rho` twice (once per
+/// spin), each of which calls [`eval_rho_one`] once per k-point, each of which
+/// allocated and zeroed `2 * ngrids * nao` doubles for `c0` plus
+/// `2 * ngrids` per density component; `accumulate_vxc` then does the same
+/// again per spin per k for `aow`, and [`vxc_mat_one`]'s per-row `terms`
+/// buffers were allocated `nao` times per call on top.
+///
+/// At the reference cell (`si`, `mesh = 31`, `ngrids = 29 791`, `nao = 8`,
+/// `nkpts = 8`) `c0` alone is 3.8 MiB, taken 16 times per block per cycle in
+/// KUKS — about 61 MiB of pure allocate-and-zero for `c0`, and as much again
+/// for `aow`. `U-06` left this open because it read the fix as needing
+/// interior-mutable state on `KNumInt` "whose aliasing story is not free".
+/// It does not: the lifetime that matters is one CALL, not one `KNumInt`, so
+/// the scratch is an ordinary `&mut` argument threaded down from `nr_rks` /
+/// `nr_uks` and there is no aliasing story at all.
+///
+/// # Bit-parity: EXACT
+///
+/// Every buffer this replaces was zero-filled at allocation and then either
+/// fully overwritten or accumulated into from zero. [`Scratch::zeroed`]
+/// reproduces that starting state exactly, and [`Scratch::raw`] is used only
+/// where every element is assigned before it is read. No arithmetic, no
+/// ordering and no partition changes.
+#[derive(Debug, Default)]
+pub(crate) struct Scratch {
+    /// `eval_rho_one`'s `c0 = ao . dm` — two `ngrids * nao` planes.
+    c0_re: Vec<f64>,
+    c0_im: Vec<f64>,
+    /// `eval_rho_one`'s per-component `_contract_rho` accumulator —
+    /// two `ngrids` planes.
+    acc_re: Vec<f64>,
+    acc_im: Vec<f64>,
+    /// `vxc_mat_one`'s `aow = ao * wv` — two `ngrids * nao` planes.
+    aow_re: Vec<f64>,
+    aow_im: Vec<f64>,
+    /// `vxc_mat_one`'s per-output-row product buffer — two `nao * ngrids`
+    /// planes, one `ngrids` slice per row, handed to the rayon workers by
+    /// `par_chunks_mut` so each worker owns a disjoint slice.
+    terms_re: Vec<f64>,
+    terms_im: Vec<f64>,
+}
+
+impl Scratch {
+    /// A zero-filled `&mut [f64]` of length `n` — the state a fresh
+    /// `vec![0.0; n]` had.
+    fn zeroed(buf: &mut Vec<f64>, n: usize) -> &mut [f64] {
+        if buf.len() < n {
+            buf.resize(n, 0.0);
+        }
+        let out = &mut buf[..n];
+        out.fill(0.0);
+        out
+    }
+
+    /// A `&mut [f64]` of length `n` whose contents are UNSPECIFIED. Only for
+    /// buffers every element of which is assigned before it is read.
+    fn raw(buf: &mut Vec<f64>, n: usize) -> &mut [f64] {
+        if buf.len() < n {
+            buf.resize(n, 0.0);
+        }
+        &mut buf[..n]
+    }
+
+    /// [`eval_rho_one`]'s four buffers, all zeroed, borrowed together.
+    ///
+    /// They are split in ONE call rather than two because `c0` stays borrowed
+    /// across the whole component loop that `acc` is used inside; taking them
+    /// separately would be two overlapping `&mut self` borrows.
+    fn split_rho(
+        &mut self,
+        n_c0: usize,
+        n_acc: usize,
+    ) -> (&mut [f64], &mut [f64], &mut [f64], &mut [f64]) {
+        (
+            Self::zeroed(&mut self.c0_re, n_c0),
+            Self::zeroed(&mut self.c0_im, n_c0),
+            Self::zeroed(&mut self.acc_re, n_acc),
+            Self::zeroed(&mut self.acc_im, n_acc),
+        )
+    }
+
+    /// [`vxc_mat_one`]'s four buffers. `aow` is ACCUMULATED into and so must
+    /// start at zero; `terms` is fully assigned before it is read on every
+    /// `(row, nu)` pass, so it is handed out raw — the same contract the
+    /// `vec![0.0; ngrids]` it replaces satisfied by accident.
+    fn split_vxc(
+        &mut self,
+        n_aow: usize,
+        n_terms: usize,
+    ) -> (&mut [f64], &mut [f64], &mut [f64], &mut [f64]) {
+        (
+            Self::zeroed(&mut self.aow_re, n_aow),
+            Self::zeroed(&mut self.aow_im, n_aow),
+            Self::raw(&mut self.terms_re, n_terms),
+            Self::raw(&mut self.terms_im, n_terms),
+        )
+    }
+}
+
+
 /// `wv = weight * vxc[spin]`, with the `hermi = 1` half-factor on row 0
 /// (`numint.py:1234-1237`).
 fn weighted(out: &VxcEff, spin: usize, w: &[f64]) -> Vec<Vec<f64>> {
@@ -1065,10 +1286,16 @@ fn vxc_mat_one(
     nao: usize,
     ngrids: usize,
     nvar: usize,
+    sc: &mut Scratch,
 ) {
     if ngrids == 0 {
         return;
     }
+    // U-10: `aow` (zeroed, accumulated into) and the per-row `terms` planes
+    // (fully assigned before read) come from reused scratch instead of a
+    // `vec![0.0; ..]` per call and a `vec![0.0; ngrids]` per output row.
+    let (aow_re, aow_im, terms_re_all, terms_im_all) =
+        sc.split_vxc(ngrids * nao, nao * ngrids);
     // aow, in the same F-order-per-component layout as `ao`'s component 0.
     //
     // W-06: `nu` indexes DISJOINT output rows of `aow`, so it is the axis split
@@ -1076,8 +1303,6 @@ fn vxc_mat_one(
     // inside each row, which is what makes this bit-identical to the pre-W-06
     // `n`-outer nest. The `if s == 0.0 { continue; }` skip is kept deliberately
     // — see the module note on it.
-    let mut aow_re = vec![0.0_f64; ngrids * nao];
-    let mut aow_im = vec![0.0_f64; ngrids * nao];
     aow_re
         .par_chunks_mut(ngrids)
         .zip(aow_im.par_chunks_mut(ngrids))
@@ -1102,13 +1327,20 @@ fn vxc_mat_one(
     // on which thread evaluates it, so D-PBC-17's thread-count invariance is
     // preserved exactly. The `terms` scratch becomes per-worker; it used to be
     // one buffer reused across `(mu, nu)`.
+    // U-10: each output row's `terms` planes are a DISJOINT `ngrids` slice of
+    // one preallocated buffer, handed to the worker that owns that row by the
+    // same `par_chunks_mut` split. The partition, the ownership and the
+    // arithmetic are unchanged; only the per-row allocation is gone.
     out.re
         .par_chunks_mut(nao)
         .zip(out.im.par_chunks_mut(nao))
+        .zip(
+            terms_re_all
+                .par_chunks_mut(ngrids)
+                .zip(terms_im_all.par_chunks_mut(ngrids)),
+        )
         .enumerate()
-        .for_each(|(mu, (orow, oirow))| {
-            let mut terms_re = vec![0.0_f64; ngrids];
-            let mut terms_im = vec![0.0_f64; ngrids];
+        .for_each(|(mu, ((orow, oirow), (terms_re, terms_im)))| {
             let mb = mu * ngrids;
             for nu in 0..nao {
                 let nb = nu * ngrids;
@@ -1118,8 +1350,8 @@ fn vxc_mat_one(
                     terms_re[g] = ar * br - ai * bi;
                     terms_im[g] = ar * bi + ai * br;
                 }
-                orow[nu] += oracle_sum(&terms_re);
-                oirow[nu] += oracle_sum(&terms_im);
+                orow[nu] += oracle_sum(terms_re);
+                oirow[nu] += oracle_sum(terms_im);
             }
         });
 }
@@ -1133,6 +1365,7 @@ fn eval_rho_one(
     ngrids: usize,
     nao: usize,
     ty: XcType,
+    sc: &mut Scratch,
 ) -> Result<(RhoEff, f64), PbcDftError> {
     let want = ty.ncomp() * ngrids * nao;
     if ao.len() != want {
@@ -1153,8 +1386,10 @@ fn eval_rho_one(
     // W-06: `j` indexes disjoint output rows of `c0`; the reduction over `i`
     // stays serial and ascending inside each of them, so the same terms reach
     // each `c0[j, g]` in the same order as the pre-W-06 `i`-outer nest.
-    let mut c0_re = vec![0.0_f64; ngrids * nao];
-    let mut c0_im = vec![0.0_f64; ngrids * nao];
+    // U-10: reused, zero-filled scratch instead of a fresh `vec![0.0; ..]`
+    // per k-point per spin per block. Same starting state, same partition,
+    // same arithmetic — bit-exact.
+    let (c0_re, c0_im, acc_re, acc_im) = sc.split_rho(ngrids * nao, ngrids);
     c0_re
         .par_chunks_mut(ngrids)
         .zip(c0_im.par_chunks_mut(ngrids))
@@ -1183,8 +1418,11 @@ fn eval_rho_one(
         // W-06: `g` is the OUTPUT index here and `j` is the reduction axis, so
         // the split is over disjoint grid chunks with `j` serial and ascending
         // inside each — the pre-W-06 order, term for term.
-        let mut acc_re = vec![0.0_f64; ngrids];
-        let mut acc_im = vec![0.0_f64; ngrids];
+        // U-10: the per-component accumulators are re-zeroed here, which is
+        // exactly the state the per-component `vec![0.0; ngrids]` allocations
+        // they replace started in.
+        acc_re.fill(0.0);
+        acc_im.fill(0.0);
         acc_re
             .par_chunks_mut(RHO_CHUNK)
             .zip(acc_im.par_chunks_mut(RHO_CHUNK))
@@ -1209,7 +1447,7 @@ fn eval_rho_one(
         for g in 0..ngrids {
             row[g] = scale * acc_re[g];
         }
-        for v in &acc_im {
+        for v in acc_im.iter() {
             imag = imag.max(v.abs());
         }
     }

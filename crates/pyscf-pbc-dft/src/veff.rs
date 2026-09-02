@@ -173,6 +173,115 @@ pub fn trace_dm_v(dms: &KDms, v: &[KMats], nao: usize) -> (f64, f64) {
     (oracle_sum(&re), oracle_sum(&im))
 }
 
+/// [`trace_dm_v`] against ONE shared matrix stack instead of one per channel —
+/// `einsum('nKij,Kji->', dm, v)` where `v` has no `n` axis.
+///
+/// # U-06 — why this exists
+///
+/// `kuks.py:87` computes `ecoul` from the SPIN-SUMMED Coulomb matrix, which is
+/// shared by both channels. Expressing that through [`trace_dm_v`] required
+/// materialising `vec![jtot.clone(), jtot.clone()]` — two full `nkpts x nao^2`
+/// complex k-stacks cloned and dropped on every single `get_veff`, purely to
+/// satisfy a `v[s][k]` index shape. This takes the shared stack directly.
+///
+/// **Bit-exact against the two-clone form**: the partials are pushed in the
+/// same `(channel, k)` order, each is the same ordered [`trace_ab`] against
+/// numerically identical operands, and the same [`oracle_sum`] reduces them.
+pub fn trace_dm_v_shared(dms: &KDms, v: &KMats, nao: usize) -> (f64, f64) {
+    let n: usize = dms.iter().map(Vec::len).sum();
+    let mut re = Vec::with_capacity(n);
+    let mut im = Vec::with_capacity(n);
+    for set in dms.iter() {
+        for (k, d) in set.iter().enumerate() {
+            let (r, i) = trace_ab(d, &v[k], nao);
+            re.push(r);
+            im.push(i);
+        }
+    }
+    (oracle_sum(&re), oracle_sum(&im))
+}
+
+/// `Re einsum('K,nKij,nKji->', weights, dm, v)` — [`trace_dm_v`] with a
+/// PER-K-POINT WEIGHT instead of a uniform `1/nkpts`.
+///
+/// # Why this exists — plan item P-02
+///
+/// Under k-point symmetry the energy contractions weight each irreducible
+/// k-point by its star multiplicity (`weights_ibz`), not by `1/nkpts`
+/// (17-CONTEXT §3.5). `krks_ksymm.rs` expressed that with two hand-rolled
+/// nests — `weighted_trace` and `weighted_trace_uks` — whose `nao^2` product
+/// sum AND whose `nkpts_ibz` outer fold were both naive running sums, on the
+/// quantities that become `ecoul`, the hybrid `exc` correction and
+/// `energy_elec`'s `e1` for every k-symmetric KS driver. That is precisely
+/// the shape D-PBC-17 forbids and U-03 closed for the non-symmetric drivers;
+/// the symmetric twins were written afterwards and never got it.
+///
+/// # D-PBC-17 — the reduction is ORDERED, twice
+///
+/// Each `(set, k)` partial is `weights[k] * trace_ab(..).0`, itself an
+/// ordered reduction over the `n^2` products in a fixed index order; the
+/// partials are then reduced with the FOUND-06 pairwise tree rather than a
+/// running `+=`. Two ordered reductions compose into an ordered reduction.
+///
+/// # Bit-parity against the loops this replaced
+///
+/// EXACT wherever `nao^2 <= PAIRWISE_CHUNK` (128, i.e. `nao <= 11`) and
+/// `nset * nkpts_ibz <= PAIRWISE_CHUNK`, because `oracle_sum`'s base case is
+/// a strict left-to-right fold from `0.0` — the same arithmetic the nests
+/// did, term for term, in the same order. Every reference cell in this
+/// repository has `nao = 8` and `nkpts_ibz <= 10`. Beyond that the tree
+/// engages and the error bound improves from `O(n^2 · eps)` to
+/// `O(log2(n^2) · eps)`.
+///
+/// Only the REAL part is returned: every consumer takes `.real` (upstream's
+/// `krks_ksymm.py:76`, `:81`), and the imaginary residue is checked
+/// separately by `coulomb_imag`.
+pub fn weighted_trace_dm_v(dms: &KDms, v: &[KMats], weights: &[f64], nao: usize) -> f64 {
+    let n: usize = dms.iter().map(Vec::len).sum();
+    let mut parts = Vec::with_capacity(n);
+    for (s, set) in dms.iter().enumerate() {
+        for (k, d) in set.iter().enumerate() {
+            parts.push(weights[k] * trace_ab(d, &v[s][k], nao).0);
+        }
+    }
+    oracle_sum(&parts)
+}
+
+/// [`weighted_trace_dm_v`] against ONE shared matrix stack instead of one per
+/// channel — `Re einsum('K,nKij,Kji->', weights, dm, v)` where `v` has no `n`
+/// axis.
+///
+/// # Why this exists — plan item P-02
+///
+/// The same reason [`trace_dm_v_shared`] exists for the non-symmetric
+/// drivers, and the same two call sites, one file over:
+/// `KsymAdaptedKuks::get_veff_tagged` traced the spin-summed Coulomb matrix
+/// by materialising `vec![jtot.clone(), jtot.clone()]`, and its
+/// `energy_elec` traced the one-electron matrix by materialising
+/// `vec![h1e.to_vec(), h1e.to_vec()]` — two full `nkpts_ibz x nao^2` complex
+/// stacks cloned and dropped on every `get_veff` and every `energy_elec`,
+/// purely to satisfy a `v[s][k]` index shape. U-06 deleted exactly these two
+/// clones from `kuks.rs` and did not reach the k-symmetric twin.
+///
+/// **Bit-exact against the two-clone form**: the partials are pushed in the
+/// same `(channel, k)` order, each is the same ordered [`trace_ab`] against
+/// numerically identical operands, and the same [`oracle_sum`] reduces them.
+pub fn weighted_trace_dm_v_shared(
+    dms: &KDms,
+    v: &KMats,
+    weights: &[f64],
+    nao: usize,
+) -> f64 {
+    let n: usize = dms.iter().map(Vec::len).sum();
+    let mut parts = Vec::with_capacity(n);
+    for set in dms.iter() {
+        for (k, d) in set.iter().enumerate() {
+            parts.push(weights[k] * trace_ab(d, &v[k], nao).0);
+        }
+    }
+    oracle_sum(&parts)
+}
+
 /// `Tr(A B)` over one row-major `n x n` pair.
 ///
 /// # D-PBC-17 — the reduction is ORDERED

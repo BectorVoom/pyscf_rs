@@ -3,6 +3,10 @@
 //! examples §2.1 of that plan was measured with (deleted after that run).
 //!
 //! ```bash
+//! # The KUKS half (U-01): adds the nset=2 timings and nr_uks beside nr_rks.
+//! cargo run -p pyscf-bench --release --bin krks_profile -- \
+//!     jk --driver kuks --cell si --nk 2,2,2 --mesh 31,31,31 --xc pbe0
+//!
 //! # Isolated 3-D transform batch — the ~93% of get_k_kpts that W-02 targets.
 //! cargo run -p pyscf-bench --release --bin krks_profile -- transform
 //!
@@ -26,6 +30,7 @@ use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
 use pyscf_pbc_df::{Fftdf, get_hcore, get_j_kpts, get_k_kpts, get_k_kpts_opts};
 use pyscf_pbc_dft::krks::{Krks, hybrid};
+use pyscf_pbc_dft::kuks::Kuks;
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs, make_kpts_default};
 use pyscf_pbc_gto::hcore::get_ovlp;
 use pyscf_pbc_scf::KScfConfig;
@@ -162,6 +167,32 @@ struct JkReport {
     warm_nr_rks_ms: f64,
     /// The same call on a COLD AO cache: the one-off AO collocation.
     cold_nr_rks_ms: f64,
+    // -----------------------------------------------------------------
+    // U-01 (`.planning/pbc/KUKS-OPTIMISATION-PLAN.md`) — the `nset = 2` half.
+    //
+    // §2.1.2 could only BOUND the KUKS/KRKS multiplier at `1 < m < 2`, because
+    // the shares it inherited from the KRKS plan's §2.1 predate W-02/W-02b and
+    // W-06/W-07 and are therefore stale in the one direction that matters: the
+    // transform got both algorithmically cheaper and parallel while the
+    // contractions — the part KUKS doubles — did not. U-01 step 2 says the
+    // cheapest useful measurement needs no new cell and no new physics: call
+    // the SAME `get_j_kpts`/`get_k_kpts` on `[dm, dm]` and on `[dm]`, and the
+    // ratio of the two IS the multiplier, on identical data.
+    // -----------------------------------------------------------------
+    /// Which driver's SCF produced `e_tot`/`full_kernel_ms`: `krks` or `kuks`.
+    driver: String,
+    /// `get_j_kpts` on a two-set density built from the converged one.
+    warm_get_j_kpts_nset2_ms: f64,
+    /// `get_k_kpts` on the same, `0.0` for a pure functional.
+    warm_get_k_kpts_nset2_ms: f64,
+    /// `nset = 2 / nset = 1` on identical data — the measured multiplier.
+    nset2_over_nset1_j: f64,
+    nset2_over_nset1_k: f64,
+    /// `KNumInt::nr_uks` warm / cold, beside `nr_rks` on the same cell.
+    warm_nr_uks_ms: f64,
+    cold_nr_uks_ms: f64,
+    /// `nr_uks / nr_rks`, warm.
+    nr_uks_over_nr_rks: f64,
     get_ovlp_ms: f64,
     get_hcore_ms: f64,
     full_kernel_ms: f64,
@@ -186,6 +217,12 @@ fn run_jk(args: &[String]) {
     let nk = parse_triple(&arg_value(args, "--nk").unwrap_or_else(|| "2,2,2".into()));
     let mesh = parse_triple(&arg_value(args, "--mesh").unwrap_or_else(|| "31,31,31".into()));
     let xc = arg_value(args, "--xc").unwrap_or_else(|| "pbe".into());
+    // U-01 step 1: the harness was KRKS-only.
+    let driver = arg_value(args, "--driver").unwrap_or_else(|| "krks".into());
+    assert!(
+        driver == "krks" || driver == "kuks",
+        "--driver must be krks or kuks, got {driver:?}"
+    );
     let json_path = arg_value(args, "--json");
     let compare_path = arg_value(args, "--compare");
 
@@ -203,7 +240,29 @@ fn run_jk(args: &[String]) {
         max_cycle: 40,
         ..KScfConfig::default()
     };
-    let (result, full_kernel_ms) = time_ms(|| krks.kernel(&cfg).expect("KRKS kernel"));
+    // The driver under test supplies `e_tot` and `full_kernel_ms`; the KRKS
+    // object is built either way because its `KNumInt` and grids are what the
+    // per-stage timings below reuse, and reusing ONE grid/AO cache for both
+    // `nr_rks` and `nr_uks` is what makes their ratio a measurement of the
+    // spin doubling rather than of two different caches.
+    let (result, full_kernel_ms) = if driver == "kuks" {
+        let df_u = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
+        let kuks = Kuks::from_df(Box::new(df_u), &xc).expect("KUKS");
+        let (r, ms) = time_ms(|| kuks.kernel(&cfg).expect("KUKS kernel"));
+        // Warm the shared KRKS caches too, so the stage timings below are warm.
+        let _ = krks.kernel(&cfg).expect("KRKS kernel");
+        (r, ms)
+    } else {
+        time_ms(|| krks.kernel(&cfg).expect("KRKS kernel"))
+    };
+    // `nset = 1` k-stack, whatever the driver was: the stage timings are all
+    // expressed against it so the `nset = 2` ratio is like-for-like.
+    let dm1: Vec<Vec<pyscf_algebra::CTensor>> = vec![result.dm[0].clone()];
+    // U-01 step 2: the SAME density in both channels. This measures the
+    // `nset` doubling and nothing else — no second SCF, no second cell, and
+    // no second physical state to explain a difference away with.
+    let dm2: Vec<Vec<pyscf_algebra::CTensor>> =
+        vec![result.dm[0].clone(), result.dm[0].clone()];
 
     // --- the one-off (per-SCF, not per-iteration) stages ---
     let (_, get_ovlp_ms) = time_ms(|| get_ovlp(&cell, &kpts).expect("get_ovlp"));
@@ -220,43 +279,66 @@ fn run_jk(args: &[String]) {
     krks.ni.reset();
     let (_, cold_nr_rks_ms) = time_ms(|| {
         krks.ni
-            .nr_rks(&cell, &krks.grids, &xc, &result.dm, 1, None)
+            .nr_rks(&cell, &krks.grids, &xc, &dm1, 1, None)
             .expect("cold nr_rks")
     });
     let (_, warm_nr_rks_ms) = time_ms(|| {
         krks.ni
-            .nr_rks(&cell, &krks.grids, &xc, &result.dm, 1, None)
+            .nr_rks(&cell, &krks.grids, &xc, &dm1, 1, None)
             .expect("warm nr_rks")
+    });
+
+    // U-01 step 3: `nr_uks` beside `nr_rks`, same cell, same grid, same AO
+    // cache, same density in both channels. §2.1.1 predicts "just under 2x" —
+    // `eval_ao` is shared once per block, `eval_rho` and `accumulate_vxc` run
+    // twice, and `eval_xc_eff_uks` is one call on a 2x-wider kernel.
+    let uks_sets: [Vec<Vec<pyscf_algebra::CTensor>>; 2] = [dm1.clone(), dm1.clone()];
+    krks.ni.reset();
+    let (_, cold_nr_uks_ms) = time_ms(|| {
+        krks.ni
+            .nr_uks(&cell, &krks.grids, &xc, &uks_sets, 1, None)
+            .expect("cold nr_uks")
+    });
+    let (_, warm_nr_uks_ms) = time_ms(|| {
+        krks.ni
+            .nr_uks(&cell, &krks.grids, &xc, &uks_sets, 1, None)
+            .expect("warm nr_uks")
     });
 
     let df = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
     // Prime the AO / coulG-expmikr caches before timing (RULE O: measure warm).
-    let _ = get_j_kpts(&df, &result.dm, 1, &kpts, None, None).expect("warm get_j_kpts");
+    let _ = get_j_kpts(&df, &dm1, 1, &kpts, None, None).expect("warm get_j_kpts");
     if is_hybrid {
-        let _ = get_k_kpts(&df, &result.dm, 1, &kpts, None, Some(ExxDiv::Ewald), None)
+        let _ = get_k_kpts(&df, &dm1, 1, &kpts, None, Some(ExxDiv::Ewald), None)
             .expect("warm get_k_kpts");
     }
 
     let (_, warm_j_ms) =
-        time_ms(|| get_j_kpts(&df, &result.dm, 1, &kpts, None, None).expect("get_j_kpts"));
+        time_ms(|| get_j_kpts(&df, &dm1, 1, &kpts, None, None).expect("get_j_kpts"));
+    let _ = get_j_kpts(&df, &dm2, 1, &kpts, None, None).expect("warm get_j_kpts nset=2");
+    let (_, warm_j_nset2_ms) =
+        time_ms(|| get_j_kpts(&df, &dm2, 1, &kpts, None, None).expect("get_j_kpts nset=2"));
     // W-08: `--kk-symmetry` times the halved pair loop instead of the full one.
     // It is opt-in because it changes the last bits of `vk`; timing it here
     // beside the full loop is how its 1.x is attributed.
     let kk_symmetry = args.iter().any(|a| a == "--kk-symmetry");
-    let warm_k_ms = if is_hybrid {
-        let _ = get_k_kpts_opts(
-            &df, &result.dm, 1, &kpts, None, Some(ExxDiv::Ewald), None, kk_symmetry,
-        )
-        .expect("warm get_k_kpts");
-        let (_, ms) = time_ms(|| {
-            get_k_kpts_opts(
-                &df, &result.dm, 1, &kpts, None, Some(ExxDiv::Ewald), None, kk_symmetry,
+    let (warm_k_ms, warm_k_nset2_ms) = if is_hybrid {
+        let mut run = |dms: &Vec<Vec<pyscf_algebra::CTensor>>| {
+            let _ = get_k_kpts_opts(
+                &df, dms, 1, &kpts, None, Some(ExxDiv::Ewald), None, kk_symmetry,
             )
-            .expect("get_k_kpts")
-        });
-        ms
+            .expect("warm get_k_kpts");
+            let (_, ms) = time_ms(|| {
+                get_k_kpts_opts(
+                    &df, dms, 1, &kpts, None, Some(ExxDiv::Ewald), None, kk_symmetry,
+                )
+                .expect("get_k_kpts")
+            });
+            ms
+        };
+        (run(&dm1), run(&dm2))
     } else {
-        0.0
+        (0.0, 0.0)
     };
 
     let report = JkReport {
@@ -273,6 +355,14 @@ fn run_jk(args: &[String]) {
         warm_get_k_kpts_ms: warm_k_ms,
         warm_nr_rks_ms,
         cold_nr_rks_ms,
+        driver: driver.clone(),
+        warm_get_j_kpts_nset2_ms: warm_j_nset2_ms,
+        warm_get_k_kpts_nset2_ms: warm_k_nset2_ms,
+        nset2_over_nset1_j: warm_j_nset2_ms / warm_j_ms,
+        nset2_over_nset1_k: if warm_k_ms > 0.0 { warm_k_nset2_ms / warm_k_ms } else { f64::NAN },
+        warm_nr_uks_ms,
+        cold_nr_uks_ms,
+        nr_uks_over_nr_rks: warm_nr_uks_ms / warm_nr_rks_ms,
         get_ovlp_ms,
         get_hcore_ms,
         full_kernel_ms,
@@ -305,6 +395,22 @@ fn run_jk(args: &[String]) {
         report.e_tot,
         report.converged,
     );
+    // U-01: the `nset = 2` block, printed beside the `nset = 1` one so the
+    // multiplier is read off directly rather than inferred from two runs.
+    println!(
+        "  --- U-01, nset = 2 on IDENTICAL data (driver={}) ---\n  \
+         get_j_kpts nset=2 = {:.3} ms   ({:.3}x nset=1)\n  \
+         get_k_kpts nset=2 = {:.3} ms   ({:.3}x nset=1)\n  \
+         nr_uks     (warm) = {:.3} ms   (cold = {:.3} ms, {:.3}x nr_rks)",
+        report.driver,
+        report.warm_get_j_kpts_nset2_ms,
+        report.nset2_over_nset1_j,
+        report.warm_get_k_kpts_nset2_ms,
+        report.nset2_over_nset1_k,
+        report.warm_nr_uks_ms,
+        report.cold_nr_uks_ms,
+        report.nr_uks_over_nr_rks,
+    );
 
     if let Some(path) = &json_path {
         let s = serde_json::to_string_pretty(&report).expect("serialize report");
@@ -327,6 +433,21 @@ fn run_jk(args: &[String]) {
             ("get_j_kpts", base_j, report.warm_get_j_kpts_ms),
             ("get_k_kpts", base_k, report.warm_get_k_kpts_ms),
             ("nr_rks    ", base_nr, report.warm_nr_rks_ms),
+            (
+                "nr_uks    ",
+                baseline["warm_nr_uks_ms"].as_f64().unwrap_or(f64::NAN),
+                report.warm_nr_uks_ms,
+            ),
+            (
+                "get_j n=2 ",
+                baseline["warm_get_j_kpts_nset2_ms"].as_f64().unwrap_or(f64::NAN),
+                report.warm_get_j_kpts_nset2_ms,
+            ),
+            (
+                "get_k n=2 ",
+                baseline["warm_get_k_kpts_nset2_ms"].as_f64().unwrap_or(f64::NAN),
+                report.warm_get_k_kpts_nset2_ms,
+            ),
             ("kernel()  ", base_full, report.full_kernel_ms),
         ] {
             println!(
@@ -624,6 +745,295 @@ fn finish_contract(
     }
 }
 
+// ---------------------------------------------------------------------------
+// `ksymm` — S-00 of `.planning/pbc/KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md`.
+//
+// Phase 17 shipped `KsymAdaptedKrks` / `KsymAdaptedKuks` and 17-08 Task 5's
+// "speed report" was never written, so **no k-symmetry timing has ever been
+// measured in this repository**. RULE O forbids landing S-01..S-03 without a
+// baseline; this is that baseline.
+//
+// What it measures, and why each number is the honest one:
+//
+// * `kernel()` for the ksymm driver and for the ordinary full-BZ driver on the
+//   SAME cell, mesh and functional. Two SCFs, so the comparison is end to end.
+//   It is a SPEED comparison only — RULE K forbids reading the two energies
+//   against each other without first establishing that the full-BZ solution is
+//   star-symmetric, which this harness does not do and does not claim.
+// * `get_veff` warm on the converged density, both drivers — the per-iteration
+//   number, which is what an optimisation item actually moves.
+// * `unfold_kdms` alone, on the same density: S-01's target, isolated.
+// * Peak RSS (`VmHWM`), because half of this plan is about memory and a table
+//   without it reads as "never measured".
+// ---------------------------------------------------------------------------
+
+/// Peak resident set size in MiB, from `/proc/self/status`'s `VmHWM`.
+///
+/// `VmHWM` is a HIGH-WATER MARK and never decreases, so it is read once at the
+/// end and reported as the run's peak — not differenced across stages, which
+/// would be meaningless for a monotone counter.
+fn peak_rss_mib() -> f64 {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("VmHWM:"))
+                .and_then(|l| l.split_whitespace().nth(1).and_then(|v| v.parse::<f64>().ok()))
+        })
+        .map_or(f64::NAN, |kb| kb / 1024.0)
+}
+
+/// The 1-minute load average, printed with every report: RULE O invalidates a
+/// ratio measured on a contended machine, so the reader must be able to see
+/// whether this one was.
+fn load_average() -> f64 {
+    std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
+        .unwrap_or(f64::NAN)
+}
+
+#[derive(Serialize, Default)]
+struct KsymmReport {
+    cell: String,
+    basis: String,
+    nk: [usize; 3],
+    mesh: [usize; 3],
+    xc: String,
+    hybrid: bool,
+    driver: String,
+    nao: usize,
+    nkpts: usize,
+    nkpts_ibz: usize,
+    /// `nkpts / nkpts_ibz` — the naive bound on any IBZ saving.
+    fold_factor: f64,
+    /// The star multiplicities, as weights. Printed because a uniform vector
+    /// would mean the fixture cannot see a dropped weight at all
+    /// (`krks_ksymm.rs::si_222_stars_have_unequal_sizes_so_the_weighting_is_observable`).
+    weights_ibz: Vec<f64>,
+    use_ao_symmetry: bool,
+    /// End-to-end SCF, full BZ and IBZ.
+    full_kernel_ms: f64,
+    ksymm_kernel_ms: f64,
+    ksymm_over_full_kernel: f64,
+    /// Warm `get_veff` on the converged density — the per-iteration cost.
+    warm_full_get_veff_ms: f64,
+    warm_ksymm_get_veff_ms: f64,
+    ksymm_over_full_get_veff: f64,
+    /// S-01's target, isolated: one IBZ-to-BZ density unfold.
+    warm_unfold_kdms_ms: f64,
+    /// How many unfolds one `get_veff` is worth, at this cell.
+    unfolds_per_get_veff_equivalent: f64,
+    peak_rss_mib: f64,
+    load_average_at_start: f64,
+    full_e_tot: f64,
+    ksymm_e_tot: f64,
+    full_converged: bool,
+    ksymm_converged: bool,
+}
+
+fn run_ksymm(args: &[String]) {
+    use pyscf_pbc_dft::krks_ksymm::{KsymAdaptedKrks, KsymAdaptedKuks};
+    // `cell()` is a `KOverrideHooks` method on both adapters, not an inherent
+    // one — the trait has to be in scope to call it.
+    use pyscf_pbc_scf::khooks::KOverrideHooks;
+    use pyscf_pbc_symm::kpts::make_kpts;
+
+    let cell_name = arg_value(args, "--cell").unwrap_or_else(|| "si".into());
+    let basis = arg_value(args, "--basis").unwrap_or_else(|| "gth-szv".into());
+    let nk = parse_triple(&arg_value(args, "--nk").unwrap_or_else(|| "2,2,2".into()));
+    let mesh = parse_triple(&arg_value(args, "--mesh").unwrap_or_else(|| "31,31,31".into()));
+    let xc = arg_value(args, "--xc").unwrap_or_else(|| "pbe".into());
+    let driver = arg_value(args, "--driver").unwrap_or_else(|| "krks".into());
+    assert!(
+        driver == "krks" || driver == "kuks",
+        "--driver must be krks or kuks, got {driver:?}"
+    );
+    // D-17-07-01 (`17-07-SUMMARY.md`): `little_cogroup_ops` indexes `k2opk`'s
+    // doubled column space while its consumers index `ops`, so time reversal
+    // combined with `use_ao_symmetry = true` is refused by this port (and
+    // raises `IndexError` upstream). The default here folds on the space group
+    // alone, exactly as every ksymm test in the tree does.
+    let time_reversal = args.iter().any(|a| a == "--time-reversal");
+    let use_ao_symmetry = !args.iter().any(|a| a == "--no-ao-symmetry");
+    let json_path = arg_value(args, "--json");
+    let compare_path = arg_value(args, "--compare");
+
+    let load0 = load_average();
+    let mut cell = cell_by_name(&cell_name, &basis);
+    cell.mesh = mesh;
+    let kpts_abs = make_kpts_default(&cell, nk).expect("k-mesh");
+    let kpts = make_kpts(&cell, &kpts_abs, true, time_reversal).expect("make_kpts");
+    assert!(
+        kpts.nkpts_ibz() < kpts.nkpts(),
+        "this cell/k-mesh does not fold ({} IBZ of {} BZ) — nothing to measure",
+        kpts.nkpts_ibz(),
+        kpts.nkpts()
+    );
+    if use_ao_symmetry {
+        use pyscf_pbc_symm::basis::{self, SymmAdaptedBasisInput};
+        let input = SymmAdaptedBasisInput {
+            kpts_scaled_ibz: kpts.kpts_scaled_ibz.clone(),
+            little_cogroup_ops: kpts.little_cogroup_ops.clone(),
+            ops: kpts.symmetry.ops.clone(),
+            dmats: kpts.symmetry.dmats.clone(),
+        };
+        basis::build_symmetry(&mut cell, &input).expect("build_symmetry");
+    }
+
+    let cfg = KScfConfig {
+        conv_tol: 1e-9,
+        max_cycle: 40,
+        ..KScfConfig::default()
+    };
+    let is_hybrid = hybrid(&xc).unwrap_or(false);
+    let nao = cell.mol.nao_nr;
+
+    // ---- the ordinary full-BZ driver ----
+    let df_full = Fftdf::with_mesh(cell.clone(), &kpts.kpts, mesh).expect("FFTDF");
+    let (full_result, full_kernel_ms, warm_full_get_veff_ms) = if driver == "kuks" {
+        let mf = Kuks::from_df(Box::new(df_full), &xc).expect("KUKS");
+        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KUKS kernel"));
+        // Warm: the AO / coulG caches are already populated by the SCF above,
+        // so this is what one converged iteration actually costs.
+        let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
+        (r, ms, veff_ms)
+    } else {
+        let mf = Krks::from_df(Box::new(df_full), &xc).expect("KRKS");
+        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KRKS kernel"));
+        let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
+        (r, ms, veff_ms)
+    };
+
+    // ---- the k-symmetric driver ----
+    let df_sym = Fftdf::with_mesh(cell.clone(), &kpts.kpts, mesh).expect("FFTDF");
+    let grids = pyscf_pbc_dft::gen_grid::PeriodicGrids::uniform(&cell, Some(mesh)).expect("grids");
+    let (ksymm_result, ksymm_kernel_ms, warm_ksymm_get_veff_ms, warm_unfold_kdms_ms) =
+        if driver == "kuks" {
+            let mut mf =
+                KsymAdaptedKuks::new(cell.clone(), kpts.clone(), &xc).expect("KsymAdaptedKuks");
+            mf.with_df = Box::new(df_sym);
+            mf.grids = grids;
+            mf.use_ao_symmetry = use_ao_symmetry;
+            let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("ksymm KUKS kernel"));
+            let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
+            let (_, unfold_ms) =
+                time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
+            (r, ms, veff_ms, unfold_ms)
+        } else {
+            let mut mf =
+                KsymAdaptedKrks::new(cell.clone(), kpts.clone(), &xc).expect("KsymAdaptedKrks");
+            mf.with_df = Box::new(df_sym);
+            mf.grids = grids;
+            mf.use_ao_symmetry = use_ao_symmetry;
+            let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("ksymm KRKS kernel"));
+            let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
+            let (_, unfold_ms) =
+                time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
+            (r, ms, veff_ms, unfold_ms)
+        };
+
+    let report = KsymmReport {
+        cell: cell_name,
+        basis,
+        nk,
+        mesh,
+        xc: xc.clone(),
+        hybrid: is_hybrid,
+        driver: driver.clone(),
+        nao,
+        nkpts: kpts.nkpts(),
+        nkpts_ibz: kpts.nkpts_ibz(),
+        fold_factor: kpts.nkpts() as f64 / kpts.nkpts_ibz() as f64,
+        weights_ibz: kpts.weights_ibz.clone(),
+        use_ao_symmetry,
+        full_kernel_ms,
+        ksymm_kernel_ms,
+        ksymm_over_full_kernel: ksymm_kernel_ms / full_kernel_ms,
+        warm_full_get_veff_ms,
+        warm_ksymm_get_veff_ms,
+        ksymm_over_full_get_veff: warm_ksymm_get_veff_ms / warm_full_get_veff_ms,
+        warm_unfold_kdms_ms,
+        unfolds_per_get_veff_equivalent: warm_ksymm_get_veff_ms / warm_unfold_kdms_ms.max(1e-12),
+        peak_rss_mib: peak_rss_mib(),
+        load_average_at_start: load0,
+        full_e_tot: full_result.e_tot,
+        ksymm_e_tot: ksymm_result.e_tot,
+        full_converged: full_result.converged,
+        ksymm_converged: ksymm_result.converged,
+    };
+
+    println!(
+        "cell={} basis={} nk={:?} mesh={:?} xc={} hybrid={} driver={}\n  \
+         nao={} nkpts={} nkpts_ibz={} fold={:.3}x  use_ao_symmetry={}\n  \
+         weights_ibz={:?}\n  \
+         load average at start = {:.2}   peak RSS = {:.1} MiB\n  \
+         kernel()   full = {:.3} ms   ksymm = {:.3} ms   ksymm/full = {:.4}\n  \
+         get_veff   full = {:.3} ms   ksymm = {:.3} ms   ksymm/full = {:.4}\n  \
+         unfold_kdms (one call) = {:.3} ms   -> {:.1} unfolds per ksymm get_veff\n  \
+         e_tot      full = {:.12} ({})   ksymm = {:.12} ({})\n  \
+         NOTE: the two energies are NOT a correctness comparison — RULE K. An\n  \
+         IBZ run is CONSTRAINED to symmetric occupations and an unconstrained\n  \
+         full-BZ run is not, so they can legitimately converge to different\n  \
+         states (D-17-08-03). This subcommand measures TIME.",
+        report.cell,
+        report.basis,
+        report.nk,
+        report.mesh,
+        report.xc,
+        report.hybrid,
+        report.driver,
+        report.nao,
+        report.nkpts,
+        report.nkpts_ibz,
+        report.fold_factor,
+        report.use_ao_symmetry,
+        report.weights_ibz,
+        report.load_average_at_start,
+        report.peak_rss_mib,
+        report.full_kernel_ms,
+        report.ksymm_kernel_ms,
+        report.ksymm_over_full_kernel,
+        report.warm_full_get_veff_ms,
+        report.warm_ksymm_get_veff_ms,
+        report.ksymm_over_full_get_veff,
+        report.warm_unfold_kdms_ms,
+        report.unfolds_per_get_veff_equivalent,
+        report.full_e_tot,
+        report.full_converged,
+        report.ksymm_e_tot,
+        report.ksymm_converged,
+    );
+
+    if let Some(path) = json_path {
+        std::fs::write(&path, serde_json::to_string_pretty(&report).expect("serialize"))
+            .expect("write json");
+        println!("wrote {path}");
+    }
+    if let Some(path) = compare_path {
+        let prev: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read baseline"))
+                .expect("parse baseline");
+        let now = serde_json::to_value(&report).expect("serialize");
+        println!("--- compare against {path} (RULE O: ONE variable changed) ---");
+        for key in [
+            "full_kernel_ms",
+            "ksymm_kernel_ms",
+            "ksymm_over_full_kernel",
+            "warm_full_get_veff_ms",
+            "warm_ksymm_get_veff_ms",
+            "ksymm_over_full_get_veff",
+            "warm_unfold_kdms_ms",
+            "peak_rss_mib",
+        ] {
+            let (a, b) = (prev.get(key).and_then(|v| v.as_f64()), now.get(key).and_then(|v| v.as_f64()));
+            if let (Some(a), Some(b)) = (a, b) {
+                println!("  {key:<28} {a:>12.3} -> {b:>12.3}   ({:+.1} %)", (b / a - 1.0) * 100.0);
+            }
+        }
+    }
+}
+
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
         .position(|a| a == key)
@@ -645,8 +1055,9 @@ fn main() {
         "transform" => run_transform(rest),
         "jk" => run_jk(rest),
         "contract" => run_contract(rest),
+        "ksymm" => run_ksymm(rest),
         other => {
-            eprintln!("unknown subcommand {other:?} (expected transform|jk|contract)");
+            eprintln!("unknown subcommand {other:?} (expected transform|jk|contract|ksymm)");
             std::process::exit(1);
         }
     }

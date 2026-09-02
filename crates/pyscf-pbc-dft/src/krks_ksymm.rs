@@ -163,12 +163,28 @@ impl KsymAdaptedKrks {
         // `krks_ksymm.py:41-42` — THE line that makes the shapes work.
         let band: Vec<[f64; 3]> = kpts_band.map_or_else(|| self.kpts_ibz.clone(), <[_]>::to_vec);
 
-        // The XC half. `self.ni` is a `KSet::Ibz` numint, so `nr_rks` unfolds
-        // `dms` to the full BZ for the density (Group A) and builds the
-        // potential at `band` — the IBZ points.
+        // S-01: the density is unfolded to the full BZ ONCE, here, and the
+        // full-BZ stack is then handed to BOTH halves.
+        //
+        // It used to be unfolded twice per cycle: `nr_rks` calls
+        // `unfold_kdms` itself (Group A, `numint.py:328-331`) and the J/K half
+        // called it again a few lines below. Each call is `nkpts` `R·M·Rᴴ`
+        // sandwiches plus two format conversions across the
+        // `CTensor`/`Complex64` seam, so half of that was pure duplication.
+        //
+        // BIT-EXACT: `nr_rks`'s own `unfold_kdms` on this already-full-BZ
+        // stack returns `Cow::Borrowed` unchanged (the guard `unfold_dms` has
+        // always carried, asserted by
+        // `tests/krks_ksymm.rs::unfold_is_a_bit_exact_no_op_on_full_bz_input`),
+        // so the quadrature sees exactly the density it saw before.
+        let dm_bz = self.ni.unfold_kdms(cell, dms, nao)?;
+
+        // The XC half. `self.ni` is a `KSet::Ibz` numint, so the density is
+        // evaluated over the full BZ (Group A) and the potential is built at
+        // `band` — the IBZ points.
         let nr = self
             .ni
-            .nr_rks(cell, &self.grids, &self.xc, dms, 1, Some(&band))?;
+            .nr_rks(cell, &self.grids, &self.xc, &dm_bz, 1, Some(&band))?;
         let mut vxc = nr.vmat;
         let mut exc = nr.excsum[0];
 
@@ -176,7 +192,6 @@ impl KsymAdaptedKrks {
         // full-BZ density, with `kpts_band` selecting the IBZ output — so it
         // still knows nothing about symmetry (D-PBC-15), it only ever sees two
         // plain k-point lists.
-        let dm_bz = self.ni.unfold_kdms(cell, dms, nao)?;
         let jk = get_jk(
             self.with_df.as_ref(),
             &self.xc,
@@ -222,25 +237,34 @@ impl KsymAdaptedKrks {
     /// contraction, not `1/nkpts`.
     ///
     /// Writing `1/nkpts` here would silently drop every star multiplicity, and
-    /// would be invisible on any cell whose stars all have the same size. The
+    /// would be invisible on any cell whose stars all have the same size.
+    ///
+    /// # P-02 — this used to be a hand-rolled nest, and its doc was wrong
+    ///
+    /// The body was two naive running sums (`nao^2` products, then
+    /// `nkpts_ibz` weighted partials) and the doc comment claimed "the
     /// accumulation is ordered (D-PBC-17), so the result is bit-identical
-    /// under any thread count.
+    /// under any thread count". The conclusion held but the premise did not:
+    /// the fold was *serial*, which makes it thread-independent, and serial
+    /// is not what D-PBC-17 asks for — it asks for the ordered primitive,
+    /// whose error bound is `O(log2 n · eps)` rather than `O(n · eps)`. The
+    /// distinction matters here because this one function feeds `ecoul`, the
+    /// hybrid `exc` correction and `energy_elec`'s `e1` for every
+    /// k-symmetric KS driver.
+    ///
+    /// It now delegates to [`crate::veff::weighted_trace_dm_v`], which is
+    /// ordered in both axes. Bit-exact at every cell this repository gates on
+    /// — see that function's own note.
     fn weighted_trace(&self, dms: &KDms, v: &[KMats], nao: usize) -> f64 {
-        let w = &self.kpts.weights_ibz;
-        let mut acc = 0.0;
-        for k in 0..self.kpts_ibz.len() {
-            let (d, vk) = (&dms[0][k], &v[0][k]);
-            let mut t = 0.0;
-            for i in 0..nao {
-                for j in 0..nao {
-                    let dij = i * nao + j;
-                    let vji = j * nao + i;
-                    t += d.re[dij] * vk.re[vji] - d.im[dij] * vk.im[vji];
-                }
-            }
-            acc += w[k] * t;
-        }
-        acc
+        crate::veff::weighted_trace_dm_v(dms, v, &self.kpts.weights_ibz, nao)
+    }
+
+    /// [`KsymAdaptedKrks::weighted_trace`] against ONE shared matrix stack —
+    /// used by `energy_elec`, where the same `h1e` is traced against the
+    /// single density channel and materialising `&[h1e.to_vec()]` was a full
+    /// `nkpts_ibz x nao^2` complex clone per call.
+    fn weighted_trace_shared(&self, dms: &KDms, v: &KMats, nao: usize) -> f64 {
+        crate::veff::weighted_trace_dm_v_shared(dms, v, &self.kpts.weights_ibz, nao)
     }
 }
 
@@ -278,7 +302,8 @@ impl KOverrideHooks for KsymAdaptedKrks {
             1,
             mode,
             s1e,
-            self.nelectron() as f64,
+            &[self.nelectron() as f64],
+            0,
         )
     }
 
@@ -359,7 +384,9 @@ impl KOverrideHooks for KsymAdaptedKrks {
             ))
         })?;
         let _ = vhf;
-        let e1 = self.weighted_trace(dms, &[h1e.to_vec()], nao);
+        // P-02: `&[h1e.to_vec()]` cloned the whole one-electron k-stack on
+        // every cycle to satisfy a `v[s][k]` index shape. Bit-exact to share.
+        let e1 = self.weighted_trace_shared(dms, h1e, nao);
         Ok((e1 + tags.ecoul + tags.exc, tags.ecoul))
     }
 }
@@ -532,6 +559,9 @@ pub struct KsymAdaptedKuks {
     pub nelec: Option<(usize, usize)>,
     /// Upstream's default is `true`.
     pub use_ao_symmetry: bool,
+    /// `init_guess_breaksym` — `kuhf.py:417`, inherited by
+    /// `KsymAdaptedKUHF`/`KsymAdaptedKUKS`. Upstream's default is `1`.
+    pub init_guess_breaksym: i32,
     tags: StdCell<Option<KsEnergyTags>>,
 }
 
@@ -556,6 +586,7 @@ impl KsymAdaptedKuks {
             ni,
             nelec: None,
             use_ao_symmetry: true,
+            init_guess_breaksym: 1,
             tags: StdCell::new(None),
         })
     }
@@ -624,15 +655,27 @@ impl KsymAdaptedKuks {
         // `krks_ksymm.py:41-42`, applied to the unrestricted case.
         let band: Vec<[f64; 3]> = kpts_band.map_or_else(|| self.kpts_ibz.clone(), <[_]>::to_vec);
 
+        // S-01: ONE unfold per cycle, shared by both halves — the
+        // unrestricted case unfolded FOUR times (once per spin inside
+        // `nr_uks`, then both again for J/K) where two suffice. Bit-exact for
+        // the reason `KsymAdaptedKrks::get_veff_tagged` records.
+        let dm_bz = self.ni.unfold_kdms(cell, dms, nao)?;
+
         // `kuks.py:59-60` — one density SET per spin.
-        let sets: [KDms; 2] = [vec![dms[0].clone()], vec![dms[1].clone()]];
+        let sets: [KDms; 2] = [vec![dm_bz[0].clone()], vec![dm_bz[1].clone()]];
         let nr = self
             .ni
             .nr_uks(cell, &self.grids, &self.xc, &sets, 1, Some(&band))?;
-        let mut vxc: KDms = vec![nr.vmat[0][0].clone(), nr.vmat[1][0].clone()];
+        // P-02 step 3 (U-06 step 3, applied to the k-symmetric twin): `nr` is
+        // an OWNED `NrKUksResult`, so take the two `vmat` stacks out of it
+        // rather than cloning `nkpts_ibz x nao^2` complex twice per cycle.
+        // `nr.excsum` is read FIRST because the move invalidates that field.
         let mut exc = nr.excsum[0];
+        let mut nr_vmat = nr.vmat;
+        let vmat_b = nr_vmat[1].swap_remove(0);
+        let vmat_a = nr_vmat[0].swap_remove(0);
+        let mut vxc: KDms = vec![vmat_a, vmat_b];
 
-        let dm_bz = self.ni.unfold_kdms(cell, dms, nao)?;
         let jk = get_jk(
             self.with_df.as_ref(),
             &self.xc,
@@ -669,8 +712,10 @@ impl KsymAdaptedKuks {
 
         // `kuks.py:87` with `weights_ibz` in place of `1/nkpts`.
         let ecoul = if ground_state {
-            let stacked: Vec<KMats> = vec![jtot.clone(), jtot.clone()];
-            0.5 * self.weighted_trace_uks(dms, &stacked, nao)
+            // P-02 (the U-06 change, applied to the k-symmetric twin): trace
+            // the 2-set density against ONE shared Coulomb stack instead of
+            // cloning `jtot` into a two-set stack. Bit-exact.
+            0.5 * self.weighted_trace_uks_shared(dms, &jtot, nao)
         } else {
             0.0
         };
@@ -697,25 +742,28 @@ impl KsymAdaptedKuks {
     ///
     /// The unrestricted analogue of [`KsymAdaptedKrks::weighted_trace`], and
     /// the same warning applies: `1/nkpts` here would silently drop every star
-    /// multiplicity.
+    /// multiplicity. P-02 moved the body to
+    /// [`crate::veff::weighted_trace_dm_v`]; the partials are pushed in the
+    /// same `(spin, k)` order the nest used, so this is bit-exact at every
+    /// gated cell.
     fn weighted_trace_uks(&self, dms: &KDms, v: &[KMats], nao: usize) -> f64 {
-        let w = &self.kpts.weights_ibz;
-        let mut acc = 0.0;
-        for (spin, dset) in dms.iter().enumerate() {
-            for k in 0..self.kpts_ibz.len() {
-                let (d, vk) = (&dset[k], &v[spin][k]);
-                let mut t = 0.0;
-                for i in 0..nao {
-                    for j in 0..nao {
-                        let dij = i * nao + j;
-                        let vji = j * nao + i;
-                        t += d.re[dij] * vk.re[vji] - d.im[dij] * vk.im[vji];
-                    }
-                }
-                acc += w[k] * t;
-            }
-        }
-        acc
+        crate::veff::weighted_trace_dm_v(dms, v, &self.kpts.weights_ibz, nao)
+    }
+
+    /// [`KsymAdaptedKuks::weighted_trace_uks`] against ONE shared matrix
+    /// stack — both spin channels traced against the same `v`.
+    ///
+    /// # P-02 — the two clones U-06 deleted from `kuks.rs`, one file over
+    ///
+    /// `get_veff_tagged` traced the spin-summed Coulomb matrix through
+    /// `vec![jtot.clone(), jtot.clone()]` and `energy_elec` traced the
+    /// one-electron matrix through `vec![h1e.to_vec(), h1e.to_vec()]` — two
+    /// full `nkpts_ibz x nao^2` complex stacks built and dropped on every
+    /// cycle, purely to satisfy a `v[s][k]` index shape. Bit-exact to remove:
+    /// the operands are numerically identical and the partial order is
+    /// unchanged.
+    fn weighted_trace_uks_shared(&self, dms: &KDms, v: &KMats, nao: usize) -> f64 {
+        crate::veff::weighted_trace_dm_v_shared(dms, v, &self.kpts.weights_ibz, nao)
     }
 }
 
@@ -744,13 +792,15 @@ impl KOverrideHooks for KsymAdaptedKuks {
     }
 
     fn get_init_guess(&self, mode: &KInitGuess, s1e: &KMats) -> Result<KDms, PyscfRsError> {
+        let (na, nb) = self.nelec()?;
         pyscf_pbc_scf::init_guess::get_init_guess(
             self.cell(),
             self.kpts_ibz.len(),
             2,
             mode,
             s1e,
-            self.cell().tot_electrons(self.kpts.nkpts()) as f64,
+            &[na as f64, nb as f64],
+            self.init_guess_breaksym,
         )
     }
 
@@ -844,9 +894,9 @@ impl KOverrideHooks for KsymAdaptedKuks {
             ))
         })?;
         let _ = vhf;
-        // `e1` sums BOTH spin channels against the same one-electron matrix.
-        let stacked: Vec<KMats> = vec![h1e.to_vec(), h1e.to_vec()];
-        let e1 = self.weighted_trace_uks(dms, &stacked, nao);
+        // `e1` sums BOTH spin channels against the same one-electron matrix —
+        // P-02: against it directly, not against two clones of it.
+        let e1 = self.weighted_trace_uks_shared(dms, h1e, nao);
         Ok((e1 + tags.ecoul + tags.exc, tags.ecoul))
     }
 }

@@ -5563,6 +5563,7 @@ dependencies = [
  "pyscf-pbc-dft",
  "pyscf-pbc-gto",
  "pyscf-pbc-scf",
+ "pyscf-pbc-symm",
  "pyscf-pbc-tools",
  "pyscf-scf",
  "rayon",

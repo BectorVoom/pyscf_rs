@@ -38,7 +38,9 @@
 //! NOT delegate — they are the actual point of this plan, and go through
 //! [`crate::multigrid::colloc`] end to end.
 
-use pyscf_algebra::CTensor;
+use std::sync::{Arc, Mutex};
+
+use pyscf_algebra::{CTensor, oracle_sum};
 use pyscf_pbc_df::fftdf::Fftdf;
 use pyscf_pbc_gto::Cell;
 use pyscf_pbc_gto::{get_coulg_at_gv, get_gv};
@@ -46,14 +48,38 @@ use pyscf_pbc_gto::{get_coulg_at_gv, get_gv};
 use crate::error::PbcDftError;
 use crate::multigrid::colloc::{self, LevelValues};
 use crate::multigrid::tasks::{self, Decontracted, GridLevel};
-use crate::xc::{RhoEff, VxcEff, XcType, eval_xc_eff_rks};
+use crate::multigrid::utils::cell_fingerprint;
+use crate::xc::{RhoEff, VxcEff, XcType, eval_xc_eff_rks, eval_xc_eff_uks};
 
 const GAMMA: [f64; 3] = [0.0, 0.0, 0.0];
 
+/// The cell-independent geometry one multigrid density evaluation needs:
+/// the decontracted primitive basis and the grid-level task list.
+///
+/// M-02. Both are pure functions of the cell, and both were rebuilt on every
+/// call — i.e. on every SCF cycle — before this cache existed.
+type V1Tasks = (Decontracted, Vec<GridLevel>);
+
 /// `pbc.dft.multigrid.MultiGridNumInt` — the v1 multigrid driver (gamma
 /// point; see the module doc).
+///
+/// # M-02 — this used to be a unit struct
+///
+/// It now carries a one-entry geometry cache keyed by
+/// [`crate::multigrid::utils::cell_fingerprint`]. `new()` and `default()` are
+/// unchanged from a caller's point of view; the cache fills on first use and
+/// is dropped whenever a different cell is passed (or on [`Self::reset`]).
+///
+/// The stored value is small — the pshell records plus the `nao_p x nao`
+/// expansion matrix and the level index lists — so there is no memory
+/// trade-off to make here. The LARGE per-level collocation tables are NOT
+/// cached across calls; they are shared between the forward and reverse
+/// passes of ONE call instead, which is where the duplication actually was
+/// (see [`MultiGridNumInt::nr_rks`]).
 #[derive(Debug, Default)]
-pub struct MultiGridNumInt;
+pub struct MultiGridNumInt {
+    prepared: Mutex<Option<(u64, Arc<V1Tasks>)>>,
+}
 
 /// `(exc, nelec, veff)` — [`MultiGridNumInt::nr_rks`]'s return, mirroring
 /// upstream's `nr_rks` tuple (`multigrid.py:1059-1155`) minus `vj`/`ecoul`
@@ -67,15 +93,52 @@ pub struct MgNrRksResult {
     pub veff: Vec<f64>,
 }
 
+/// [`MultiGridNumInt::nr_uks`]'s return — the open-shell twin of
+/// [`MgNrRksResult`], with a per-spin electron count and two potentials.
+#[derive(Debug, Clone)]
+pub struct MgNrUksResult {
+    /// `(n_alpha, n_beta)` from the numerical integration.
+    pub nelec: (f64, f64),
+    pub exc: f64,
+    pub ecoul: f64,
+    /// `[alpha, beta]`, each `nao x nao` row-major.
+    pub veff: [Vec<f64>; 2],
+}
+
 impl MultiGridNumInt {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
-    fn build_tasks(&self, cell: &Cell) -> Result<(Decontracted, Vec<GridLevel>), PbcDftError> {
+    /// Drop the cached geometry — the `KNumInt::reset` idiom. Only needed if a
+    /// caller mutates a `Cell` in place in a way
+    /// [`crate::multigrid::utils::cell_fingerprint`] would not see; a
+    /// different cell is detected automatically.
+    pub fn reset(&self) {
+        if let Ok(mut g) = self.prepared.lock() {
+            *g = None;
+        }
+    }
+
+    /// The decontraction and the level task list, memoised on the cell — M-02.
+    ///
+    /// # Errors
+    /// Propagates [`tasks::build_pshells`] / [`tasks::multi_grids_tasks_for_ke_cut`].
+    fn build_tasks(&self, cell: &Cell) -> Result<Arc<V1Tasks>, PbcDftError> {
+        let key = cell_fingerprint(cell);
+        if let Ok(g) = self.prepared.lock()
+            && let Some((k, v)) = g.as_ref()
+            && *k == key
+        {
+            return Ok(Arc::clone(v));
+        }
         let decon = tasks::build_pshells(cell)?;
         let levels = tasks::multi_grids_tasks_for_ke_cut(cell, &decon, cell.mesh)?;
-        Ok((decon, levels))
+        let out = Arc::new((decon, levels));
+        if let Ok(mut g) = self.prepared.lock() {
+            *g = Some((key, Arc::clone(&out)));
+        }
+        Ok(out)
     }
 
     /// `get_nuc(mydf)` — delegated, see the module doc.
@@ -106,9 +169,11 @@ impl MultiGridNumInt {
     /// # Errors
     /// Propagates task-list / collocation / FFT construction.
     pub fn eval_rho_g(&self, cell: &Cell, dm: &[f64]) -> Result<CTensor, PbcDftError> {
-        let (decon, levels) = self.build_tasks(cell)?;
-        let dm_p = colloc::expand_dm(&decon, dm);
-        rho_g_from_levels(cell, &decon, &levels, &dm_p)
+        let prep = self.build_tasks(cell)?;
+        let (decon, levels) = (&prep.0, &prep.1);
+        let dm_p = colloc::expand_dm(decon, dm);
+        let lvs = collocate_all_levels(cell, decon, levels)?;
+        rho_g_from_level_values(cell, decon, &lvs, &dm_p)
     }
 
     /// `get_j_kpts` at gamma — `multigrid.py:515-544`, `_get_j_pass2`
@@ -119,9 +184,16 @@ impl MultiGridNumInt {
     /// Propagates task-list / collocation / FFT construction.
     #[allow(clippy::needless_range_loop)]
     pub fn get_j(&self, cell: &Cell, dm: &[f64]) -> Result<Vec<f64>, PbcDftError> {
-        let (decon, levels) = self.build_tasks(cell)?;
-        let dm_p = colloc::expand_dm(&decon, dm);
-        let rho_g = rho_g_from_levels(cell, &decon, &levels, &dm_p)?;
+        let prep = self.build_tasks(cell)?;
+        let (decon, levels) = (&prep.0, &prep.1);
+        let dm_p = colloc::expand_dm(decon, dm);
+        // M-02: collocate each level ONCE and share it between the forward
+        // (density) and reverse (`pass2`) directions. They used to be two
+        // independent `collocate_level` sweeps over the same levels with the
+        // same inputs, i.e. the collocation — the dominant cost of a v1 call —
+        // was done twice. Bit-exact: the same table, used twice.
+        let lvs = collocate_all_levels(cell, decon, levels)?;
+        let rho_g = rho_g_from_level_values(cell, decon, &lvs, &dm_p)?;
 
         let mesh = cell.mesh;
         let gv = get_gv(cell, Some(mesh))?;
@@ -131,8 +203,8 @@ impl MultiGridNumInt {
             vg.re[g] *= coulg[g];
             vg.im[g] *= coulg[g];
         }
-        let v_p = pass2_from_full_vg(cell, &decon, &levels, &vg)?;
-        Ok(colloc::contract_v(&decon, &v_p))
+        let v_p = pass2_from_level_values(cell, decon, &lvs, &vg)?;
+        Ok(colloc::contract_v(decon, &v_p))
     }
 
     /// `nr_rks(mydf, xc_code, dm, with_j=True)` at gamma — `multigrid.py:1059-1155`.
@@ -154,68 +226,228 @@ impl MultiGridNumInt {
         xc_code: &str,
         dm: &[f64],
     ) -> Result<MgNrRksResult, PbcDftError> {
-        let ty = XcType::of(xc_code)?;
-        let (decon, levels) = self.build_tasks(cell)?;
-        let dm_p = colloc::expand_dm(&decon, dm);
-        let rho_g = rho_g_from_levels(cell, &decon, &levels, &dm_p)?;
+        let prep = self.build_tasks(cell)?;
+        let (decon, levels) = (&prep.0, &prep.1);
+        let dm_p = colloc::expand_dm(decon, dm);
+        // M-02 — see `get_j`: one collocation sweep, used by both directions.
+        let lvs = collocate_all_levels(cell, decon, levels)?;
+        let rho_g = rho_g_from_level_values(cell, decon, &lvs, &dm_p)?;
 
-        let mesh = cell.mesh;
-        let ngrids = mesh[0] * mesh[1] * mesh[2];
-        let vol = cell.vol();
-        let gv = get_gv(cell, Some(mesh))?;
-        let coulg = get_coulg_at_gv(cell, mesh, &gv)?;
+        // M-00: the middle is shared with `nr_uks` and with the v2 driver.
+        let parts = mg_xc_parts(cell, xc_code, std::slice::from_ref(&rho_g))?;
+        let v_p = pass2_from_level_values(cell, decon, &lvs, &parts.wv_freq0[0])?;
+        let veff = colloc::contract_v(decon, &v_p);
 
-        let mut vg = rho_g.clone();
-        for g in 0..ngrids {
-            vg.re[g] *= coulg[g];
-            vg.im[g] *= coulg[g];
+        Ok(MgNrRksResult {
+            nelec: parts.nelec[0],
+            exc: parts.exc,
+            ecoul: parts.ecoul,
+            veff,
+        })
+    }
+
+    /// `nr_uks(mydf, xc_code, [dm_a, dm_b], with_j=True)` at gamma —
+    /// `multigrid.py:1166-1270`. **M-00.**
+    ///
+    /// # Why this did not exist before
+    ///
+    /// 17-11 shipped `nr_rks` only, and 17-12 the same for v2, so "KUKS on
+    /// multigrid" was a phrase and not a code path — which also meant no
+    /// multigrid optimisation could be validated on an open-shell density
+    /// (RULE U). The Coulomb half is built from the SPIN-SUMMED density and
+    /// both channels receive the same `vG`; only the XC evaluation and the
+    /// two `pass2` sweeps are per spin.
+    ///
+    /// The collocation is done ONCE per spin for the density and then REUSED
+    /// for both `pass2` sweeps (M-02), so an open-shell evaluation costs two
+    /// density sweeps and two `pass2` sweeps over ONE set of level tables —
+    /// not two independent `nr_rks` calls.
+    ///
+    /// # Errors
+    /// Propagates task-list / collocation / FFT / XC evaluation.
+    pub fn nr_uks(
+        &self,
+        cell: &Cell,
+        xc_code: &str,
+        dm: &[&[f64]; 2],
+    ) -> Result<MgNrUksResult, PbcDftError> {
+        let prep = self.build_tasks(cell)?;
+        let (decon, levels) = (&prep.0, &prep.1);
+        let lvs = collocate_all_levels(cell, decon, levels)?;
+
+        let mut rho_g = Vec::with_capacity(2);
+        for d in dm {
+            let dm_p = colloc::expand_dm(decon, d);
+            rho_g.push(rho_g_from_level_values(cell, decon, &lvs, &dm_p)?);
         }
-        // ecoul = 0.5 * Re(<rhoG|vG>) / vol   (multigrid.py:1112-1114)
-        let ecoul = 0.5
-            * (0..ngrids)
-                .map(|g| rho_g.re[g] * vg.re[g] + rho_g.im[g] * vg.im[g])
-                .sum::<f64>()
-            / vol;
 
-        let weight = vol / ngrids as f64;
-        let rho_r = pyscf_pbc_tools::ifft(&rho_g, mesh).map_err(wrap_tools)?;
-        let rho_scalar: Vec<f64> = rho_r.re.iter().map(|x| x / weight).collect();
-        let nelec = rho_scalar.iter().sum::<f64>() * weight;
+        let parts = mg_xc_parts(cell, xc_code, &rho_g)?;
+        let mut veff = Vec::with_capacity(2);
+        for w in &parts.wv_freq0 {
+            let v_p = pass2_from_level_values(cell, decon, &lvs, w)?;
+            veff.push(colloc::contract_v(decon, &v_p));
+        }
+        let vb = veff.pop().expect("two channels");
+        let va = veff.pop().expect("two channels");
 
-        let mut rho_eff = RhoEff::zeros(ty, ngrids);
-        rho_eff.row_mut(0).copy_from_slice(&rho_scalar);
+        Ok(MgNrUksResult {
+            nelec: (parts.nelec[0], parts.nelec[1]),
+            exc: parts.exc,
+            ecoul: parts.ecoul,
+            veff: [va, vb],
+        })
+    }
+}
+
+/// What [`mg_xc_parts`] returns: everything a multigrid `nr_rks`/`nr_uks`
+/// needs between the density and the `pass2` sweep.
+///
+/// M-00. The two drivers (v1 `MultiGridNumInt`, v2 `MultiGridNumInt2`) and the
+/// two spin cases (RKS, UKS) share this middle entirely — upstream's
+/// `multigrid.py:1059` `nr_rks` and `:1166` `nr_uks` differ only in producing
+/// `rhoG` per spin, summing it for the Coulomb term, and calling the
+/// unrestricted XC evaluator. Writing it once is what makes `nr_uks` a small
+/// addition to each driver instead of a second copy of this arithmetic.
+pub(crate) struct MgXcParts {
+    /// Integrated electron count, per spin channel.
+    pub nelec: Vec<f64>,
+    /// `Σ_s Σ_g rho_s(g) · eps_xc(g) · w` — upstream's `excsum`.
+    pub exc: f64,
+    /// `0.5 · Re<rho_sf|v_G> / vol` on the SPIN-SUMMED density.
+    pub ecoul: f64,
+    /// The G-space field each spin's `pass2` sweep contracts, `wv_freq[s][0]`
+    /// with the GGA divergence folded in and the Coulomb potential added.
+    pub wv_freq0: Vec<CTensor>,
+}
+
+/// The spin-generic middle of a multigrid `nr_rks` / `nr_uks` — M-00.
+///
+/// `rho_g[s]` is spin channel `s`'s density on `cell.mesh` in G-space, already
+/// carrying the `weight` scaling `_eval_rhoG` applies. One entry means RKS,
+/// two means UKS; nothing else is accepted.
+///
+/// Ported from `multigrid.py:1059-1160` (`nr_rks`) and `:1166-1270`
+/// (`nr_uks`), which agree line for line once the spin axis is factored out:
+///
+/// * the Coulomb term uses the SPIN-SUMMED density
+///   (`rhoG_sf = rhoG[0,0] + rhoG[1,0]`, `:1223`), and both channels then
+///   receive the SAME `vG` (`wv_freq[:,0] += vG`, `:1246`);
+/// * `excsum` is `rhoR[:,0].dot(exc).sum()` (`:1238`) — a per-spin dot
+///   followed by a sum over spins, which is the association reproduced here
+///   rather than one flat reduction over `2 * ngrids` terms (the U-03
+///   discipline: upstream's association is part of the answer);
+/// * the GGA route is upstream's DEFAULT `RHOG_HIGH_ORDER = False` one —
+///   `grad rho` from G-space, then `wv[0] -= i·Gv·wv[1:4]` (`:1256`) — so
+///   `pass2` is always an LDA-shaped contraction.
+///
+/// # Bit-parity against the pre-M-00 `nr_rks`
+///
+/// EXACT for the one-channel case: with `rho_g.len() == 1` the spin sum is
+/// `0 + x`, the `excsum` composition is a one-element pairwise sum, and every
+/// other statement is the same arithmetic in the same order.
+///
+/// # Errors
+/// Propagates the FFT and the XC evaluation, and rejects a channel count
+/// other than 1 or 2.
+pub(crate) fn mg_xc_parts(
+    cell: &Cell,
+    xc_code: &str,
+    rho_g: &[CTensor],
+) -> Result<MgXcParts, PbcDftError> {
+    let nspin = rho_g.len();
+    if nspin != 1 && nspin != 2 {
+        return Err(PbcDftError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(format!(
+                "multigrid: expected 1 (RKS) or 2 (UKS) density channels, got {nspin}"
+            )),
+        )));
+    }
+    let ty = XcType::of(xc_code)?;
+    let mesh = cell.mesh;
+    let ngrids = mesh[0] * mesh[1] * mesh[2];
+    let vol = cell.vol();
+    let weight = vol / ngrids as f64;
+    let gv = get_gv(cell, Some(mesh))?;
+    let coulg = get_coulg_at_gv(cell, mesh, &gv)?;
+
+    // `multigrid.py:1223` — the Coulomb term sees the SPIN-SUMMED density.
+    // For `nspin == 1` this is `0 + rho`, i.e. bit-identical to using it
+    // directly.
+    let mut rho_sf = CTensor::zeros(ngrids);
+    for r in rho_g {
+        for g in 0..ngrids {
+            rho_sf.re[g] += r.re[g];
+            rho_sf.im[g] += r.im[g];
+        }
+    }
+    let mut vg = rho_sf.clone();
+    for g in 0..ngrids {
+        vg.re[g] *= coulg[g];
+        vg.im[g] *= coulg[g];
+    }
+    // P-03: ordered, not `Iterator::sum` — see the note this replaced.
+    let ecoul_terms: Vec<f64> = (0..ngrids)
+        .map(|g| rho_sf.re[g] * vg.re[g] + rho_sf.im[g] * vg.im[g])
+        .collect();
+    let ecoul = 0.5 * oracle_sum(&ecoul_terms) / vol;
+
+    // Real-space density (and, for GGA, its gradient) per spin.
+    let mut rho_eff: Vec<RhoEff> = Vec::with_capacity(nspin);
+    let mut rho_scalar: Vec<Vec<f64>> = Vec::with_capacity(nspin);
+    let mut nelec: Vec<f64> = Vec::with_capacity(nspin);
+    for r in rho_g {
+        let rho_r = pyscf_pbc_tools::ifft(r, mesh).map_err(wrap_tools)?;
+        let scalar: Vec<f64> = rho_r.re.iter().map(|x| x / weight).collect();
+        nelec.push(oracle_sum(&scalar) * weight);
+        let mut eff = RhoEff::zeros(ty, ngrids);
+        eff.row_mut(0).copy_from_slice(&scalar);
         if ty == XcType::Gga {
-            for (axis, gv_axis) in [0usize, 1, 2].into_iter().zip([0usize, 1, 2]) {
+            for axis in 0..3 {
                 let mut gcomp = CTensor::zeros(ngrids);
                 for g in 0..ngrids {
                     // d(rho)/dx_axis in G-space: i * Gv[g,axis] * rhoG[g].
-                    let gk = gv[g][gv_axis];
-                    gcomp.re[g] = -gk * rho_g.im[g];
-                    gcomp.im[g] = gk * rho_g.re[g];
+                    let gk = gv[g][axis];
+                    gcomp.re[g] = -gk * r.im[g];
+                    gcomp.im[g] = gk * r.re[g];
                 }
                 let grad_r = pyscf_pbc_tools::ifft(&gcomp, mesh).map_err(wrap_tools)?;
-                let row = rho_eff.row_mut(1 + axis);
+                let row = eff.row_mut(1 + axis);
                 for g in 0..ngrids {
                     row[g] = grad_r.re[g] / weight;
                 }
             }
         }
+        rho_eff.push(eff);
+        rho_scalar.push(scalar);
+    }
 
-        let xc_out: VxcEff = eval_xc_eff_rks(xc_code, &rho_eff)?;
-        let exc_row = &xc_out.exc;
-        let exc = (0..ngrids)
-            .map(|g| rho_scalar[g] * exc_row[g])
-            .sum::<f64>()
-            * weight;
+    let xc_out: VxcEff = if nspin == 1 {
+        eval_xc_eff_rks(xc_code, &rho_eff[0])?
+    } else {
+        eval_xc_eff_uks(xc_code, &rho_eff[0], &rho_eff[1])?
+    };
 
-        // wv = weight * vxc, FFT'd per row; GGA folds rows 1..4 into row 0
-        // via the G-space divergence trick (see the fn doc).
-        let mut wv_freq: Vec<CTensor> = Vec::with_capacity(ty.nvar());
+    // `multigrid.py:1238` — a per-spin dot, then a sum over spins.
+    let exc_row = &xc_out.exc;
+    let per_spin: Vec<f64> = rho_scalar
+        .iter()
+        .map(|scalar| {
+            let terms: Vec<f64> = (0..ngrids).map(|g| scalar[g] * exc_row[g]).collect();
+            oracle_sum(&terms)
+        })
+        .collect();
+    let exc = oracle_sum(&per_spin) * weight;
+
+    // `wv = weight * vxc`, FFT'd per row; the GGA rows fold into row 0 via the
+    // G-space divergence, then the Coulomb potential is added to row 0.
+    let mut wv_freq0 = Vec::with_capacity(nspin);
+    for s in 0..nspin {
+        let mut rows: Vec<CTensor> = Vec::with_capacity(ty.nvar());
         for v in 0..ty.nvar() {
-            let row = xc_out.row(0, v);
+            let row = xc_out.row(s, v);
             let wv: Vec<f64> = row.iter().map(|x| x * weight).collect();
             let wv_c = CTensor::from_planes(wv, vec![0.0; ngrids]);
-            wv_freq.push(pyscf_pbc_tools::fft(&wv_c, mesh).map_err(wrap_tools)?);
+            rows.push(pyscf_pbc_tools::fft(&wv_c, mesh).map_err(wrap_tools)?);
         }
         if ty == XcType::Gga {
             for g in 0..ngrids {
@@ -224,29 +456,28 @@ impl MultiGridNumInt {
                 for axis in 0..3 {
                     let gk = gv[g][axis];
                     // i * Gv . wv_freq[1:4]
-                    dot_re += -gk * wv_freq[1 + axis].im[g];
-                    dot_im += gk * wv_freq[1 + axis].re[g];
+                    dot_re += -gk * rows[1 + axis].im[g];
+                    dot_im += gk * rows[1 + axis].re[g];
                 }
-                wv_freq[0].re[g] -= dot_re;
-                wv_freq[0].im[g] -= dot_im;
+                rows[0].re[g] -= dot_re;
+                rows[0].im[g] -= dot_im;
             }
         }
-        // with_j: fold the Coulomb potential into the same G-space field.
+        // with_j: fold the Coulomb potential into the same G-space field. Both
+        // channels get the SAME `vG` (`multigrid.py:1246`).
         for g in 0..ngrids {
-            wv_freq[0].re[g] += vg.re[g];
-            wv_freq[0].im[g] += vg.im[g];
+            rows[0].re[g] += vg.re[g];
+            rows[0].im[g] += vg.im[g];
         }
-
-        let v_p = pass2_from_full_vg(cell, &decon, &levels, &wv_freq[0])?;
-        let veff = colloc::contract_v(&decon, &v_p);
-
-        Ok(MgNrRksResult {
-            nelec,
-            exc,
-            ecoul,
-            veff,
-        })
+        wv_freq0.push(rows.swap_remove(0));
     }
+
+    Ok(MgXcParts {
+        nelec,
+        exc,
+        ecoul,
+        wv_freq0,
+    })
 }
 
 pub(crate) fn wrap_tools(e: pyscf_pbc_tools::PbcToolsError) -> PbcDftError {
@@ -261,31 +492,59 @@ pub(crate) fn wrap_df(e: pyscf_pbc_df::PbcDfError) -> PbcDftError {
     ))
 }
 
+/// Collocate every level ONCE — M-02.
+///
+/// The forward (`rho`) and reverse (`pass2`) directions of one v1 call read
+/// the identical per-level Cartesian primitive values, and used to build them
+/// independently: `rho_g_from_levels` called `collocate_level` per level and
+/// `pass2_from_full_vg` called it again, per level, a few statements later.
+/// Collocation is the dominant cost of a v1 evaluation (a `PeriodicGrids`
+/// build, a per-pshell lattice image list, and one kernel launch per level),
+/// so that was a factor of two on the whole driver.
+///
+/// The tables are held for the duration of ONE call and dropped at its end —
+/// they are `n_slots * ngrids` doubles per level and caching them across SCF
+/// cycles is a memory trade-off this item deliberately does not make.
+///
+/// # Errors
+/// Propagates [`colloc::collocate_level`].
+fn collocate_all_levels(
+    cell: &Cell,
+    decon: &Decontracted,
+    levels: &[GridLevel],
+) -> Result<Vec<LevelValues>, PbcDftError> {
+    levels
+        .iter()
+        .map(|level| colloc::collocate_level(cell, decon, level))
+        .collect()
+}
+
 /// Combine every level's real-space `rho` into `rho(G)` on `cell.mesh`,
 /// via `fft(rho_level) * weight_level` inserted at that level's own
 /// G-window into the big mesh's G array (`_eval_rhoG`/`_takebak_4d`,
 /// `multigrid.py:664-679`).
-fn rho_g_from_levels(
+///
+/// M-02: takes the already-collocated level tables rather than building them.
+fn rho_g_from_level_values(
     cell: &Cell,
     decon: &Decontracted,
-    levels: &[GridLevel],
+    lvs: &[LevelValues],
     dm_p: &[f64],
 ) -> Result<CTensor, PbcDftError> {
     let mesh = cell.mesh;
     let ngrids_full = mesh[0] * mesh[1] * mesh[2];
     let mut rho_g = CTensor::zeros(ngrids_full);
     let vol = cell.vol();
-    for level in levels {
-        let lv: LevelValues = colloc::collocate_level(cell, decon, level)?;
-        let rho_r = colloc::level_rho(&lv, decon, dm_p);
-        let ngrids_level = level.mesh[0] * level.mesh[1] * level.mesh[2];
+    for lv in lvs {
+        let rho_r = colloc::level_rho(lv, decon, dm_p);
+        let ngrids_level = lv.ngrids;
         let weight = vol / ngrids_level as f64;
         let rr = CTensor::from_planes(rho_r, vec![0.0; ngrids_level]);
-        let mut freq = pyscf_pbc_tools::fft(&rr, level.mesh).map_err(wrap_tools)?;
+        let mut freq = pyscf_pbc_tools::fft(&rr, lv.mesh).map_err(wrap_tools)?;
         for x in freq.re.iter_mut().chain(freq.im.iter_mut()) {
             *x *= weight;
         }
-        insert_gspace_window(&mut rho_g, mesh, &freq, level.mesh);
+        insert_gspace_window(&mut rho_g, mesh, &freq, lv.mesh);
     }
     Ok(rho_g)
 }
@@ -297,19 +556,21 @@ fn rho_g_from_levels(
 ///
 /// # Errors
 /// Propagates the FFT / collocation.
-fn pass2_from_full_vg(
+///
+/// M-02: takes the already-collocated level tables rather than rebuilding
+/// them, which is the half of the duplication this driver used to pay.
+fn pass2_from_level_values(
     cell: &Cell,
     decon: &Decontracted,
-    levels: &[GridLevel],
+    lvs: &[LevelValues],
     vg_full: &CTensor,
 ) -> Result<Vec<f64>, PbcDftError> {
     let mesh = cell.mesh;
     let mut v_p = vec![0.0f64; decon.nao_p * decon.nao_p];
-    for level in levels {
-        let sub = extract_gspace_window(vg_full, mesh, level.mesh);
-        let v_r = pyscf_pbc_tools::ifft(&sub, level.mesh).map_err(wrap_tools)?;
-        let lv = colloc::collocate_level(cell, decon, level)?;
-        colloc::level_pass2(&lv, decon, &v_r.re, &mut v_p);
+    for lv in lvs {
+        let sub = extract_gspace_window(vg_full, mesh, lv.mesh);
+        let v_r = pyscf_pbc_tools::ifft(&sub, lv.mesh).map_err(wrap_tools)?;
+        colloc::level_pass2(lv, decon, &v_r.re, &mut v_p);
     }
     Ok(v_p)
 }

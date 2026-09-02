@@ -65,7 +65,10 @@
 //! NOT ported.
 
 use pyscf_algebra::AlgebraError;
-use pyscf_kernels::multigrid_pair::{PairSlotTable, collocate_pairs};
+use pyscf_kernels::multigrid_pair::{
+    PairSlotBatch, PairSlotTable, collocate_pairs_integrate, collocate_pairs_integrate_batched,
+    collocate_pairs_rho, collocate_pairs_rho_batched,
+};
 use pyscf_pbc_gto::Cell;
 use pyscf_pbc_gto::lattice::get_lattice_ls;
 
@@ -105,7 +108,7 @@ pub fn pair_grid_levels(cell: &Cell) -> Result<Vec<GridLevelSpec>, PbcDftError> 
             k3.into_iter().fold(f64::NEG_INFINITY, f64::max)
         }
     };
-    let mut cutoff = vec![0.0f64; NTASKS];
+    let mut cutoff = [0.0f64; NTASKS];
     cutoff[NTASKS - 1] = ke_cutoff;
     let mut ke1 = ke_cutoff;
     for i in (0..NTASKS - 1).rev() {
@@ -180,7 +183,8 @@ pub fn build_pair_task_list(
                 let dist2 = dx * dx + dy * dy + dz * dz;
                 let eta = p.alpha + q.alpha;
                 let k = (-p.alpha * q.alpha / eta * dist2).exp();
-                if k * p.coef.abs() * q.coef.abs() >= threshold {
+                let scale = (p.coef * q.coef).abs();
+                if pair_prescreen_bound(k, scale, dist2.sqrt(), p.l + q.l, eta) >= threshold {
                     any = true;
                     break;
                 }
@@ -239,16 +243,139 @@ pub fn binom_shift(a: u32, b: u32, pa: f64, pb: f64) -> Vec<f64> {
     f
 }
 
-/// One level's collocated pair-fused slot values, plus the `(ci, cj)`
-/// routing every slot needs for the dm/weight contraction —
-/// [`pairlevel_rho`] / [`pairlevel_pass2`].
-pub struct PairLevelValues {
-    pub table: PairSlotTable,
-    pub slot_ci: Vec<usize>,
-    pub slot_cj: Vec<usize>,
-    pub values: Vec<f64>,
-    pub ngrids: usize,
+/// Target edge (grid points per axis) of one [`GridBlock`] — upstream's
+/// rcut sub-mesh idea turned inside out: instead of one sub-mesh per
+/// Gaussian, one slot subset per block of the mesh. Every level is
+/// streamed through the kernel one block at a time with the reduction
+/// fused into the kernel (`collocate_pairs_rho` / `collocate_pairs_integrate`),
+/// so the only per-launch buffers are the block's points, its selected
+/// slots and ONE output value per point (rho) or per slot (pass2): peak
+/// memory is bounded by the table itself, never by `slots × ngrids`,
+/// which for the 25³ Gate-E cells is >100 GiB per level and was
+/// exit-137'd in 17-12's first run (`17-12-SUMMARY.md`).
+pub const BLOCK_EDGE: usize = 5;
+
+/// One level's pair-fused GEOMETRY — host-side only, NO grid values —
+/// the v2 analogue of upstream's per-level `TaskList` entry plus the
+/// Hermite/Cartesian pair coefficients `grid_collocate_drv` contracts the
+/// density matrix into before it touches the grid.
+///
+/// Three index spaces:
+///
+/// * **fused terms** `t` — one per `(pair instance (p,q,L), monomial
+///   (k1,k2,k3))`: the logical object `C_t · (r-P)^k · exp(-eta|r-P|²)`.
+/// * **slots** `s` — one per `(term, ci, cj)` with a non-zero geometric
+///   coefficient; the routing between a fused term and the decontracted
+///   AO pair it came from. The coefficient is `K · fx·fy·fz` ONLY — the
+///   contraction coefficient and `common_fac_sp` already live in
+///   `Decontracted::expand`, and `dm_p = E·dm·Eᵀ` / `v = Eᵀ·v_p·E` apply
+///   them exactly once (the same convention `crate::multigrid::colloc`
+///   documents at its `pshell_coef = 1.0`).
+/// * **kernel slots** `k` — one per `(term, wrap image L1)`: what the
+///   kernel actually evaluates. A fused Gaussian centred at `P` is a
+///   PERIODIC function on the grid, `Σ_{L1} G_P(r - L1)`; upstream's C
+///   collocation gets this by indexing its rcut sub-mesh modulo the mesh,
+///   this port gets it by giving every image `P + L1` whose radius reaches
+///   the cell its own kernel instance, sharing the term's coefficients
+///   (the polynomial is in `r - P - L1`, and `pa`/`pb` are unchanged by a
+///   common shift of `A` and `B+L`). Without it a Gaussian on an atom at
+///   the cell origin keeps only its one in-cell octant.
+///
+/// `rho(r) = Σ_k C_{term(k)} · kslot_k(r)` with `C_t = Σ_{s→t}
+/// dm_p[ci,cj]·coef_s`, and its transpose `v_p[ci,cj] += Σ_{s→t} coef_s ·
+/// Σ_{k→t} ∫ w·kslot_k`. Every `Σ_{s→t}` / `Σ_{k→t}` is fixed-order
+/// (table order), independent of any parallel split (D-PBC-17 shape).
+#[derive(Debug)]
+pub struct PairLevelTable {
     pub mesh: [usize; 3],
+    pub ngrids: usize,
+    /// `(ngrids, 3)` row-major, Bohr.
+    pub coords: Vec<f64>,
+    /// `inv(a)`, rows of `a` the lattice vectors: `frac = r · inv_a`.
+    pub inv_a: [[f64; 3]; 3],
+    /// Slab height between the two faces normal to each reciprocal axis.
+    pub heights: [f64; 3],
+    /// Number of fused terms.
+    pub nterms: usize,
+    /// Per slot: the GEOMETRIC coefficient (`K·fx·fy·fz`, see above).
+    pub slot_coef: Vec<f64>,
+    /// Per slot: the decontracted Cartesian AO row / column it routes to.
+    pub slot_ci: Vec<u32>,
+    pub slot_cj: Vec<u32>,
+    /// Per slot: the fused term it feeds.
+    pub slot_term: Vec<u32>,
+    /// Per kernel slot, 3 entries: `(k1,k2,k3)`.
+    pub kslot_pow: Vec<u32>,
+    /// Per kernel slot: its kernel instance (one per `(p,q,L,L1)`).
+    pub kslot_instance: Vec<u32>,
+    /// Per kernel slot: the fused term it is an image of.
+    pub kslot_term: Vec<u32>,
+    /// Per kernel instance: `eta = alpha_p + alpha_q`.
+    pub instance_alpha: Vec<f64>,
+    /// Per kernel instance, 3 entries: the (image-shifted) centre `P + L1`.
+    pub instance_center: Vec<f64>,
+    /// Per kernel instance: the fused Gaussian's own cutoff radius
+    /// ([`fused_radius`]) — what decides which [`GridBlock`]s it reaches.
+    pub instance_radius: Vec<f64>,
+
+    /// M-02: the spatial block partition of this level's mesh, and each
+    /// block's kernel-slot reach list, computed ONCE at build time.
+    ///
+    /// Both are pure geometry — [`grid_blocks`]'s own doc says so ("the
+    /// partition depends only on the mesh, never on the density, the thread
+    /// count or the backend") — and both used to be recomputed inside
+    /// [`pairlevel_rho`] AND inside [`pairlevel_pass2`], i.e. twice per level
+    /// per density evaluation, i.e. twice per level per SCF cycle.
+    /// `block_slots` in particular is `ninst * nblocks` slab-distance tests.
+    ///
+    /// Bit-exact: the same values in the same order, computed once instead of
+    /// four times.
+    pub blocks: Vec<GridBlock>,
+    /// `block_sel[b]` — [`block_slots`] for `blocks[b]`.
+    pub block_sel: Vec<Vec<u32>>,
+
+    /// M-03: every block's table CONCATENATED, so one kernel launch covers the
+    /// whole level instead of one launch per block.
+    ///
+    /// `None` when the concatenation would exceed [`BATCH_BUDGET_BYTES`], in
+    /// which case the per-block streaming path is used unchanged — the
+    /// fallback D-PBC-26 point 6 and 17-12's own OOM both argue for. The
+    /// stored batch carries geometry only; `slot_coef` is filled per call.
+    pub batch: Option<BatchedLevel>,
+}
+
+/// The M-03 concatenated launch tables for one level, plus the two maps that
+/// scatter a batched result back into mesh / kernel-slot order.
+#[derive(Debug)]
+pub struct BatchedLevel {
+    /// Geometry only — `slot_coef` is empty here and filled per call.
+    pub batch: PairSlotBatch,
+    /// Concatenated point index -> this level's mesh grid index.
+    pub point_global: Vec<u32>,
+    /// Concatenated slot index -> this level's kernel-slot index.
+    pub slot_global: Vec<u32>,
+}
+
+/// The largest concatenated batch M-03 will build, in bytes.
+///
+/// A block's kernel-slot list contains every slot whose instance REACHES that
+/// block, so a diffuse Gaussian appears in many blocks and the concatenation is
+/// a multiple — measured at roughly `0.35 * nkslots * nblocks` on the Gate-E
+/// cells — of the level's own slot count, not equal to it. That is the same
+/// quantity 17-12's `pair_level_tables_stream_under_budget` bounds per launch,
+/// and the same reason its predecessor was SIGKILLed: a batch is a memory
+/// trade for a launch-count win, and it has to be bounded.
+///
+/// 256 MiB is 17-12's own per-launch budget, reused rather than reinvented.
+pub const BATCH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+
+impl PairLevelTable {
+    pub fn nslots(&self) -> usize {
+        self.slot_term.len()
+    }
+    pub fn nkslots(&self) -> usize {
+        self.kslot_term.len()
+    }
 }
 
 fn wrap_alg(e: AlgebraError) -> PbcDftError {
@@ -257,17 +384,171 @@ fn wrap_alg(e: AlgebraError) -> PbcDftError {
     ))
 }
 
-/// Build the pair-fused slot table for `pairs` on `level`'s own mesh, and
-/// launch [`collocate_pairs`] — Task 2's forward primitive.
+fn backend_client() -> Result<pyscf_algebra::AlgebraClient, PbcDftError> {
+    Ok(pyscf_algebra::select_backend()
+        .map_err(|e| {
+            PbcDftError::Core(pyscf_core::PyscfRsError::Core(
+                pyscf_core::CoreError::InvalidMolecule(format!(
+                    "multigrid pair collocate: backend selection failed: {e}"
+                )),
+            ))
+        })?
+        .client)
+}
+
+fn norm3(v: [f64; 3]) -> f64 {
+    (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
+}
+
+/// 3×3 inverse (row-major), `None` when singular.
+fn inv3(m: &[[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    if det == 0.0 || !det.is_finite() {
+        return None;
+    }
+    let d = 1.0 / det;
+    Some([
+        [
+            (m[1][1] * m[2][2] - m[1][2] * m[2][1]) * d,
+            (m[0][2] * m[2][1] - m[0][1] * m[2][2]) * d,
+            (m[0][1] * m[1][2] - m[0][2] * m[1][1]) * d,
+        ],
+        [
+            (m[1][2] * m[2][0] - m[1][0] * m[2][2]) * d,
+            (m[0][0] * m[2][2] - m[0][2] * m[2][0]) * d,
+            (m[0][2] * m[1][0] - m[0][0] * m[1][2]) * d,
+        ],
+        [
+            (m[1][0] * m[2][1] - m[1][1] * m[2][0]) * d,
+            (m[0][1] * m[2][0] - m[0][0] * m[2][1]) * d,
+            (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * d,
+        ],
+    ])
+}
+
+/// `r · inv_a` — the fractional coordinate of a Cartesian point.
+fn frac_of(inv_a: &[[f64; 3]; 3], r: [f64; 3]) -> [f64; 3] {
+    [0usize, 1, 2].map(|i| r[0] * inv_a[0][i] + r[1] * inv_a[1][i] + r[2] * inv_a[2][i])
+}
+
+/// Radius beyond which `cmax · r^kmax · exp(-eta r²)` stays below `thr` —
+/// the fused Gaussian's own cutoff (the same `_primitive_gto_cutoff`
+/// question, asked of the PRODUCT). Two fixed-point sweeps on the
+/// polynomial factor; `0.0` when the whole function is below `thr`.
+pub fn fused_radius(cmax: f64, kmax: f64, eta: f64, thr: f64) -> f64 {
+    if cmax <= 0.0 || thr <= 0.0 || eta <= 0.0 {
+        return 0.0;
+    }
+    let lnratio = (cmax / thr).ln();
+    if lnratio <= 0.0 {
+        return 0.0;
+    }
+    let mut r = (lnratio / eta).sqrt();
+    for _ in 0..2 {
+        let arg = lnratio + kmax * r.max(1.0).ln();
+        r = (arg.max(0.0) / eta).sqrt();
+    }
+    r
+}
+
+/// Distance a fractional point `f` sits outside the fractional box
+/// `[lo, hi]`, measured along each reciprocal axis and reduced by `max` —
+/// a LOWER bound on the true point-to-parallelepiped distance (each slab
+/// distance is one), so "`<= r`" never drops a Gaussian that reaches the
+/// box; it may keep a few that do not, which costs kernel work, never
+/// accuracy.
+fn slab_distance(f: [f64; 3], lo: [f64; 3], hi: [f64; 3], heights: &[f64; 3]) -> f64 {
+    let mut d = 0.0f64;
+    for i in 0..3 {
+        let outside = if f[i] < lo[i] {
+            lo[i] - f[i]
+        } else if f[i] > hi[i] {
+            f[i] - hi[i]
+        } else {
+            0.0
+        };
+        d = d.max(outside * heights[i]);
+    }
+    d
+}
+
+/// Every lattice image `P + L1` of a fused centre `P` whose radius-`r`
+/// ball can reach the mesh — the periodic wrap of one kernel instance
+/// (see [`PairLevelTable`]). `glo`/`ghi` is the mesh's OWN fractional
+/// bounding box, measured from its coordinates: this port's uniform grid
+/// is origin-centred (`get_uniform_grids`'s `fftfreq`-style fractions in
+/// `[-0.5, 0.5)`), NOT `[0,1)` — assuming the latter silently dropped
+/// every image on the negative side of the cell and cost 1e-3 of the
+/// electron count on the Gate-E cells (found by the per-pair brute-force
+/// diagnostic in `tests/multigrid2.rs`). Candidates are the integer box
+/// `[floor(glo_i - f_i - r/h_i), ceil(ghi_i - f_i + r/h_i)]` around `P`'s
+/// fractional coordinate `f`; each is kept by [`slab_distance`].
+fn wrap_images(
+    a: &[[f64; 3]; 3],
+    inv_a: &[[f64; 3]; 3],
+    heights: &[f64; 3],
+    glo: [f64; 3],
+    ghi: [f64; 3],
+    p: [f64; 3],
+    r: f64,
+) -> Vec<[f64; 3]> {
+    let f = frac_of(inv_a, p);
+    let lo = [0usize, 1, 2].map(|i| (glo[i] - f[i] - r / heights[i]).floor() as i64);
+    let hi = [0usize, 1, 2].map(|i| (ghi[i] - f[i] + r / heights[i]).ceil() as i64);
+    let mut out = Vec::new();
+    for m0 in lo[0]..=hi[0] {
+        for m1 in lo[1]..=hi[1] {
+            for m2 in lo[2]..=hi[2] {
+                let fi = [f[0] + m0 as f64, f[1] + m1 as f64, f[2] + m2 as f64];
+                if slab_distance(fi, glo, ghi, heights) > r {
+                    continue;
+                }
+                let (m0f, m1f, m2f) = (m0 as f64, m1 as f64, m2 as f64);
+                out.push([
+                    p[0] + m0f * a[0][0] + m1f * a[1][0] + m2f * a[2][0],
+                    p[1] + m0f * a[0][1] + m1f * a[1][1] + m2f * a[2][1],
+                    p[2] + m0f * a[0][2] + m1f * a[1][2] + m2f * a[2][2],
+                ]);
+            }
+        }
+    }
+    out
+}
+
+/// Upper bound on a fused pair-image's peak magnitude, for PRE-screening
+/// only: `K · scale · (1+d)^{l_p+l_q} · max_r r^{kmax} e^{-eta r²}` — the
+/// binomial shift can multiply the fused coefficient by up to
+/// `|P-A|^{l_p} |P-(B+L)|^{l_q} <= d^{l_p+l_q}` (`d = |A-(B+L)|`), and the
+/// monomial `(r-P)^k` peaks at `r² = k/(2 eta)`. Screening on `K·scale`
+/// alone dropped far `p-p` images whose NEGATIVE shifted terms carry
+/// real weight and left `∫rho` 7e-5 too large on the Gate-E silicon cell;
+/// the exact per-instance cutoff ([`fused_radius`] on the true `cmax`)
+/// then does the real screening.
+fn pair_prescreen_bound(k: f64, scale: f64, d: f64, ltot: i32, eta: f64) -> f64 {
+    let kmax = ltot as f64;
+    let mono_peak = if kmax > 0.0 {
+        (kmax / (2.0 * eta)).powf(kmax / 2.0) * (-kmax / 2.0).exp()
+    } else {
+        1.0
+    };
+    k * scale * (1.0 + d).powi(ltot) * mono_peak.max(1.0)
+}
+
+/// Build one level's [`PairLevelTable`] for `pairs` on `level`'s own mesh —
+/// Task 2's host-side half (the kernel launch is deferred to
+/// [`pairlevel_rho`] / [`pairlevel_pass2`], which stream it).
 ///
 /// # Errors
-/// Propagates grid construction / the kernel's shape checks.
-pub fn collocate_pair_level(
+/// Propagates grid construction / lattice-image enumeration; a singular
+/// lattice.
+pub fn build_pair_level_table(
     cell: &Cell,
     decon: &Decontracted,
     level: &GridLevelSpec,
     pairs: &[(usize, usize)],
-) -> Result<PairLevelValues, PbcDftError> {
+) -> Result<PairLevelTable, PbcDftError> {
     let grids = crate::gen_grid::PeriodicGrids::uniform(cell, Some(level.mesh))?;
     let coords = grids.coords()?;
     let ngrids = coords.len();
@@ -278,13 +559,47 @@ pub fn collocate_pair_level(
         coords_flat.push(c[2]);
     }
 
-    let mut slot_pow = Vec::new();
+    let a = cell.lattice_vectors();
+    let inv_a = inv3(&a).ok_or_else(|| {
+        PbcDftError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(
+                "multigrid pair collocate: singular lattice".to_string(),
+            ),
+        ))
+    })?;
+    // Column `i` of inv(a) is the (unscaled) reciprocal direction; the
+    // slab height is `1 / |b_i|`.
+    let heights = [0usize, 1, 2].map(|i| 1.0 / norm3([inv_a[0][i], inv_a[1][i], inv_a[2][i]]));
+    // The mesh's fractional bounding box, from its coordinates (see
+    // [`wrap_images`] for why this is measured rather than assumed).
+    let mut glo = [f64::INFINITY; 3];
+    let mut ghi = [f64::NEG_INFINITY; 3];
+    for g in 0..ngrids {
+        let f = frac_of(
+            &inv_a,
+            [
+                coords_flat[g * 3],
+                coords_flat[g * 3 + 1],
+                coords_flat[g * 3 + 2],
+            ],
+        );
+        for i in 0..3 {
+            glo[i] = glo[i].min(f[i]);
+            ghi[i] = ghi[i].max(f[i]);
+        }
+    }
+
     let mut slot_coef = Vec::new();
-    let mut slot_instance = Vec::new();
-    let mut instance_alpha = Vec::new();
-    let mut instance_center = Vec::new();
     let mut slot_ci = Vec::new();
     let mut slot_cj = Vec::new();
+    let mut slot_term = Vec::new();
+    let mut nterms = 0usize;
+    let mut kslot_pow = Vec::new();
+    let mut kslot_instance = Vec::new();
+    let mut kslot_term = Vec::new();
+    let mut instance_alpha = Vec::new();
+    let mut instance_center = Vec::new();
+    let mut instance_radius = Vec::new();
 
     let threshold = cell.precision * EXTRA_PREC;
 
@@ -296,6 +611,15 @@ pub fn collocate_pair_level(
         let powers_i = pshell_cart_powers(p.l);
         let powers_j = pshell_cart_powers(q.l);
         let eta = p.alpha + q.alpha;
+        // The AO-product magnitude (`E`'s scales included) — for SCREENING
+        // and the cutoff radius only, never stored in a coefficient.
+        let scale = (p.coef * q.coef).abs();
+        // Per pair-instance monomial lookup: `(k1,k2,k3)` -> fused term,
+        // each `k <= l_p + l_q`. Allocated lazily on first non-zero use so
+        // a monomial nobody feeds costs no kernel work.
+        let kmax = (p.l + q.l + 1) as usize;
+        let mut term_of = vec![u32::MAX; kmax * kmax * kmax];
+        let mut terms_here: Vec<(u32, [u32; 3])> = Vec::new();
 
         for l in &ls {
             let bshift = [q.center[0] + l[0], q.center[1] + l[1], q.center[2] + l[2]];
@@ -306,7 +630,7 @@ pub fn collocate_pair_level(
             ];
             let dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
             let k = (-p.alpha * q.alpha / eta * dist2).exp();
-            if k * p.coef.abs() * q.coef.abs() < threshold {
+            if pair_prescreen_bound(k, scale, dist2.sqrt(), p.l + q.l, eta) < threshold {
                 continue;
             }
             let pcen = [
@@ -319,15 +643,15 @@ pub fn collocate_pair_level(
                 pcen[1] - p.center[1],
                 pcen[2] - p.center[2],
             ];
-            let pb = [pcen[0] - bshift[0], pcen[1] - bshift[1], pcen[2] - bshift[2]];
+            let pb = [
+                pcen[0] - bshift[0],
+                pcen[1] - bshift[1],
+                pcen[2] - bshift[2],
+            ];
 
-            let inst = (instance_alpha.len()) as u32;
-            instance_alpha.push(eta);
-            instance_center.push(pcen[0]);
-            instance_center.push(pcen[1]);
-            instance_center.push(pcen[2]);
-
-            let kcoef = k * p.coef * q.coef;
+            term_of.iter_mut().for_each(|t| *t = u32::MAX);
+            terms_here.clear();
+            let mut cmax_here = 0.0f64;
 
             for (ci, &(aix, aiy, aiz)) in powers_i.iter().enumerate() {
                 for (cj, &(bjx, bjy, bjz)) in powers_j.iter().enumerate() {
@@ -346,106 +670,523 @@ pub fn collocate_pair_level(
                                 if cz == 0.0 {
                                     continue;
                                 }
-                                let coef = kcoef * cx * cy * cz;
+                                let coef = k * cx * cy * cz;
                                 if coef == 0.0 {
                                     continue;
                                 }
-                                slot_pow.push(k1 as u32);
-                                slot_pow.push(k2 as u32);
-                                slot_pow.push(k3 as u32);
+                                cmax_here = cmax_here.max(coef.abs() * scale);
+                                let key = (k1 * kmax + k2) * kmax + k3;
+                                let t = if term_of[key] == u32::MAX {
+                                    let t = nterms as u32;
+                                    nterms += 1;
+                                    term_of[key] = t;
+                                    terms_here.push((t, [k1 as u32, k2 as u32, k3 as u32]));
+                                    t
+                                } else {
+                                    term_of[key]
+                                };
                                 slot_coef.push(coef);
-                                slot_instance.push(inst);
-                                slot_ci.push(p.cart_ao0 + ci);
-                                slot_cj.push(q.cart_ao0 + cj);
+                                slot_ci.push((p.cart_ao0 + ci) as u32);
+                                slot_cj.push((q.cart_ao0 + cj) as u32);
+                                slot_term.push(t);
                             }
                         }
                     }
                 }
             }
+            if terms_here.is_empty() {
+                continue;
+            }
+
+            // Periodic wrap of the fused Gaussian (see the struct doc). Its
+            // own radius — where `|C|·r^k·exp(-eta r²)` drops below the
+            // screening threshold — bounds the images, NOT the primitives'
+            // radii: `eta >= max(alpha)` and `K <= 1`, so the fused
+            // function is at least as compact as its tighter parent.
+            let r_inst = fused_radius(cmax_here, (p.l + q.l) as f64, eta, threshold);
+            if r_inst <= 0.0 {
+                continue;
+            }
+            for c in wrap_images(&a, &inv_a, &heights, glo, ghi, pcen, r_inst) {
+                let inst = instance_alpha.len() as u32;
+                instance_alpha.push(eta);
+                instance_center.push(c[0]);
+                instance_center.push(c[1]);
+                instance_center.push(c[2]);
+                instance_radius.push(r_inst);
+                for &(t, pw) in &terms_here {
+                    kslot_pow.push(pw[0]);
+                    kslot_pow.push(pw[1]);
+                    kslot_pow.push(pw[2]);
+                    kslot_instance.push(inst);
+                    kslot_term.push(t);
+                }
+            }
         }
     }
 
-    let table = PairSlotTable {
+    let mut table = PairLevelTable {
+        mesh: level.mesh,
+        ngrids,
         coords: coords_flat,
-        slot_pow,
+        inv_a,
+        heights,
+        nterms,
         slot_coef,
-        slot_instance,
-        instance_alpha,
-        instance_center,
-    };
-    let client = pyscf_algebra::select_backend()
-        .map_err(|e| {
-            PbcDftError::Core(pyscf_core::PyscfRsError::Core(
-                pyscf_core::CoreError::InvalidMolecule(format!(
-                    "multigrid pair collocate: backend selection failed: {e}"
-                )),
-            ))
-        })?
-        .client;
-    let values = collocate_pairs(&client, &table).map_err(wrap_alg)?;
-
-    Ok(PairLevelValues {
-        table,
         slot_ci,
         slot_cj,
-        values,
-        ngrids,
-        mesh: level.mesh,
+        slot_term,
+        kslot_pow,
+        kslot_instance,
+        kslot_term,
+        instance_alpha,
+        instance_center,
+        instance_radius,
+        blocks: Vec::new(),
+        block_sel: Vec::new(),
+        batch: None,
+    };
+    // M-02: the block partition and the per-block reach lists are geometry, so
+    // they are built here, once, rather than inside each direction of each
+    // density evaluation. `grid_blocks` / `block_slots` stay public as the
+    // builders (and as the seam the `multigrid2.rs` gates measure through).
+    table.blocks = grid_blocks(&table);
+    table.block_sel = table
+        .blocks
+        .iter()
+        .map(|b| block_slots(&table, b))
+        .collect();
+    // M-03: the concatenated single-launch tables, when they fit.
+    table.batch = build_batched_level(&table);
+    Ok(table)
+}
+
+/// Concatenate every block's launch table into one — M-03.
+///
+/// Mirrors [`block_table`] block by block and slot by slot, so the batched
+/// kernel sees each block's instances and slots in exactly the order the
+/// per-block launch presented them. Returns `None` above
+/// [`BATCH_BUDGET_BYTES`], leaving the caller on the streaming path.
+fn build_batched_level(lv: &PairLevelTable) -> Option<BatchedLevel> {
+    let npoints: usize = lv.blocks.iter().map(|b| b.points.len()).sum();
+    let nslots: usize = lv.block_sel.iter().map(Vec::len).sum();
+    // An upper bound on the instance count: one per slot. Cheap and safe.
+    let bytes = npoints * (3 * 8 + 4) + nslots * (3 * 4 + 8 + 4) + nslots * (8 + 3 * 8 + 4 + 4);
+    if bytes > BATCH_BUDGET_BYTES || npoints == 0 || nslots == 0 {
+        return None;
+    }
+
+    let mut b = PairSlotBatch {
+        coords: Vec::with_capacity(npoints * 3),
+        point_block: Vec::with_capacity(npoints),
+        block_point0: Vec::with_capacity(lv.blocks.len() + 1),
+        block_inst0: Vec::with_capacity(lv.blocks.len() + 1),
+        inst_block: Vec::new(),
+        instance_alpha: Vec::new(),
+        instance_center: Vec::new(),
+        // Filled below: one START per instance, then the final end, which is
+        // exactly the `ninst + 1` prefix shape the kernel indexes.
+        inst_slot0: Vec::new(),
+        slot_pow: Vec::with_capacity(nslots * 3),
+        // Geometry only: the coefficients are per call.
+        slot_coef: Vec::new(),
+    };
+    let mut point_global = Vec::with_capacity(npoints);
+    let mut slot_global = Vec::with_capacity(nslots);
+
+    b.block_point0.push(0);
+    b.block_inst0.push(0);
+    for (bi, (block, sel)) in lv.blocks.iter().zip(&lv.block_sel).enumerate() {
+        for &g in &block.points {
+            let g = g as usize;
+            b.coords.extend_from_slice(&lv.coords[g * 3..g * 3 + 3]);
+            b.point_block.push(bi as u32);
+            point_global.push(g as u32);
+        }
+        // Same instance grouping `block_table` performs: a new instance opens
+        // whenever the table-order slot list moves to a different one.
+        let mut last_inst = u32::MAX;
+        for &k in sel {
+            let k = k as usize;
+            let inst = lv.kslot_instance[k];
+            if inst != last_inst {
+                last_inst = inst;
+                let i = inst as usize;
+                b.instance_alpha.push(lv.instance_alpha[i]);
+                b.instance_center
+                    .extend_from_slice(&lv.instance_center[i * 3..i * 3 + 3]);
+                b.inst_block.push(bi as u32);
+                // This instance's slots start at the running slot count.
+                b.inst_slot0.push(slot_global.len() as u32);
+            }
+            b.slot_pow
+                .extend_from_slice(&lv.kslot_pow[k * 3..k * 3 + 3]);
+            slot_global.push(k as u32);
+        }
+        b.block_point0.push(b.point_block.len() as u32);
+        b.block_inst0.push(b.instance_alpha.len() as u32);
+    }
+    // One START was pushed per instance; the final end closes the prefix.
+    b.inst_slot0.push(slot_global.len() as u32);
+    debug_assert_eq!(b.inst_slot0.len(), b.instance_alpha.len() + 1);
+    debug_assert_eq!(b.inst_slot0[0], 0);
+    b.slot_coef = vec![0.0; slot_global.len()];
+
+    Some(BatchedLevel {
+        batch: b,
+        point_global,
+        slot_global,
     })
 }
 
-/// `NUMINT_fill`/`grid_collocate_drv`'s forward direction at one level —
-/// `rho(r) = Σ_slot dm_p[ci,cj] · values[slot,r]`, [`pyscf_algebra::oracle_sum`]
-/// over slots per grid point (D-PBC-17 shape — fixed slot order, independent
-/// of which grid points a rayon worker owns).
-pub fn pairlevel_rho(lv: &PairLevelValues, decon: &Decontracted, dm_p: &[f64]) -> Vec<f64> {
-    let ngrids = lv.ngrids;
-    let nslots = lv.slot_ci.len();
-    let mut terms: Vec<(usize, f64)> = Vec::with_capacity(nslots);
-    for s in 0..nslots {
-        let d = dm_p[lv.slot_ci[s] * decon.nao_p + lv.slot_cj[s]];
-        if d != 0.0 {
-            terms.push((s, d));
-        }
-    }
-    use rayon::prelude::*;
-    let mut rho = vec![0.0f64; ngrids];
-    rho.par_iter_mut().enumerate().for_each(|(g, out)| {
-        if terms.is_empty() {
-            *out = 0.0;
-            return;
-        }
-        let mut buf = vec![0.0f64; terms.len()];
-        for (k, &(s, d)) in terms.iter().enumerate() {
-            buf[k] = d * lv.values[s * ngrids + g];
-        }
-        *out = pyscf_algebra::oracle_sum(&buf);
-    });
-    rho
+/// Every non-empty level's [`PairLevelTable`], built ONCE per density
+/// evaluation and shared by the forward (`rho`) and reverse (`pass2`)
+/// directions; `None` where the level owns no pair.
+///
+/// # Errors
+/// Propagates [`build_pair_level_table`].
+pub fn build_pair_level_tables(
+    cell: &Cell,
+    decon: &Decontracted,
+    task_list: &PairTaskList,
+) -> Result<Vec<Option<PairLevelTable>>, PbcDftError> {
+    task_list
+        .levels
+        .iter()
+        .zip(task_list.level_pairs.iter())
+        .map(|(level, pairs)| {
+            if pairs.is_empty() {
+                Ok(None)
+            } else {
+                build_pair_level_table(cell, decon, level, pairs).map(Some)
+            }
+        })
+        .collect()
 }
 
-/// `NUMINT_fill2c`/`grid_integrate_drv`'s reverse direction ("pass2") at one
-/// level — `v_p[ci,cj] += Σ_r w[r]·values[slot,r]` for every slot routing to
-/// `(ci,cj)`. Each slot's grid reduction is an [`pyscf_algebra::oracle_sum`],
-/// matching `crate::multigrid::colloc::level_pass2`'s idiom. ADDS into
-/// `v_p`, does not overwrite.
+/// One spatial block of a level's mesh: an index box `[i0,i1)×[j0,j1)×
+/// [k0,k1)` (x slowest, z fastest — `get_uniform_grids`'s order), its
+/// point list, and its fractional bounding box.
+#[derive(Debug)]
+pub struct GridBlock {
+    pub points: Vec<u32>,
+    pub flo: [f64; 3],
+    pub fhi: [f64; 3],
+}
+
+/// Partition `lv`'s mesh into [`GridBlock`]s of about [`BLOCK_EDGE`]
+/// points per axis. Pure geometry — the partition depends only on the
+/// mesh, never on the density, the thread count or the backend.
+pub fn grid_blocks(lv: &PairLevelTable) -> Vec<GridBlock> {
+    let [nx, ny, nz] = lv.mesh;
+    let nb = |n: usize| n.div_ceil(BLOCK_EDGE).max(1);
+    let edges = |n: usize| -> Vec<(usize, usize)> {
+        let b = nb(n);
+        (0..b)
+            .map(|i| (i * n / b, (i + 1) * n / b))
+            .filter(|(lo, hi)| hi > lo)
+            .collect()
+    };
+    let mut blocks = Vec::new();
+    for &(x0, x1) in &edges(nx) {
+        for &(y0, y1) in &edges(ny) {
+            for &(z0, z1) in &edges(nz) {
+                let mut points = Vec::with_capacity((x1 - x0) * (y1 - y0) * (z1 - z0));
+                let mut flo = [f64::INFINITY; 3];
+                let mut fhi = [f64::NEG_INFINITY; 3];
+                for ix in x0..x1 {
+                    for iy in y0..y1 {
+                        for iz in z0..z1 {
+                            let g = (ix * ny + iy) * nz + iz;
+                            points.push(g as u32);
+                            let r = [lv.coords[g * 3], lv.coords[g * 3 + 1], lv.coords[g * 3 + 2]];
+                            let f = frac_of(&lv.inv_a, r);
+                            for i in 0..3 {
+                                flo[i] = flo[i].min(f[i]);
+                                fhi[i] = fhi[i].max(f[i]);
+                            }
+                        }
+                    }
+                }
+                if !points.is_empty() {
+                    blocks.push(GridBlock { points, flo, fhi });
+                }
+            }
+        }
+    }
+    blocks
+}
+
+/// The kernel slots (in table order) whose instance's cutoff ball can
+/// reach `block` — the per-block analogue of upstream's per-Gaussian
+/// rcut sub-mesh. Everything left out is below the screening threshold on
+/// every point of the block by construction of [`fused_radius`].
+pub fn block_slots(lv: &PairLevelTable, block: &GridBlock) -> Vec<u32> {
+    let ninst = lv.instance_alpha.len();
+    let mut reach = vec![false; ninst];
+    for (i, r) in reach.iter_mut().enumerate() {
+        let c = [
+            lv.instance_center[i * 3],
+            lv.instance_center[i * 3 + 1],
+            lv.instance_center[i * 3 + 2],
+        ];
+        let f = frac_of(&lv.inv_a, c);
+        *r = slab_distance(f, block.flo, block.fhi, &lv.heights) <= lv.instance_radius[i];
+    }
+    (0..lv.nkslots() as u32)
+        .filter(|&k| reach[lv.kslot_instance[k as usize] as usize])
+        .collect()
+}
+
+/// The kernel-facing sub-table for one block: the selected kernel slots
+/// `sel` (table order, hence still grouped by instance) with `coef` as
+/// the per-slot coefficient, the instances they touch renumbered densely,
+/// and the block's own point coordinates.
+fn block_table(lv: &PairLevelTable, block: &GridBlock, sel: &[u32], coef: &[f64]) -> PairSlotTable {
+    let nsel = sel.len();
+    let mut table = PairSlotTable {
+        coords: Vec::with_capacity(block.points.len() * 3),
+        slot_pow: Vec::with_capacity(nsel * 3),
+        slot_coef: Vec::with_capacity(nsel),
+        slot_instance: Vec::with_capacity(nsel),
+        instance_alpha: Vec::new(),
+        instance_center: Vec::new(),
+    };
+    let mut last_inst = u32::MAX;
+    for &k in sel {
+        let k = k as usize;
+        let inst = lv.kslot_instance[k];
+        if inst != last_inst {
+            last_inst = inst;
+            let i = inst as usize;
+            table.instance_alpha.push(lv.instance_alpha[i]);
+            table
+                .instance_center
+                .extend_from_slice(&lv.instance_center[i * 3..i * 3 + 3]);
+        }
+        table
+            .slot_pow
+            .extend_from_slice(&lv.kslot_pow[k * 3..k * 3 + 3]);
+        table.slot_coef.push(coef[k]);
+        table
+            .slot_instance
+            .push(table.instance_alpha.len() as u32 - 1);
+    }
+    for &g in &block.points {
+        let g = g as usize;
+        table.coords.extend_from_slice(&lv.coords[g * 3..g * 3 + 3]);
+    }
+    table
+}
+
+/// Shallow-copy a batch's GEOMETRY, leaving `slot_coef` for the caller.
+///
+/// M-03. The geometry is cached on the [`PairLevelTable`] and the coefficients
+/// change per call, so each call assembles a `PairSlotBatch` from the two.
+/// The clone is of the index and coordinate tables only; it is the price of
+/// the kernel API taking one owned struct, and it is a fraction of the launch
+/// overhead it removes.
+fn clone_batch_geometry(b: &PairSlotBatch) -> PairSlotBatch {
+    PairSlotBatch {
+        coords: b.coords.clone(),
+        point_block: b.point_block.clone(),
+        block_point0: b.block_point0.clone(),
+        block_inst0: b.block_inst0.clone(),
+        inst_block: b.inst_block.clone(),
+        instance_alpha: b.instance_alpha.clone(),
+        instance_center: b.instance_center.clone(),
+        inst_slot0: b.inst_slot0.clone(),
+        slot_pow: b.slot_pow.clone(),
+        slot_coef: Vec::new(),
+    }
+}
+
+/// `grid_collocate_drv`'s forward direction at one level —
+/// `rho(r) = Σ_k C_{term(k)} · kslot_k(r)`, `C_t` the density-contracted
+/// fused-term coefficient (see [`PairLevelTable`]).
+///
+/// Streamed block by block ([`grid_blocks`] / [`block_slots`]) through
+/// `collocate_pairs_rho`, whose per-point sum runs over the kernel slots
+/// that reach the block, in table order — a list fixed by geometry alone,
+/// so the result is bit-identical under any rayon thread count or launch
+/// geometry (D-PBC-17). **Ordering note:** that in-kernel sum is
+/// sequential, not `oracle_sum`'s pairwise tree; the pairwise host
+/// reduction needed every `(slot × point)` value materialised, which is
+/// the memory shape this plan could not afford (`17-12-SUMMARY.md`).
+///
+/// # Errors
+/// Propagates backend selection / the kernel's shape checks.
+pub fn pairlevel_rho(
+    lv: &PairLevelTable,
+    decon: &Decontracted,
+    dm_p: &[f64],
+) -> Result<Vec<f64>, PbcDftError> {
+    pairlevel_rho_with(lv, decon, dm_p, true)
+}
+
+/// [`pairlevel_rho`] with M-03's batched launch explicitly on or off.
+///
+/// The seam exists so the two routes can be compared IN ONE PROCESS at
+/// `to_bits()` equality (`tests/multigrid_batch.rs`). M-03 claims bit-identity
+/// by construction — same slot list, same order, same lane ownership — and a
+/// claim like that is worth exactly as much as the test that checks it.
+/// Production always passes `true`; `false` is the streaming fallback the
+/// budget guard also selects.
+///
+/// # Errors
+/// As [`pairlevel_rho`].
+pub fn pairlevel_rho_with(
+    lv: &PairLevelTable,
+    decon: &Decontracted,
+    dm_p: &[f64],
+    use_batch: bool,
+) -> Result<Vec<f64>, PbcDftError> {
+    let ngrids = lv.ngrids;
+    let nk = lv.nkslots();
+    let mut rho = vec![0.0f64; ngrids];
+    if nk == 0 || ngrids == 0 {
+        return Ok(rho);
+    }
+    // Contract the density matrix into the fused terms — fixed slot order.
+    let mut term_coef = vec![0.0f64; lv.nterms];
+    for s in 0..lv.nslots() {
+        let d = dm_p[lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize];
+        term_coef[lv.slot_term[s] as usize] += d * lv.slot_coef[s];
+    }
+    let kcoef: Vec<f64> = lv
+        .kslot_term
+        .iter()
+        .map(|&t| term_coef[t as usize])
+        .collect();
+
+    let client = backend_client()?;
+
+    // M-03: ONE launch for the whole level when the concatenated tables fit.
+    // Bit-identical to the per-block route below — each lane runs the same
+    // slot list in the same order, and every output is written by one lane.
+    if let Some(bl) = lv.batch.as_ref().filter(|_| use_batch) {
+        let mut batch = PairSlotBatch {
+            slot_coef: bl
+                .slot_global
+                .iter()
+                .map(|&k| kcoef[k as usize])
+                .collect(),
+            ..clone_batch_geometry(&bl.batch)
+        };
+        let out = collocate_pairs_rho_batched(&client, &batch).map_err(wrap_alg)?;
+        batch.slot_coef.clear();
+        for (p, v) in out.into_iter().enumerate() {
+            rho[bl.point_global[p] as usize] = v;
+        }
+        return Ok(rho);
+    }
+
+    // M-02: `lv.blocks` / `lv.block_sel` instead of recomputing the partition
+    // and every block's reach list on each call. Same blocks, same order.
+    for (block, sel) in lv.blocks.iter().zip(&lv.block_sel) {
+        if sel.is_empty() {
+            continue;
+        }
+        let table = block_table(lv, block, sel, &kcoef);
+        let out = collocate_pairs_rho(&client, &table).map_err(wrap_alg)?;
+        for (pi, v) in out.into_iter().enumerate() {
+            rho[block.points[pi] as usize] = v;
+        }
+    }
+    Ok(rho)
+}
+
+/// `grid_integrate_drv`'s reverse direction ("pass2") at one level —
+/// `v_p[ci,cj] += Σ_{s→t} coef_s · I_t`, `I_t = Σ_{k→t} Σ_r w[r]·kslot_k(r)`.
+/// ADDS into `v_p`, does not overwrite.
+///
+/// Streamed block by block through `collocate_pairs_integrate`: every
+/// kernel slot's grid integral is the fixed-order sum of its per-block
+/// partial sums (blocks visited in [`grid_blocks`]'s order, points within
+/// a block in mesh order) — a property of the mesh and the table, not of
+/// the thread count (D-PBC-17; same ordering note as [`pairlevel_rho`]).
+/// The image fold `Σ_{k→t}` and the final scatter into `v_p` run in fixed
+/// table order.
+///
+/// # Errors
+/// Propagates backend selection / the kernel's shape checks.
 pub fn pairlevel_pass2(
-    lv: &PairLevelValues,
+    lv: &PairLevelTable,
     decon: &Decontracted,
     weight: &[f64],
     v_p: &mut [f64],
-) {
+) -> Result<(), PbcDftError> {
+    pairlevel_pass2_with(lv, decon, weight, v_p, true)
+}
+
+/// [`pairlevel_pass2`] with M-03's batched launch explicitly on or off — the
+/// reverse-direction twin of [`pairlevel_rho_with`], and for the same reason.
+///
+/// # Errors
+/// As [`pairlevel_pass2`].
+pub fn pairlevel_pass2_with(
+    lv: &PairLevelTable,
+    decon: &Decontracted,
+    weight: &[f64],
+    v_p: &mut [f64],
+    use_batch: bool,
+) -> Result<(), PbcDftError> {
     debug_assert_eq!(weight.len(), lv.ngrids);
-    let ngrids = lv.ngrids;
-    let nslots = lv.slot_ci.len();
-    let mut buf = vec![0.0f64; ngrids];
-    for s in 0..nslots {
-        for g in 0..ngrids {
-            buf[g] = weight[g] * lv.values[s * ngrids + g];
-        }
-        let acc = pyscf_algebra::oracle_sum(&buf);
-        v_p[lv.slot_ci[s] * decon.nao_p + lv.slot_cj[s]] += acc;
+    let nk = lv.nkslots();
+    if nk == 0 || lv.ngrids == 0 {
+        return Ok(());
     }
+    let ones = vec![1.0f64; nk];
+    let mut kint = vec![0.0f64; nk];
+
+    let client = backend_client()?;
+
+    // M-03 — see `pairlevel_rho`. The host fold below visits the concatenated
+    // slots in block-major, within-block-table order, which is exactly the
+    // order the per-block loop accumulated in (D-PBC-17's fixed-order
+    // property, preserved).
+    let mut batched = false;
+    if let Some(bl) = lv.batch.as_ref().filter(|_| use_batch) {
+        let batch = PairSlotBatch {
+            slot_coef: vec![1.0; bl.slot_global.len()],
+            ..clone_batch_geometry(&bl.batch)
+        };
+        let w: Vec<f64> = bl
+            .point_global
+            .iter()
+            .map(|&g| weight[g as usize])
+            .collect();
+        let out = collocate_pairs_integrate_batched(&client, &batch, &w).map_err(wrap_alg)?;
+        for (s, v) in out.into_iter().enumerate() {
+            kint[bl.slot_global[s] as usize] += v;
+        }
+        batched = true;
+    }
+
+    // M-02 — see `pairlevel_rho`.
+    if !batched {
+        for (block, sel) in lv.blocks.iter().zip(&lv.block_sel) {
+            if sel.is_empty() {
+                continue;
+            }
+            let table = block_table(lv, block, sel, &ones);
+            let w: Vec<f64> = block.points.iter().map(|&g| weight[g as usize]).collect();
+            let out = collocate_pairs_integrate(&client, &table, &w).map_err(wrap_alg)?;
+            for (j, v) in out.into_iter().enumerate() {
+                kint[sel[j] as usize] += v;
+            }
+        }
+    }
+
+    let mut integrals = vec![0.0f64; lv.nterms];
+    for k in 0..nk {
+        integrals[lv.kslot_term[k] as usize] += kint[k];
+    }
+    for s in 0..lv.nslots() {
+        let idx = lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize;
+        v_p[idx] += lv.slot_coef[s] * integrals[lv.slot_term[s] as usize];
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------
@@ -455,9 +1196,8 @@ pub fn pairlevel_pass2(
 use pyscf_algebra::CTensor;
 use pyscf_pbc_gto::{get_coulg_at_gv, get_gv};
 
-use crate::multigrid::numint::{extract_gspace_window, insert_gspace_window};
+use crate::multigrid::numint::{extract_gspace_window, insert_gspace_window, mg_xc_parts};
 use crate::multigrid::tasks;
-use crate::xc::{RhoEff, VxcEff, XcType, eval_xc_eff_rks};
 
 /// `pbc.dft.multigrid.multigrid_pair.MultiGridNumInt` (re-exported upstream
 /// as `MultiGridNumInt2`, `__init__.py:18`) — the v2 multigrid driver
@@ -466,7 +1206,20 @@ use crate::xc::{RhoEff, VxcEff, XcType, eval_xc_eff_rks};
 /// MultiGridNumInt2)` on — NOT `crate::multigrid::MultiGridNumInt` (v1)** —
 /// recorded in `PBC-MASTER-PLAN.md §8.10` by this plan.
 #[derive(Debug, Default)]
-pub struct MultiGridNumInt2;
+pub struct MultiGridNumInt2 {
+    prepared: std::sync::Mutex<Option<(u64, std::sync::Arc<V2Tasks>)>>,
+}
+
+/// The cell-independent geometry one v2 density evaluation needs — M-02.
+///
+/// The decontraction, plus every non-empty level's [`PairLevelTable`]
+/// (including, since M-02, that level's block partition and per-block reach
+/// lists). All of it is a pure function of the cell, and all of it was rebuilt
+/// on every call: `build_pair_level_tables` re-runs `get_lattice_ls` and the
+/// full binomial-shift image enumeration for EVERY pshell pair, which on the
+/// `25^3` reference cells is the bulk of the 7-9 s 17-12 measured per density
+/// evaluation.
+type V2Tasks = (Decontracted, Vec<Option<PairLevelTable>>);
 
 /// [`MultiGridNumInt2::nr_rks`]'s return — same shape as v1's
 /// `MgNrRksResult`.
@@ -479,15 +1232,51 @@ pub struct Mg2NrRksResult {
     pub veff: Vec<f64>,
 }
 
+/// [`MultiGridNumInt2::nr_uks`]'s return — the open-shell twin of
+/// [`Mg2NrRksResult`].
+#[derive(Debug, Clone)]
+pub struct Mg2NrUksResult {
+    /// `(n_alpha, n_beta)` from the numerical integration.
+    pub nelec: (f64, f64),
+    pub exc: f64,
+    pub ecoul: f64,
+    /// `[alpha, beta]`, each `nao x nao` row-major.
+    pub veff: [Vec<f64>; 2],
+}
+
 impl MultiGridNumInt2 {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
-    fn build_tasks(&self, cell: &Cell) -> Result<(Decontracted, PairTaskList), PbcDftError> {
+    /// Drop the cached geometry — the `KNumInt::reset` idiom. A different cell
+    /// is detected automatically by
+    /// [`crate::multigrid::utils::cell_fingerprint`].
+    pub fn reset(&self) {
+        if let Ok(mut g) = self.prepared.lock() {
+            *g = None;
+        }
+    }
+
+    /// Decontract, build the pair task list, and build every non-empty
+    /// level's [`PairLevelTable`] ONCE — shared by the forward and reverse
+    /// directions of one density evaluation.
+    fn build_tasks(&self, cell: &Cell) -> Result<std::sync::Arc<V2Tasks>, PbcDftError> {
+        let key = crate::multigrid::utils::cell_fingerprint(cell);
+        if let Ok(g) = self.prepared.lock()
+            && let Some((k, v)) = g.as_ref()
+            && *k == key
+        {
+            return Ok(std::sync::Arc::clone(v));
+        }
         let decon = tasks::build_pshells(cell)?;
         let task_list = build_pair_task_list(cell, &decon)?;
-        Ok((decon, task_list))
+        let tables = build_pair_level_tables(cell, &decon, &task_list)?;
+        let out = std::sync::Arc::new((decon, tables));
+        if let Ok(mut g) = self.prepared.lock() {
+            *g = Some((key, std::sync::Arc::clone(&out)));
+        }
+        Ok(out)
     }
 
     /// `get_nuc(mydf)` — delegated to AFTDF, see `crate::multigrid::pp`.
@@ -512,9 +1301,30 @@ impl MultiGridNumInt2 {
     /// # Errors
     /// Propagates task-list / collocation / FFT construction.
     pub fn eval_rho_g(&self, cell: &Cell, dm: &[f64]) -> Result<CTensor, PbcDftError> {
-        let (decon, task_list) = self.build_tasks(cell)?;
+        let prep = self.build_tasks(cell)?;
+        let (decon, tables) = (&prep.0, &prep.1);
+        let dm_p = crate::multigrid::colloc::expand_dm(decon, dm);
+        rho_g_from_pair_levels(cell, decon, tables, &dm_p)
+    }
+
+    /// [`MultiGridNumInt2::eval_rho_g`] over a caller-supplied
+    /// [`PairTaskList`] — the diagnostic seam that lets a test re-run the
+    /// same density with a different level assignment (e.g. every pair on
+    /// the finest mesh) and attribute a residual to the level ladder
+    /// rather than to the collocation.
+    ///
+    /// # Errors
+    /// As [`MultiGridNumInt2::eval_rho_g`].
+    pub fn eval_rho_g_with_task_list(
+        &self,
+        cell: &Cell,
+        task_list: &PairTaskList,
+        dm: &[f64],
+    ) -> Result<CTensor, PbcDftError> {
+        let decon = tasks::build_pshells(cell)?;
+        let tables = build_pair_level_tables(cell, &decon, task_list)?;
         let dm_p = crate::multigrid::colloc::expand_dm(&decon, dm);
-        rho_g_from_pair_levels(cell, &decon, &task_list, &dm_p)
+        rho_g_from_pair_levels(cell, &decon, &tables, &dm_p)
     }
 
     /// `get_j_kpts` at gamma — the v2 analogue of `MultiGridNumInt::get_j`.
@@ -522,20 +1332,21 @@ impl MultiGridNumInt2 {
     /// # Errors
     /// Propagates task-list / collocation / FFT construction.
     pub fn get_j(&self, cell: &Cell, dm: &[f64]) -> Result<Vec<f64>, PbcDftError> {
-        let (decon, task_list) = self.build_tasks(cell)?;
-        let dm_p = crate::multigrid::colloc::expand_dm(&decon, dm);
-        let rho_g = rho_g_from_pair_levels(cell, &decon, &task_list, &dm_p)?;
+        let prep = self.build_tasks(cell)?;
+        let (decon, tables) = (&prep.0, &prep.1);
+        let dm_p = crate::multigrid::colloc::expand_dm(decon, dm);
+        let rho_g = rho_g_from_pair_levels(cell, decon, tables, &dm_p)?;
 
         let mesh = cell.mesh;
         let gv = get_gv(cell, Some(mesh))?;
         let coulg = get_coulg_at_gv(cell, mesh, &gv)?;
         let mut vg = rho_g;
-        for g in 0..vg.re.len() {
-            vg.re[g] *= coulg[g];
-            vg.im[g] *= coulg[g];
+        for ((re, im), c) in vg.re.iter_mut().zip(vg.im.iter_mut()).zip(&coulg) {
+            *re *= c;
+            *im *= c;
         }
-        let v_p = pass2_from_full_vg_pair(cell, &decon, &task_list, &vg)?;
-        Ok(crate::multigrid::colloc::contract_v(&decon, &v_p))
+        let v_p = pass2_from_full_vg_pair(cell, decon, tables, &vg)?;
+        Ok(crate::multigrid::colloc::contract_v(decon, &v_p))
     }
 
     /// `nr_rks(mydf, xc_code, dm, with_j=True)` at gamma — the v2 analogue
@@ -553,92 +1364,65 @@ impl MultiGridNumInt2 {
         xc_code: &str,
         dm: &[f64],
     ) -> Result<Mg2NrRksResult, PbcDftError> {
-        let ty = XcType::of(xc_code)?;
-        let (decon, task_list) = self.build_tasks(cell)?;
-        let dm_p = crate::multigrid::colloc::expand_dm(&decon, dm);
-        let rho_g = rho_g_from_pair_levels(cell, &decon, &task_list, &dm_p)?;
+        let prep = self.build_tasks(cell)?;
+        let (decon, tables) = (&prep.0, &prep.1);
+        let dm_p = crate::multigrid::colloc::expand_dm(decon, dm);
+        let rho_g = rho_g_from_pair_levels(cell, decon, tables, &dm_p)?;
 
-        let mesh = cell.mesh;
-        let ngrids = mesh[0] * mesh[1] * mesh[2];
-        let vol = cell.vol();
-        let gv = get_gv(cell, Some(mesh))?;
-        let coulg = get_coulg_at_gv(cell, mesh, &gv)?;
-
-        let mut vg = rho_g.clone();
-        for g in 0..ngrids {
-            vg.re[g] *= coulg[g];
-            vg.im[g] *= coulg[g];
-        }
-        let ecoul = 0.5
-            * (0..ngrids)
-                .map(|g| rho_g.re[g] * vg.re[g] + rho_g.im[g] * vg.im[g])
-                .sum::<f64>()
-            / vol;
-
-        let weight = vol / ngrids as f64;
-        let rho_r = pyscf_pbc_tools::ifft(&rho_g, mesh).map_err(crate::multigrid::numint::wrap_tools)?;
-        let rho_scalar: Vec<f64> = rho_r.re.iter().map(|x| x / weight).collect();
-        let nelec = rho_scalar.iter().sum::<f64>() * weight;
-
-        let mut rho_eff = RhoEff::zeros(ty, ngrids);
-        rho_eff.row_mut(0).copy_from_slice(&rho_scalar);
-        if ty == XcType::Gga {
-            for (axis, gv_axis) in [0usize, 1, 2].into_iter().zip([0usize, 1, 2]) {
-                let mut gcomp = CTensor::zeros(ngrids);
-                for g in 0..ngrids {
-                    let gk = gv[g][gv_axis];
-                    gcomp.re[g] = -gk * rho_g.im[g];
-                    gcomp.im[g] = gk * rho_g.re[g];
-                }
-                let grad_r =
-                    pyscf_pbc_tools::ifft(&gcomp, mesh).map_err(crate::multigrid::numint::wrap_tools)?;
-                let row = rho_eff.row_mut(1 + axis);
-                for g in 0..ngrids {
-                    row[g] = grad_r.re[g] / weight;
-                }
-            }
-        }
-
-        let xc_out: VxcEff = eval_xc_eff_rks(xc_code, &rho_eff)?;
-        let exc_row = &xc_out.exc;
-        let exc = (0..ngrids)
-            .map(|g| rho_scalar[g] * exc_row[g])
-            .sum::<f64>()
-            * weight;
-
-        let mut wv_freq: Vec<CTensor> = Vec::with_capacity(ty.nvar());
-        for v in 0..ty.nvar() {
-            let row = xc_out.row(0, v);
-            let wv: Vec<f64> = row.iter().map(|x| x * weight).collect();
-            let wv_c = CTensor::from_planes(wv, vec![0.0; ngrids]);
-            wv_freq.push(pyscf_pbc_tools::fft(&wv_c, mesh).map_err(crate::multigrid::numint::wrap_tools)?);
-        }
-        if ty == XcType::Gga {
-            for g in 0..ngrids {
-                let mut dot_re = 0.0f64;
-                let mut dot_im = 0.0f64;
-                for axis in 0..3 {
-                    let gk = gv[g][axis];
-                    dot_re += -gk * wv_freq[1 + axis].im[g];
-                    dot_im += gk * wv_freq[1 + axis].re[g];
-                }
-                wv_freq[0].re[g] -= dot_re;
-                wv_freq[0].im[g] -= dot_im;
-            }
-        }
-        for g in 0..ngrids {
-            wv_freq[0].re[g] += vg.re[g];
-            wv_freq[0].im[g] += vg.im[g];
-        }
-
-        let v_p = pass2_from_full_vg_pair(cell, &decon, &task_list, &wv_freq[0])?;
-        let veff = crate::multigrid::colloc::contract_v(&decon, &v_p);
+        // M-00: the middle — Coulomb, XC, the GGA G-space fold, the ordered
+        // energy reductions — is shared with v1 and with `nr_uks`. See
+        // `crate::multigrid::numint::mg_xc_parts`.
+        let parts = mg_xc_parts(cell, xc_code, std::slice::from_ref(&rho_g))?;
+        let v_p = pass2_from_full_vg_pair(cell, decon, tables, &parts.wv_freq0[0])?;
+        let veff = crate::multigrid::colloc::contract_v(decon, &v_p);
 
         Ok(Mg2NrRksResult {
-            nelec,
-            exc,
-            ecoul,
+            nelec: parts.nelec[0],
+            exc: parts.exc,
+            ecoul: parts.ecoul,
             veff,
+        })
+    }
+
+    /// `nr_uks(mydf, xc_code, [dm_a, dm_b], with_j=True)` at gamma — the v2
+    /// analogue of [`crate::multigrid::MultiGridNumInt::nr_uks`]. **M-00.**
+    ///
+    /// Same structure and the same shared middle: the Coulomb term is built
+    /// from the spin-summed density and both channels receive the same `vG`;
+    /// only the XC evaluation and the two `pass2` sweeps are per spin. The
+    /// pair tables are built once (M-02) and used by all four sweeps.
+    ///
+    /// # Errors
+    /// Propagates task-list / collocation / FFT / XC evaluation.
+    pub fn nr_uks(
+        &self,
+        cell: &Cell,
+        xc_code: &str,
+        dm: &[&[f64]; 2],
+    ) -> Result<Mg2NrUksResult, PbcDftError> {
+        let prep = self.build_tasks(cell)?;
+        let (decon, tables) = (&prep.0, &prep.1);
+
+        let mut rho_g = Vec::with_capacity(2);
+        for d in dm {
+            let dm_p = crate::multigrid::colloc::expand_dm(decon, d);
+            rho_g.push(rho_g_from_pair_levels(cell, decon, tables, &dm_p)?);
+        }
+
+        let parts = mg_xc_parts(cell, xc_code, &rho_g)?;
+        let mut veff = Vec::with_capacity(2);
+        for w in &parts.wv_freq0 {
+            let v_p = pass2_from_full_vg_pair(cell, decon, tables, w)?;
+            veff.push(crate::multigrid::colloc::contract_v(decon, &v_p));
+        }
+        let vb = veff.pop().expect("two channels");
+        let va = veff.pop().expect("two channels");
+
+        Ok(Mg2NrUksResult {
+            nelec: (parts.nelec[0], parts.nelec[1]),
+            exc: parts.exc,
+            ecoul: parts.ecoul,
+            veff: [va, vb],
         })
     }
 }
@@ -648,27 +1432,24 @@ impl MultiGridNumInt2 {
 fn rho_g_from_pair_levels(
     cell: &Cell,
     decon: &Decontracted,
-    task_list: &PairTaskList,
+    tables: &[Option<PairLevelTable>],
     dm_p: &[f64],
 ) -> Result<CTensor, PbcDftError> {
     let mesh = cell.mesh;
     let ngrids_full = mesh[0] * mesh[1] * mesh[2];
     let mut rho_g = CTensor::zeros(ngrids_full);
     let vol = cell.vol();
-    for (level, pairs) in task_list.levels.iter().zip(task_list.level_pairs.iter()) {
-        if pairs.is_empty() {
-            continue;
-        }
-        let lv = collocate_pair_level(cell, decon, level, pairs)?;
-        let rho_r = pairlevel_rho(&lv, decon, dm_p);
-        let ngrids_level = level.mesh[0] * level.mesh[1] * level.mesh[2];
+    for lv in tables.iter().flatten() {
+        let rho_r = pairlevel_rho(lv, decon, dm_p)?;
+        let ngrids_level = lv.ngrids;
         let weight = vol / ngrids_level as f64;
         let rr = CTensor::from_planes(rho_r, vec![0.0; ngrids_level]);
-        let mut freq = pyscf_pbc_tools::fft(&rr, level.mesh).map_err(crate::multigrid::numint::wrap_tools)?;
+        let mut freq =
+            pyscf_pbc_tools::fft(&rr, lv.mesh).map_err(crate::multigrid::numint::wrap_tools)?;
         for x in freq.re.iter_mut().chain(freq.im.iter_mut()) {
             *x *= weight;
         }
-        insert_gspace_window(&mut rho_g, mesh, &freq, level.mesh);
+        insert_gspace_window(&mut rho_g, mesh, &freq, lv.mesh);
     }
     Ok(rho_g)
 }
@@ -679,19 +1460,16 @@ fn rho_g_from_pair_levels(
 fn pass2_from_full_vg_pair(
     cell: &Cell,
     decon: &Decontracted,
-    task_list: &PairTaskList,
+    tables: &[Option<PairLevelTable>],
     vg_full: &CTensor,
 ) -> Result<Vec<f64>, PbcDftError> {
     let mesh = cell.mesh;
     let mut v_p = vec![0.0f64; decon.nao_p * decon.nao_p];
-    for (level, pairs) in task_list.levels.iter().zip(task_list.level_pairs.iter()) {
-        if pairs.is_empty() {
-            continue;
-        }
-        let sub = extract_gspace_window(vg_full, mesh, level.mesh);
-        let v_r = pyscf_pbc_tools::ifft(&sub, level.mesh).map_err(crate::multigrid::numint::wrap_tools)?;
-        let lv = collocate_pair_level(cell, decon, level, pairs)?;
-        pairlevel_pass2(&lv, decon, &v_r.re, &mut v_p);
+    for lv in tables.iter().flatten() {
+        let sub = extract_gspace_window(vg_full, mesh, lv.mesh);
+        let v_r =
+            pyscf_pbc_tools::ifft(&sub, lv.mesh).map_err(crate::multigrid::numint::wrap_tools)?;
+        pairlevel_pass2(lv, decon, &v_r.re, &mut v_p)?;
     }
     Ok(v_p)
 }

@@ -33,6 +33,7 @@ pub mod rdm;
 pub mod rhf;
 pub mod scanner;
 pub mod uhf;
+pub mod uhf_init_guess; // U-02 — _break_dm_spin_symm (uhf.py:116-134).
 // Plan 03-06 — SCF chkfile schema (impl Checkpointable for ScfResult +
 // dump_scf_to_file/load_scf_from_file helpers).
 pub mod chkfile;
@@ -59,6 +60,7 @@ pub use fock::{
     default_get_fock, default_get_hcore, default_get_jk, default_get_ovlp, default_get_veff,
 };
 pub use init_guess::default_get_init_guess;
+pub use uhf_init_guess::{break_atom_guess_spin_symm, break_dm_spin_symm, BREAKSYM_TOL};
 pub use occ::default_get_occ;
 pub use rdm::default_make_rdm1;
 pub use scanner::as_scanner;

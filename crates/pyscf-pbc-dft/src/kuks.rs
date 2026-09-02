@@ -15,7 +15,7 @@
 //! `0.5` of the exchange trace, because its two channels are not
 //! spin-degenerate.
 
-use pyscf_algebra::CTensor;
+use pyscf_algebra::{CTensor, oracle_sum};
 use pyscf_core::PyscfRsError;
 use pyscf_pbc_df::{Fftdf, PeriodicDf};
 use pyscf_pbc_gto::{Cell, ExxDiv};
@@ -30,7 +30,7 @@ use crate::error::PbcDftError;
 use crate::gen_grid::PeriodicGrids;
 use crate::krks::{KsEnergyTags, unwrap_err};
 use crate::numint::KNumInt;
-use crate::veff::{get_jk, sub_scaled, trace_dm_v};
+use crate::veff::{get_jk, sub_scaled, trace_dm_v, trace_dm_v_shared};
 use crate::xc::err;
 
 /// Unrestricted periodic Kohn-Sham.
@@ -50,6 +50,13 @@ pub struct Kuks {
     pub nelec: Option<(usize, usize)>,
     /// Smearing, when enabled.
     pub smearing: Option<pyscf_pbc_scf::smearing::Smearing>,
+    /// `init_guess_breaksym` — `uhf.py:778`, re-declared at `kuhf.py:417`.
+    /// Upstream's default is **1**. `0` disables the break; `1` keeps only the
+    /// intra-atomic blocks of the beta guess; `2` rescales the two channels to
+    /// the doublet counts. Without it `dm_a == dm_b` is an exact fixed point of
+    /// the SCF map at `cell.spin == 0` and no spin-broken solution is reachable
+    /// (KUKS-OPTIMISATION-PLAN §2.2.1).
+    pub init_guess_breaksym: i32,
     tags: std::cell::Cell<Option<KsEnergyTags>>,
     entropy: std::cell::Cell<Option<f64>>,
 }
@@ -80,6 +87,7 @@ impl Kuks {
             ni,
             nelec: None,
             smearing: None,
+            init_guess_breaksym: 1,
             tags: std::cell::Cell::new(None),
             entropy: std::cell::Cell::new(None),
         })
@@ -206,8 +214,14 @@ impl Kuks {
         // kuks.py:59-60 — one density SET per spin, each carrying every k-point.
         let sets: [KDms; 2] = [vec![dms[0].clone()], vec![dms[1].clone()]];
         let nr = ni.nr_uks(cell, grids, xc, &sets, 1, kpts_band)?;
-        let mut vxc: KDms = vec![nr.vmat[0][0].clone(), nr.vmat[1][0].clone()];
         let mut exc = nr.excsum[0];
+        // U-06 step 3: `nr` is an OWNED `NrKUksResult`, so take the two vmat
+        // stacks out of it instead of cloning them. `nr.excsum` is read first
+        // because the move invalidates `nr`.
+        let mut nr_vmat = nr.vmat;
+        let vmat_b = nr_vmat[1].swap_remove(0);
+        let vmat_a = nr_vmat[0].swap_remove(0);
+        let mut vxc: KDms = vec![vmat_a, vmat_b];
 
         let jk = get_jk(
             with_df,
@@ -243,9 +257,11 @@ impl Kuks {
             }
         }
         // kuks.py:87 — ecoul = einsum('nKij,Kji->', dm, vj).real * .5 * weight
+        //
+        // U-06 step 1: `jtot` is shared by both channels, so trace against it
+        // directly rather than cloning it into a two-set stack. Bit-exact.
         let ecoul = if ground_state {
-            let stacked: Vec<KMats> = vec![jtot.clone(), jtot.clone()];
-            0.5 * weight * trace_dm_v(dms, &stacked, nao).0
+            0.5 * weight * trace_dm_v_shared(dms, &jtot, nao).0
         } else {
             0.0
         };
@@ -301,7 +317,8 @@ impl KOverrideHooks for Kuks {
             2,
             mode,
             s1e,
-            (na + nb) as f64,
+            &[na as f64, nb as f64],
+            self.init_guess_breaksym,
         )
     }
 
@@ -373,13 +390,24 @@ impl KOverrideHooks for Kuks {
         let _ = vhf;
         let nao = self.cell().mol.nao_nr;
         let weight = 1.0 / h1e.len() as f64;
-        let mut e1 = 0.0_f64;
+        // U-09 step 2: `e1` is a term of every KUKS total energy and was a
+        // naive `(nset * nkpts)`-long running sum. U-03 ordered the KUHF copy
+        // in `krdm::energy_elec` and the traces in `veff.rs`, and did not
+        // reach this one — the same defect class, one file over. Collect the
+        // per-`(set, k)` partials (each an ordered `trace_ab`) and reduce THOSE
+        // through the pairwise tree, so the composition is ordered-inside-
+        // ordered.
+        //
+        // BIT-EXACT at every cell this repository gates on: for
+        // `nset * nkpts <= PAIRWISE_CHUNK` (128) `oracle_sum`'s base case is
+        // the strict left-to-right fold this loop performed.
+        let mut e1_parts = Vec::with_capacity(dms.len() * h1e.len());
         for set in dms.iter() {
             for (k, h) in h1e.iter().enumerate() {
-                e1 += pyscf_pbc_scf::krdm::trace_ab(&set[k], h, nao).0;
+                e1_parts.push(pyscf_pbc_scf::krdm::trace_ab(&set[k], h, nao).0);
             }
         }
-        e1 *= weight;
+        let e1 = weight * oracle_sum(&e1_parts);
         Ok((e1 + tags.ecoul + tags.exc, tags.ecoul + tags.exc))
     }
 

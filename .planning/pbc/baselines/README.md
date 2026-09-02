@@ -136,3 +136,13 @@ Add `--kk-symmetry` to time W-08's halved pair loop, and
 **Note that every `jk-*.json` here predates W-02b/W-06/W-07/W-09**, deliberately:
 they are the reference the session's improvements are quoted against. Re-capture
 them only when starting a new optimisation pass, and say so when you do.
+
+## 2026-09-02 — KUKS baseline (U-01, first clean run)
+
+`2026-09-02-kuks-si222-mesh31-pbe.json`, `2026-09-02-kuks-si222-mesh31-pbe0.json`:
+`krks_profile jk --driver kuks --cell si --nk 2,2,2 --mesh 31,31,31 --xc {pbe,pbe0}`,
+release, CPU backend, load average 8.5 (pbe) / 3.6 (pbe0) at launch. Headline
+ratios, nset=2 over nset=1 on identical data: `get_k_kpts` ×1.034,
+`get_j_kpts` ×1.90-2.20, `nr_uks`/`nr_rks` ×1.30-1.75. Cold `nr_rks` (AO
+evaluation) 6.0-6.4 s vs 39-83 ms warm. Analysis in
+`../KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md` §2.1.0a.

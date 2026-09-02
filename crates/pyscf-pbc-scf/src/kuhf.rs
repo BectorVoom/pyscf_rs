@@ -35,6 +35,13 @@ pub struct Kuhf {
     pub nelec: Option<(usize, usize)>,
     /// Smearing, when enabled.
     pub smearing: Option<crate::smearing::Smearing>,
+    /// `init_guess_breaksym` — `uhf.py:778`, re-declared at `kuhf.py:417`.
+    /// Upstream's default is **1**. `0` disables the break; `1` keeps only the
+    /// intra-atomic blocks of the beta guess; `2` rescales the two channels to
+    /// the doublet counts. Without it `dm_a == dm_b` is an exact fixed point of
+    /// the SCF map at `cell.spin == 0` and no spin-broken solution is reachable
+    /// (KUKS-OPTIMISATION-PLAN §2.2.1).
+    pub init_guess_breaksym: i32,
     entropy: std::cell::Cell<Option<f64>>,
 }
 
@@ -54,6 +61,7 @@ impl Kuhf {
             exxdiv: Some(ExxDiv::Ewald),
             nelec: None,
             smearing: None,
+            init_guess_breaksym: 1,
             entropy: std::cell::Cell::new(None),
         }
     }
@@ -140,7 +148,8 @@ impl KOverrideHooks for Kuhf {
             2,
             mode,
             s1e,
-            (na + nb) as f64,
+            &[na as f64, nb as f64],
+            self.init_guess_breaksym,
         )
     }
 

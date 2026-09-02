@@ -218,19 +218,36 @@ pub fn level_rho(lv: &LevelValues, decon: &Decontracted, dm_p: &[f64]) -> Vec<f6
     let terms = pair_terms(lv, decon, dm_p);
     let ngrids = lv.ngrids;
     let mut rho = vec![0.0f64; ngrids];
+    if terms.is_empty() {
+        return rho;
+    }
     // W-06-style split: disjoint grid chunks across workers, each computing
     // its own points' FULL fixed-order term list — see the module doc.
+    //
+    // M-04 step 1: the term buffer is allocated ONCE PER CHUNK instead of once
+    // per grid point. It used to be a `vec![0.0; terms.len()]` inside a
+    // `par_iter_mut().enumerate()` over every point — `ngrids` heap
+    // allocations per level per call (15 625 at `25^3`, 42 875 at `35^3`),
+    // where upstream's per-point work allocates nothing at all.
+    //
+    // BIT-EXACT: every element of `buf` is assigned before it is read, the
+    // term list and its order are unchanged, each point still reduces its own
+    // full list with the same `oracle_sum`, and the chunking is over DISJOINT
+    // outputs so no reduction axis is touched. `CHUNK` therefore cannot appear
+    // in any result — it only decides how many allocations happen.
     use rayon::prelude::*;
-    rho.par_iter_mut().enumerate().for_each(|(g, out)| {
-        if terms.is_empty() {
-            *out = 0.0;
-            return;
-        }
+    const CHUNK: usize = 512;
+    rho.par_chunks_mut(CHUNK).enumerate().for_each(|(c, out)| {
+        let g0 = c * CHUNK;
         let mut buf = vec![0.0f64; terms.len()];
-        for (k, t) in terms.iter().enumerate() {
-            buf[k] = t.coeff * lv.values[t.slot_i * ngrids + g] * lv.values[t.slot_j * ngrids + g];
+        for (i, slot) in out.iter_mut().enumerate() {
+            let g = g0 + i;
+            for (k, t) in terms.iter().enumerate() {
+                buf[k] =
+                    t.coeff * lv.values[t.slot_i * ngrids + g] * lv.values[t.slot_j * ngrids + g];
+            }
+            *slot = oracle_sum(&buf);
         }
-        *out = oracle_sum(&buf);
     });
     rho
 }
@@ -247,6 +264,14 @@ pub fn level_rho(lv: &LevelValues, decon: &Decontracted, dm_p: &[f64]) -> Vec<f6
 pub fn level_pass2(lv: &LevelValues, decon: &Decontracted, weight: &[f64], v_p: &mut [f64]) {
     debug_assert_eq!(weight.len(), lv.ngrids);
     let ngrids = lv.ngrids;
+    // M-04 step 2: ONE `ngrids` buffer for the whole sweep instead of a fresh
+    // `vec![0.0; ngrids]` per `(ci, cj)` matrix entry — `nao_p^2` allocations
+    // of `ngrids` doubles each, per level, per call.
+    //
+    // BIT-EXACT: every element is assigned before it is read on every entry,
+    // and the `oracle_sum` it feeds sees the identical values in the identical
+    // order.
+    let mut buf = vec![0.0f64; ngrids];
     let mut add_block = |i_range: std::ops::Range<usize>, j_range: std::ops::Range<usize>| {
         for i in i_range.clone() {
             let pi = lv.ids[i];
@@ -258,7 +283,6 @@ pub fn level_pass2(lv: &LevelValues, decon: &Decontracted, weight: &[f64], v_p: 
                 let cj0 = decon.pshells[pj].cart_ao0;
                 for (si, ci) in (si0..si1).zip(ci0..ci0 + (si1 - si0)) {
                     for (sj, cj) in (sj0..sj1).zip(cj0..cj0 + (sj1 - sj0)) {
-                        let mut buf = vec![0.0f64; ngrids];
                         for g in 0..ngrids {
                             buf[g] =
                                 weight[g] * lv.values[si * ngrids + g] * lv.values[sj * ngrids + g];

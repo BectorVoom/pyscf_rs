@@ -386,6 +386,15 @@ pub fn get_k_kpts_opts(
         return Ok(vk_kpts);
     }
 
+    // U-06 step 5: `vR_dm` used to be a fresh `nset x (nao*ngrids)` allocation
+    // per `(k2, k1)` pair. At `MESH_GATE` that is 3.81 MiB per set on 64 pairs
+    // — 244 MiB of allocate-and-zero per KRKS `get_k_kpts`, 488 MiB per KUKS
+    // one. It is safe to hoist and NOT re-zero: `contract_vr_aodm` `fill(0.0)`s
+    // each output row before accumulating into it, and the `p0` block loop
+    // below covers `0..nao` in full, so every element is overwritten on every
+    // pair. Bit-exact; this helps KRKS too.
+    let mut vr_dm: Vec<CTensor> = vec![CTensor::zeros(nao * ngrids); nset];
+
     // fft_jk.py:256 — for k2, ao2T in enumerate(ao2_kpts)
     for k2 in 0..nkpts {
         let ao2t = ao2_kpts.at(k2);
@@ -418,10 +427,6 @@ pub fn get_k_kpts_opts(
                 let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, &gv)?;
                 (entry.0.clone(), entry.1.clone())
             };
-
-            // vR_dm[i][p, g], allocated once per (k2, k1) as upstream does.
-            let mut vr_dm: Vec<CTensor> =
-                vec![CTensor::zeros(nao * ngrids); nset];
 
             // fft_jk.py:283-296 — the AO block loop.
             let mut p0 = 0usize;

@@ -34,7 +34,10 @@ pub use eval_gto::{
 };
 pub use multigrid_collocate::{PshellGridTable, collocate};
 pub use multigrid_gspace::{get_gga_vrho_gs, gradient_gs};
-pub use multigrid_pair::{PairSlotTable, collocate_pairs};
+pub use multigrid_pair::{
+    PairSlotTable, collocate_pairs, collocate_pairs_integrate, collocate_pairs_per_slot,
+    collocate_pairs_rho,
+};
 pub use pbc::ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use pbc::gv::gv;
 pub use pbc::struct_factor::struct_factor;

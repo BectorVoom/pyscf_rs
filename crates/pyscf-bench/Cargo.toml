@@ -36,6 +36,10 @@ pyscf-pbc-tools  = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-df     = { path = "../pyscf-pbc-df" }
 pyscf-pbc-dft    = { path = "../pyscf-pbc-dft" }
 pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
+# S-00 (KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md): the `ksymm` profiling
+# mode needs `make_kpts`/`KPoints` to build an irreducible k-set. Not a
+# cubecl crate, so ALG-06 is untouched; `pyscf-pbc-dft` already pulls it in.
+pyscf-pbc-symm   = { path = "../pyscf-pbc-symm" }
 serde            = { workspace = true }
 serde_json       = { workspace = true }
 cubecl        = { workspace = true }

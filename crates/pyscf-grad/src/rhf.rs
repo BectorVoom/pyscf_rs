@@ -45,7 +45,7 @@
 use crate::Gradients;
 use crate::error::GradError;
 use pyscf_algebra::{oracle_dot, oracle_sum};
-use pyscf_core::raw_layout::{ATOM_OF, BAS_SLOTS};
+
 use pyscf_core::{MOCoefficients, Mole, PyscfRsError, Unit};
 
 /// The number of Cartesian derivative components every gradient intor carries
@@ -498,52 +498,11 @@ fn assert_component_leading(
     Ok(())
 }
 
-/// Per-atom molecular AO range `[p0, p1)` — the in-tree `aoslice_by_atom`
-/// (`mol.aoslice_by_atom()[ia, 2:]`). For each atom walks `mol._bas` rows whose
-/// `ATOM_OF` slot equals `ia` and unions their `ao_loc_nr` AO ranges. Ported
-/// from `pyscf-scf/src/init_guess.rs::aoslice_by_atom` (RESEARCH A4); shells are
-/// atom-ordered post-build so each atom's AO block is contiguous.
-pub fn aoslice_by_atom(mol: &Mole) -> Result<Vec<(usize, usize)>, PyscfRsError> {
-    let natm = mol.natm;
-    let nbas = mol.nbas;
-    let nao = mol.nao_nr;
-    if mol.ao_loc_nr.len() <= nbas {
-        return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-            format!(
-                "aoslice_by_atom: ao_loc_nr len {} <= nbas {} (Mole not built?)",
-                mol.ao_loc_nr.len(),
-                nbas
-            ),
-        )));
-    }
-    let mut slices = vec![(nao, 0usize); natm];
-    for shell in 0..nbas {
-        let atom = mol._bas[shell * BAS_SLOTS + ATOM_OF] as usize;
-        if atom >= natm {
-            return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-                format!("aoslice_by_atom: _bas[{shell}, ATOM_OF] = {atom} but natm = {natm}"),
-            )));
-        }
-        let lo = mol.ao_loc_nr[shell] as usize;
-        let hi = mol.ao_loc_nr[shell + 1] as usize;
-        if hi > nao || lo > hi {
-            return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
-                format!("aoslice_by_atom: shell {shell} AO range [{lo},{hi}) invalid (nao={nao})"),
-            )));
-        }
-        let (cur_lo, cur_hi) = slices[atom];
-        slices[atom] = (cur_lo.min(lo), cur_hi.max(hi));
-    }
-    let mut next = 0usize;
-    for slot in slices.iter_mut() {
-        if slot.0 == nao && slot.1 == 0 {
-            *slot = (next, next);
-        } else {
-            next = slot.1;
-        }
-    }
-    Ok(slices)
-}
+/// Per-atom molecular AO range `[p0, p1)` — re-exported from
+/// [`pyscf_gto::aoslice_by_atom`], which is where the single copy now lives
+/// (U-02 step 5). Kept public here because `pyscf-grad`'s own tests and the
+/// `rks`/`uks` gradient modules import it under this path.
+pub use pyscf_gto::aoslice_by_atom;
 
 /// RHF electronic gradient seam preserved for compatibility with the 07-02
 /// module stub. `NotYetImplemented` no longer applies — the body lives in

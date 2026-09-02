@@ -588,6 +588,24 @@ an operation this phase builds anyway.
 
 **RULING (adopt as D-PBC-26, recorded by plan 17-07):**
 
+> ### ERRATUM on point 1 — MEASURED WRONG, 2026-09-02
+>
+> **Point 1 below does not compute the same `vj`/`vk`, and the 223x / 40x in
+> point 3 compared two different quantities.** Full derivation and the
+> measurement are in
+> [`KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md`](../../pbc/KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md)
+> §2.2.3 and the `PBC-MASTER-PLAN.md` D-PBC-26 entry; in one line: the Coulomb
+> density built from an IBZ k-list is `Σ rho_k / N_ibz` and the true one is
+> `Σ w_k <rho_k>_star`, and `rho_k` is not point-group invariant. Measured
+> `max |d veff| = 9.486e-2 Ha` on `si [2,2,2]`
+> (`khf_ksymm.rs::ibz_only_get_jk_is_not_an_identity`).
+>
+> The attainable bound is `nkpts / nkpts_ibz`, reached **bit-identically**
+> (`max |d| = 0e0`) by restricting the OUTPUT set — `kpts_band = kpts_ibz` —
+> rather than the sampling set. Points 2, 4, 5 and 6 stand; point 4 was
+> already satisfied, since the DFT k-symmetric adapters have taken the band
+> route since 17-08 Task 2.
+
 1. `get_jk` gains a **second, faster route**: call `PeriodicDf::get_jk` only at
    `kpts.kpts_ibz`, then unfold `vj`/`vk` to the full BZ with
    `transform_1e_operator` instead of re-running the DF builder at every BZ

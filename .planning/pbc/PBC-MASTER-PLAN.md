@@ -254,6 +254,8 @@ stop, write a deviation note in the plan's SUMMARY, and escalate.
 | **D-PBC-24** | Everything range-separated in Phase 14 — `rsdf_builder._RSGDFBuilder`, `mdf._RSMDFBuilder`, `rsdf.RSGDF`, `scf.rsjk` — is **BLOCKED on `cintx`, not deferred by choice**, and returns `NotYetImplemented { phase: 14 }` naming the gap. The ω machinery (all twelve estimators, `weighted_coulG_LR/_SR`, `_gaussian_int`) ships and is gated. | Range separation is not a distinct integral symbol: upstream never calls an `int2e_sr_*`. It is libcint's `PTR_RANGE_OMEGA` (`env[8]`) toggle around the STANDARD `int3c2e`/`int2c2e`/`int2e`. `cintx_runtime::ExecutionOptions` has `f12_zeta` (`env[9]`), `rinv_orig` and `common_orig` and **no `range_omega`**; no kernel reads `env[8]`; and `incore::aux_e2` reaches cintx through `build_image_expanded_with_aux`, which builds its `BasisSet` from the parsed per-element basis rather than from an `_env` array, so even `pyscf-gto`'s own direct-`_env` workaround is unreachable. **This is Phase 4's Open Question A5 / cintx#11**, already documented in `crates/pyscf-gto/src/range_coulomb.rs`. `14-07-PLAN.md` Task 7b required this be REPORTED rather than worked around with a numerically different kernel — a full-range substitute would run, converge, and be silently a different method, and for `rsjk` (which is EXACT) the wrong answer would land inside GDF's 1.2e-3 fitting error and look plausible. Consequence: **Gate 3 is unreachable** and `GDF._prefer_ccdf` stays `true`. **Lifting it is planned in `.planning/carryovers/D-PBC-24-cintx-range-omega-PLAN.md`**, whose sizing finding is that `rys_order = (sum l_ceil)/2 + 1` is `<= 3` on every system this milestone gates, and that libcint computes the short-range integral in that regime as `full - LR` with DOUBLED Rys roots using only the standard root finder — so `CINTsr_rys_roots` is a later stage, not a prerequisite. Recorded 2026-08-29, plans 14-07/14-08; planned 2026-08-30. |
 | **D-PBC-25** | `KPoints` lives in **`pyscf-pbc-symm`**, not `pyscf-pbc-lib`, and holds a `Symmetry` by **composition**. `pyscf-pbc-df` and `pyscf-pbc-dft` gain a `pyscf-pbc-symm` dependency. | Upstream declares `class KPoints(symm.Symmetry, lib.StreamObject)` (`kpts.py:847`) — `KPoints` *is a* `Symmetry`. Mirroring the file name would put it in `pyscf-pbc-lib`, which already sits *below* `pyscf-pbc-symm` in the dependency graph (`pyscf-pbc-symm/Cargo.toml`) and cannot see `Cell` at all, so the natural placement is a **cycle**. The `df`/`dft` dependency is forced by upstream's seven `isinstance(kpts, KPoints)` branches in `pbc/dft/numint.py` (`:328, 431, 647, 779, 859, 908, 956`) and by every DF builder's `kpts` setter (`fft.py:230-246`, `aft.py:613-641`, `df.py:189-217`, `mdf.py:59`). Verified acyclic. `xtask check_dependency_wall` polices only cubecl deps (`check_dependency_wall.rs:28-60`), so no exemption is needed. **Corollary:** `pyscf-pbc-dft` may not name cubecl (ALG-06), so multigrid's kernels go in `pyscf-kernels` (plans 17-11/17-12). Recorded 2026-08-31. |
 | **D-PBC-27** | Plan 17-10 ports `ft_ao._RangeSeparatedCell` (`RsCell`) by copying ALREADY-NORMALISED `cintx::Shell`s out of the built `basis_set` and reordering/slicing them — never through `Cell::build`, which would re-normalise a decontracted (smaller-`nprim`) shell's coefficients a second time and silently break upstream's `_env`-splice invariant. `ExtendedMole` is represented as `(rs_cell, Ls, bvkmesh_Ls, bas_mask)`, NOT as a literal replicated `Mole` the way upstream builds it. `exclude_dd_block`'s closure (`gdf_builder::dd_block::fft_dd_block` + `j3c::make_j3c_scheme_dd`) is a POST-HOC scatter-add correction applied after the existing real-space pass, not a rewrite of it. | `Cell::build`'s normalisation path (`pyscf_gto::make_env::normalise_contractions`) rescales each shell's contraction column by `1/sqrt(cᵀSc)` over THAT shell's own primitive set; routing a smaller decontracted shell through it changes the rescale factor, which is exactly the corruption upstream's raw `_env` splice avoids. This port's dual (raw-array + cintx `BasisSet`) representation needs the analogous fix at the `Shell` level — see `AuxCell::modrho_scale`'s precedent for the same class of problem. `ExtendedMole`'s quantities (`strip_basis`'s surviving triples, `get_ovlp_mask`'s screen) are functions of shell parameters + geometry only, never of an actually-cint-drivable molecule, so materialising `nimgs · bvk_ncells · rs_cell.nbas` real shells would cost real time and buy nothing this plan gates. The post-hoc correction shape means `make_j3c`/`make_j3c_scheme`'s existing callers and tests are behaviourally UNCHANGED (`dd_correction = None` is a no-op path), which is what let `exclude_dd_block = true` ship as a fully-working OPT-IN without touching the already-shipped, already-tested real-space pipeline; the crate-wide DEFAULT was deliberately left at `false` rather than flipped, pending a full-suite regression run — see `17-10-SUMMARY.md`. Recorded 2026-09-01, plan 17-10. Gated: `crates/pyscf-pbc-df/tests/{rs_cell,extended_mole,exclude_dd_block}.rs`, `crates/pyscf-pbc-scf/tests/exclude_dd_block_energy.rs`. |
+| **D-PBC-28** | *(Phase 15's speed ruling — recorded in full at `.planning/phases/15-periodic-ao2mo-kmp2/15-CONTEXT.md §7`; this row exists so the identifier is visibly allocated.)* Renumbered from D-PBC-27 by `15-REVIEW.md D-15-R-01` after plan 17-10 claimed 27 first. | Two unrelated rulings under one identifier, in a project whose audit story is "you can look the decision up a year later", is the defect the renumber fixed. Recorded 2026-09-02. |
+| **D-PBC-29** | **Phase 16's speed + memory ruling, four clauses.** **(1) Complex tensors get their own arena.** `ZWorkspacePool` in `pyscf-runtime` with `shape_bytes = product * 16`, non-copying block access and per-buffer locking; `WorkspacePool`'s f64 API stays byte-for-byte unchanged. Reinterpreting `Box<[f64]>` as complex pairs is FORBIDDEN. **(2) Contractions are host rayon loops over k-triples with `oracle_*` accumulators, not `zgemm_dense`**, and every site NAMES its primitive (`oracle_zdot` = `zdotc` vs `oracle_zdotu`). **(3) `symm_map` is used from the FIRST version of the ERI build**, not retrofitted. **(4) Storage tiers are selected from an exact per-tensor byte count, never from upstream's `_mem_usage`**, and at least one green test must cross a tier boundary. Recorded 2026-09-02, plans 16-02/16-05, `16-REVIEW.md §6`. | **(1)** `workspace_pool.rs:278-280` computes `shape_bytes` as `product * 8` and feeds `try_reserve` (`:266-274`), the HARD `MemoryLimitExceeded` refusal — a complex tensor sized with `* 8` under-reports by 2× to the one mechanism whose job is to refuse before an OOM, on the machine where 17-12's host suite already exit-137s. `as_slice` (`:397`) is `Ok(b.to_vec())`, a full copy per access, and `with_mut_slice` (`:461-483`, the closure runs at `:475`) holds the pool's single `Mutex` across the caller's closure, which would serialise every rayon k-loop at one core. `pyscf-ccsd` has zero complex arithmetic, so only the arena's SHAPE is reusable, not its element type. **(2)** Standing measurements `zgemm-dense-loses-to-host-rayon` (6-12× slower on the CPU backend AND 1.35e-10 off, outside the 1e-11 gate) and `pyscf-algebra-cpu-is-default-backend`. Re-measured against this phase's own shapes at 16-14 Task 4.2, and amended if it wins there. The naming requirement is `15-REVIEW.md D-15-R-02`'s lesson: a plan saying only "route through `oracle_dot`" yields `Σ x·x` instead of `Σ conj(x)·y` — a plausible wrong number only the final energy gate catches. **(3)** `kpts_helper.py:583-630` puts each of the `nkpts³` triples in an orbit of ≤4; `kccsd_rhf.py:783`/`:798-805`/`:909` transforms `≈nkpts³/4` blocks and transposes the rest — a derived ~4× on the phase's dominant step, which the original §8.8 never mentions. **`15-REVIEW.md D-15-R-04`'s ≤2× ruling does NOT carry over**: it held because KMP2 only wants `(ov|ov)` blocks, whereas KCCSD's `_ERIS` wants the full general block (`kccsd_rhf.py:789-794`), so all four operations land inside the set it needs. Measured by 16-01 Task 6, not asserted cold. **(4)** `kccsd_rhf.py:1100-1107` is `nkpts³·nmo⁴·4·16` carrying its own `# TODO`, and over-estimates by **9.1×** (diamond `gth-szv`) to **6.2×** (`gth-dzvp`) against the seven blocks actually allocated — porting it would make this port's HARD refusal reject jobs that fit. Derived `vvvv`: `gth-szv` 2×2×2 **2.0 MiB**, 4×4×4 **1.0 GiB**; `gth-dzvp` 2×2×2 **1.79 GiB**, 3×3×3 **68.7 GiB**; ×3 for KUCCSD's three `Wvvvv`-class tensors, **×16 for KGCCSD**. Every `§9.2` fixture is `gth-szv`, where `vvvv` at 2×2×2 is 2 MiB — so a gate on those alone ships the HDF5 spill path never once executed, which is 17-12's exit-137 shape. Gated: `crates/pyscf-runtime/tests/zworkspace_pool.rs`, `crates/pyscf-pbc-lib/tests/symm_map.rs`, `crates/pyscf-pbc-cc/tests/{ktensor,keris_tiers,kccsd_rhf,kccsd_t}.rs`. |
 
 ---
 
@@ -444,7 +446,7 @@ primitive that you can call four times. Adding a bespoke complex kernel where
 | **13** | ft_ao + AFTDF | `ft_ao`/`ft_aopair` cubecl kernel, `AFTDF` `get_nuc`/`get_pp`/`get_jk`, `aft_jk`, `aft_ao2mo` | `ft_aopair` matches upstream to 1e-10; `AFTDF` KRHF energy == FFTDF KRHF energy to 1e-6 |
 | **14** | GDF / MDF / RSDF / RSJK | `gdf_builder`, `GDF` (+ HDF5 `_cderi`), `incore`/`outcore`, `MDF`, `rsdf_builder`, `rsdf_helper`, `RSDF`, `df_jk`, `rsjk` | `GDF` KRHF energy == FFTDF to 1e-6 with 10× less memory on a 4×4×4 mesh |
 | **15** | Periodic AO2MO + KMP2 | `pbc/ao2mo/eris`, per-DF `*_ao2mo`, `KMP2`, `KUMP2`, `kmp2_stagger` | `KMP2` correlation energy matches upstream to 1e-8 |
-| **16** | Periodic CC + CI | `KCCSD` (RHF/UHF/GHF), `kintermediates`, `KCCSD(T)`, `EOM-KCCSD` IP/EA/EE, `KCIS` | `KRCCSD` `e_corr` matches upstream to 1e-8 on He 1×1×2 |
+| **16** | Periodic CC + CI | `KCCSD` (RHF/UHF/GHF), `kintermediates`, `KCCSD(T)`, `EOM-KCCSD` IP/EA (+EE: GHF full, RHF singlet-only, **UHF absent upstream** — see §8.8), `KCIS` | ~~`KRCCSD` `e_corr` matches upstream to 1e-8 on He 1×1×2~~ **UNMEASURED, and it contradicts `ROADMAP.md`'s 1e-14 for the same number — six orders apart, the fourth instance of this defect (cf. Phases 14, 15, 17).** Upstream's own suite asserts `KRCCSD` `e_corr` at **6 decimals** (`pbc/cc/test/test_krccsd.py:180`, `:226`, `:232`, `:338`, `:356`) and EOM roots at **3** (`:359-366`), so 1e-14 is eight orders tighter than upstream and 1e-8 is two. **Plan 16-01 measures the floor before the gate is written** (`.planning/phases/16-periodic-cc-ci/16-01-PLAN.md`) and restates it here, in `ROADMAP.md` and in `16-CONTEXT §2` together; the gate must name its DF route (`kccsd_rhf.py:37` branches on `isinstance(with_df, GDF)`, the split Phase 14 measured at 4.5e-6 Ha). |
 | **17** | k-point symmetry + multigrid | `pbc/symm/*`, `KPoints` IBZ machinery, all `*_ksymm` adapters, `dft/multigrid` | ~~`KRHF` with `space_group_symmetry=True` equals the no-symmetry energy to 1e-9`~~ **WRONG, replaced by five measured gates (17-01, `.planning/phases/17-ksymm-multigrid/measurements/README.md`; §8.9 below).** Gate A (IBZ integers, exact): 145/145/245/408/816/2052, reproduced bit-for-bit on `si`/`diamond`. Gate B (transforms vs one converged SCF): ≤1e-9 at default `cell.precision`, ≤1e-13 at `cell.precision=1e-13`. Gate C/D (energy, symmetry vs no-symmetry, mesh pinned): FFTDF ≤5.985e-11, GDF ≤3.433e-09, both inside upstream's own 5e-8/5e-7. Gate E (multigrid vs reference `numint`): v1 exact to 1e-12; v2 carries a mesh-independent ~2e-8…2e-7 floor and is NOT held to Gate B-D. |
 | **18** | Periodic gradients + stress + geomopt | `grad/krhf`, `kuhf`, `krks`, `kuks`, `krkspu`, `kukspu`, gamma variants, `*_stress`, `geomopt` | analytic gradient matches central-difference `verify_fd` to 1e-6 Ha/Bohr. **cintx prereq: the `_ip1_r{2,4,6}_origk` + `r{2,4}_origi_ip2` half of Wave 0.5 — see §2.4** |
 | **19** | Periodic response + relativistic | `tdscf` (k + gamma), `gw` (AC + CD), `adc` (IP/EA), `x2c`, `newton_ah`, `stability`, `cphf`, `eph` | KRHF-TDA lowest excitation matches upstream to 1e-6 eV |
@@ -2056,26 +2058,53 @@ with `kb` fixed by momentum conservation `kconserv[ki, ka, kj]`.
 
 ### 8.8 Phase 16 — Periodic Coupled Cluster + CI
 
-**Plans:** 10. This is the largest phase by line count (13,675 + 852 lines upstream).
+**Plans: 14** (~~10~~ — the original ten-plan table was an undercount and was
+wrong about the starting state in seven ways; see `16-CONTEXT.md §1`, corrected
+2026-09-02, and `16-REVIEW.md`). Still the largest phase by line count
+(13,675 + 852 upstream). **`16-01` MUST run before any plan below writes a line
+of Rust** — its measured gates replace the placeholder numbers this section and
+`§7` carried before it.
+
+**Phase 16 is HARD-BLOCKED on Phase 15** (`16-CONTEXT §1.1`): all nine k-point
+CC/CI modules import `padding_k_idx` / `padded_mo_coeff` / `padded_mo_energy` /
+`get_nocc` / `get_nmo` / `get_frozen_mask` from `pbc.mp.kmp2` / `kump2`, and
+`crates/pyscf-pbc-mp` is a 13-line stub. Waves 0 (16-01/02/03) have no such
+dependency and start immediately; wave 1 onward waits, and defers explicitly
+rather than reimplementing the padding surface — the same ruling 17-09 made.
 
 | Plan | Content | Port from |
 |---|---|---|
-| **16-01** | `kintermediates_rhf` (Foo/Fvv/Fov/Woooo/Wvvvv/Wvoov…) at k | `cc/kintermediates_rhf.py` (926 l) |
-| **16-02** | `KRCCSD`: `update_amps`, `energy`, `kernel`, k-batched contractions (K-17) | `cc/kccsd_rhf.py` (1203 l) |
-| **16-03** | `kintermediates_uhf` + `KUCCSD` | `cc/kintermediates_uhf.py` (1225 l), `cc/kccsd_uhf.py` (1116 l) |
-| **16-04** | `KGCCSD` (spin-orbital) + `kintermediates` | `cc/kccsd.py` (833 l), `cc/kintermediates.py` (529 l) |
-| **16-05** | `KCCSD(T)`: `kccsd_t`, `kccsd_t_rhf` | `cc/kccsd_t.py` + `kccsd_t_rhf.py` (970 l) |
-| **16-06** | `EOM-KCCSD-RHF` IP/EA | `cc/eom_kccsd_rhf.py` (1716 l) + ip/ea (158 l) |
-| **16-07** | `EOM-KCCSD-UHF` | `cc/eom_kccsd_uhf.py` (1275 l) |
-| **16-08** | `EOM-KCCSD-GHF` (incl. EE) | `cc/eom_kccsd_ghf.py` (2011 l) |
-| **16-09** | `KCIS` + `pbc/ci/cisd` | `ci/kcis_rhf.py` (700 l), `ci/cisd.py` (116 l) |
-| **16-10** | `kuccsd_rdm`, `pbc/cc/ccsd.py` gamma shim, verification | `cc/kuccsd_rdm.py`, `cc/ccsd.py` |
+| **16-01** | Measure the floor (`e_corr`, EOM roots, (T), the DF-route split, the storage-tier crossover, the `symm_map` ratio); restate every gate in four documents | — (measurement only, no Rust) |
+| **16-02** | Substrate: `KptsHelper::build_symm_map`/`transform_symm`; the **complex** tensor arena `ZWorkspacePool`; `KTensor` (**costed at zero by the original table** — see D-PBC-29) | `lib/kpts_helper.py:544-630` |
+| **16-03** | `davidson_nosym1` + `pick_real_eigs` — iterative NON-symmetric Davidson (**omitted entirely**; four plans are dead without it) | `lib/linalg_helper.py:741` |
+| **16-04** | `kintermediates_rhf` at k | `cc/kintermediates_rhf.py` (926 l) |
+| **16-05** | `KRCCSD`: `_ERIS` (3 storage tiers + `symm_map`), `update_amps`, `energy`, `kernel` | `cc/kccsd_rhf.py` (1203 l) |
+| **16-06** | `kintermediates_uhf` + `KUCCSD` (kernel EXISTS upstream, unlike `KUMP2`) | `cc/kintermediates_uhf.py` (1225 l), `cc/kccsd_uhf.py` (1116 l) |
+| **16-07** | `KGCCSD` + `kintermediates` + **the narrow molecular `gccsd` surface it inherits** (`kccsd.py:332`/`:339`/`:352`/`:477`) | `cc/kccsd.py` (833 l), `cc/kintermediates.py` (529 l), + `cc/gccsd.py` (partial) |
+| **16-08** | `KCCSD(T)`: `kccsd_t`, `kccsd_t_rhf`, gated against **`kccsd_t_rhf_slow` — the file the original table omitted** (`kccsd_t_rhf.py:236` runs on the C kernel `CCsd_zcontract_t3T`, which this port has not got) | `cc/kccsd_t.py` (319 l) + `kccsd_t_rhf.py` (651 l) + `kccsd_t_rhf_slow.py` (271 l) |
+| **16-09** | `EOM-KCCSD-GHF` IP/EA/EE + **the narrow molecular `eom_rccsd` base** — **REORDERED FIRST**: `eom_kccsd_rhf.py:25` and `eom_kccsd_uhf.py:29` both inherit from it | `cc/eom_kccsd_ghf.py` (2011 l), + `cc/eom_rccsd.py` (partial) |
+| **16-10** | `EOM-KCCSD-RHF` IP/EA + EE-**singlet**; Triplet/SpinFlip ship as upstream's shells with upstream's refusals | `cc/eom_kccsd_rhf.py` (1716 l) + ip/ea (158 l) |
+| **16-11** | `EOM-KCCSD-UHF` IP/EA; **EE refuses — upstream has no `EOMEE` class and `_IMDS.make_ee` (`:1120`) raises** | `cc/eom_kccsd_uhf.py` (1275 l) |
+| **16-12** | `kuccsd_rdm` + the Γ-point `pbc/cc/ccsd.py` shim (both halves of the `exxdiv`/Madelung treatment) | `cc/kuccsd_rdm.py` (157 l), `cc/ccsd.py` (157 l) |
+| **16-13** | `KCIS` (k-point CI **singles**); **`pbc/ci/cisd.py` DEFERRED EXPLICITLY** — it is a Γ-only shim over molecular RCISD/UCISD/GCISD, and this port has no molecular CI crate | `ci/kcis_rhf.py` (700 l) |
+| **16-14** | Verification against the restated gates + re-measurement of D-PBC-29's four claims | — |
 
-**Reuse note:** `pyscf-ccsd` already owns the molecular `WorkspacePool` tensor arena and
-`PYSCF_MAX_MEMORY` pre-flight refusal. `pyscf-pbc-cc` MUST reuse both — a k-point CCSD
-`Wvvvv` is `nkpts³ × nvir⁴` and will OOM without them.
+**Reuse note — CORRECTED.** ~~`pyscf-ccsd` already owns the molecular
+`WorkspacePool` tensor arena and `PYSCF_MAX_MEMORY` pre-flight refusal.
+`pyscf-pbc-cc` MUST reuse both.~~ Three corrections (`16-CONTEXT §1.3`,
+`16-REVIEW §2`): the arena is in **`pyscf-runtime`**, not `pyscf-ccsd`;
+`pyscf-ccsd` contains **zero** complex arithmetic (`grep -c "Complex64" ` is 0
+on every file) while every k-point CC tensor is `complex128`; and the pool is
+f64-typed all the way down (`shape_bytes = product * 8`,
+`InMemory(Box<[f64]>)`, `as_slice -> Vec<f64>`). What is reusable is the
+**shape** — budget ceiling, free-list, `InMemory | Spilled`, the HARD refusal
+with no silent downgrade. See **D-PBC-29**.
 
----
+**Droppable half if the phase overruns:** 16-09/10/11/13 (EOM + KCIS). Nothing
+in Phases 17-20 needs excited states for correctness, and they are ordered
+last. Do **not** drop 16-05 or 16-07 instead — §8.9 blocks 17-09's CC half on
+`KRCCSD` by name, and `scf.kghf.KGHF.CCSD` (`kccsd.py:805`) is a surface
+Phase 19 reads.
 
 ### 8.9 Phase 17 — k-point symmetry + multigrid
 
@@ -2163,6 +2192,44 @@ because exact-exchange cost scales closer to quadratically than linearly in
 `nkpts`. Target the GDF number (~40x) as the realistic floor since GDF is the
 port's default route.
 
+> ### ERRATUM — D-PBC-26 point 1 is WRONG. Recorded 2026-09-02, MEASURED.
+>
+> Plan item S-02 of
+> [`KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md`](./KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md)
+> §2.2.3, measured by
+> `crates/pyscf-pbc-scf/tests/khf_ksymm.rs::ibz_only_get_jk_is_not_an_identity`.
+>
+> **Calling the DF builder at `kpts_ibz` only does not compute the same `vj`
+> or `vk`.** `get_j_kpts` forms `rho(r) = (1/N) Σ_{k ∈ list}` over whatever
+> k-list it is handed; over the IBZ list that is `Σ_{k∈IBZ} rho_k / N_ibz`,
+> while the true density is `Σ_{k∈IBZ} w_k <rho_k>_star` — and `rho_k(r)` is
+> NOT point-group invariant (`rho_{Rk}(r) = rho_k(R^-1 r)`). The two agree
+> only when every star has one member. Unfolding the RESULT with
+> `transform_1e_operator` rotates a potential built from the wrong density; it
+> does not repair it. For `K` the argument is sharper: restoring the dropped
+> `k2` terms by equivariance needs `K` evaluated at every `R^-1 k1`, which for
+> `k1` over the IBZ is the whole zone again.
+>
+> **Measured on `si [2,2,2]`** (stars `[1, 3, 4]`, so the fixture can see the
+> difference): `max |d veff|` between the IBZ-only route and the reference
+> route is **9.486e-2 Ha** — not a tolerance question.
+>
+> **So the 223x / 40x above compared two DIFFERENT QUANTITIES**, and neither
+> number is a speed target. The attainable bound is `nkpts / nkpts_ibz`, and
+> it is reached exactly — **bit-identically**, measured `max |d| = 0e0` — by
+> restricting the OUTPUT set instead of the sampling set, i.e. `kpts_band =
+> kpts_ibz`. The exchange sum still runs over every `k2` (that is the
+> physics); only the free output index `k1` is restricted, which is
+> `nkpts · nkpts_ibz` pairs instead of `nkpts²`. On `si [2,2,2]` that is
+> **64 -> 24 pairs, 2.67x fewer**, and the reference route was computing those
+> extra output points only to discard them in `fold_to_ibz`.
+>
+> `JkRoute::Fast` is renamed `JkRoute::IbzOnly` and kept non-default solely so
+> this measurement stays reproducible; `JkRoute::Band` is the correct route.
+> Points 2, 4, 5 and 6 of the ruling are unaffected — and the DFT k-symmetric
+> adapters have taken the band route since 17-08 Task 2, so point 4 was
+> already true.
+
 ---
 
 ### 8.10 Phase 18 — Periodic gradients + stress + geomopt
@@ -2201,6 +2268,17 @@ The remaining cintx dependency is the PP-gradient half of §2.4:
 (`pp_int.py:454`). These are cintx Wave 0.5. If they have not landed, plan 18-01 ships
 the assembly and `#[ignore]`-gates only the PP-gradient contribution — the rest of the
 phase, including `verify_fd`, runs.
+
+**Multigrid dependency (recorded by plan 17-12, 2026-09-02):** `grad/rhf.py:44` and
+`grad/uhf.py:40` `assert isinstance(ni, MultiGridNumInt2)` — that is upstream's **v2**
+multigrid (`multigrid_pair.py`, ported as `pyscf_pbc_dft::multigrid::MultiGridNumInt2`,
+`crates/pyscf-pbc-dft/src/multigrid/pair.rs`), NOT v1 (`MultiGridNumInt`,
+`multigrid.py`, plan 17-11). Plans 18-02/18-03 inherit the v2 half: gamma-point only,
+not yet wired into the KRKS driver as a selectable `numint`, and (17-01's
+measurement) slower than the reference `numint` at Gate-E scale — require it for
+`isinstance` fidelity, do not expect a speed win from it. Its accuracy floor against
+the reference route is the screening floor `precision · EXTRA_PREC` (~1e-6 on the
+electron count), see `17-12-SUMMARY.md`.
 
 **Standing rule from v1.0 that applies here:** `pyscf-grad`'s always-on
 central-difference `verify_fd` harness (GRAD-09, D-01) is the primary numeric gate.

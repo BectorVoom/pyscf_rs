@@ -226,6 +226,43 @@ and the `flag_submesh = true` branch (which needs no `get_bands`) still ships.
 upstream raises `NotImplementedError`. Port the refusal; do not silently drop
 the negative part, which is what "just skip it" would do.
 
+### 3.10 `oracle_zdot` is `zdotc`. Every KMP2 contraction is `zdotu`.
+
+`crates/pyscf-algebra/src/zoracle.rs:35` — `oracle_zdot(x, y)` computes
+**`xᴴ·y = Σ conj(x[i])·y[i]`** (`re = dot(xr,yr) + dot(xi,yi)`). It is the only
+bit-deterministic complex inner product the workspace exports
+(`lib.rs:116`); `zblas::zdotu_dense` is the unconjugated one and `zoracle`'s own
+module doc (`:1-14`) rules it out for anything that lands in an energy.
+
+Three of Phase 15's four hot contractions have **no conjugate**:
+
+| contraction | upstream | conjugation |
+|---|---|---|
+| `Lov·Lov -> oovv` | `kmp2.py:96`, `einsum("Lia,Ljb->iajb")` | **none** — `df_ao2mo.rs:12-19` explains why the second factor is already conjugated inside `cderi` |
+| `edi = 2·Re⟨t2, oovv[ka]⟩` | `kmp2.py:113` | `t2` is **already** `conj(oovv/eijab)` (`:110`), so the einsum is unconjugated |
+| `exi = −Re⟨t2, oovv[kb]ᵀ⟩` | `kmp2.py:114` | same |
+
+Calling `oracle_zdot(t2, oovv)` therefore computes `Σ (oovv/e)·oovv` — the
+**unconjugated square** — instead of `Σ conj(oovv/e)·oovv`. It runs, it returns
+a plausible number, and it is wrong. Two ways out, and the plan must pick one
+out loud rather than leave it to the implementer:
+
+* **(a)** add `oracle_zdotu` next to `oracle_zdot` in `zoracle.rs` — four
+  `oracle_dot` calls in the `zdotu` pattern (`re = rr − ii`, `im = ri + ir`) —
+  and use it everywhere §3.10's table says "none"; or
+* **(b)** never materialise the conjugation: keep `x = oovv/eijab`
+  **unconjugated**, call `oracle_zdot(x, oovv)`, and conjugate only when storing
+  `t2`. This is exact for `edi`/`exi` but does **not** help `Lov·Lov`, which has
+  no conjugate on either side.
+
+`Lov·Lov` forces (a). **15-04 adds `oracle_zdotu`** (a four-line sibling of an
+existing function, host-only, no device path) and both consumers use it.
+
+There is a second, free win in the same place: `edi`/`exi` take only
+`Re`, so two of the four `oracle_dot` calls are computed and thrown away.
+A `oracle_zdotu_re` / `oracle_zdot_re` that returns just the real part halves
+that contraction. Ship it with (a); it is the same file.
+
 ---
 
 ## 4. What the phase builds on — the exact call surface
@@ -288,54 +325,208 @@ anchor, as `09-05` already had to for `Gv`.
   Route the reductions through `pyscf_algebra::oracle_sum` / `oracle_dot`
   (the FOUND-06 pairwise tree) and pin bit-identity at
   `RAYON_NUM_THREADS=1` and `=8`, as `fft_jk` had to (W-05, `.planning/pbc/SUMMARY.md`).
+  **The complex sibling `oracle_zdot` is `zdotc` and every KMP2 contraction is
+  `zdotu` — see §3.10 before writing a single one of them.**
 * **RULE 9** — every plan ends with a `15-PP-SUMMARY.md` and a `STATE.md` update.
 
 ---
 
-## 7. The speed ruling — parallelise the independent k-work, and measure the route choice's cost
+## 7. The speed ruling — D-PBC-28
 
-§2.2 already rules that `kmp2.py:69`'s GDF-vs-FFTDF branch is a **correctness**
-decision (the two routes disagree by the same 4.5e-6-Ha class of amount Phase 14
-measured at the SCF level, so each must be gated against its own upstream
-number). What §2.2 does not address, and no plan currently measures, is that the
-same branch is also a **cost** decision users make when they choose a DF
-backend, and this phase ships no number that tells them what it costs.
+**Numbering:** an earlier draft of this section proposed `D-PBC-27`. That number
+was taken on 2026-09-01 by plan 17-10 (`RsCell`/`ExtendedMole`,
+`PBC-MASTER-PLAN.md §6`). **The Phase-15 speed ruling is D-PBC-28** and every
+plan file in this phase now says so. If an older document (or a summary written
+before 2026-09-02) says `D-PBC-27` in a *speed* context, it means this section;
+`D-PBC-27` itself is 17-10's `RsCell`/`ExtendedMole` ruling and is unrelated.
 
-**RULING (adopt as D-PBC-27, recorded by plan 15-01/15-05):**
+§2.2 rules that `kmp2.py:69`'s GDF-vs-FFTDF branch is a **correctness**
+decision. It is also a **cost** decision users make when they pick a DF backend,
+and nothing in this phase measured it until now. Eight sub-rulings follow. Each
+is either a measurement obligation or a construction obligation; none is a
+tolerance.
 
-1. **Measure the DF-route-vs-non-DF-route wall-clock gap in upstream, not only
-   the energy gap.** 15-01 already runs both routes on the same cells for Gate
-   §2.2's sake (Task 3); the marginal cost of also timing them is one more
-   column in a table already being built. Record it, so plan 15-05 has a floor
-   to compare the port's own two routes against.
-2. **The per-k-pair work in `Lov` (plan 15-04) and in `KMP2`'s `(ki, kj)` outer
-   loop (plan 15-05) is embarrassingly parallel across k-pairs — parallelise it
-   with rayon.** Every `Lov[ki,kj]` block and every `(ki,kj)`'s `oovv_ij`
-   assembly writes to a disjoint slot; the reduction that is *not* disjoint —
-   `edi`/`exi` accumulating into `emp2_ss`/`emp2_os` across `nkpts³` triples —
-   already goes through `oracle_sum`/`oracle_dot` per §9.3 above. Parallelising
-   the disjoint outer loop and reducing the shared accumulator deterministically
-   are two different obligations; ship both from the first version, not the
-   accumulator alone with a single-threaded outer loop bolted on top.
-3. Once both are in, plan 15-05's tests report the port's own DF-route vs
-   non-DF-route wall-clock ratio next to upstream's (from point 1) — a
-   correctness gate with no accompanying cost number leaves a user unable to
-   tell which backend to pick for performance, which is exactly the choice
-   `kmp2.py:69` forces on them.
+### 7.0 The cost model this section argues from
 
-**Corollary — do not retrofit `KptsHelper.symm_map`'s 8-fold ERI symmetry into
-`KMP2.kernel`, and say why in the code.** The infrastructure sits right next to
-the kernel (15-02 ships it in the same plan wave), and it is tempting to use it
-to touch only `nkpts³/8` triples instead of `nkpts³`. **Upstream itself does
-not** — `kmp2.kernel` reads only `khelper.kconserv` (15-CONTEXT §1.1) — and the
-reason generalises: the dominant cost per triple is the `nocc²·nvir²`
-`edi`/`exi` contraction, which every member of a symmetry orbit still has to
-pay once its `oovv` block is recovered by `transform_symm`, so the 8-fold
-reduction would only shrink the cheaper `oovv`-assembly step. `build_symm_map`
-itself is `O(nkpts³)` (15-CONTEXT §1.1) — spending that cost to save a smaller
-one is not a win, and it would silently diverge from RULE 2's "same order" for
-no measured benefit. This is not an omission; it has been considered and
-declined, and 15-05 records the decision next to the kernel it applies to.
+Per `(ki, kj, ka)` triple, with `no = nocc`, `nv = nvir`, `nx = naux`,
+`Ng = ngrids`, `n = nao`. These are **derived operation counts, not
+measurements** — 15-01 Task 7 and 15-05 test 7b supply the wall clock.
 
-Both keep the phase's standing discipline: a performance claim is either
-measured and reported, or it is not made.
+| step | route | complex mults per triple |
+|---|---|---|
+| `oovv` assembly, `Σ_L Lov·Lov` | DF | `nx·(no·nv)²` |
+| `oovv` assembly, `with_df.ao2mo` | non-DF, **upstream** | `Ng·(no·nv)²` (`_contract_plain`, `fft_ao2mo.py:145-152`) |
+| `oovv` assembly, `with_df.ao2mo` | non-DF, **this port today** | `Ng·n⁴ + n⁴·no` (§7.5) |
+| `edi` + `exi` | both | `2·(no·nv)²` |
+
+**The assembly dominates by a factor of `naux` (DF) or `ngrids` (non-DF).**
+Everything below follows from that one line, and it is the line 15-CONTEXT's
+first draft got backwards.
+
+### 7.1 Parallelise the independent k-work — with a granularity rule
+
+`Lov[ki,kj]` (15-04) and `KMP2`'s `(ki,kj)` outer loop (15-05) write to disjoint
+slots, so both take `rayon::par_iter` over the flattened index. **But the flat
+index is only `nkpts²` long, and the phase's own anchor cell is `[1,1,2]` —
+`nkpts = 2`, i.e. FOUR tasks on a sixteen-thread machine.** A bare
+`par_iter` over `(ki,kj)` leaves 75 % of the machine idle on the plan's most-run
+fixture.
+
+**RULING:** parallelise over the flattened `(ki, kj, ka)` triple where the
+consumer allows it, and where it does not (the `oovv_ij[ka]` first pass must
+complete for all `ka` before the second pass reads `kb`), nest a second
+`par_iter` over `ka` inside the `(ki,kj)` task via `rayon::join`/`par_iter`
+on the inner loop. For `Lov`, whose blocks are only `nkpts²`, also parallelise
+`r_e2` over its auxiliary index `l` — `df_ao2mo.rs:349-392` is a serial loop
+over `blk.naux` whose iterations write disjoint `l * ni * nj` output slices,
+so it is a one-line `par_chunks_mut` and it is bit-parity-preserving.
+
+Report the measured thread scaling, not just bit-identity (15-05 test 12
+already asks for this; 15-04 test 9b must ask for it too).
+
+### 7.2 The reduction obligation is separate, and it needs a primitive that does not exist
+
+The `emp2_ss`/`emp2_os` accumulation over `nkpts³` triples goes through
+`oracle_sum`; the `(no·nv)²`-long `edi`/`exi` dots go through the ordered
+complex dot. **See §3.10: the ordered complex dot the workspace exports is
+`zdotc` and all three of these contractions are `zdotu`.** 15-04 adds
+`oracle_zdotu` (+ the real-part-only variants) before anything consumes it.
+
+### 7.3 Do NOT route the assembly through `zgemm_dense`
+
+Measured on this machine 2026-08-31 (`krks_profile contract`,
+`.planning/pbc/baselines/contract-mesh{21,31}.json`): `zgemm_dense` is
+**6.7-8.3× SLOWER** than a plain rayon host loop over disjoint output rows on
+the default CPU cubecl backend, and on a long reduction its unordered sum is
+**1.35e-10** away from `oracle_dot`'s pairwise tree — thirteen times the KRKS
+gate. `pyscf-algebra`'s Cargo default is `default = ["cpu"]` (ALG-03), so this
+is the default execution path, not a fallback.
+
+**RULING:** the `oovv` assembly is a **rayon loop over disjoint output rows plus
+an ordered dot per output element**. No `zgemm_dense`, no `gemm_dense`, in
+`pyscf-pbc-mp` or on any Phase-15 path. If a future device GEMM becomes
+competitive, `krks_profile contract` is the gate that re-opens the question.
+
+### 7.4 `Lov`'s memory layout is a speed decision — store the auxiliary index FASTEST
+
+§7.3 makes every `oovv[i,a,j,b]` element an ordered dot over `L`. That dot is
+contiguous only if `Lov` is stored `[i, a][L]`. Upstream stores `[L, i, a]`
+(`kmp2.py:180-190`) because NumPy's `einsum` wants it that way; this port's
+inner loop wants the transpose.
+
+**RULING:** `LovTable`'s blocks are stored **`(nocc·nvir, naux)` row-major —
+`L` fastest**, and the doc comment records the deviation from `kmp2.py:190`'s
+`(naux, nocc, nvir)` with this reason. It is a storage order, not an algebra
+change; §3.1's warning applies (there must be exactly one place that knows it).
+
+### 7.5 The non-DF route materialises the `nao⁴` AO ERI, and upstream does not
+
+**This is the phase's largest single speed item and no plan currently names
+it.** `crates/pyscf-pbc-df/src/pbc_ao2mo.rs:449-457`:
+
+```rust
+pub fn fft_general(df, mos, kptijkl) -> Result<Eri, _> {
+    let ao = fft_get_eri(df, kptijkl)?;   // the FULL nao² x nao² AO block
+    Ok(mo_eri(&ao, nao, mos))             // then a 4-index MO transform
+}
+```
+
+Upstream's `fft_ao2mo.general` (`fft_ao2mo.py:102-153`) never builds it: it
+transforms AO→MO **on the real-space grid first**
+(`mos = [dot(c.T, aos[i].T) for ...]`, `:147-148`) and hands the MO-resolved
+grid arrays to `_contract_plain`. `aft_ao2mo.general` (`aft_ao2mo.py:126-...`)
+is the same shape. So:
+
+* **flops:** `Ng·n⁴` here vs `Ng·(no·nv)²` upstream — a ratio of
+  `(n²/(no·nv))²`. Diamond `gth-szv` (`n=8, no=nv=4`): **16×**. A `gth-dzvp`
+  cell (`n=26, no=4, nv=22`): **59×**. And KMP2 calls it `nkpts³` times.
+* **memory:** `n⁴` complex per call — 1.6 GB at `n = 100`, on a machine where
+  17-12's host tests already exit-137 (`STATE.md`) and where the standing
+  memory `materialised-grid-values-oom` records the same failure mode.
+* **RULE 2:** this is an unrecorded structural deviation from upstream shipped
+  by 14-05, not a Phase-15 defect — but Phase 15 is its first `nkpts³` caller.
+
+**RULING:** **plan 15-08** adds the MO-first path to `fft_general` /
+`aft_general`, keeping the existing AO-ERI route reachable and bit-compared
+against it. It depends on nothing in this phase and starts at wave 0.
+
+### 7.6 Hoist what does not depend on the triple
+
+`fft_get_eri` (`pbc_ao2mo.rs:231-268`) recomputes `get_gv_weights`, `get_gv`
+and `get_coulG` on **every call**. Inside KMP2 that is `nkpts³` rebuilds of
+quantities that depend only on `q = k_j − k_i`, of which there are at most
+`nkpts` distinct values. Same for the MO slices `orbo[ki]` / `orbv[ka]`, which
+`kmp2.py:99-102` re-slices per triple.
+
+**RULING:** 15-08 gives the plane-wave `general` path a caller-supplied,
+per-`q` cache for `(Gv, weights, coulG)`; 15-05 hoists the `mo_slice` calls out
+of the `(ki,kj,ka)` loop into a `nkpts`-long table built once. Both are
+bit-parity-preserving and both are checked by an `assert_eq!` against the
+un-hoisted form on the anchor cell.
+
+### 7.7 The `symm_map` corollary — right conclusion, wrong reason, and the right reason is worth recording
+
+The first draft of this section declined to use `KptsHelper.symm_map`'s ERI
+symmetry inside `KMP2.kernel` on the grounds that "the dominant cost per triple
+is the `nocc²·nvir²` `edi`/`exi` contraction, which every member of a symmetry
+orbit still has to pay." **§7.0 shows that premise is backwards**: the
+`edi`/`exi` contraction is `2·(no·nv)²` and the assembly it was called cheaper
+than is `naux·(no·nv)²` — the assembly is `naux/2` times MORE expensive, and
+`naux` is several times `nao`. The symmetry would shrink the dominant term, not
+the cheap one.
+
+The conclusion still holds, for two reasons that are actually true:
+
+1. **The usable symmetry inside the `(o v | o v)` pattern is 2-fold, not
+   8-fold.** Of `transform_symm`'s four operations (15-02), only op 0 and op 1
+   (`transpose(2,3,0,1)`, `(ia|jb) -> (jb|ia)`) map an `oovv` block to another
+   `oovv` block. Ops 2 and 3 conjugate-transpose *within* each pair and produce
+   `(ai|bj)` / `(vo|vo)` blocks, which KMP2 never asks for. The available saving
+   on the assembly is **≤ 2×**, against `build_symm_map`'s own `O(nkpts³)`
+   construction (15-02) and a second `nkpts`-long `oovv` buffer to hold the
+   partner block.
+2. **Upstream does not** (`kmp2.py:93` reads only `khelper.kconserv`), and
+   RULE 2's "same order" is not something to spend on an unmeasured ≤2×.
+
+**RULING:** unchanged — `Kmp2` builds its helper with
+`KptsHelper::without_symm_map` and the kernel does not use the map. **But the
+reason recorded next to the kernel is the one above, not the arithmetic that
+was wrong**, and the ≤2× is logged as a Phase-16 carry-over (KCCSD pays the
+`build_symm_map` cost anyway, so the trade there is different).
+
+### 7.8 The rayon fan-out has a peak-memory budget, and this machine OOMs
+
+`oovv_ij` is `nkpts × (no·nv)²` complex **per `(ki,kj)` task**. Parallelising
+the outer loop multiplies peak resident memory by the number of live tasks:
+
+```
+peak ≈ min(threads, nkpts²) · nkpts · (nocc·nvir)² · 16 bytes
+```
+
+At the reference systems this is kilobytes (diamond `gth-szv` `[2,2,2]`:
+8 · 8 · 256 · 16 = 256 KiB) and the ruling is free. It is **not** free at the
+scale a user reaches, and 17-12's whole host suite is currently SIGKILLed
+(exit 137) on this machine (`STATE.md`, `ROADMAP.md` Phase-17 rollup).
+
+**RULING:** 15-05's memory pre-flight (`kmp2.py:70-85`) evaluates the formula
+above **including the thread factor**, not just upstream's two single-threaded
+formulas, and the rayon pool for the outer loop is bounded so the product stays
+under the `PYSCF_MAX_MEMORY` budget `pyscf-ccsd` already owns. A refusal is
+correct; an exit-137 is not.
+
+### 7.9 What gets reported
+
+Every claim above is either measured or not made:
+
+* **15-01 Task 7** — upstream's DF-vs-non-DF wall clock, per system and mesh.
+* **15-02 test 7** — `build_symm_map`'s `O(nkpts³)` growth curve.
+* **15-04 test 9b** — `Lov` bit-identity at 1 and 8 threads **and** the measured
+  speed-up (bit-identity alone cannot tell a parallel loop from a serial one).
+* **15-05 test 7b** — the port's own DF-vs-non-DF ratio next to 15-01's.
+* **15-05 test 12** — `e_corr`/`t2` bit-identity at 1 and 8 threads, plus the
+  wall-clock drop.
+* **15-08** — the MO-first vs AO-ERI route: bit-comparison, flop ratio, wall
+  clock, and peak RSS, on the anchor cell and one larger basis.
+* **15-07 §8** — the ledger that collects all of it. A blank row there reads as
+  "never measured", which is the failure mode the correctness gates exist to
+  prevent, applied to speed.

@@ -6,9 +6,24 @@ beneath it. Sibling to [`KRKS-OPTIMISATION-PLAN.md`](./KRKS-OPTIMISATION-PLAN.md
 whose §1.2 explicitly excluded `KUKS` — *"They share `KNumInt` and `fft_jk`, so
 they inherit the wins for free, but their drivers are not touched."* This plan is
 the driver.
-**Status:** draft — no code written. **§2.2 (the open-shell divergences) is
-VERIFIED against both sides of the comparison. §2.1 (the cost model) is
-MODELLED, NOT MEASURED, and its inherited premise is STALE** — see §2.1.0.
+**Status:** **IN EXECUTION.** See
+[`KUKS-EXECUTION-SUMMARY.md`](./KUKS-EXECUTION-SUMMARY.md) for the session
+record. As of 2026-09-02: **U-00, U-01, U-02, U-03, U-06, U-07 LANDED**;
+**U-04 and U-05 NOT STARTED** (both are speed items that deliberately break
+bit-parity, and neither may land until U-01's baseline has been re-measured on
+an idle machine — RULE O). §2.2 (the open-shell divergences) was VERIFIED
+against both sides of the comparison and is now CLOSED by U-02. §2.1 (the cost
+model) is MODELLED, NOT MEASURED, and its inherited premise is STALE — see
+§2.1.0; U-01 ships the instrument, not yet a clean number.
+
+**Successor plan (2026-09-02):** the items this plan leaves open (U-04, U-05,
+U-06 step 6) plus the k-symmetry and multigrid surfaces Phase 17 added are
+planned in [`KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md`](./KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md);
+U-04/U-05 keep their sequencing rules from §4 here.
+**Three errata against this document's own text, found while executing it, are
+recorded inline where they belong:** §2.2.5 (the `get_occ` description), §2.3
+(the `trace_ab` inventory, half of which had already landed) and §8 Q3 (now
+MEASURED, not UNVERIFIED).
 **Audience:** an execution agent that follows instructions literally and does NOT
 infer.
 
@@ -102,16 +117,40 @@ obligation to add `pyscf-pbc-dft`.
 **This gate does not exist today and nothing in §2.2 can be fixed before it
 does.** KUKS against live upstream on cells where `dm_a != dm_b`:
 
-| case | cell | k-mesh | tolerance | what only it can see |
-|---|---|---|---|---|
-| U-a | `li_atom_spin1()`, all-electron | Γ and `[1,1,3]` | **1e-12** | the `spin != 0` path; no GTH floor |
-| U-b | `h2_stretched_spin0()`, all-electron | Γ | **1e-12** | `_break_dm_spin_symm` (§2.2.1) |
-| U-c | either, `xc = pbe0` | Γ | **1e-11** | the doubled K contractions, `sub_scaled(.., 1.0, vk)` |
+| case | cell | k-mesh | tolerance (PROPOSED) | tolerance (**MEASURED 2026-09-02**) | what only it can see |
+|---|---|---|---|---|---|
+| U-a | `li_atom_spin1()`, all-electron | Γ and `[1,1,3]` | ~~1e-12~~ | **5e-11** | the `spin != 0` path; no GTH floor |
+| U-b | `h2_stretched_spin0()`, all-electron | Γ | **1e-12** | **1e-12 — MET as written** | `_break_dm_spin_symm` (§2.2.1) |
+| U-c | either, `xc = pbe0` | Γ | **1e-11** | **1e-11** (H2) / **5e-11** (Li) | the doubled K contractions, `sub_scaled(.., 1.0, vk)` |
 
 All-electron deliberately: the GTH cells floor at ~4e-12 for structural reasons
 inherited from `get_pp`, and the all-electron control is what proves 1e-12 is
-reachable (`KRKS He-fcc` sits at 9.81e-14). **Do not gate the open-shell work on
-a pseudopotential cell.**
+reachable (`KRKS He-fcc` sits at 9.81e-14 — **re-measured 2026-09-02 at
+8.615e-14**). **Do not gate the open-shell work on a pseudopotential cell.**
+
+> **MEASURED, and it answers §8 Q4.** `1e-12` was a guess for U-a and it is not
+> reachable **on that cell**. The gate's own no-XC control says why:
+>
+> | row | residual |
+> |---|---|
+> | **`KUHF` Li, NO XC AT ALL — the floor control** | **1.494e-11** |
+> | `KUKS` Li PBE0 | 9.724e-12 |
+> | `KUKS` Li LDA,VWN | 7.804e-12 |
+> | `KUKS` Li PBE | 7.735e-12 |
+> | `KUKS` Li `[1,1,3]` PBE | 5.489e-12 |
+>
+> The control is the WORST row and every functional lands BELOW it — an
+> INHERITED floor, not a KS-path defect. `Li`/`sto-3g` puts a tight 1s
+> (exponent 16.1195) in a 6-Bohr box at `mesh = 31`: grid spacing 0.19 Bohr
+> against a Gaussian width of 0.176, so the all-electron `get_nuc` planewave sum
+> is marginally resolved. This is the all-electron analogue of `KRHF Si`'s
+> 4.158e-12 `get_pp` floor, and it is handled the same way `gate.rs` handles
+> that one — a control row, and KS rows gated above it.
+>
+> **1e-12 all-electron is NOT refuted**, only Li at this mesh: `h2_stretched_spin0`
+> lands at **7.8e-14 … 2.6e-13** and is gated at 1e-12 unchanged. The cheapest
+> way to tighten U-a is a finer mesh or a larger box for the Li fixture, not a
+> code change; nothing in the measurement points at the port.
 
 ---
 
@@ -259,10 +298,36 @@ Traced through this port's SCF map with `cell.spin == 0`:
 
 **The correct statement of the defect is therefore stronger than "the initial
 guess differs": this port's KUKS/KUHF is structurally incapable of reaching a
-spin-broken solution at `cell.spin == 0`.** Upstream reaches AFM and other
-spin-broken minima on exactly these cells **by default**. `KInitGuess::UserDm`
-(`init_guess.rs:48`) is the only escape hatch and requires the caller to
-hand-build the broken density matrix.
+spin-broken solution at `cell.spin == 0`.** ~~Upstream reaches AFM and other
+spin-broken minima on exactly these cells **by default**.~~
+`KInitGuess::UserDm` (`init_guess.rs:48`) is the only escape hatch and requires
+the caller to hand-build the broken density matrix.
+
+> **ERRATUM (2026-09-02, U-00/U-02) — the struck sentence is NOT reproducible,
+> and it was the load-bearing half of U-b's premise.** Measured against the
+> vendored 2.12.1 oracle:
+>
+> | run | separations | `<S^2>` |
+> |---|---|---|
+> | periodic `KUHF` H2 `6-31g`, boxes 8/10/12, `breaksym = 1` | 2.00 … 6.0 Bohr | **0 everywhere** |
+> | the same at `breaksym = 2` | 2.5 / 3.0 / 4.0 Bohr | **0** |
+> | **MOLECULAR** `UHF` H2 `6-31g`, no PBC | 2.0 … 5.0 Bohr | **0**, including 5 Bohr, where the UHF minimum is unambiguously broken |
+> | periodic and molecular `UHF` Li2 `sto-3g` | 5 … 10 Bohr | **0** |
+>
+> The mechanism is in the scheme: `breaksym == 1` sets `dmb` to the
+> INTRA-ATOMIC blocks of `dma`, so the perturbation is the deleted
+> inter-atomic block — which is small for a MINAO guess (one 1s per H) and
+> gets SMALLER as the bond stretches, not larger. DIIS pulls it straight back.
+>
+> **What survives unchanged:** the five-step fixed-point trace above, and
+> therefore the defect itself — this port could not represent a broken guess at
+> all, while upstream can. **What does not survive:** the claim that fixing it
+> moves a converged ENERGY on any fixture in reach. U-02 is a faithfulness fix
+> — the port now follows upstream's guess path rather than a different one —
+> plus a genuine numerical fix to the per-channel electron counts (§2.2.2),
+> which WAS measurably wrong. The discriminating assertions therefore live at
+> the GUESS level (`pyscf-pbc-scf/tests/init_guess_spin.rs`), not in GATE U's
+> energies.
 
 #### 2.2.2 The initial guess is renormalised on one total, not per channel
 
@@ -340,7 +405,18 @@ solution is indistinguishable from a correct one: **"converged" is not
 
 #### 2.2.5 `Smearing` has no `fix_spin` — a missing feature, not a defect
 
-`Kuks::get_occ` (`kuks.rs:334-339`) pools all `2·nkpts` energy lists, fills
+> **ERRATUM (2026-09-02, U-00).** The paragraph below described the SMEARING
+> branch as if it were `Kuks::get_occ`'s only behaviour. It is not.
+> `Kuks::get_occ` (`kuks.rs:344-361`) pools the `2·nkpts` lists **only when
+> `self.smearing` is `Some`**; the DEFAULT path calls
+> `get_occ_unrestricted(ea, eb, na, nb)` (`kocc.rs:49-82`), which computes
+> **two independent Fermi levels**, one per channel, exactly as
+> `kuhf.py:136-204` does — including upstream's separate `nocc_b == 0` branch.
+> So the default occupation path is a faithful port and needs nothing. The
+> conclusion of this section survives unchanged, and only for the smeared
+> path: **`Smearing` has no `fix_spin`.**
+
+`Kuks::get_occ`'s SMEARED branch pools all `2·nkpts` energy lists, fills
 `na + nb` electrons at `mo_occ_max = 1.0`, and returns one shared Fermi level.
 That is **exactly** upstream's `fix_spin=False` branch
 (`pbc/scf/smearing.py:107-142`), so it is correct against the default. But
@@ -354,6 +430,14 @@ spin.** Record it; do not call it a bug.
 KRKS W-05 fixed `fft_jk`'s reductions and **only** those — `SUMMARY.md:14-16`
 names one file in one crate. The following are on the KUKS energy path and were
 never in scope of any landed item.
+
+> **ERRATUM (2026-09-02, U-03).** Half of the first bullet had already landed
+> before this plan was executed. Commit `0bcff45` ("D-PBC-17 — route
+> `ztrace_ab` / `trace_ab` / `trace_dm_v` through `oracle_sum`") ordered
+> `pyscf-pbc-dft::veff::trace_ab` and `trace_dm_v` — and, exactly as this plan
+> predicted two paragraphs later, **it did not reach `krdm.rs`, so `e1` stayed
+> on the naive path.** The bullet is left as written because its warning is
+> what proved true; U-03 closed the remaining copy.
 
 * **`trace_ab` exists TWICE, as two independent naive duplicates, and both reach
   an energy.**
@@ -890,12 +974,36 @@ answers still hold.
 2. **What is the transform's share of `get_k_kpts` now?** The 93 % in
    `KRKS-OPTIMISATION-PLAN.md` §2.1 predates W-02 and W-02b. U-01 step 4 both
    answers it and files the erratum.
-3. **Does the init-guess renormalisation branch fire on `silicon()`/`diamond()`?**
-   UNVERIFIED (§2.2.2). One gate run under `RUST_LOG=debug`; U-00 step 7.
-4. **Can the open-shell gate actually reach 1e-12 all-electron?** The KRKS
-   all-electron control sits at 9.81e-14, so 1e-12 should be reachable — but an
-   open-shell SCF converges less tightly and no measurement exists. U-00 sets
-   the number from what it measures rather than inheriting 1e-12 on faith.
+3. ~~**Does the init-guess renormalisation branch fire on
+   `silicon()`/`diamond()`?**~~ **ANSWERED — YES, ON BOTH, 2026-09-02.** Not by
+   reading a `tracing::debug!` line out of a gate run, but by counting the
+   electrons directly:
+   `pyscf-pbc-scf/tests/init_guess_spin.rs::measurement_does_the_renormalisation_fire_on_the_reference_cells`.
+   At `nkpts = 8` the raw minao guess carries **8.272107178178 e/cell on
+   `silicon()`** (want 8.0 — an OVERSHOOT of 0.272) and **7.911590849382
+   e/cell on `diamond()`** (want 8.0 — an UNDERSHOOT of 0.088). Upstream's
+   threshold is `0.01 · nkpts` on the BZ total, i.e. 0.08 here, and both
+   deviations (2.177 and 0.707 in BZ units) clear it comfortably. So the
+   branch fires on every reference cell this repository gates on, which is why
+   §2.2.2's "the threshold differs by 2×" was a live divergence rather than a
+   theoretical one — and why U-02's per-channel form had to keep the
+   closed-shell factor identical: with `dm_a == dm_b`,
+   `Ne/ne_total == nalpha/ne_a` exactly, so the CLOSED-SHELL scale is
+   unchanged and GATE A cannot move because of it.
+4. ~~**Can the open-shell gate actually reach 1e-12 all-electron?**~~
+   **ANSWERED — YES ON ONE FIXTURE, NO ON THE OTHER, AND IT IS THE CELL NOT THE
+   SPIN, 2026-09-02.** `h2_stretched_spin0` reaches **7.8e-14 … 2.6e-13** and is
+   gated at 1e-12 as proposed. `li_atom_spin1` cannot: its own NO-XC `KUHF`
+   control sits at **1.494e-11**, above every KUKS row on the same cell
+   (5.5e-12 … 9.7e-12), so the residual is an inherited all-electron `get_nuc`
+   resolution floor — a tight 1s (exponent 16.1195) in a 6-Bohr box at
+   `mesh = 31` — and not the open-shell path. U-a is therefore gated at
+   **5e-11**, 3.3x its measured floor, mirroring the ~2.4x `gate.rs` gives its
+   Si rows over the `KRHF` `get_pp` floor. The hypothesis in the original
+   question — "an open-shell SCF converges less tightly" — is **refuted**:
+   `<S^2>` agrees with upstream to <= 1.11e-15 and `(Na, Nb)` agrees exactly on
+   every row, so both sides converged to the same state; the gap is quadrature,
+   not convergence.
 5. **What does U-04's second `get_jk` call cost on GDF/RSDF/MDF?** Unmeasured.
    U-04 step 3.
 6. **Does upstream's `_break_dm_spin_symm` guard `abs(dma-dmb).max() < 1e-2`

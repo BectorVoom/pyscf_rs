@@ -144,4 +144,98 @@ impl KScfResult {
     pub fn idx(&self, set: usize, k: usize) -> usize {
         set * self.nkpts + k
     }
+
+    /// `<S^2>` and `2S+1` — `KUHF.spin_square` (`kuhf.py:590-611`).
+    ///
+    /// Treats the k-point-sampled wavefunction as ONE giant Slater determinant,
+    /// exactly as upstream's docstring says, so the counts are over the whole
+    /// Brillouin zone and carry no `1/nkpts`:
+    ///
+    /// ```text
+    /// ssxy = (Na + Nb)/2 - sum_k sum_ij |<a_i^k | b_j^k>|^2
+    /// ssz  = (Nb - Na)^2 / 4
+    /// <S^2> = ssxy + ssz,   S = sqrt(<S^2> + 1/4) - 1/2
+    /// ```
+    ///
+    /// `s1e[k]` is the row-major `nao x nao` overlap at k-point `k` — the same
+    /// stack `get_ovlp` returns. `mo_coeff` is COLUMN-MAJOR `nao x nmo`, so MO
+    /// `i` lives at `[i * nao + mu]`.
+    ///
+    /// Returns `None` for a restricted or two-component result (`nset != 2`),
+    /// where `<S^2>` is not defined by this formula.
+    ///
+    /// # Why it is here (KUKS-OPTIMISATION-PLAN §2.2.4 / U-07)
+    ///
+    /// Once U-02 lets the SCF reach a spin-broken solution, "converged" stops
+    /// implying "the state you asked for": a spin-contaminated UKS solution is
+    /// indistinguishable from a correct one on the energy alone. `<S^2>` is the
+    /// discriminator, and every open-shell gate should assert on it beside the
+    /// energy.
+    pub fn spin_square(&self, s1e: &KMats, nao: usize) -> Option<(f64, f64)> {
+        use pyscf_algebra::oracle_sum;
+        if self.nset != 2 || s1e.len() < self.nkpts {
+            return None;
+        }
+        let occupied = |set: usize, k: usize| -> Vec<usize> {
+            self.mo_occ[self.idx(set, k)]
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| **o > 0.0)
+                .map(|(i, _)| i)
+                .collect()
+        };
+        let mut na = 0usize;
+        let mut nb = 0usize;
+        for k in 0..self.nkpts {
+            na += occupied(0, k).len();
+            nb += occupied(1, k).len();
+        }
+
+        let mut overlaps: Vec<f64> = Vec::new();
+        for k in 0..self.nkpts {
+            let ia = occupied(0, k);
+            let ib = occupied(1, k);
+            if ia.is_empty() || ib.is_empty() {
+                continue;
+            }
+            let ca = &self.mo_coeff[self.idx(0, k)];
+            let cb = &self.mo_coeff[self.idx(1, k)];
+            let s = &s1e[k];
+            for &i in &ia {
+                // w[nu] = sum_mu conj(Ca[mu, i]) S[mu, nu]
+                let mut wr = vec![0.0_f64; nao];
+                let mut wi = vec![0.0_f64; nao];
+                for nu in 0..nao {
+                    let mut pr = Vec::with_capacity(nao);
+                    let mut pi = Vec::with_capacity(nao);
+                    for mu in 0..nao {
+                        let (ar, ai) = (ca.re[i * nao + mu], -ca.im[i * nao + mu]);
+                        let (sr, si) = (s.re[mu * nao + nu], s.im[mu * nao + nu]);
+                        pr.push(ar * sr - ai * si);
+                        pi.push(ar * si + ai * sr);
+                    }
+                    wr[nu] = oracle_sum(&pr);
+                    wi[nu] = oracle_sum(&pi);
+                }
+                for &j in &ib {
+                    let mut pr = Vec::with_capacity(nao);
+                    let mut pi = Vec::with_capacity(nao);
+                    for nu in 0..nao {
+                        let (br, bi) = (cb.re[j * nao + nu], cb.im[j * nao + nu]);
+                        pr.push(wr[nu] * br - wi[nu] * bi);
+                        pi.push(wr[nu] * bi + wi[nu] * br);
+                    }
+                    let zr = oracle_sum(&pr);
+                    let zi = oracle_sum(&pi);
+                    overlaps.push(zr * zr + zi * zi);
+                }
+            }
+        }
+
+        let ssxy = (na + nb) as f64 * 0.5 - oracle_sum(&overlaps);
+        let ssz = (nb as f64 - na as f64).powi(2) * 0.25;
+        let ss = ssxy + ssz;
+        let spin = (ss + 0.25).sqrt() - 0.5;
+        Some((ss, spin * 2.0 + 1.0))
+    }
 }

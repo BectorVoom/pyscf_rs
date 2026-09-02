@@ -64,19 +64,69 @@ pub const OCC_SYMMETRY_TOL: f64 = 1e-4;
 
 /// Which `get_jk` route [`KsymAdaptedKrhf::get_veff`] takes.
 ///
-/// D-PBC-26 / 17-CONTEXT §8. The reference route is the literal port of
-/// `khf_ksymm.py:250-277` and is the **default** and the Gate C/D reference;
-/// the fast route is validated against it at 1e-13, never against upstream.
+/// D-PBC-26 / 17-CONTEXT §8, **as corrected by plan item S-02** of
+/// `.planning/pbc/KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md`. The reference
+/// route is the literal port of `khf_ksymm.py:250-277`, is the default, and is
+/// the Gate C/D reference. Any other route is validated against it inside one
+/// process, never against upstream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JkRoute {
     /// Unfold the IBZ density to the full BZ, call [`PeriodicDf::get_jk`] over
     /// all `nkpts`, fold the result back. The DF layer never learns about
     /// symmetry — it only ever sees a plain k-point list.
+    ///
+    /// Cost: `nkpts^2` exchange k-pairs, of which `nkpts * (nkpts -
+    /// nkpts_ibz)` are computed and then discarded by the fold.
     #[default]
     Reference,
-    /// Call [`PeriodicDf::get_jk`] at `kpts_ibz` only and unfold `vj`/`vk`
-    /// with `transform_1e_operator`. Same contract, fewer DF k-points.
-    Fast,
+    /// Unfold the density to the full BZ and ask the DF layer for the output
+    /// at `kpts_ibz` ONLY, via `kpts_band`.
+    ///
+    /// # This is the route that actually saves work, and it is exact
+    ///
+    /// The exchange sum `vk(k1) = Σ_{k2 ∈ BZ} K(k1, k2)[D_k2]` must run over
+    /// the whole zone in `k2` — that is the physics — but its OUTPUT index
+    /// `k1` is free. Restricting `k1` to the IBZ computes `nkpts * nkpts_ibz`
+    /// pairs instead of `nkpts^2` and drops nothing, because the `k1` loop is
+    /// independent per output point (`fft_jk.rs`'s `for k1 in 0..nband`) and
+    /// the fold in [`JkRoute::Reference`] was throwing exactly those extra
+    /// points away.
+    ///
+    /// Expected **bit-identical** to [`JkRoute::Reference`], and asserted as
+    /// such rather than argued: 17-08 already measured `max|dvj| =
+    /// max|dvk| = 0` for the GDF band route
+    /// (`krks_ksymm.rs::gdf_band_route_matches_the_direct_route`), and the DFT
+    /// k-symmetric adapters have taken this route since 17-08 Task 2.
+    Band,
+    /// Call [`PeriodicDf::get_jk`] at `kpts_ibz` only — a SHORTER SAMPLING
+    /// SET, not merely a shorter output set — and unfold `vj`/`vk` with
+    /// `transform_1e_operator`.
+    ///
+    /// # THIS IS NOT AN IDENTITY. Do not enable it. — S-02
+    ///
+    /// It is D-PBC-26 point 1 taken literally, and D-PBC-26 point 1 is wrong.
+    /// The route is kept, non-default and behind this doc comment, only so
+    /// that the measurement which disproves it stays reproducible
+    /// (`tests/khf_ksymm.rs::ibz_only_get_jk_is_not_an_identity`).
+    ///
+    /// **Why it cannot work.** `get_j_kpts` forms
+    /// `rho(r) = (1/N) Σ_{k ∈ list} Σ_ij D_k,ij φ*_k,i φ_k,j` over whatever
+    /// k-list it is handed. Over the IBZ list that is `Σ_{k ∈ IBZ} rho_k /
+    /// N_ibz`, but the true density is `Σ_{k ∈ IBZ} w_k · <rho_k>_star` — and
+    /// `rho_k(r)` is NOT invariant under the point group
+    /// (`rho_{Rk}(r) = rho_k(R^-1 r)`), so the two agree only when every star
+    /// has one member. Applying `transform_1e_operator` afterwards rotates a
+    /// potential built from the wrong density; it does not repair it. For `K`
+    /// the argument is sharper still: restoring the dropped `k2` terms by
+    /// equivariance needs `K` evaluated at every `R^-1 k1`, which for `k1`
+    /// over the IBZ is the whole zone again — the pair count is
+    /// `nkpts * nkpts_ibz` either way, which is exactly what
+    /// [`JkRoute::Band`] already attains exactly.
+    ///
+    /// The 40x (GDF) / 223x (FFTDF) ratios `measurements/speed_get_jk.py`
+    /// reported were therefore a comparison between two DIFFERENT quantities.
+    /// The attainable bound is `nkpts / nkpts_ibz`.
+    IbzOnly,
 }
 
 /// Restricted periodic Hartree-Fock over an irreducible k-point set.
@@ -298,18 +348,62 @@ impl KsymAdaptedKrhf {
         Ok(vec![self.fold_to_ibz(&vj)])
     }
 
-    /// The fast `get_jk` route — D-PBC-26, 17-CONTEXT §8.
+    /// The BAND `get_jk` route — S-02, and the one that actually saves work.
     ///
-    /// Call [`PeriodicDf::get_jk`] at `kpts_ibz` only, then unfold `vj`/`vk`
-    /// with `transform_1e_operator` and fold back exactly as the reference
-    /// route does, so both present the same [`KOverrideHooks::get_veff`]
-    /// contract. Still no symmetry inside the DF layer: it sees a plain
-    /// k-point list that is merely shorter.
+    /// Unfold the density to the full BZ exactly as [`Self::veff_reference`]
+    /// does, hand the DF layer the full-BZ sampling set, and ask for the
+    /// output at `kpts_band = kpts_ibz`. The exchange sum still runs over
+    /// every `k2` in the zone — that is the physics — but it is evaluated for
+    /// `nkpts_ibz` output points instead of `nkpts`, which is `nkpts_ibz /
+    /// nkpts` of the pair count. Nothing is discarded afterwards, so no fold
+    /// is needed and none is done.
     ///
-    /// **Validated against [`Self::veff_reference`] at 1e-13, never against
-    /// upstream** — two routes to the same number inside one process is the
-    /// stronger test (the same idiom as 17-10's MO-factorised `get_k_kpts`).
-    fn veff_fast(&self, dms: &KDms) -> Result<KDms, PyscfRsError> {
+    /// Still no symmetry inside the DF layer (D-PBC-15): it receives two plain
+    /// k-point lists, one of which is shorter.
+    ///
+    /// **Validated against [`Self::veff_reference`] at `to_bits()` equality,
+    /// never against upstream** — the 17-10 Task 4 idiom, and the tolerance is
+    /// bit-identity rather than 1e-13 because this route computes the same
+    /// terms in the same order and any difference at all would mean a
+    /// `kpts_band` path defect. See
+    /// `tests/khf_ksymm.rs::band_route_matches_reference_route_bit_exact`.
+    fn veff_band(&self, dms: &KDms) -> Result<KDms, PyscfRsError> {
+        let dm_bz = self.unfold_dm(&dms[0])?;
+        let r = self
+            .with_df
+            .get_jk(
+                &vec![dm_bz],
+                self.kpts_bz(),
+                JkOpts {
+                    hermi: 1,
+                    // `kpts_ibz[i] == kpts[ibz2bz[i]]` by construction, so the
+                    // band output is already in the order `fold_to_ibz` would
+                    // have selected — index for index, no fold.
+                    kpts_band: Some(&self.kpts_ibz),
+                    with_j: true,
+                    with_k: true,
+                    exxdiv: self.exxdiv,
+                    omega: None,
+                    kk_symmetry: JkOpts::kk_symmetry_default(),
+                },
+            )
+            .map_err(df_err)?;
+        let mut vj = r.vj.ok_or_else(|| missing("vj"))?.remove(0);
+        let vk = r.vk.ok_or_else(|| missing("vk"))?.remove(0);
+        Self::combine_jk(&mut vj, &vk);
+        Ok(vec![vj])
+    }
+
+    /// The IBZ-ONLY `get_jk` route — D-PBC-26 point 1 taken literally.
+    ///
+    /// # NOT AN IDENTITY. See [`JkRoute::IbzOnly`] for why, and do not enable
+    /// # it.
+    ///
+    /// Kept, unreferenced by any default path, solely so the measurement that
+    /// disproves D-PBC-26 point 1 stays reproducible. `tests/khf_ksymm.rs`
+    /// pins the disagreement with a lower bound, so this cannot quietly be
+    /// re-adopted on a loose tolerance later.
+    fn veff_ibz_only(&self, dms: &KDms) -> Result<KDms, PyscfRsError> {
         let r = self
             .with_df
             .get_jk(
@@ -370,14 +464,16 @@ impl KOverrideHooks for KsymAdaptedKrhf {
             1,
             mode,
             s1e,
-            self.nelectron() as f64,
+            &[self.nelectron() as f64],
+            0,
         )
     }
 
     fn get_veff(&self, dms: &KDms) -> Result<KDms, PyscfRsError> {
         match self.jk_route {
             JkRoute::Reference => self.veff_reference(dms),
-            JkRoute::Fast => self.veff_fast(dms),
+            JkRoute::Band => self.veff_band(dms),
+            JkRoute::IbzOnly => self.veff_ibz_only(dms),
         }
     }
 

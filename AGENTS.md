@@ -41,5 +41,3 @@ The `treefinder` cli tool is used to find cubecl manuals
 
 ## Cubecl manual
 /home/user/Documents/workspace/cubecl_manual/manual/Cubecl
-
-Do not need to check FMA

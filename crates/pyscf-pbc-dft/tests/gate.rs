@@ -56,8 +56,8 @@ import json, sys
 import numpy as np
 from pyscf.pbc import gto, dft, scf
 
-(a_json, xyz_json, sym_json, basis, pseudo,
- nk_json, mesh_json, method, xc, xclib) = sys.argv[1:11]
+(a_json, xyz_json, sym_json, spin, charge, basis, pseudo,
+ nk_json, mesh_json, method, xc, xclib) = sys.argv[1:13]
 
 c = gto.Cell()
 c.a = json.loads(a_json)
@@ -66,6 +66,10 @@ c.basis = basis
 if pseudo:
     c.pseudo = pseudo
 c.unit = 'Bohr'
+# U-00 step 1: spin and charge are set BEFORE build(), the only point at which
+# `tot_electrons` / `nelec` are derived from them.
+c.spin = int(spin)
+c.charge = int(charge)
 c.verbose = 0
 c.build()
 

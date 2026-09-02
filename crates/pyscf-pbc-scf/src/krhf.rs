@@ -212,7 +212,8 @@ impl KOverrideHooks for Krhf {
             1,
             mode,
             s1e,
-            self.nelectron() as f64,
+            &[self.nelectron() as f64],
+            0,
         )
     }
 

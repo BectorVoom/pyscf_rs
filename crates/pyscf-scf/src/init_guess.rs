@@ -296,63 +296,14 @@ pub(crate) fn init_guess_by_minao(mol: &Mole) -> Result<Density, PyscfRsError> {
     Ok(Density { nao, data })
 }
 
-/// Per-atom molecular AO range `[lo, hi)` (the in-tree `aoslice_by_atom`
-/// equivalent). For each atom `ia`, walks `mol._bas` rows whose `ATOM_OF`
-/// slot equals `ia` and unions their `ao_loc_nr[shell]..ao_loc_nr[shell+1]`
-/// AO ranges. Shells are atom-ordered post-build, so each atom's AO block is
-/// contiguous. Returns `natm` `(lo, hi)` pairs.
+/// Per-atom molecular AO range `[lo, hi)` — re-exported from
+/// [`pyscf_gto::aoslice_by_atom`].
 ///
-/// Shared by `init_guess_by_atom` (block placement) and `init_guess_by_huckel`
-/// (occupied-orbital scatter). Mirrors `analyze.rs`'s `ATOM_OF` + `ao_loc_nr`
-/// walk. AO-range / atom-index overruns return `Err` (never panics —
-/// T-03-14-PANIC).
-fn aoslice_by_atom(mol: &Mole) -> Result<Vec<(usize, usize)>, PyscfRsError> {
-    use pyscf_core::CoreError;
-    use pyscf_core::raw_layout::{ATOM_OF, BAS_SLOTS};
-
-    let natm = mol.natm;
-    let nbas = mol.nbas;
-    let nao = mol.nao_nr;
-    if mol.ao_loc_nr.len() <= nbas {
-        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-            "aoslice_by_atom: ao_loc_nr len {} <= nbas {} (Mole not built?)",
-            mol.ao_loc_nr.len(),
-            nbas
-        ))));
-    }
-    // Per-atom [lo, hi). Initialize lo = nao (sentinel), hi = 0.
-    let mut slices = vec![(nao, 0usize); natm];
-    for shell in 0..nbas {
-        let atom = mol._bas[shell * BAS_SLOTS + ATOM_OF] as usize;
-        if atom >= natm {
-            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                "aoslice_by_atom: _bas[{shell}, ATOM_OF] = {atom} but natm = {natm}"
-            ))));
-        }
-        let lo = mol.ao_loc_nr[shell] as usize;
-        let hi = mol.ao_loc_nr[shell + 1] as usize;
-        if hi > nao || lo > hi {
-            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                "aoslice_by_atom: shell {shell} AO range [{lo},{hi}) invalid (nao={nao})"
-            ))));
-        }
-        let (cur_lo, cur_hi) = slices[atom];
-        slices[atom] = (cur_lo.min(lo), cur_hi.max(hi));
-    }
-    // Atoms with no basis get an empty [lo, lo) range (lo defaults to its
-    // contiguous position; if never touched the sentinel collapses to (nao,0)
-    // → normalize to an empty slice anchored at the running offset).
-    let mut next = 0usize;
-    for slot in slices.iter_mut() {
-        if slot.0 == nao && slot.1 == 0 {
-            // Basis-less atom: empty range at the current running offset.
-            *slot = (next, next);
-        } else {
-            next = slot.1;
-        }
-    }
-    Ok(slices)
-}
+/// U-02 step 5: this was one of three textually identical copies (here,
+/// `pyscf-grad/src/rhf.rs`, and a `Cell`-shaped one in `pyscf-pbc-symm`). The
+/// molecular one now lives beside `Mole` in `pyscf-gto`, which is what lets
+/// `pyscf-pbc-scf` call it without depending on `pyscf-grad`.
+use pyscf_gto::aoslice_by_atom;
 
 /// Cartesian-basis init guess via a spherical sibling + `cart2sph` projection.
 ///

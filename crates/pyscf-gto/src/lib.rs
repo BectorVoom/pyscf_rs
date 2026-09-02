@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aoslice; // U-02 — Mole.aoslice_by_atom(), shared by SCF and gradients.
 pub mod basis; // Plan 02-03 — GTO-03 (basis loading).
 pub mod cart2sph; // Molecular cart→sph coeff (Mole.cart2sph_coeff analog).
 pub mod dumps_loads; // Plan 02-08 — GTO-09 (semantic JSON round-trip).
@@ -30,6 +31,7 @@ pub mod types;
 // and Arc-clones `basis_set` so the GTO-11 zero-copy contract survives
 // the copy. Tests in `tests/mole_copy.rs` verify both halves.
 
+pub use aoslice::aoslice_by_atom;
 pub use basis::{load_basis, parse as parse_basis};
 pub use cart2sph::cart2sph_coeff;
 pub use dumps_loads::{dumps, loads};
