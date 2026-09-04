@@ -156,7 +156,10 @@ fn main() -> Result<ExitCode> {
         eprintln!("check-orphan-modules: PASS — {scanned} source files, all reachable");
         return Ok(ExitCode::SUCCESS);
     }
-    eprintln!("check-orphan-modules: FAIL — {} orphaned source file(s):", orphans.len());
+    eprintln!(
+        "check-orphan-modules: FAIL — {} orphaned source file(s):",
+        orphans.len()
+    );
     for o in &orphans {
         eprintln!("  {o}");
     }

@@ -15,21 +15,21 @@
 #![warn(clippy::unwrap_used)]
 
 pub mod auxbasis;
-pub mod cholesky_eri;
 pub mod bse_auxbasis;
+pub mod cholesky_eri;
 pub mod configuration;
+pub mod df_jk;
+pub mod error;
 pub mod etb;
 pub mod make_auxbasis;
 pub mod psi4_auxbasis;
-pub mod df_jk;
-pub mod error;
 
 pub use auxbasis::{DEFAULT_AUXBASIS, default_jkfit, default_ri};
+pub use bse_auxbasis::BSE_AUXBASIS;
+pub use cholesky_eri::{DfIntegrals, cholesky_eri};
 pub use configuration::CONFIGURATION;
+pub use df_jk::get_jk_df;
+pub use error::DfError;
 pub use etb::{ETB_BETA, EtbBlock, aug_etb, aug_etb_element, expand_etbs};
 pub use make_auxbasis::{make_auxbasis, predefined_auxbasis};
 pub use psi4_auxbasis::PSI4_AUXBASIS;
-pub use bse_auxbasis::BSE_AUXBASIS;
-pub use cholesky_eri::{DfIntegrals, cholesky_eri};
-pub use df_jk::get_jk_df;
-pub use error::DfError;

@@ -86,8 +86,15 @@ fn he_fcc_rsdf_dd_block_seam_is_live() {
     let mut b_true = RsGdfBuilder::new(cell.clone(), &k);
     b_true.exclude_dd_block = true;
     b_true.build().expect("build true");
-    let rs = b_true.rs_cell.as_ref().expect("rs_cell built when exclude_dd_block");
-    assert_eq!(rs.bas_type, vec![1, 2], "He-fcc DOES split under RSGDF's own threshold");
+    let rs = b_true
+        .rs_cell
+        .as_ref()
+        .expect("rs_cell built when exclude_dd_block");
+    assert_eq!(
+        rs.bas_type,
+        vec![1, 2],
+        "He-fcc DOES split under RSGDF's own threshold"
+    );
     let c_true = b_true.make_j3c(Aosym::S1, false).expect("j3c true");
     assert!(!c_true.blocks.is_empty());
 
@@ -115,9 +122,15 @@ fn diamond_gdf_both_routes_produce_a_cderi() {
     b_true.build().expect("build true");
     // Confirm the SMOOTH cell that carries the correction is genuinely
     // non-empty here — the point of testing diamond rather than He-fcc.
-    let rs = b_true.rs_cell.as_ref().expect("rs_cell built when exclude_dd_block");
+    let rs = b_true
+        .rs_cell
+        .as_ref()
+        .expect("rs_cell built when exclude_dd_block");
     let smooth = rs.smooth_basis_cell().expect("smooth_basis_cell");
-    assert!(smooth.mol.nao_nr > 0, "diamond must have a live smooth block");
+    assert!(
+        smooth.mol.nao_nr > 0,
+        "diamond must have a live smooth block"
+    );
     let c_true = b_true.make_j3c(Aosym::S1, false).expect("j3c true");
 
     let mut b_false = CcGdfBuilder::new(cell, &k);
@@ -136,5 +149,8 @@ fn diamond_gdf_both_routes_produce_a_cderi() {
             any_diff = true;
         }
     }
-    assert!(any_diff, "exclude_dd_block must change diamond's cderi (D-PBC-23)");
+    assert!(
+        any_diff,
+        "exclude_dd_block must change diamond's cderi (D-PBC-23)"
+    );
 }

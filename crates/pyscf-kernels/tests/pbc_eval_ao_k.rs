@@ -135,3 +135,64 @@ fn accumulate_rejects_mismatched_operands() {
         "phase vectors disagreeing with nkpts must be rejected"
     );
 }
+
+#[test]
+fn device_path_matches_slice_path_bit_exact() {
+    let sel = select_backend().expect("backend must resolve");
+    let client = &sel.client;
+    let (nkpts, n) = (3, 96);
+    let ao = fill(n, 41);
+    let pr = fill(nkpts, 42);
+    let pi = fill(nkpts, 43);
+    let device = pyscf_kernels::AoBlockDevice::from_values(client, &ao, vec![n]);
+    let mut acc = AoKAccumulator::zeros(client, nkpts, n);
+    acc.accumulate_device(client, &device, &pr, &pi)
+        .expect("device accumulate");
+    let got = acc.into_planes(client);
+    let expected = eval_ao_k_accumulate(
+        client,
+        &ao,
+        &pr,
+        &pi,
+        &vec![0.0; nkpts * n],
+        &vec![0.0; nkpts * n],
+    )
+    .expect("slice accumulate");
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn device_scatter_path_matches_zero_filled_slice_bit_exact() {
+    let sel = select_backend().expect("backend must resolve");
+    let client = &sel.client;
+    let (nkpts, ngrids, nao, comp) = (3, 17, 4, 2);
+    let index = vec![0usize, 2, 3, 8, 13, 16];
+    let sub = fill(comp * index.len() * nao, 51);
+    let mut full = vec![0.0f64; comp * ngrids * nao];
+    for c in 0..comp {
+        for a in 0..nao {
+            for (j, &g) in index.iter().enumerate() {
+                full[c * ngrids * nao + a * ngrids + g] =
+                    sub[c * index.len() * nao + a * index.len() + j];
+            }
+        }
+    }
+    let pr = fill(nkpts, 52);
+    let pi = fill(nkpts, 53);
+    let device =
+        pyscf_kernels::AoBlockDevice::from_values(client, &sub, vec![comp, index.len(), nao]);
+    let mut acc = AoKAccumulator::zeros(client, nkpts, full.len());
+    acc.accumulate_device_scatter(client, &device, &index, ngrids, nao, comp, &pr, &pi)
+        .expect("device scatter accumulate");
+    let got = acc.into_planes(client);
+    let expected = eval_ao_k_accumulate(
+        client,
+        &full,
+        &pr,
+        &pi,
+        &vec![0.0; nkpts * full.len()],
+        &vec![0.0; nkpts * full.len()],
+    )
+    .expect("zero-filled slice accumulate");
+    assert_eq!(got, expected);
+}

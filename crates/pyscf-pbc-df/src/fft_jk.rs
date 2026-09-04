@@ -41,7 +41,7 @@ use pyscf_algebra::{CTensor, oracle_dot};
 use pyscf_pbc_gto::{CoulGArgs, ExxDiv, get_coulg, get_gv};
 use pyscf_pbc_tools::{fft, ifft};
 
-use crate::df_jk::{all_gamma, ewald_exxdiv_for_g0, format_kpts_band, KMats};
+use crate::df_jk::{KMats, all_gamma, ewald_exxdiv_for_g0, format_kpts_band};
 use crate::error::PbcDfError;
 use crate::fftdf::Fftdf;
 use crate::zlinalg::zscale_real;
@@ -368,14 +368,25 @@ pub fn get_k_kpts_opts(
     let budget = (df.max_memory * 1e6 / 16.0 / 4.0 / ngrids as f64 / nao as f64) as usize;
     let blksize = nao.min(budget.max(1));
 
-    let mut vk_kpts: Vec<KMats> =
-        vec![vec![CTensor::zeros(nao * nao); nband]; nset];
+    let mut vk_kpts: Vec<KMats> = vec![vec![CTensor::zeros(nao * nao); nband]; nset];
 
     if kk_symmetry {
         check_kk_symmetry_preconditions(hermi, kpts_band, mesh, blksize, nao)?;
         kk_symmetric_pair_loop(
-            df, dms, kpts, exxdiv, omega, &gv, &ao2_kpts, &mut vk_kpts, weight, nao,
-            ngrids, nset, nkpts, real_out,
+            df,
+            dms,
+            kpts,
+            exxdiv,
+            omega,
+            &gv,
+            &ao2_kpts,
+            &mut vk_kpts,
+            weight,
+            nao,
+            ngrids,
+            nset,
+            nkpts,
+            real_out,
         )?;
         if real_out {
             zero_imaginary(&mut vk_kpts);
@@ -423,10 +434,14 @@ pub fn get_k_kpts_opts(
             // matrix or on which `(k1,k2)` pair produced this `dk` — so they
             // are hoisted into a cache on `Fftdf` that survives the whole SCF
             // instead of being rebuilt on every one of the `Nk^2` pairs.
-            let (coulg, expmikr) = {
-                let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, &gv)?;
-                (entry.0.clone(), entry.1.clone())
-            };
+            // S-04: hold the cached `Arc` and BORROW its contents. Cloning the
+            // tuple deep-copied `coulG` (`ngrids` f64) plus `expmikr` (two
+            // `ngrids` planes) on EVERY one of the `Nk^2` pairs — 715 KiB per
+            // pair at `MESH_GATE`, ~45 MiB per `get_k_kpts` — which is exactly
+            // the pair-invariant work W-01 built this cache to stop paying.
+            // Bit-exact: the same bytes, read in place instead of copied.
+            let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, &gv)?;
+            let (coulg, expmikr) = (&entry.0, entry.1.as_ref());
 
             // fft_jk.py:283-296 — the AO block loop.
             let mut p0 = 0usize;
@@ -435,7 +450,7 @@ pub fn get_k_kpts_opts(
                 let nblk = p1 - p0;
 
                 // rho1[i, j, g] = conj(ao1T[p0+i, g]) * expmikr[g] * ao2T[j, g]
-                let rho1 = build_rho1(ao1t, ao2t, expmikr.as_ref(), p0, p1, nao, ngrids);
+                let rho1 = build_rho1(ao1t, ao2t, expmikr, p0, p1, nao, ngrids);
 
                 // fft_jk.py:286-291 — vG = fft(rho1) * coulG; vR = ifft(vG).
                 let mut vg = fft(&rho1, mesh)?;
@@ -459,15 +474,13 @@ pub fn get_k_kpts_opts(
 
                 // fft_jk.py:294-295 — einsum('ijg,jg->ig', vR, ao_dms[i])
                 for i in 0..nset {
-                    contract_vr_aodm(
-                        &mut vr_dm[i], &vr, &ao_dms[i], p0, nblk, nao, ngrids,
-                    );
+                    contract_vr_aodm(&mut vr_dm[i], &vr, &ao_dms[i], p0, nblk, nao, ngrids);
                 }
                 p0 = p1;
             }
 
             // fft_jk.py:297 — vR_dm *= expmikr.conj()
-            if let Some(ph) = expmikr.as_ref() {
+            if let Some(ph) = expmikr {
                 for v in vr_dm.iter_mut() {
                     // W-02b: element-wise over `(p, g)`; one worker per row `p`.
                     v.re.par_chunks_mut(ngrids)
@@ -485,9 +498,7 @@ pub fn get_k_kpts_opts(
 
             // fft_jk.py:299-300 — vk_kpts[i,k1] += weight * dot(vR_dm[i], ao1T.T)
             for i in 0..nset {
-                accumulate_vk(
-                    &mut vk_kpts[i][k1], &vr_dm[i], ao1t, weight, nao, ngrids,
-                );
+                accumulate_vk(&mut vk_kpts[i][k1], &vr_dm[i], ao1t, weight, nao, ngrids);
             }
         }
     }
@@ -693,9 +704,7 @@ fn check_kk_symmetry_preconditions(
 ) -> Result<(), PbcDfError> {
     let bad = |what: String| {
         Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
-            pyscf_core::CoreError::InvalidMolecule(format!(
-                "get_k_kpts with kk_symmetry: {what}"
-            )),
+            pyscf_core::CoreError::InvalidMolecule(format!("get_k_kpts with kk_symmetry: {what}")),
         )))
     };
     if hermi != 1 {
@@ -773,16 +782,16 @@ fn kk_symmetric_pair_loop(
                 Some(ExxDiv::Ewald) | None => None,
                 other => other,
             };
-            let (coulg, expmikr) = {
-                let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, gv)?;
-                (entry.0.clone(), entry.1.clone())
-            };
+            // S-04: borrow through the cached `Arc`; see the twin comment in
+            // `get_k_kpts_opts`. Same bytes, no per-pair deep copy.
+            let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, gv)?;
+            let (coulg, expmikr) = (&entry.0, entry.1.as_ref());
 
             // The ONE transform this pair pays for.
             let rho1 = build_rho1(
                 ao_kpts.at(k1),
                 ao_kpts.at(k2),
-                expmikr.as_ref(),
+                expmikr,
                 0,
                 nao,
                 nao,
@@ -809,7 +818,7 @@ fn kk_symmetric_pair_loop(
             for i in 0..nset {
                 contract_vr_aodm(&mut vr_dm[i], &vr, &ao_dms[k2][i], 0, nao, nao, ngrids);
             }
-            if let Some(ph) = expmikr.as_ref() {
+            if let Some(ph) = expmikr {
                 // fft_jk.py:297 — vR_dm *= expmikr.conj()
                 mul_phase(&mut vr_dm, ph, true, nao, ngrids);
             }
@@ -843,7 +852,7 @@ fn kk_symmetric_pair_loop(
                     ngrids,
                 );
             }
-            if let Some(ph) = expmikr.as_ref() {
+            if let Some(ph) = expmikr {
                 mul_phase(&mut vr_dm_mirror, ph, false, nao, ngrids);
             }
             for i in 0..nset {
@@ -862,13 +871,7 @@ fn kk_symmetric_pair_loop(
 }
 
 /// `v *= phase` (or `conj(phase)` when `conjugate`), row-wise over `nao` rows.
-fn mul_phase(
-    vs: &mut [CTensor],
-    ph: &CTensor,
-    conjugate: bool,
-    nao: usize,
-    ngrids: usize,
-) {
+fn mul_phase(vs: &mut [CTensor], ph: &CTensor, conjugate: bool, nao: usize, ngrids: usize) {
     let _ = nao;
     let sign = if conjugate { -1.0 } else { 1.0 };
     for v in vs.iter_mut() {

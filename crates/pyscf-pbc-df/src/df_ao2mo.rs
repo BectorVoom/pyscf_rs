@@ -418,9 +418,7 @@ fn pack_mo_pairs(z: &CTensor, naux: usize, dims: PairDims) -> CTensor {
 /// emits a `PBC2DIntegralsWarning`; this port emits a `tracing::warn!`, and
 /// deliberately does not silently pass.
 pub fn warn_pbc2d_eri(cell: &Cell) {
-    if cell.dimension == 2
-        && cell.low_dim_ft_type == pyscf_pbc_gto::LowDimFtType::InfVacuum
-    {
+    if cell.dimension == 2 && cell.low_dim_ft_type == pyscf_pbc_gto::LowDimFtType::InfVacuum {
         tracing::warn!(
             "ERIs of PBC-2D systems with infinite vacuum are singular; \
              cell.low_dim_ft_type = None should be set"
@@ -501,9 +499,7 @@ pub fn get_eri(df: &Gdf, kidx: [usize; 4], compact: bool) -> Result<Eri, PbcDfEr
     let k = kvecs(df, kidx)?;
 
     if !is_kconserv(cell, &k) {
-        tracing::warn!(
-            "df_ao2mo: momentum conservation not found in the given k-points {kidx:?}"
-        );
+        tracing::warn!("df_ao2mo: momentum conservation not found in the given k-points {kidx:?}");
         return Ok(Eri::zeros(
             PairDims::plain(nao, nao),
             PairDims::plain(nao, nao),
@@ -639,9 +635,7 @@ pub fn general(
     let nm = [mos[0].nmo, mos[1].nmo, mos[2].nmo, mos[3].nmo];
 
     if !is_kconserv(cell, &k) {
-        tracing::warn!(
-            "df_ao2mo: momentum conservation not found in the given k-points {kidx:?}"
-        );
+        tracing::warn!("df_ao2mo: momentum conservation not found in the given k-points {kidx:?}");
         return Ok(Eri::zeros(
             PairDims::plain(nm[0], nm[1]),
             PairDims::plain(nm[2], nm[3]),

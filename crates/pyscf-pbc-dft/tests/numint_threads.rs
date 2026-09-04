@@ -34,30 +34,32 @@ const MESH_FAST: [usize; 3] = [11, 11, 11];
 const THREADS: [usize; 4] = [1, 2, 3, 8];
 
 fn model_dms(nao: usize, nkpts: usize) -> Vec<Vec<CTensor>> {
-    vec![(0..nkpts)
-        .map(|k| {
-            let mut m = CTensor::zeros(nao * nao);
-            for p in 0..nao {
-                for q in 0..nao {
-                    let v =
-                        0.3 / (1.0 + (p as f64 - q as f64).abs()) + if p == q { 1.0 } else { 0.0 };
-                    m.re[p * nao + q] = v * (1.0 + 0.1 * k as f64);
-                    m.im[p * nao + q] = 0.02 * (p as f64 - q as f64);
+    vec![
+        (0..nkpts)
+            .map(|k| {
+                let mut m = CTensor::zeros(nao * nao);
+                for p in 0..nao {
+                    for q in 0..nao {
+                        let v = 0.3 / (1.0 + (p as f64 - q as f64).abs())
+                            + if p == q { 1.0 } else { 0.0 };
+                        m.re[p * nao + q] = v * (1.0 + 0.1 * k as f64);
+                        m.im[p * nao + q] = 0.02 * (p as f64 - q as f64);
+                    }
                 }
-            }
-            // The density matrix must be Hermitian — `nr_rks` requires
-            // `hermi = 1` and the imaginary residue is a diagnostic, not a
-            // quantity.
-            for p in 0..nao {
-                for q in 0..p {
-                    m.re[q * nao + p] = m.re[p * nao + q];
-                    m.im[q * nao + p] = -m.im[p * nao + q];
+                // The density matrix must be Hermitian — `nr_rks` requires
+                // `hermi = 1` and the imaginary residue is a diagnostic, not a
+                // quantity.
+                for p in 0..nao {
+                    for q in 0..p {
+                        m.re[q * nao + p] = m.re[p * nao + q];
+                        m.im[q * nao + p] = -m.im[p * nao + q];
+                    }
+                    m.im[p * nao + p] = 0.0;
                 }
-                m.im[p * nao + p] = 0.0;
-            }
-            m
-        })
-        .collect()]
+                m
+            })
+            .collect(),
+    ]
 }
 
 fn pool(n: usize) -> rayon::ThreadPool {
@@ -85,8 +87,7 @@ fn nr_rks_is_bit_identical_across_thread_counts() {
             let run = |t: usize| {
                 pool(t).install(|| {
                     let ni = KNumInt::new(&kpts);
-                    ni.nr_rks(&cell, &grids, xc, &dms, 1, None)
-                        .expect("nr_rks")
+                    ni.nr_rks(&cell, &grids, xc, &dms, 1, None).expect("nr_rks")
                 })
             };
             let reference = run(THREADS[0]);

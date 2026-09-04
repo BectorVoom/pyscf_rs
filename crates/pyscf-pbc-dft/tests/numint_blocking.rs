@@ -47,19 +47,21 @@ use pyscf_pbc_gto::make_kpts_default;
 const MESH: [usize; 3] = [15, 15, 15];
 
 fn model_dms(nao: usize, nkpts: usize) -> Vec<Vec<CTensor>> {
-    vec![(0..nkpts)
-        .map(|k| {
-            let mut m = CTensor::zeros(nao * nao);
-            for p in 0..nao {
-                for q in 0..nao {
-                    let v =
-                        0.3 / (1.0 + (p as f64 - q as f64).abs()) + if p == q { 1.0 } else { 0.0 };
-                    m.re[p * nao + q] = v * (1.0 + 0.1 * k as f64);
+    vec![
+        (0..nkpts)
+            .map(|k| {
+                let mut m = CTensor::zeros(nao * nao);
+                for p in 0..nao {
+                    for q in 0..nao {
+                        let v = 0.3 / (1.0 + (p as f64 - q as f64).abs())
+                            + if p == q { 1.0 } else { 0.0 };
+                        m.re[p * nao + q] = v * (1.0 + 0.1 * k as f64);
+                    }
                 }
-            }
-            m
-        })
-        .collect()]
+                m
+            })
+            .collect(),
+    ]
 }
 
 /// `max_memory` in MB that yields a block of about `want` grid points for this
@@ -106,7 +108,8 @@ fn nr_rks_is_bit_identical_for_the_default_whole_grid_partition() {
 
     let run = || {
         let ni = KNumInt::new(&kpts);
-        ni.nr_rks(&cell, &grids, "PBE", &dms, 1, None).expect("nr_rks")
+        ni.nr_rks(&cell, &grids, "PBE", &dms, 1, None)
+            .expect("nr_rks")
     };
     let a = run();
     let b = run();
@@ -133,7 +136,8 @@ fn nr_rks_agrees_across_block_partitions_far_inside_the_gate() {
         if let Some(w) = want {
             ni.max_memory = max_memory_for_block(w, comp, kpts.len());
         }
-        ni.nr_rks(&cell, &grids, "PBE", &dms, 1, None).expect("nr_rks")
+        ni.nr_rks(&cell, &grids, "PBE", &dms, 1, None)
+            .expect("nr_rks")
     };
     // The DEFAULT budget — one block covering the whole grid — is the reference.
     let reference = run(None);

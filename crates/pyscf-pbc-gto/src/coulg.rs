@@ -153,11 +153,13 @@ pub fn get_coulg(cell: &Cell, args: CoulGArgs<'_>) -> Result<Vec<f64>, PyscfRsEr
         // so it is built here from the same inputs. It depends only on the cell
         // and the k-mesh, so it is a pure function of what is already in `args`.
         Some(ExxDiv::VcutWs) => {
-            let kpts = args.kpts.ok_or(PyscfRsError::Core(CoreError::InvalidMolecule(
-                "get_coulG with exxdiv = 'vcut_ws' needs the sampling k-points \
+            let kpts = args
+                .kpts
+                .ok_or(PyscfRsError::Core(CoreError::InvalidMolecule(
+                    "get_coulG with exxdiv = 'vcut_ws' needs the sampling k-points \
                  (upstream reads them off `mf.kpts` — pbc.py:382-389)"
-                    .to_string(),
-            )))?;
+                        .to_string(),
+                )))?;
             let ws = crate::exxdiv_vcut::precompute_exx(cell, kpts)?;
             crate::exxdiv_vcut::coulg_vcut_ws(cell, &kg, &absg2, &ws)?
         }
@@ -198,7 +200,11 @@ pub fn get_coulg(cell: &Cell, args: CoulGArgs<'_>) -> Result<Vec<f64>, PyscfRsEr
     if cell.dimension > 0 && args.exxdiv == Some(ExxDiv::Ewald) && !g0_idx.is_empty() {
         let owned_k = [args.k];
         let kpts: &[[f64; 3]] = args.kpts.unwrap_or(&owned_k);
-        let mad_omega = if args.omega.is_none() { None } else { Some(0.0) };
+        let mad_omega = if args.omega.is_none() {
+            None
+        } else {
+            Some(0.0)
+        };
         let mad = madelung(cell, kpts, mad_omega)?;
         let shift = nk as f64 * cell.vol() * mad;
         for i in &g0_idx {
@@ -255,11 +261,7 @@ fn madelung_cache() -> &'static Mutex<HashMap<MadelungKey, f64>> {
 /// * propagates [`crate::ewald::ewald`], including its
 ///   `NotYetImplemented { phase: 12 }` for `dimension == 2`;
 /// * [`CoreError::InvalidMolecule`] if the probe cell cannot be built.
-pub fn madelung(
-    cell: &Cell,
-    kpts: &[[f64; 3]],
-    omega: Option<f64>,
-) -> Result<f64, PyscfRsError> {
+pub fn madelung(cell: &Cell, kpts: &[[f64; 3]], omega: Option<f64>) -> Result<f64, PyscfRsError> {
     let nk = crate::lattice::get_monkhorst_pack_size_default(cell, kpts)?;
     let a = cell.lattice_vectors();
     let mut a_super = [[0.0_f64; 3]; 3];

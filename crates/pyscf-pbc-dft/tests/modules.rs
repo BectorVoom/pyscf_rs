@@ -10,13 +10,13 @@ use pyscf_pbc_df::Fftdf;
 use pyscf_pbc_dft::cdft::ShiftHamiltonian;
 use pyscf_pbc_dft::gen_grid::PeriodicGrids;
 use pyscf_pbc_dft::krks::Krks;
-use pyscf_pbc_dft::kspu::{add_vhubbard, reference_cell, set_u, HubbardU, USite, HARTREE2EV};
+use pyscf_pbc_dft::kspu::{HARTREE2EV, HubbardU, USite, add_vhubbard, reference_cell, set_u};
 use pyscf_pbc_dft::numint::KNumInt;
 use pyscf_pbc_dft::numint2c::{Collinear, KNumInt2C};
 use pyscf_pbc_dft::xc::XcType;
-use pyscf_pbc_gto::{make_kpts_default, Cell};
-use pyscf_pbc_scf::types::{KDms, KMats};
+use pyscf_pbc_gto::{Cell, make_kpts_default};
 use pyscf_pbc_scf::KScfConfig;
+use pyscf_pbc_scf::types::{KDms, KMats};
 
 const MESH: [usize; 3] = [11, 11, 11];
 
@@ -100,8 +100,7 @@ fn hubbard_u_is_zero_at_u_zero_and_non_negative_otherwise() {
             u_val: vec![u],
             ..HubbardU::default()
         };
-        let mut vxc: Vec<KMats> =
-            vec![vec![pyscf_algebra::CTensor::zeros(nao * nao); kpts.len()]];
+        let mut vxc: Vec<KMats> = vec![vec![pyscf_algebra::CTensor::zeros(nao * nao); kpts.len()]];
         add_vhubbard(&mut vxc, &cell, &kpts, &dm, &cfg).expect("add_vhubbard")
     };
 
@@ -198,7 +197,10 @@ fn numint2c_refuses_what_upstream_refuses() {
         .nr_vxc(&cell, &grids, "lda,vwn", &dm2c, None)
         .expect_err("mcol must be refused");
     println!("mcol: {e}");
-    assert!(e.to_string().contains("mcfun"), "the refusal must name mcfun");
+    assert!(
+        e.to_string().contains("mcfun"),
+        "the refusal must name mcfun"
+    );
 
     ni.collinear = Collinear::Ncol;
     let e = ni
@@ -212,7 +214,10 @@ fn numint2c_refuses_what_upstream_refuses() {
         .nr_vxc(&cell, &grids, "lda,vwn", &dm2c, None)
         .expect("collinear 2-component nr_vxc");
     println!("col: nelec = {:.10}, E_xc = {:.12}", r.nelec, r.excsum);
-    assert!(r.excsum.is_finite() && r.excsum < 0.0, "E_xc must be negative");
+    assert!(
+        r.excsum.is_finite() && r.excsum < 0.0,
+        "E_xc must be negative"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +242,11 @@ fn becke_grids_integrate_to_the_same_electron_count() {
     let ni = KNumInt::new(&kpts);
 
     let becke = PeriodicGrids::becke(&cell, pyscf_grids::Grids::new()).expect("becke grids");
-    println!("uniform: {} points, becke: {} points", uniform.size(), becke.size());
+    println!(
+        "uniform: {} points, becke: {} points",
+        uniform.size(),
+        becke.size()
+    );
 
     let n_u = ni
         .nr_rks(&cell, &uniform, "lda,vwn", &dm, 1, None)
@@ -296,15 +305,17 @@ fn fxc_is_the_derivative_of_vxc() {
         .collect();
 
     let vxc_at = |eps: f64| -> KMats {
-        let shifted: KDms = vec![(0..nkpts)
-            .map(|k| {
-                let mut m = dm[0][k].clone();
-                for i in 0..nao * nao {
-                    m.re[i] += eps * delta[k].re[i];
-                }
-                m
-            })
-            .collect()];
+        let shifted: KDms = vec![
+            (0..nkpts)
+                .map(|k| {
+                    let mut m = dm[0][k].clone();
+                    for i in 0..nao * nao {
+                        m.re[i] += eps * delta[k].re[i];
+                    }
+                    m
+                })
+                .collect(),
+        ];
         ni.nr_rks(&cell, &grids, "lda,vwn", &shifted, 1, None)
             .expect("nr_rks")
             .vmat
@@ -341,7 +352,10 @@ fn fxc_is_the_derivative_of_vxc() {
     }
     let rel = worst / scale.max(1e-30);
     println!("fxc vs d vxc/d D: worst |delta| {worst:.3e}, relative {rel:.3e}");
-    assert!(rel < 1e-4, "fxc does not reproduce d vxc / d D (relative {rel:e})");
+    assert!(
+        rel < 1e-4,
+        "fxc does not reproduce d vxc / d D (relative {rel:e})"
+    );
 }
 
 /// The refusal that keeps `XcType` honest, restated here so `modules.rs` is

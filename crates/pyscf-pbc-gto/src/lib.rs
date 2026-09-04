@@ -11,8 +11,8 @@ pub mod dumps_loads;
 
 // Phase 9 plan 09-04 — cutoff / rcut / mesh estimators.
 pub mod coulg;
-pub mod exxdiv_vcut;
 pub mod cutoff;
+pub mod exxdiv_vcut;
 
 // Phase 9 plan 09-05 — G-vectors (K-01), structure factors (K-02), uniform grids.
 pub mod grids;
@@ -89,8 +89,8 @@ pub use gv::{
 pub use hcore::{HcoreParts, get_hcore, get_hcore_parts, get_ovlp, get_t};
 pub use kpts_mesh::{
     KCONSERV_TOL, KIdx, KPT_DIFF_TOL, Kconserv, Kconserv3, UniqueKpts, WITH_GAMMA, WRAP_AROUND,
-    gamma_point, get_kconserv, get_kconserv3, intersection, is_gamma_point, is_trim, is_zero, make_kpts,
-    make_kpts_default, member, round_to_fbz, unique,
+    gamma_point, get_kconserv, get_kconserv3, intersection, is_gamma_point, is_trim, is_zero,
+    make_kpts, make_kpts_default, member, round_to_fbz, unique,
 };
 pub use lattice::{
     check_lattice_sum_range, get_lattice_ls, get_lattice_ls_default, get_monkhorst_pack_size,
@@ -105,5 +105,5 @@ pub use pbc_intor::{
 };
 pub use pseudo::{PseudoData, resolve_pseudo};
 pub use supercell::{cell_plus_imgs, super_cell};
-pub use types::{ALattice, CellBuildArgs, DEFAULT_PRECISION, LowDimFtType};
 pub use symmetry_data::{Dmats, LatticeSymmetry, LatticeSymmetryOp, check_mesh_symmetry_core};
+pub use types::{ALattice, CellBuildArgs, DEFAULT_PRECISION, LowDimFtType};

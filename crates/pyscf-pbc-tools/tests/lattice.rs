@@ -87,14 +87,7 @@ fn qr_row2_matches_the_3x3_twin_on_its_first_three_columns() {
     // reflections, same order.
     let dr = [[1.5, 0.0, 0.0], [0.0, 2.5, 0.0], [0.0, 0.0, 0.75]];
     for perm in [[1usize, 2, 0], [2, 0, 1], [0, 1, 2]] {
-        let cols = [
-            A[perm[0]],
-            A[perm[1]],
-            A[perm[2]],
-            dr[0],
-            dr[1],
-            dr[2],
-        ];
+        let cols = [A[perm[0]], A[perm[1]], A[perm[2]], dr[0], dr[1], dr[2]];
         let r2 = qr_row2(&cols);
         assert_eq!(r2.len(), 6);
         let head = [cols[0], cols[1], cols[2]];
@@ -193,9 +186,18 @@ fn undiscarded_ls_is_a_full_cartesian_product() {
 #[test]
 fn degenerate_inputs_return_the_origin_only() {
     // pbc.py:619-620 — dimension == 0, rcut <= 0, or an empty cell.
-    assert_eq!(get_lattice_ls(&A, &SCALED, &COORDS, 10.0, 0, true), vec![[0.0; 3]]);
-    assert_eq!(get_lattice_ls(&A, &SCALED, &COORDS, 0.0, 3, true), vec![[0.0; 3]]);
-    assert_eq!(get_lattice_ls(&A, &SCALED, &COORDS, -1.0, 3, true), vec![[0.0; 3]]);
+    assert_eq!(
+        get_lattice_ls(&A, &SCALED, &COORDS, 10.0, 0, true),
+        vec![[0.0; 3]]
+    );
+    assert_eq!(
+        get_lattice_ls(&A, &SCALED, &COORDS, 0.0, 3, true),
+        vec![[0.0; 3]]
+    );
+    assert_eq!(
+        get_lattice_ls(&A, &SCALED, &COORDS, -1.0, 3, true),
+        vec![[0.0; 3]]
+    );
     assert_eq!(get_lattice_ls(&A, &[], &[], 10.0, 3, true), vec![[0.0; 3]]);
 }
 
@@ -272,7 +274,10 @@ fn supercell_translations_are_the_expected_cartesian_products() {
     let ls = super_cell_translations(&A, &[2, 2, 2], false);
     assert_eq!(ls.len(), 8);
     // ncopy = [1,1,1] is a no-op.
-    assert_eq!(super_cell_translations(&A, &[1, 1, 1], false), vec![[0.0; 3]]);
+    assert_eq!(
+        super_cell_translations(&A, &[1, 1, 1], false),
+        vec![[0.0; 3]]
+    );
     // wrap_around shifts index (n+1)/2.. by -n; for n = 2 that is index 1 -> -1.
     let wrapped = super_cell_translations(&A, &[2, 2, 2], true);
     assert_eq!(wrapped.len(), 8);
@@ -309,7 +314,10 @@ fn image_atom_coords_is_image_major() {
     assert_eq!(out[0], COORDS[0]);
     assert_eq!(out[1], COORDS[1]);
     assert_eq!(out[2], [1.0, 2.0, 3.0]);
-    assert_eq!(out[3], [COORDS[1][0] + 1.0, COORDS[1][1] + 2.0, COORDS[1][2] + 3.0]);
+    assert_eq!(
+        out[3],
+        [COORDS[1][0] + 1.0, COORDS[1][1] + 2.0, COORDS[1][2] + 3.0]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -332,15 +340,29 @@ fn lattice_ls_matches_upstream_counts_and_first_row() {
             10.0,
             false,
             729,
-            [-26.961100564394652, -26.961100564394652, -26.961100564394652],
+            [
+                -26.961100564394652,
+                -26.961100564394652,
+                -26.961100564394652,
+            ],
             46.69799600550547,
         ),
-        (5.0, true, 19, [0.0, 0.0, -6.740275141098663], 6.740275141098663),
+        (
+            5.0,
+            true,
+            19,
+            [0.0, 0.0, -6.740275141098663],
+            6.740275141098663,
+        ),
         (
             5.0,
             false,
             343,
-            [-20.220825423295988, -20.220825423295988, -20.220825423295988],
+            [
+                -20.220825423295988,
+                -20.220825423295988,
+                -20.220825423295988,
+            ],
             35.023497004129105,
         ),
         (

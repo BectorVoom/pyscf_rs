@@ -250,10 +250,8 @@ pub fn cross_spin_ao2mo(
         for a in 0..nvir_a {
             for jj in 0..nocc_b {
                 for bb in 0..nvir_b {
-                    let f_idx = i
-                        + a * nocc_a
-                        + jj * nocc_a * nvir_a
-                        + bb * nocc_a * nvir_a * nocc_b;
+                    let f_idx =
+                        i + a * nocc_a + jj * nocc_a * nvir_a + bb * nocc_a * nvir_a * nocc_b;
                     let c_idx = ((i * nvir_a + a) * nocc_b + jj) * nvir_b + bb;
                     ovov[c_idx] = f_order[f_idx];
                 }

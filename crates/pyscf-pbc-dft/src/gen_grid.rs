@@ -132,7 +132,10 @@ pub fn get_becke_grids(
                 atom_coords[ia][2] + l[2],
             ];
             let template = tab.get(&charges[ia]).ok_or_else(|| {
-                err(format!("BeckeGrids: no atomic grid for Z = {}", charges[ia]))
+                err(format!(
+                    "BeckeGrids: no atomic grid for Z = {}",
+                    charges[ia]
+                ))
             })?;
 
             // gen_grid.py:180-206 — keep only the points inside the unit cell,

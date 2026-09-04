@@ -70,12 +70,10 @@
 
 mod common;
 
-use common::{
-    cell_args, h2_stretched_spin0, li_atom_spin1, oracle_python, run_python, GATE,
-};
+use common::{GATE, cell_args, h2_stretched_spin0, li_atom_spin1, oracle_python, run_python};
 use pyscf_pbc_df::Fftdf;
 use pyscf_pbc_dft::kuks::Kuks;
-use pyscf_pbc_gto::{make_kpts_default, Cell};
+use pyscf_pbc_gto::{Cell, make_kpts_default};
 use pyscf_pbc_scf::{KScfConfig, KScfResult, Kuhf};
 
 /// The same mesh `gate.rs` pins, on BOTH sides. `check_mesh_symmetry` and
@@ -267,10 +265,20 @@ fn assert_matches(
     );
 
     let na: usize = (0..got.nkpts)
-        .map(|k| got.mo_occ[got.idx(0, k)].iter().filter(|o| **o > 0.0).count())
+        .map(|k| {
+            got.mo_occ[got.idx(0, k)]
+                .iter()
+                .filter(|o| **o > 0.0)
+                .count()
+        })
         .sum();
     let nb: usize = (0..got.nkpts)
-        .map(|k| got.mo_occ[got.idx(1, k)].iter().filter(|o| **o > 0.0).count())
+        .map(|k| {
+            got.mo_occ[got.idx(1, k)]
+                .iter()
+                .filter(|o| **o > 0.0)
+                .count()
+        })
         .sum();
     let (ss, mult) = got.spin_square(&s1e.to_vec(), nao).expect("nset == 2");
     let ss_ref = want["ss"].as_f64().expect("ss");
@@ -350,7 +358,13 @@ fn kuks_li_atom_gamma_pbe_matches_upstream() {
     run_row(
         li_atom_spin1(),
         "sto-3g",
-        &Oracle { nk: [1, 1, 1], method: "KUKS", xc: "pbe", xclib: "libxc", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 1],
+            method: "KUKS",
+            xc: "pbe",
+            xclib: "libxc",
+            breaksym: 1,
+        },
         TOL_LI,
         "U-a  KUKS Li(spin1) gamma PBE",
     );
@@ -364,7 +378,13 @@ fn kuks_li_atom_gamma_lda_matches_upstream() {
     run_row(
         li_atom_spin1(),
         "sto-3g",
-        &Oracle { nk: [1, 1, 1], method: "KUKS", xc: "lda,vwn", xclib: "libxc", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 1],
+            method: "KUKS",
+            xc: "lda,vwn",
+            xclib: "libxc",
+            breaksym: 1,
+        },
         TOL_LI,
         "U-a  KUKS Li(spin1) gamma LDA,VWN",
     );
@@ -379,7 +399,13 @@ fn kuks_li_atom_113_pbe_matches_upstream() {
     run_row(
         li_atom_spin1(),
         "sto-3g",
-        &Oracle { nk: [1, 1, 3], method: "KUKS", xc: "pbe", xclib: "libxc", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 3],
+            method: "KUKS",
+            xc: "pbe",
+            xclib: "libxc",
+            breaksym: 1,
+        },
         TOL_LI,
         "U-a  KUKS Li(spin1) [1,1,3] PBE",
     );
@@ -393,7 +419,13 @@ fn kuhf_li_atom_gamma_is_the_open_shell_floor() {
     run_row(
         li_atom_spin1(),
         "sto-3g",
-        &Oracle { nk: [1, 1, 1], method: "KUHF", xc: "", xclib: "", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 1],
+            method: "KUHF",
+            xc: "",
+            xclib: "",
+            breaksym: 1,
+        },
         TOL_LI,
         "U-a  KUHF Li(spin1) gamma (no XC)",
     );
@@ -416,7 +448,13 @@ fn kuks_h2_stretched_gamma_pbe_matches_upstream() {
     run_row(
         h2_stretched_spin0(),
         "6-31g",
-        &Oracle { nk: [1, 1, 1], method: "KUKS", xc: "pbe", xclib: "libxc", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 1],
+            method: "KUKS",
+            xc: "pbe",
+            xclib: "libxc",
+            breaksym: 1,
+        },
         TOL_H2,
         "U-b  KUKS H2(3 Bohr) gamma PBE",
     );
@@ -429,7 +467,13 @@ fn kuks_h2_stretched_gamma_lda_matches_upstream() {
     run_row(
         h2_stretched_spin0(),
         "6-31g",
-        &Oracle { nk: [1, 1, 1], method: "KUKS", xc: "lda,vwn", xclib: "libxc", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 1],
+            method: "KUKS",
+            xc: "lda,vwn",
+            xclib: "libxc",
+            breaksym: 1,
+        },
         TOL_H2,
         "U-b  KUKS H2(3 Bohr) gamma LDA,VWN",
     );
@@ -444,7 +488,13 @@ fn kuhf_h2_stretched_gamma_matches_upstream() {
     run_row(
         h2_stretched_spin0(),
         "6-31g",
-        &Oracle { nk: [1, 1, 1], method: "KUHF", xc: "", xclib: "", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 1],
+            method: "KUHF",
+            xc: "",
+            xclib: "",
+            breaksym: 1,
+        },
         TOL_H2,
         "U-b  KUHF H2(3 Bohr) gamma (no XC)",
     );
@@ -463,7 +513,13 @@ fn kuks_li_atom_gamma_pbe0_matches_upstream() {
     run_row(
         li_atom_spin1(),
         "sto-3g",
-        &Oracle { nk: [1, 1, 1], method: "KUKS", xc: "pbe0", xclib: "libxc", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 1],
+            method: "KUKS",
+            xc: "pbe0",
+            xclib: "libxc",
+            breaksym: 1,
+        },
         TOL_LI,
         "U-c  KUKS Li(spin1) gamma PBE0",
     );
@@ -477,7 +533,13 @@ fn kuks_h2_stretched_gamma_pbe0_matches_upstream() {
     run_row(
         h2_stretched_spin0(),
         "6-31g",
-        &Oracle { nk: [1, 1, 1], method: "KUKS", xc: "pbe0", xclib: "libxc", breaksym: 1 },
+        &Oracle {
+            nk: [1, 1, 1],
+            method: "KUKS",
+            xc: "pbe0",
+            xclib: "libxc",
+            breaksym: 1,
+        },
         1e-11,
         "U-c  KUKS H2(3 Bohr) gamma PBE0",
     );

@@ -23,8 +23,8 @@ use pyscf_scf::{InitGuessMode, OverrideHooks};
 
 use crate::numint::NumInt;
 use crate::parser::XcSpec;
-use crate::xc_backend::XcBackend;
 use crate::veff::{KsVeff, default_get_veff};
+use crate::xc_backend::XcBackend;
 
 /// The KS override surface — extends `pyscf_scf::OverrideHooks` (a supertrait
 /// bound) with the two KS-specific seams (DFT-08).

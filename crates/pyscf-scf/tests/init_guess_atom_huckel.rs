@@ -162,9 +162,7 @@ fn atom_and_huckel_seed_rhf_converging_to_1e_energy() {
 
 fn h2o_ccpvdz_cart() -> pyscf_core::Mole {
     M(MoleBuildArgs {
-        atom: AtomInput::String(
-            "O 0 0 0.117; H 0 0.757 -0.467; H 0 -0.757 -0.467".into(),
-        ),
+        atom: AtomInput::String("O 0 0 0.117; H 0 0.757 -0.467; H 0 -0.757 -0.467".into()),
         basis: BasisInput::Name("cc-pvdz".into()),
         unit: Unit::Ang,
         cart: true,

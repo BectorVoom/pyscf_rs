@@ -122,9 +122,7 @@ impl KNumInt2C {
         let nao = cell.mol.nao_nr;
         let (dm_a, dm_b) = split_diagonal(dms, nao)?;
         let sets: [KDms; 2] = [vec![dm_a], vec![dm_b]];
-        let nr = self
-            .ni
-            .nr_uks(cell, grids, xc_code, &sets, 1, kpts_band)?;
+        let nr = self.ni.nr_uks(cell, grids, xc_code, &sets, 1, kpts_band)?;
         let mut vmat = Vec::with_capacity(nr.vmat[0][0].len());
         for k in 0..nr.vmat[0][0].len() {
             let mut m = CTensor::zeros(4 * nao * nao);
@@ -271,16 +269,9 @@ impl KNumInt2C {
             None => None,
         };
         let sets: [KDms; 2] = [vec![d1a], vec![d1b]];
-        let v = self.ni.nr_uks_fxc(
-            cell,
-            grids,
-            xc_code,
-            d0.as_ref(),
-            &sets,
-            0,
-            None,
-            v_hermi,
-        )?;
+        let v = self
+            .ni
+            .nr_uks_fxc(cell, grids, xc_code, d0.as_ref(), &sets, 0, None, v_hermi)?;
         let nkpts = v[0][0].len();
         let mut out = Vec::with_capacity(nkpts);
         for k in 0..nkpts {
@@ -322,7 +313,7 @@ fn eval_rho_m(
         let d = &dms[k];
         if d.len() != n2 * n2 {
             return Err(err(
-                "KNumInt2C: the density matrix is not 2*nao x 2*nao".to_string(),
+                "KNumInt2C: the density matrix is not 2*nao x 2*nao".to_string()
             ));
         }
         // c_ab[g, j] = Σ_i ao[g, i] D[block_a + i, block_b + j]
@@ -332,10 +323,7 @@ fn eval_rho_m(
             for i in 0..nao {
                 let ib = i * ng;
                 for j in 0..nao {
-                    let (dr, di) = (
-                        d.re[(ra + i) * n2 + rb + j],
-                        d.im[(ra + i) * n2 + rb + j],
-                    );
+                    let (dr, di) = (d.re[(ra + i) * n2 + rb + j], d.im[(ra + i) * n2 + rb + j]);
                     if dr == 0.0 && di == 0.0 {
                         continue;
                     }

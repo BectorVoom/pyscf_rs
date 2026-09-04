@@ -27,7 +27,6 @@
 // belongs to.
 #![allow(clippy::needless_range_loop)]
 
-
 use pyscf_pbc_gto::Cell;
 use pyscf_pbc_gto::test_systems::{diamond, he_fcc, lif, si};
 use pyscf_pbc_lib::kpts_helper::KPT_DIFF_TOL;
@@ -173,7 +172,11 @@ fn check_invariants(kpts: &KPoints, cell: &Cell, who: &str) {
             // The rotation acts on SCALED k-points in the RECIPROCAL basis
             // (`kpts.py:52` — `op.a2b(cell).rot`), not the direct one.
             let rot = kpts.ops()[iop].a2b(cell).expect("a2b").rot;
-            let sign = if kpts.time_reversal_symm_bz[k] == 1 { -1.0 } else { 1.0 };
+            let sign = if kpts.time_reversal_symm_bz[k] == 1 {
+                -1.0
+            } else {
+                1.0
+            };
             let mut ok = true;
             for x in 0..3 {
                 let r = sign * (rot[x][0] * ki[0] + rot[x][1] * ki[1] + rot[x][2] * ki[2]);
@@ -200,7 +203,14 @@ fn gate_a_si_ibz_integers_are_exact() {
     let got = six_configs(si);
     assert_eq!(
         got,
-        SixConfigs { a: 145, b: 145, c: 245, d: 408, e: 816, f: 2052 },
+        SixConfigs {
+            a: 145,
+            b: 145,
+            c: 245,
+            d: 408,
+            e: 816,
+            f: 2052
+        },
         "Gate A on si: the six nkpts_ibz integers are EXACT (17-CONTEXT §2.2)"
     );
 }
@@ -212,7 +222,14 @@ fn gate_a_diamond_ibz_integers_are_exact() {
     let got = six_configs(diamond);
     assert_eq!(
         got,
-        SixConfigs { a: 145, b: 145, c: 245, d: 408, e: 816, f: 2052 },
+        SixConfigs {
+            a: 145,
+            b: 145,
+            c: 245,
+            d: 408,
+            e: 816,
+            f: 2052
+        },
         "Gate A on diamond: same Fd-3m space group as si, same six integers"
     );
 }
@@ -223,11 +240,21 @@ fn gate_a_diamond_ibz_integers_are_exact() {
 /// pass the two tests above.
 #[test]
 fn gate_a_symmorphic_controls_collapse() {
-    for (name, base) in [("lif", lif as fn() -> Cell), ("he_fcc", he_fcc as fn() -> Cell)] {
+    for (name, base) in [
+        ("lif", lif as fn() -> Cell),
+        ("he_fcc", he_fcc as fn() -> Cell),
+    ] {
         let got = six_configs(base);
         assert_eq!(
             got,
-            SixConfigs { a: 145, b: 145, c: 145, d: 408, e: 408, f: 2052 },
+            SixConfigs {
+                a: 145,
+                b: 145,
+                c: 145,
+                d: 408,
+                e: 408,
+                f: 2052
+            },
             "Gate A on {name} (Fm-3m, symmorphic): C == A and E == D"
         );
     }
@@ -266,7 +293,11 @@ fn star_search_is_bit_identical_at_1_and_8_threads() {
     assert_eq!(one.little_cogroup_ops, eight.little_cogroup_ops);
     assert_eq!(one.k2opk, eight.k2opk);
     for (a, b) in one.weights_ibz.iter().zip(eight.weights_ibz.iter()) {
-        assert_eq!(a.to_bits(), b.to_bits(), "weights_ibz moved between 1 and 8 threads");
+        assert_eq!(
+            a.to_bits(),
+            b.to_bits(),
+            "weights_ibz moved between 1 and 8 threads"
+        );
     }
 }
 

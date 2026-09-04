@@ -109,7 +109,9 @@ pub fn canonical_occ(mo_energy_kpts: &[Vec<f64>], nocc_per_k: usize) -> Vec<Vec<
         .map(|e| {
             let mut idx: Vec<usize> = (0..e.len()).collect();
             idx.sort_by(|a, b| {
-                e[*a].partial_cmp(&e[*b]).unwrap_or(std::cmp::Ordering::Equal)
+                e[*a]
+                    .partial_cmp(&e[*b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
             let mut occ = vec![0.0_f64; e.len()];
             for i in idx.into_iter().take(nocc_per_k) {

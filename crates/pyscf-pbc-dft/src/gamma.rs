@@ -13,8 +13,8 @@ use pyscf_pbc_gto::Cell;
 
 use crate::error::PbcDftError;
 use crate::kgks::Kgks;
-use crate::kroks::Kroks;
 use crate::krks::Krks;
+use crate::kroks::Kroks;
 use crate::kuks::Kuks;
 
 /// `pbc.dft.RKS(cell, xc=...)` — restricted KS at gamma.

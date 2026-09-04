@@ -171,7 +171,9 @@ impl RsCell {
             let mut prims: Vec<Primitive> = (0..nprim)
                 .map(|p| Primitive {
                     exp: shell.exponents[p],
-                    coeffs: (0..nctr).map(|c| shell.coefficients[p * nctr + c]).collect(),
+                    coeffs: (0..nctr)
+                        .map(|c| shell.coefficients[p * nctr + c])
+                        .collect(),
                 })
                 .collect();
             let mut idx: Vec<usize> = (0..nprim).collect();
@@ -305,8 +307,9 @@ impl RsCell {
 
         let new_nbas = decontracted_bas.len() / BAS_SLOTS;
         let atoms: Arc<[CintxAtom]> = Arc::from(bset.atoms().to_vec().into_boxed_slice());
-        let new_basis_set = BasisSet::try_new(atoms, Arc::from(decontracted_shells.into_boxed_slice()))
-            .map_err(|e| core_err(format!("RsCell::from_cell: BasisSet::try_new: {e}")))?;
+        let new_basis_set =
+            BasisSet::try_new(atoms, Arc::from(decontracted_shells.into_boxed_slice()))
+                .map_err(|e| core_err(format!("RsCell::from_cell: BasisSet::try_new: {e}")))?;
 
         let mut ao_loc: Vec<i32> = Vec::with_capacity(new_nbas + 1);
         let mut acc = 0i32;
@@ -315,7 +318,11 @@ impl RsCell {
             let row = &decontracted_bas[ib * BAS_SLOTS..ib * BAS_SLOTS + BAS_SLOTS];
             let l = row[ANG_OF];
             let nctr = row[NCTR_OF];
-            let dim_per_ctr = if cell.mol.cart { (l + 1) * (l + 2) / 2 } else { 2 * l + 1 };
+            let dim_per_ctr = if cell.mol.cart {
+                (l + 1) * (l + 2) / 2
+            } else {
+                2 * l + 1
+            };
             acc += dim_per_ctr * nctr;
             ao_loc.push(acc);
         }
@@ -353,7 +360,11 @@ impl RsCell {
         uniq.sort_unstable();
         uniq.dedup();
         let max = *uniq.last().expect("non-empty bas_map");
-        assert_eq!(max, uniq.len() as i32 - 1, "bas_map is not a contiguous 0..n range");
+        assert_eq!(
+            max,
+            uniq.len() as i32 - 1,
+            "bas_map is not a contiguous 0..n range"
+        );
         let mut first_idx = vec![0i32; uniq.len()];
         for (i, &v) in bas_map.iter().enumerate() {
             // first occurrence only — bas_map is grouped by construction, so a
@@ -394,9 +405,14 @@ impl RsCell {
 
         let mut new_bas = Vec::with_capacity(keep.len() * BAS_SLOTS);
         for &i in &keep {
-            new_bas.extend_from_slice(&self.cell.mol._bas[i * BAS_SLOTS..i * BAS_SLOTS + BAS_SLOTS]);
+            new_bas
+                .extend_from_slice(&self.cell.mol._bas[i * BAS_SLOTS..i * BAS_SLOTS + BAS_SLOTS]);
         }
-        let bset = self.cell.mol.basis_set().expect("built RsCell has a basis_set");
+        let bset = self
+            .cell
+            .mol
+            .basis_set()
+            .expect("built RsCell has a basis_set");
         let shells: Vec<Arc<CintxShell>> = keep.iter().map(|&i| bset.shells()[i].clone()).collect();
         let atoms: Arc<[CintxAtom]> = Arc::from(bset.atoms().to_vec().into_boxed_slice());
         let new_bset = BasisSet::try_new(atoms, Arc::from(shells.into_boxed_slice()))
@@ -410,7 +426,11 @@ impl RsCell {
             let row = &new_bas[ib * BAS_SLOTS..ib * BAS_SLOTS + BAS_SLOTS];
             let l = row[ANG_OF];
             let nctr = row[NCTR_OF];
-            let dim_per_ctr = if cell_d.mol.cart { (l + 1) * (l + 2) / 2 } else { 2 * l + 1 };
+            let dim_per_ctr = if cell_d.mol.cart {
+                (l + 1) * (l + 2) / 2
+            } else {
+                2 * l + 1
+            };
             acc += dim_per_ctr * nctr;
             ao_loc.push(acc);
         }
@@ -439,9 +459,14 @@ impl RsCell {
 
         let mut new_bas = Vec::with_capacity(keep.len() * BAS_SLOTS);
         for &i in &keep {
-            new_bas.extend_from_slice(&self.cell.mol._bas[i * BAS_SLOTS..i * BAS_SLOTS + BAS_SLOTS]);
+            new_bas
+                .extend_from_slice(&self.cell.mol._bas[i * BAS_SLOTS..i * BAS_SLOTS + BAS_SLOTS]);
         }
-        let bset = self.cell.mol.basis_set().expect("built RsCell has a basis_set");
+        let bset = self
+            .cell
+            .mol
+            .basis_set()
+            .expect("built RsCell has a basis_set");
         let shells: Vec<Arc<CintxShell>> = keep.iter().map(|&i| bset.shells()[i].clone()).collect();
         let atoms: Arc<[CintxAtom]> = Arc::from(bset.atoms().to_vec().into_boxed_slice());
         let new_bset = BasisSet::try_new(atoms, Arc::from(shells.into_boxed_slice()))
@@ -455,7 +480,11 @@ impl RsCell {
             let row = &new_bas[ib * BAS_SLOTS..ib * BAS_SLOTS + BAS_SLOTS];
             let l = row[ANG_OF];
             let nctr = row[NCTR_OF];
-            let dim_per_ctr = if self.cell.mol.cart { (l + 1) * (l + 2) / 2 } else { 2 * l + 1 };
+            let dim_per_ctr = if self.cell.mol.cart {
+                (l + 1) * (l + 2) / 2
+            } else {
+                2 * l + 1
+            };
             acc += dim_per_ctr * nctr;
             ao_loc.push(acc);
         }
@@ -471,11 +500,7 @@ impl RsCell {
         let new_bas_type: Vec<i32> = keep.iter().map(|&i| self.bas_type[i]).collect();
 
         // `segs = sh_loc[1:] - sh_loc[:-1]; segs[bas_map[~mask]] -= 1; cumsum`.
-        let mut segs: Vec<i32> = self
-            .sh_loc
-            .windows(2)
-            .map(|w| w[1] - w[0])
-            .collect();
+        let mut segs: Vec<i32> = self.sh_loc.windows(2).map(|w| w[1] - w[0]).collect();
         for (i, &t) in self.bas_type.iter().enumerate() {
             if t == SMOOTH_BASIS {
                 segs[self.bas_map[i] as usize] -= 1;
@@ -489,7 +514,8 @@ impl RsCell {
             new_sh_loc.push(acc_seg);
         }
 
-        cell_c.rcut = pyscf_pbc_gto::estimate_rcut(&cell_c, self.cell.precision).map_err(PbcDfError::from)?;
+        cell_c.rcut =
+            pyscf_pbc_gto::estimate_rcut(&cell_c, self.cell.precision).map_err(PbcDfError::from)?;
 
         Ok(RsCell {
             cell: cell_c,

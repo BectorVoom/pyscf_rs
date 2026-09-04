@@ -222,7 +222,10 @@ fn split_pseudo_suffix(canonical: &str) -> (String, Option<String>) {
         i -= 1;
     }
     if i < bytes.len() && i > 0 && bytes[i - 1] == b'q' {
-        return (canonical[..i - 1].to_string(), Some(canonical[i - 1..].to_string()));
+        return (
+            canonical[..i - 1].to_string(),
+            Some(canonical[i - 1..].to_string()),
+        );
     }
     (canonical.to_string(), None)
 }
@@ -275,7 +278,11 @@ mod tests {
     #[test]
     fn load_pseudo_gth_pade_resolves_from_pseudo_tree() {
         let pp = load_pseudo("gth-pade", "Na").expect("gth-pade must resolve from the pseudo tree");
-        assert_eq!(pp.nelec, vec![3, 6], "Na's DEFAULT gth-pade potential is q9");
+        assert_eq!(
+            pp.nelec,
+            vec![3, 6],
+            "Na's DEFAULT gth-pade potential is q9"
+        );
         approx::assert_abs_diff_eq!(pp.rloc, 0.24631780, epsilon = 1e-12);
         assert_eq!(pp.local_coeffs, vec![-7.54559253, 1.12599671]);
         assert_eq!(pp.projectors.len(), 2);
@@ -290,7 +297,11 @@ mod tests {
         assert_eq!(q1.nelec, vec![1]);
         approx::assert_abs_diff_eq!(q1.rloc, 0.88550938, epsilon = 1e-12);
         assert_eq!(q1.projectors[0].nproj, 2);
-        approx::assert_abs_diff_eq!(q1.projectors[0].h[1], q1.projectors[0].h[2], epsilon = 1e-15);
+        approx::assert_abs_diff_eq!(
+            q1.projectors[0].h[1],
+            q1.projectors[0].h[2],
+            epsilon = 1e-15
+        );
 
         // `gthlda` is an alias for the same PADE file (LDA == PADE).
         let lda = load_pseudo("gth-lda", "H").expect("gthlda alias must resolve");

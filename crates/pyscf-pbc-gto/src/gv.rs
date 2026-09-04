@@ -251,7 +251,6 @@ pub fn get_gv_weights(cell: &Cell, mesh: Option<[usize; 3]>) -> Result<GvWeights
     })
 }
 
-
 /// `_non_uniform_Gv_base(n)` — `cell.py:607-613`.
 ///
 /// A Gauss-Chebyshev radial grid mirrored about zero:

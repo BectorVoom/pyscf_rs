@@ -26,7 +26,7 @@
 
 mod common;
 
-use common::{cell_args, diamond, he_all_electron, max_dev, oracle_python, run_python, GATE};
+use common::{GATE, cell_args, diamond, he_all_electron, max_dev, oracle_python, run_python};
 use pyscf_algebra::CTensor;
 use pyscf_pbc_df::zlinalg::{forder_to_c, zmm_small};
 use pyscf_pbc_df::{Fftdf, JkOpts, PeriodicDf, get_hcore};
@@ -129,9 +129,7 @@ fn vj_and_vk_are_hermitian() {
     let nao = cell.mol.nao_nr;
     let dms = flat_dm(nao, kpts.len());
     let df = Fftdf::with_mesh(cell, &kpts, MESH_FAST).expect("FFTDF");
-    let r = df
-        .get_jk(&dms, &kpts, JkOpts::hermitian())
-        .expect("get_jk");
+    let r = df.get_jk(&dms, &kpts, JkOpts::hermitian()).expect("get_jk");
     let vj = r.vj.expect("vj");
     let vk = r.vk.expect("vk");
     for k in 0..kpts.len() {
@@ -185,7 +183,11 @@ fn coulomb_energy_is_symmetric_in_its_two_densities() {
         omega: None,
         kk_symmetry: false,
     };
-    let vj1 = df.get_jk(&dm1, &kpts, opts.clone()).expect("vj1").vj.expect("vj");
+    let vj1 = df
+        .get_jk(&dm1, &kpts, opts.clone())
+        .expect("vj1")
+        .vj
+        .expect("vj");
     let vj2 = df.get_jk(&dm2, &kpts, opts).expect("vj2").vj.expect("vj");
 
     let energy = |v: &[CTensor], d: &[CTensor]| -> f64 {
@@ -260,7 +262,9 @@ fn explicit_band_kpts_equal_the_default_path() {
     let nao = cell.mol.nao_nr;
     let dms = flat_dm(nao, kpts.len());
     let df = Fftdf::with_mesh(cell, &kpts, MESH_FAST).expect("FFTDF");
-    let a = df.get_jk(&dms, &kpts, JkOpts::hermitian()).expect("default");
+    let a = df
+        .get_jk(&dms, &kpts, JkOpts::hermitian())
+        .expect("default");
     let b = df
         .get_jk(
             &dms,
@@ -276,7 +280,10 @@ fn explicit_band_kpts_equal_the_default_path() {
         ("vk", a.vk.as_ref().expect("vk"), b.vk.as_ref().expect("vk")),
     ] {
         for k in 0..kpts.len() {
-            assert_eq!(x[0][k], y[0][k], "{name} at k={k} differs from the band path");
+            assert_eq!(
+                x[0][k], y[0][k],
+                "{name} at k={k} differs from the band path"
+            );
         }
     }
 }
@@ -432,8 +439,7 @@ fn jk_matches_upstream_on_diamond_222() {
         ("vk", None, false, true, 1e-11),
         ("vk_ewald", Some(ExxDiv::Ewald), false, true, 1e-11),
     ] {
-        let Some(want) =
-            oracle_matrices(&cell, "gth-szv", "gth-pade", [2, 2, 2], MESH_FAST, what)
+        let Some(want) = oracle_matrices(&cell, "gth-szv", "gth-pade", [2, 2, 2], MESH_FAST, what)
         else {
             eprintln!("SKIP: {GATE} is not set");
             return;

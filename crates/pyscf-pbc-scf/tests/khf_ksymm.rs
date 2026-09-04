@@ -147,8 +147,12 @@ fn ibz_weights_carry_the_star_multiplicities() {
 fn ao_symmetry_eig_matches_the_plain_route() {
     let (cell, kpts) = build([2, 2, 2]);
 
-    let plain = adapter(&cell, &kpts, false).kernel(&cfg()).expect("plain SCF");
-    let symm = adapter(&cell, &kpts, true).kernel(&cfg()).expect("symm SCF");
+    let plain = adapter(&cell, &kpts, false)
+        .kernel(&cfg())
+        .expect("plain SCF");
+    let symm = adapter(&cell, &kpts, true)
+        .kernel(&cfg())
+        .expect("symm SCF");
 
     assert!(plain.converged, "plain-eig SCF did not converge");
     assert!(symm.converged, "symmetry-adapted SCF did not converge");
@@ -163,7 +167,6 @@ fn ao_symmetry_eig_matches_the_plain_route() {
          Schur's lemma makes the block-diagonalisation exact, so a difference \
          here is a defect, not a tolerance question"
     );
-
 }
 
 /// The `eig` algebra itself, isolated from SCF convergence.
@@ -307,7 +310,11 @@ fn band_route_matches_reference_route_bit_exact() {
                 a.re[i],
                 b.re[i]
             );
-            assert_eq!(a.im[i].to_bits(), b.im[i].to_bits(), "veff[{k}].im[{i}] differs");
+            assert_eq!(
+                a.im[i].to_bits(),
+                b.im[i].to_bits(),
+                "veff[{k}].im[{i}] differs"
+            );
         }
     }
     println!(

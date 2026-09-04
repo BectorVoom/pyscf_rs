@@ -190,7 +190,11 @@ impl SPGElement {
     /// `r @ self.rot.T + self.trans`.
     pub fn dot_point(&self, r: &[f64; 3]) -> [f64; 3] {
         let rv = matvec3(&self.rot, r);
-        [rv[0] + self.trans[0], rv[1] + self.trans[1], rv[2] + self.trans[2]]
+        [
+            rv[0] + self.trans[0],
+            rv[1] + self.trans[1],
+            rv[2] + self.trans[2],
+        ]
     }
 
     /// `space_group.py:103-117` — `dot`, the operator-composing branch:
@@ -287,7 +291,11 @@ impl SPGElement {
     /// reciprocal basis too, since both are unimodular-integer representations
     /// of the same operation).
     pub fn a2b(&self, cell: &Cell) -> Result<Self, PbcSymmError> {
-        self.transform(&cell.lattice_vectors(), &cell.reciprocal_vectors_2pi()?, false)
+        self.transform(
+            &cell.lattice_vectors(),
+            &cell.reciprocal_vectors_2pi()?,
+            false,
+        )
     }
 
     /// `space_group.py:213-217` — `a2r`: direct lattice -> Cartesian.
@@ -300,7 +308,11 @@ impl SPGElement {
 
     /// `space_group.py:219-223` — `b2a`: reciprocal lattice -> direct lattice.
     pub fn b2a(&self, cell: &Cell) -> Result<Self, PbcSymmError> {
-        self.transform(&cell.reciprocal_vectors_2pi()?, &cell.lattice_vectors(), false)
+        self.transform(
+            &cell.reciprocal_vectors_2pi()?,
+            &cell.lattice_vectors(),
+            false,
+        )
     }
 
     /// `space_group.py:225-229` — `b2r`: reciprocal lattice -> Cartesian.

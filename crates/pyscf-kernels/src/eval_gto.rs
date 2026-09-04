@@ -1164,8 +1164,13 @@ pub fn cart2sph_l_matrix(l: u32) -> Result<Vec<f64>, PyscfRsError> {
 // (LaunchArg for T=T, like gemm's m/k/n) so NO host-only helper fn is called
 // inside `#[cube]` (the "calling a normal Rust fn from inside #[cube]" pitfall).
 
-/// Threads per block for the s-shell launch. One thread = one output element.
-const EVAL_GTO_BLOCK: u32 = 256;
+// launch_1d CPU work estimates.  One primitive exponential is costed as about
+// 100 scalar flops.  The reference GTH basis has up to four primitives per
+// contraction; the general kernels additionally form/transform the angular
+// components, and deriv1 writes four component blocks.
+const EVAL_GTO_S_WORK_PER_LANE: usize = 4 * 100;
+const EVAL_GTO_GENERAL_WORK_PER_LANE: usize = 4 * 100 + 128;
+const EVAL_GTO_DERIV1_WORK_PER_LANE: usize = 4 * 100 + 4 * 128;
 
 /// l=0 (s-shell) AO-on-grid kernel. One thread per `(g, ao_idx)` output element.
 /// Each thread resolves its grid point + owning shell/contraction, computes
@@ -1237,7 +1242,8 @@ fn eval_gto_sph_kernel(
                     let alpha = env[pe + p_idx];
                     // Coefficient matrix is F-order: ptr_coeff + c_idx*nprim + p.
                     let coef = env[pc + c_idx * nprim + p_idx];
-                    acc += coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
+                    acc += coef
+                        * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
                 }
                 // ang_of==0 holds on this path (all-s routing); referenced so the
                 // launch arg is not flagged unused.
@@ -1252,7 +1258,7 @@ fn eval_gto_sph_kernel(
 /// coords, allocates the F-order output, launches the kernel on `R`, reads back.
 /// Modeled on `gemm.rs::launch_gemm`. Returns `ngrids*nao` f64 in F-order.
 #[allow(clippy::too_many_arguments)]
-fn launch_eval_gto_s<R: Runtime>(
+fn launch_eval_gto_s_into<R: Runtime>(
     client: &ComputeClient<R>,
     coords: &[f64],
     ngrids: usize,
@@ -1261,7 +1267,8 @@ fn launch_eval_gto_s<R: Runtime>(
     env: &[f64],
     ao_loc: &[i32],
     nao: usize,
-) -> Vec<f64> {
+    out_handle: &cubecl::server::Handle,
+) {
     let nbas = bas.len() / BAS_SLOTS;
     let out_len = ngrids * nao;
 
@@ -1270,10 +1277,9 @@ fn launch_eval_gto_s<R: Runtime>(
     let bas_handle = client.create(Bytes::from_elems(bas.to_vec()));
     let atm_handle = client.create(Bytes::from_elems(atm.to_vec()));
     let ao_loc_handle = client.create(Bytes::from_elems(ao_loc.to_vec()));
-    let out_handle = client.empty(out_len * core::mem::size_of::<f64>());
-
     let y00 = 0.5_f64 / std::f64::consts::PI.sqrt();
-    let groups = out_len.div_ceil(EVAL_GTO_BLOCK as usize) as u32;
+    let (cube_count, cube_dim) =
+        pyscf_algebra::launch::launch_1d(client, out_len, EVAL_GTO_S_WORK_PER_LANE);
 
     // SAFETY: handle lengths match the slice lengths uploaded above; the kernel
     // bounds-guards the tail (`if tid < ngrids*nao`). All input Arrays are
@@ -1282,8 +1288,8 @@ fn launch_eval_gto_s<R: Runtime>(
     unsafe {
         eval_gto_sph_kernel::launch_unchecked::<R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(EVAL_GTO_BLOCK),
+            cube_count,
+            cube_dim,
             ArrayArg::from_raw_parts(coords_handle.clone(), coords.len()),
             ArrayArg::from_raw_parts(env_handle.clone(), env.len()),
             ArrayArg::from_raw_parts(bas_handle.clone(), bas.len()),
@@ -1306,9 +1312,6 @@ fn launch_eval_gto_s<R: Runtime>(
             PTR_COORD,
         );
     }
-
-    let bytes = client.read(vec![out_handle]);
-    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
 }
 
 // ── general l 0..=4 device kernel + launcher (quick-260530-mlg) ──────────
@@ -1471,7 +1474,8 @@ fn eval_gto_sph_kernel_general(
             for p_idx in 0..nprim {
                 let alpha = env[pe + p_idx];
                 let coef = env[pc + c_idx * nprim + p_idx];
-                acc += coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
+                acc +=
+                    coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
             }
             let radial = acc * fac1;
 
@@ -1577,7 +1581,8 @@ fn eval_gto_sph_deriv1_kernel(
             for p_idx in 0..nprim {
                 let alpha = env[pe + p_idx];
                 let coef = env[pc + c_idx * nprim + p_idx];
-                let g0 = coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
+                let g0 =
+                    coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
                 acc += g0;
                 acc2a += (-2.0) * alpha * g0;
             }
@@ -1697,7 +1702,7 @@ fn build_angular_tables(maxl: u32) -> Result<AngularTables, PyscfRsError> {
 /// `(g, shell)`, reads back the F-order `(ngrids, nao)` buffer.
 /// Modeled on `launch_eval_gto_s`. `maxl` must be `<= 4` (caller guarantees).
 #[allow(clippy::too_many_arguments)]
-fn launch_eval_gto_general<R: Runtime>(
+fn launch_eval_gto_general_into<R: Runtime>(
     client: &ComputeClient<R>,
     coords: &[f64],
     ngrids: usize,
@@ -1707,7 +1712,8 @@ fn launch_eval_gto_general<R: Runtime>(
     ao_loc: &[i32],
     nao: usize,
     maxl: u32,
-) -> Result<Vec<f64>, PyscfRsError> {
+    out_handle: &cubecl::server::Handle,
+) -> Result<(), PyscfRsError> {
     let nbas = bas.len() / BAS_SLOTS;
     let out_len = ngrids * nao;
 
@@ -1729,9 +1735,9 @@ fn launch_eval_gto_general<R: Runtime>(
     let c2s_off_h = client.create(Bytes::from_elems(t.c2s_off_by_l.clone()));
     let cpow_off_h = client.create(Bytes::from_elems(t.cpow_off_by_l.clone()));
 
-    let out_handle = client.empty(out_len * core::mem::size_of::<f64>());
-
-    let groups = (ngrids * nbas).div_ceil(EVAL_GTO_BLOCK as usize) as u32;
+    let lanes = ngrids * nbas;
+    let (cube_count, cube_dim) =
+        pyscf_algebra::launch::launch_1d(client, lanes, EVAL_GTO_GENERAL_WORK_PER_LANE);
 
     // SAFETY: every handle length matches the slice length uploaded above; the
     // kernel bounds-guards the tail (`if tid < ngrids*nbas`). All input Arrays
@@ -1740,8 +1746,8 @@ fn launch_eval_gto_general<R: Runtime>(
     unsafe {
         eval_gto_sph_kernel_general::launch_unchecked::<R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(EVAL_GTO_BLOCK),
+            cube_count,
+            cube_dim,
             ArrayArg::from_raw_parts(coords_handle.clone(), coords.len()),
             ArrayArg::from_raw_parts(env_handle.clone(), env.len()),
             ArrayArg::from_raw_parts(bas_handle.clone(), bas.len()),
@@ -1772,8 +1778,7 @@ fn launch_eval_gto_general<R: Runtime>(
         );
     }
 
-    let bytes = client.read(vec![out_handle]);
-    Ok(bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec())
+    Ok(())
 }
 
 /// Host-slice launcher for the general l 0..=4 **deriv1** kernel. Clones
@@ -1782,7 +1787,7 @@ fn launch_eval_gto_general<R: Runtime>(
 /// ngrids*nao` scalar AFTER the existing trailing scalar args. Reads back the
 /// F-order `[4, ngrids, nao]` buffer. `maxl` must be `<= 4` (caller guarantees).
 #[allow(clippy::too_many_arguments)]
-fn launch_eval_gto_deriv1<R: Runtime>(
+fn launch_eval_gto_deriv1_into<R: Runtime>(
     client: &ComputeClient<R>,
     coords: &[f64],
     ngrids: usize,
@@ -1792,7 +1797,8 @@ fn launch_eval_gto_deriv1<R: Runtime>(
     ao_loc: &[i32],
     nao: usize,
     maxl: u32,
-) -> Result<Vec<f64>, PyscfRsError> {
+    out_handle: &cubecl::server::Handle,
+) -> Result<(), PyscfRsError> {
     let nbas = bas.len() / BAS_SLOTS;
     let comp_stride = ngrids * nao;
     let out_len = 4 * comp_stride;
@@ -1815,9 +1821,9 @@ fn launch_eval_gto_deriv1<R: Runtime>(
     let c2s_off_h = client.create(Bytes::from_elems(t.c2s_off_by_l.clone()));
     let cpow_off_h = client.create(Bytes::from_elems(t.cpow_off_by_l.clone()));
 
-    let out_handle = client.empty(out_len * core::mem::size_of::<f64>());
-
-    let groups = (ngrids * nbas).div_ceil(EVAL_GTO_BLOCK as usize) as u32;
+    let lanes = ngrids * nbas;
+    let (cube_count, cube_dim) =
+        pyscf_algebra::launch::launch_1d(client, lanes, EVAL_GTO_DERIV1_WORK_PER_LANE);
 
     // SAFETY: every handle length matches the slice length uploaded above; the
     // kernel bounds-guards the tail (`if tid < ngrids*nbas`). All input Arrays
@@ -1825,8 +1831,8 @@ fn launch_eval_gto_deriv1<R: Runtime>(
     unsafe {
         eval_gto_sph_deriv1_kernel::launch_unchecked::<R>(
             client,
-            CubeCount::Static(groups, 1, 1),
-            CubeDim::new_1d(EVAL_GTO_BLOCK),
+            cube_count,
+            cube_dim,
             ArrayArg::from_raw_parts(coords_handle.clone(), coords.len()),
             ArrayArg::from_raw_parts(env_handle.clone(), env.len()),
             ArrayArg::from_raw_parts(bas_handle.clone(), bas.len()),
@@ -1858,8 +1864,7 @@ fn launch_eval_gto_deriv1<R: Runtime>(
         );
     }
 
-    let bytes = client.read(vec![out_handle]);
-    Ok(bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec())
+    Ok(())
 }
 
 /// Output of an eval_gto call. Flat F-order buffer + shape descriptor.
@@ -1873,6 +1878,118 @@ pub struct EvalGtoBuffers {
     /// Logical shape — `[ngrids, nao]` for scalar variants; future
     /// `[ncomp, ngrids, nao]` for derivative variants.
     pub shape: Vec<usize>,
+}
+
+/// Opaque, device-resident AO block shared with the periodic Bloch accumulator.
+/// The CubeCL handle stays private so method crates cannot cross the ALG-06 wall.
+pub struct AoBlockDevice {
+    handle: cubecl::server::Handle,
+    len: usize,
+    shape: Vec<usize>,
+}
+
+impl core::fmt::Debug for AoBlockDevice {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AoBlockDevice")
+            .field("len", &self.len)
+            .field("shape", &self.shape)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AoBlockDevice {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+    pub fn shape(&self) -> &[usize] {
+        &self.shape
+    }
+    pub(crate) fn handle(&self) -> &cubecl::server::Handle {
+        &self.handle
+    }
+
+    /// Upload a host AO block for uncommon evaluator fallbacks while preserving
+    /// the opaque-handle dependency wall.
+    pub fn from_values(client: &AlgebraClient, values: &[f64], shape: Vec<usize>) -> Self {
+        upload_ao_block(client, values, shape)
+    }
+
+    pub fn into_values(self, client: &AlgebraClient) -> Vec<f64> {
+        if self.len == 0 {
+            return Vec::new();
+        }
+        dispatch_backend!(client, c, Rt, {
+            let bytes = c.read(vec![self.handle.clone()]);
+            bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
+        })
+    }
+}
+
+fn upload_ao_block(client: &AlgebraClient, values: &[f64], shape: Vec<usize>) -> AoBlockDevice {
+    let handle = dispatch_backend!(
+        client,
+        c,
+        Rt,
+        pyscf_algebra::launch::upload::<Rt, f64>(c, values)
+    );
+    AoBlockDevice {
+        handle,
+        len: values.len(),
+        shape,
+    }
+}
+
+/// Evaluate a scalar AO block without reading the device result back to the host.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_gto_sph_into(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+    spherical: bool,
+) -> Result<AoBlockDevice, PyscfRsError> {
+    let all_s = !bas.is_empty() && bas.chunks_exact(BAS_SLOTS).all(|row| row[ANG_OF] == 0);
+    let out_len = ngrids * nao;
+    if all_s && out_len > 0 {
+        let _ = spherical;
+        return Ok(dispatch_backend!(client, c, Rt, {
+            let out = c.empty(out_len * core::mem::size_of::<f64>());
+            launch_eval_gto_s_into::<Rt>(c, coords, ngrids, atm, bas, env, ao_loc, nao, &out);
+            AoBlockDevice {
+                handle: out,
+                len: out_len,
+                shape: vec![ngrids, nao],
+            }
+        }));
+    }
+    let maxl = bas
+        .chunks_exact(BAS_SLOTS)
+        .map(|row| row[ANG_OF])
+        .max()
+        .unwrap_or(0) as u32;
+    if !bas.is_empty() && maxl <= 4 && out_len > 0 {
+        let _ = spherical;
+        return dispatch_backend!(client, c, Rt, {
+            let out = c.empty(out_len * core::mem::size_of::<f64>());
+            launch_eval_gto_general_into::<Rt>(
+                c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl, &out,
+            )?;
+            Ok(AoBlockDevice {
+                handle: out,
+                len: out_len,
+                shape: vec![ngrids, nao],
+            })
+        });
+    }
+    let host = eval_gto_sph_cpu(coords, ngrids, atm, bas, env, ao_loc, nao, spherical)?;
+    Ok(upload_ao_block(client, &host.values, host.shape))
 }
 
 /// Evaluate `GTOval_sph` (or `GTOval_cart`) on the given grid for the
@@ -1907,64 +2024,12 @@ pub fn eval_gto_sph(
     nao: usize,
     spherical: bool,
 ) -> Result<EvalGtoBuffers, PyscfRsError> {
-    // quick-260530-ljv: route pure-s-shell bases to the real device kernel
-    // (the FIRST GPU compute path for eval_gto), fanned out over every backend
-    // via the exported `dispatch_backend!`. ANY basis with an l>=1 shell — or an
-    // empty grid / empty basis — falls back to the UNCHANGED `eval_gto_sph_cpu`,
-    // so all l>=1 numerics stay byte-for-byte identical (behavior-preserving).
-    let all_s = !bas.is_empty() && bas.chunks_exact(BAS_SLOTS).all(|row| row[ANG_OF] == 0);
-
-    if all_s && ngrids * nao > 0 {
-        // Device path: pure-s-shell. y00 is folded inside the launcher; the
-        // `spherical` flag is a no-op for l=0 (Y00 identity), exactly as the
-        // host path treats s-shells.
-        let _ = spherical;
-        let values = dispatch_backend!(
-            client,
-            c,
-            Rt,
-            launch_eval_gto_s::<Rt>(c, coords, ngrids, atm, bas, env, ao_loc, nao)
-        );
-        return Ok(EvalGtoBuffers {
-            values,
-            shape: vec![ngrids, nao],
-        });
-    }
-
-    // quick-260530-mlg: route any non-empty basis whose max angular momentum is
-    // <= 4 (p/d/f/g — which subsumes l=0 too) to the GENERAL device kernel, fanned
-    // out over every backend via `dispatch_backend!`. l>4 (h/i-shells and above),
-    // empty basis, and empty grid fall through to the UNCHANGED `eval_gto_sph_cpu`,
-    // which now evaluates l=5 (h) and l=6 (i) generically via `c2s_coeff`; only
-    // l>6 there returns NotYetImplemented{phase:4}. Plus the out_len==0
-    // early-return. The host device tables are built only for l in 0..=maxl with
-    // maxl<=4, so `c2s_coeff` is never called with l>4 on the device path.
-    let maxl = bas
-        .chunks_exact(BAS_SLOTS)
-        .map(|row| row[ANG_OF])
-        .max()
-        .unwrap_or(0) as u32;
-
-    if !bas.is_empty() && maxl <= 4 && ngrids * nao > 0 {
-        // l>=1 always emits SPHERICAL AOs, matching `eval_gto_sph_cpu`; the
-        // `spherical` flag is referenced (no-op for the corpus path) so it is
-        // not flagged unused.
-        let _ = spherical;
-        let values = dispatch_backend!(
-            client,
-            c,
-            Rt,
-            launch_eval_gto_general::<Rt>(c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl)
-        )?;
-        return Ok(EvalGtoBuffers {
-            values,
-            shape: vec![ngrids, nao],
-        });
-    }
-
-    // Fallback: l>4 shell, empty basis, or empty grid → the unchanged host
-    // path (which also handles the out_len==0 early-return).
-    eval_gto_sph_cpu(coords, ngrids, atm, bas, env, ao_loc, nao, spherical)
+    let shape = vec![ngrids, nao];
+    let values = eval_gto_sph_into(
+        client, coords, ngrids, atm, bas, env, ao_loc, nao, spherical,
+    )?
+    .into_values(client);
+    Ok(EvalGtoBuffers { values, shape })
 }
 
 /// CPU-host implementation of the s-shell AO-on-grid kernel.
@@ -2164,6 +2229,40 @@ fn eval_gto_sph_cpu(
 /// `pyscf-algebra` types only (AlgebraClient) so `pyscf-gto`'s wrapper
 /// imports it without naming `cubecl::*` (algebra wall / D-04).
 #[allow(clippy::too_many_arguments)]
+pub fn eval_gto_sph_deriv1_into(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+) -> Result<AoBlockDevice, PyscfRsError> {
+    let maxl = bas
+        .chunks_exact(BAS_SLOTS)
+        .map(|row| row[ANG_OF])
+        .max()
+        .unwrap_or(0) as u32;
+    let out_len = 4 * ngrids * nao;
+    if !bas.is_empty() && maxl <= 4 && out_len > 0 {
+        return dispatch_backend!(client, c, Rt, {
+            let out = c.empty(out_len * core::mem::size_of::<f64>());
+            launch_eval_gto_deriv1_into::<Rt>(
+                c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl, &out,
+            )?;
+            Ok(AoBlockDevice {
+                handle: out,
+                len: out_len,
+                shape: vec![4, ngrids, nao],
+            })
+        });
+    }
+    let host = eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc, nao, true)?;
+    Ok(upload_ao_block(client, &host.values, host.shape))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn eval_gto_sph_deriv1(
     client: &AlgebraClient,
     coords: &[f64],
@@ -2174,38 +2273,10 @@ pub fn eval_gto_sph_deriv1(
     ao_loc: &[i32],
     nao: usize,
 ) -> Result<EvalGtoBuffers, PyscfRsError> {
-    // quick-260530-oms: route any non-empty basis whose max angular momentum is
-    // <= 4 (p/d/f/g, subsuming l=0) to the general deriv1 device kernel, fanned
-    // out over every backend via `dispatch_backend!`. l>4 (h/i-shells+), empty
-    // basis, and empty grid fall through to the UNCHANGED
-    // `eval_gto_sph_deriv1_cpu`, which now evaluates l=5/l=6 generically via
-    // `c2s_coeff` (only l>6 returns NotYetImplemented{phase:4}), plus the
-    // comp_stride==0 early-return. Host device tables are built only for l in
-    // 0..=maxl with maxl<=4, so `c2s_coeff` is never called with l>4 on device.
-    let maxl = bas
-        .chunks_exact(BAS_SLOTS)
-        .map(|row| row[ANG_OF])
-        .max()
-        .unwrap_or(0) as u32;
-    let comp_stride = ngrids * nao;
-
-    if !bas.is_empty() && maxl <= 4 && comp_stride > 0 {
-        let values = dispatch_backend!(
-            client,
-            c,
-            Rt,
-            launch_eval_gto_deriv1::<Rt>(c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl)
-        )?;
-        return Ok(EvalGtoBuffers {
-            values,
-            shape: vec![4, ngrids, nao],
-        });
-    }
-
-    // Fallback: l>4 shell, empty basis, or empty grid → the unchanged host
-    // deriv1 path (which handles the comp_stride==0 early-return, evaluates
-    // l=5/l=6 generically, and returns NotYetImplemented{phase:4} for l>6).
-    eval_gto_sph_deriv1_cpu(coords, ngrids, atm, bas, env, ao_loc, nao, true)
+    let shape = vec![4, ngrids, nao];
+    let values = eval_gto_sph_deriv1_into(client, coords, ngrids, atm, bas, env, ao_loc, nao)?
+        .into_values(client);
+    Ok(EvalGtoBuffers { values, shape })
 }
 
 /// Evaluate `GTOval_cart_deriv1` on the grid: the *cartesian* AO value plus

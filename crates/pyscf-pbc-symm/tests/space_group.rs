@@ -41,7 +41,9 @@ fn xyz_is_identity() {
 fn assert_a2b_b2a_roundtrips(cell: &Cell) {
     let sg = SpaceGroup::build(cell, 1e-6).expect("space group");
     for op in &sg.ops {
-        let b = op.a2b(cell).expect("a2b must succeed for a genuine point-group op");
+        let b = op
+            .a2b(cell)
+            .expect("a2b must succeed for a genuine point-group op");
         let back = b.b2a(cell).expect("b2a must succeed");
         assert!(
             max_abs_diff(&back.rot, &op.rot) < 1e-13,
@@ -74,8 +76,12 @@ fn a2b_b2a_roundtrip_graphene() {
 fn assert_a2r_r2a_roundtrips(cell: &Cell) {
     let sg = SpaceGroup::build(cell, 1e-6).expect("space group");
     for op in &sg.ops {
-        let r = op.a2r(cell).expect("a2r must always succeed (allow_non_integer=true)");
-        let back = r.r2a(cell).expect("r2a of a genuine op must round-trip to integers");
+        let r = op
+            .a2r(cell)
+            .expect("a2r must always succeed (allow_non_integer=true)");
+        let back = r
+            .r2a(cell)
+            .expect("r2a of a genuine op must round-trip to integers");
         assert!(
             max_abs_diff(&back.rot, &op.rot) < 1e-13,
             "a2r/r2a rot round-trip: {:?} != {:?}",
@@ -113,7 +119,9 @@ fn b2r_r2b_roundtrip_si() {
     let mut n_ok = 0;
     for op in &sg.ops {
         let b = op.a2b(&cell).expect("a2b");
-        let r = b.b2r(&cell).expect("b2r must succeed on every op of a cubic lattice");
+        let r = b
+            .b2r(&cell)
+            .expect("b2r must succeed on every op of a cubic lattice");
         let back = r.r2b(&cell).expect("r2b");
         assert!(max_abs_diff(&back.rot, &b.rot) < 1e-13);
         assert!(max_abs_diff3(&back.trans, &b.trans) < 1e-13);
@@ -245,7 +253,10 @@ fn point_group_symbol_matches_upstream() {
     for (name, build, want) in cases {
         let cell = build();
         let sg = SpaceGroup::build(&cell, 1e-6).expect("space group");
-        assert_eq!(sg.point_group_symbol, *want, "point group mismatch for {name}");
+        assert_eq!(
+            sg.point_group_symbol, *want,
+            "point group mismatch for {name}"
+        );
     }
 }
 
@@ -303,4 +314,3 @@ fn graphene_op_split_matches_upstream() {
     assert_eq!(n_zero, 6);
     assert_eq!(n_nonzero, 6);
 }
-

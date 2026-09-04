@@ -136,7 +136,11 @@ pub fn symm_adapted_basis_at_k(
     let chartab = pg.character_table(true); // [nirrep][order], per-ELEMENT columns.
     let nirrep = chartab.len();
     let order = pg.order();
-    debug_assert_eq!(spg_ops.len(), order, "spg_ops must match pg's element order");
+    debug_assert_eq!(
+        spg_ops.len(),
+        order,
+        "spg_ops must match pg's element order"
+    );
     debug_assert_eq!(dmats.len(), order, "dmats must match pg's element order");
     let nao = cell.nao_nr;
     let natm = cell.natm;
@@ -171,7 +175,11 @@ pub fn symm_adapted_basis_at_k(
         for ib in b0..b1 {
             let nctr = bas_nctr(cell, ib);
             let l = bas_angular(cell, ib);
-            let degen = if cell.cart { (l + 1) * (l + 2) / 2 } else { 2 * l + 1 };
+            let degen = if cell.cart {
+                (l + 1) * (l + 2) / 2
+            } else {
+                2 * l + 1
+            };
 
             for n in 0..degen {
                 for iop in 0..order {
@@ -237,11 +245,18 @@ pub fn symm_adapted_basis_at_k(
         let so = CTensor { re, im };
         let (so, ncol2) = gram_schmidt(&so, nao, ncol, tol);
         nso += ncol2;
-        blocks.push(IrrepBlock { irrep_id: ir as i32, so, ncol: ncol2 });
+        blocks.push(IrrepBlock {
+            irrep_id: ir as i32,
+            so,
+            ncol: ncol2,
+        });
     }
 
     if nso != nao {
-        return Err(PbcSymmError::IncompleteBasis { expected: nao, got: nso });
+        return Err(PbcSymmError::IncompleteBasis {
+            expected: nao,
+            got: nso,
+        });
     }
     Ok(blocks)
 }
@@ -261,11 +276,19 @@ pub fn symm_adapted_basis_at_k(
 /// Returns the orthonormalized, possibly-narrower `(CTensor, ncol)`.
 pub fn gram_schmidt(v: &CTensor, nao: usize, ncol: usize, tol: f64) -> (CTensor, usize) {
     if ncol == 0 {
-        return (CTensor { re: Vec::new(), im: Vec::new() }, 0);
+        return (
+            CTensor {
+                re: Vec::new(),
+                im: Vec::new(),
+            },
+            0,
+        );
     }
 
     let get_col = |t: &CTensor, k: usize| -> Vec<Complex64> {
-        (0..nao).map(|row| Complex64::new(t.re[k * nao + row], t.im[k * nao + row])).collect()
+        (0..nao)
+            .map(|row| Complex64::new(t.re[k * nao + row], t.im[k * nao + row]))
+            .collect()
     };
 
     let mut u_cols: Vec<Vec<Complex64>> = vec![vec![Complex64::new(0.0, 0.0); nao]; ncol];
@@ -397,7 +420,8 @@ pub fn symm_adapted_basis(
 
         let elements: Vec<PgElement> = triples.iter().map(|(e, _)| *e).collect();
         let spg_ops: Vec<SPGElement> = triples.iter().map(|&(_, iop)| ops[iop]).collect();
-        let dmats_small: Vec<DmatSet> = triples.iter().map(|&(_, iop)| dmats[iop].clone()).collect();
+        let dmats_small: Vec<DmatSet> =
+            triples.iter().map(|&(_, iop)| dmats[iop].clone()).collect();
 
         let pg = PointGroup::new(elements)?;
         let blocks = symm_adapted_basis_at_k(cell, kpt_scaled, &pg, &spg_ops, &dmats_small, tol)?;

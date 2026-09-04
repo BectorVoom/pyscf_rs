@@ -62,8 +62,8 @@
 use crate::cell::Cell;
 use crate::cutoff::{PgtoOp, extract_pgto_params};
 use crate::pbc_intor::is_gamma;
+use pyscf_algebra::{AlgebraClient, CTensor, select_backend};
 use pyscf_core::raw_layout::{ATOM_OF, BAS_SLOTS};
-use pyscf_algebra::{CTensor, select_backend};
 use pyscf_core::{CoreError, PyscfRsError};
 use std::f64::consts::PI;
 
@@ -227,6 +227,11 @@ pub fn eval_ao_kpts_with_images(
     // block and the `2*nkpts` phase factors cross per image, and the planes come
     // home once, after the loop.
     let mut acc: Option<pyscf_kernels::pbc::AoKAccumulator> = None;
+    // A-02: both coordinate and index workspaces are reused for every image.
+    // The device evaluator uploads/copies from these slices before returning,
+    // so clearing them for the next image cannot alias a queued kernel input.
+    let mut shifted_workspace = Vec::with_capacity(3 * ngrids);
+    let mut index_workspace = Vec::with_capacity(ngrids);
 
     // W-09: the per-image block screen. Built once, outside the image loop,
     // because both the block boxes and the shell radii are image-independent.
@@ -255,11 +260,6 @@ pub fn eval_ao_kpts_with_images(
         None
     };
 
-    // The full-length scratch the screened path scatters into. Allocated once
-    // and re-zeroed per image (`13_memory_preallocation.md` §1 — the same
-    // reason the accumulators are hoisted).
-    let mut screened: Vec<f64> = Vec::new();
-
     for (m, l) in ls.iter().enumerate() {
         // phi(r − L): shift the GRID, not the atoms — same function, and it
         // keeps the molecular evaluator and its `Mole` untouched.
@@ -276,51 +276,75 @@ pub fn eval_ao_kpts_with_images(
             }
         };
 
-        let ao_values: &[f64] = match &keep {
-            None => {
-                let shifted: Vec<[f64; 3]> = coords
-                    .iter()
-                    .map(|r| [r[0] - l[0], r[1] - l[1], r[2] - l[2]])
-                    .collect();
-                let ao = pyscf_gto::eval_gto(&cell.mol, eval_name, &shifted)?;
-                screened = ao.values;
-                &screened
-            }
-            Some(keep) => {
-                let (shifted, index) = gather_kept(coords, keep, *l);
-                let ao = pyscf_gto::eval_gto(&cell.mol, eval_name, &shifted)?;
-                // `comp` is not known before the first successful evaluation;
-                // derive it from THIS block, whose grid length is `index.len()`.
-                let sub_comp = ao
-                    .values
-                    .len()
-                    .checked_div(index.len().max(1) * nao)
-                    .unwrap_or(1);
-                let total = sub_comp * ngrids * nao;
-                if screened.len() != total {
-                    screened = vec![0.0_f64; total];
-                } else {
-                    screened.fill(0.0);
+        let (ao_device, scatter_index): (pyscf_kernels::AoBlockDevice, Option<&[usize]>) =
+            match &keep {
+                None => {
+                    {
+                        let span = tracing::info_span!("pbc_eval_ao_shift_pack");
+                        let _entered = span.enter();
+                        shifted_workspace.clear();
+                        for axis in 0..3 {
+                            shifted_workspace.extend(coords.iter().map(|r| r[axis] - l[axis]));
+                        }
+                    }
+                    let ao = {
+                        let span = tracing::info_span!("pbc_eval_ao_eval_gto");
+                        let _entered = span.enter();
+                        eval_gto_device(&client, cell, eval_name, &shifted_workspace, ngrids)?
+                    };
+                    (ao, None)
                 }
-                scatter_kept(&mut screened, &ao.values, &index, ngrids, nao, sub_comp);
-                &screened
+                Some(keep) => {
+                    {
+                        let span = tracing::info_span!("pbc_eval_ao_shift_pack");
+                        let _entered = span.enter();
+                        gather_kept(
+                            coords,
+                            keep,
+                            *l,
+                            &mut shifted_workspace,
+                            &mut index_workspace,
+                        );
+                    }
+                    let ao = {
+                        let span = tracing::info_span!("pbc_eval_ao_eval_gto");
+                        let _entered = span.enter();
+                        eval_gto_device(
+                            &client,
+                            cell,
+                            eval_name,
+                            &shifted_workspace,
+                            index_workspace.len(),
+                        )?
+                    };
+                    (ao, Some(index_workspace.as_slice()))
+                }
+            };
+
+        let image_ngrids = scatter_index.map_or(ngrids, <[usize]>::len);
+        // The evaluator reports its own layout — `[ngrids, nao]`, or
+        // `[comp, ngrids, nao]` for the derivative variants. Taking `comp`
+        // from the shape rather than dividing the buffer length means a block
+        // that is short a component is an error here, not a silently
+        // truncated AO array downstream.
+        let image_comp = match ao_device.shape() {
+            [g, a] if *g == image_ngrids && *a == nao => 1,
+            [c, g, a] if *g == image_ngrids && *a == nao => *c,
+            other => {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_ao_kpts: image {m} produced an AO block of shape {other:?}, expected \
+                     [{image_ngrids}, {nao}] or [comp, {image_ngrids}, {nao}]",
+                ))));
             }
         };
-
-        // `n` is fixed by the first image that produced any AO values; a
-        // screened image produces the SAME full length, because the screen
-        // scatters into a full-size zero-filled buffer rather than shortening
-        // the block.
+        let image_n = image_comp * ngrids * nao;
         if n == 0 {
-            n = ao_values.len();
-            // An empty grid or an empty basis leaves no block to divide by;
-            // the component count is then moot, so report the scalar 1.
-            comp = n.checked_div(ngrids * nao).unwrap_or(1);
-        } else if ao_values.len() != n {
+            n = image_n;
+            comp = image_comp;
+        } else if image_comp != comp {
             return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                "eval_ao_kpts: image {m} produced {} AO values, an earlier image \
-                 produced {n}",
-                ao_values.len()
+                "eval_ao_kpts: image {m} produced {image_comp} AO components, an earlier image \
+                 produced {comp}",
             ))));
         }
         if n == 0 {
@@ -334,13 +358,25 @@ pub fn eval_ao_kpts_with_images(
         // Built on the first image that actually has AO values, so `n` is known;
         // `get_or_insert_with` keeps that lazy without an unreachable panic
         // branch (FOUND-07 — no `unwrap`/`expect` in production code).
-        acc.get_or_insert_with(|| pyscf_kernels::pbc::AoKAccumulator::zeros(&client, nkpts, n))
-            .accumulate(&client, ao_values, &pr, &pi)
-            .map_err(|e| {
+        {
+            let span = tracing::info_span!("pbc_eval_ao_k08_accumulate");
+            let _entered = span.enter();
+            let accumulator = acc.get_or_insert_with(|| {
+                pyscf_kernels::pbc::AoKAccumulator::zeros(&client, nkpts, n)
+            });
+            let result = if let Some(index) = scatter_index {
+                accumulator.accumulate_device_scatter(
+                    &client, &ao_device, index, ngrids, nao, comp, &pr, &pi,
+                )
+            } else {
+                accumulator.accumulate_device(&client, &ao_device, &pr, &pi)
+            };
+            result.map_err(|e| {
                 PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                     "eval_ao_kpts: K-08 accumulate failed at image {m}: {e}"
                 )))
             })?;
+        }
     }
 
     // W-09: every image may have been screened out (an empty basis, or a grid
@@ -380,6 +416,49 @@ pub fn eval_ao_kpts_with_images(
     })
 }
 
+fn eval_gto_device(
+    client: &AlgebraClient,
+    cell: &Cell,
+    eval_name: &str,
+    flat: &[f64],
+    ngrids: usize,
+) -> Result<pyscf_kernels::AoBlockDevice, PyscfRsError> {
+    match eval_name {
+        "GTOval" | "GTOval_sph" => pyscf_kernels::eval_gto_sph_into(
+            client,
+            flat,
+            ngrids,
+            &cell.mol._atm,
+            &cell.mol._bas,
+            &cell.mol._env,
+            &cell.mol.ao_loc_nr,
+            cell.mol.nao_nr,
+            true,
+        ),
+        "GTOval_sph_deriv1" => pyscf_kernels::eval_gto_sph_deriv1_into(
+            client,
+            flat,
+            ngrids,
+            &cell.mol._atm,
+            &cell.mol._bas,
+            &cell.mol._env,
+            &cell.mol.ao_loc_nr,
+            cell.mol.nao_nr,
+        ),
+        _ => {
+            let coords: Vec<[f64; 3]> = (0..ngrids)
+                .map(|g| [flat[g], flat[ngrids + g], flat[2 * ngrids + g]])
+                .collect();
+            let host = pyscf_gto::eval_gto(&cell.mol, eval_name, &coords)?;
+            Ok(pyscf_kernels::AoBlockDevice::from_values(
+                client,
+                &host.values,
+                host.shape,
+            ))
+        }
+    }
+}
+
 impl Cell {
     /// `cell.pbc_eval_gto(eval_name, coords, kpts)` — `cell.py:2040`.
     ///
@@ -414,7 +493,10 @@ fn ao_screen_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
         !std::env::var("PYSCF_PBC_AO_SCREEN").is_ok_and(|v| {
-            matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off")
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
         })
     })
 }
@@ -516,7 +598,9 @@ fn gather_kept(
     coords: &[[f64; 3]],
     keep: &[bool],
     l: [f64; 3],
-) -> (Vec<[f64; 3]>, Vec<usize>) {
+    shifted: &mut Vec<f64>,
+    index: &mut Vec<usize>,
+) {
     let n_kept: usize = keep
         .iter()
         .enumerate()
@@ -526,45 +610,21 @@ fn gather_kept(
             (start + SCREEN_BLKSIZE).min(coords.len()) - start
         })
         .sum();
-    let mut shifted = Vec::with_capacity(n_kept);
-    let mut index = Vec::with_capacity(n_kept);
+    index.clear();
+    index.reserve(n_kept);
     for (b, k) in keep.iter().enumerate() {
         if !k {
             continue;
         }
         let start = b * SCREEN_BLKSIZE;
         let end = (start + SCREEN_BLKSIZE).min(coords.len());
-        for (g, r) in coords[start..end].iter().enumerate() {
-            shifted.push([r[0] - l[0], r[1] - l[1], r[2] - l[2]]);
+        for g in 0..(end - start) {
             index.push(start + g);
         }
     }
-    (shifted, index)
-}
-
-/// Scatter a screened AO block back into a full-length, zero-filled buffer.
-///
-/// Both buffers are F-order per component — `values[c*n*nao + mu*n + g]` — so
-/// this is a per-`(component, AO)` row copy at the kept grid indices, and the
-/// skipped points keep the exact zero the screen asserts they hold.
-fn scatter_kept(
-    out: &mut [f64],
-    sub: &[f64],
-    index: &[usize],
-    ngrids: usize,
-    nao: usize,
-    comp: usize,
-) {
-    let n_sub = index.len();
-    for c in 0..comp {
-        let ob = c * ngrids * nao;
-        let sb = c * n_sub * nao;
-        for mu in 0..nao {
-            let orow = ob + mu * ngrids;
-            let srow = sb + mu * n_sub;
-            for (j, &g) in index.iter().enumerate() {
-                out[orow + g] = sub[srow + j];
-            }
-        }
+    shifted.clear();
+    shifted.reserve(3usize.saturating_mul(n_kept));
+    for axis in 0..3 {
+        shifted.extend(index.iter().map(|&g| coords[g][axis] - l[axis]));
     }
 }

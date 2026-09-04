@@ -12,15 +12,15 @@ pub mod chkfile;
 pub mod gamma;
 pub mod init_guess;
 pub mod kdiis;
+pub mod kghf;
+pub mod khf_ksymm;
 pub mod khooks;
 pub mod kocc;
 pub mod krdm;
-pub mod kghf;
-pub mod krohf;
-pub mod khf_ksymm;
 pub mod krhf;
-pub mod kuhf;
+pub mod krohf;
 pub mod kscf;
+pub mod kuhf;
 // Phase 14 — range-separated J/K with no density fitting (plan 14-08 Task 4).
 // BLOCKED on the cintx short-range-integral gap; see the module docs.
 pub mod rsjk;
@@ -29,13 +29,13 @@ pub mod types;
 
 pub use chkfile::{KScfCheckpoint, dump_kscf_to_file, load_kscf_from_file};
 pub use gamma::{ghf, rhf, rhf_at, rohf, uhf};
-pub use khooks::KOverrideHooks;
-pub use khf_ksymm::{JkRoute, KsymAdaptedKrhf};
-pub use krhf::Krhf;
 pub use kghf::Kghf;
+pub use khf_ksymm::{JkRoute, KsymAdaptedKrhf};
+pub use khooks::KOverrideHooks;
+pub use krhf::Krhf;
 pub use krohf::Krohf;
-pub use kuhf::Kuhf;
 pub use kscf::kernel;
+pub use kuhf::Kuhf;
 pub use rsjk::RangeSeparatedJkBuilder;
 pub use smearing::{Smearing, SmearingMethod};
 pub use types::{KDms, KInitGuess, KMats, KScfConfig, KScfResult};

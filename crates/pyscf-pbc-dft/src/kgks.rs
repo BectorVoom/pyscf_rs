@@ -162,9 +162,8 @@ impl Kgks {
                 },
             )
             .map_err(|e| err(format!("KGKS: density fitting failed: {e}")))?;
-        let vj = r
-            .vj
-            .ok_or_else(|| err("KGKS: the density-fitting object returned no vj"))?;
+        let vj =
+            r.vj.ok_or_else(|| err("KGKS: the density-fitting object returned no vj"))?;
 
         let nband = vxc.len();
         let mut jfull: KMats = Vec::with_capacity(nband);
@@ -240,35 +239,19 @@ impl KOverrideHooks for Kgks {
         Ok(v)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         self.hf.eig(fock, s1e)
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         self.hf.get_occ(mo_energy)
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         self.hf.make_rdm1(mo_coeff, mo_occ)
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         // kgks.py:137 — `energy_elec = krks.energy_elec`.
         let tags = match self.tags.get() {
             Some(t) => t,

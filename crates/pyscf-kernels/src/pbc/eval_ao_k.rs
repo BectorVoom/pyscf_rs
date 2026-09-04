@@ -90,6 +90,35 @@ fn eval_ao_k_accumulate_kernel<F: Float + CubeElement, N: Size>(
     }
 }
 
+#[cube(launch_unchecked)]
+fn eval_ao_k_accumulate_scatter_kernel<F: Float + CubeElement>(
+    ao: &Array<F>,
+    index: &Array<u32>,
+    pr: &Array<F>,
+    pi: &Array<F>,
+    out_re: &mut Array<F>,
+    out_im: &mut Array<F>,
+    nkpts: usize,
+    nkeep: usize,
+    ngrids: usize,
+    nao: usize,
+    comp: usize,
+) {
+    let sub_n = comp * nkeep * nao;
+    let i = ABSOLUTE_POS;
+    if i < nkpts * sub_n {
+        let k = i / sub_n;
+        let q = i % sub_n;
+        let c = q / (nkeep * nao);
+        let rem = q % (nkeep * nao);
+        let a = rem / nkeep;
+        let j = rem % nkeep;
+        let p = c * ngrids * nao + a * ngrids + index[j] as usize;
+        out_re[k * comp * ngrids * nao + p] += pr[k] * ao[q];
+        out_im[k * comp * ngrids * nao + p] += pi[k] * ao[q];
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn launch_on_handles<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
@@ -125,6 +154,44 @@ fn launch_on_handles<R: Runtime, F: DeviceScalar>(
             ArrayArg::from_raw_parts(out_im.clone(), total),
             nkpts,
             n_lines,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_scatter_on_handles<R: Runtime, F: DeviceScalar>(
+    client: &ComputeClient<R>,
+    ao: &Handle,
+    index: &Handle,
+    pr: &Handle,
+    pi: &Handle,
+    out_re: &Handle,
+    out_im: &Handle,
+    nkpts: usize,
+    nkeep: usize,
+    ngrids: usize,
+    nao: usize,
+    comp: usize,
+) {
+    let sub_n = comp * nkeep * nao;
+    let lanes = nkpts * sub_n;
+    let (count, dim) = launch_1d(client, lanes, 2);
+    unsafe {
+        eval_ao_k_accumulate_scatter_kernel::launch_unchecked::<F, R>(
+            client,
+            count,
+            dim,
+            ArrayArg::from_raw_parts(ao.clone(), sub_n),
+            ArrayArg::from_raw_parts(index.clone(), nkeep),
+            ArrayArg::from_raw_parts(pr.clone(), nkpts),
+            ArrayArg::from_raw_parts(pi.clone(), nkpts),
+            ArrayArg::from_raw_parts(out_re.clone(), nkpts * comp * ngrids * nao),
+            ArrayArg::from_raw_parts(out_im.clone(), nkpts * comp * ngrids * nao),
+            nkpts,
+            nkeep,
+            ngrids,
+            nao,
+            comp,
         );
     }
 }
@@ -230,6 +297,109 @@ impl AoKAccumulator {
             let pr_h = upload(c, pr);
             let pi_h = upload(c, pi);
             launch_on_handles::<Rt, f64>(c, &ao_h, &pr_h, &pi_h, &self.re, &self.im, nkpts, n)
+        });
+        Ok(())
+    }
+
+    /// Fold a resident, full-size AO block without a device→host→device round trip.
+    pub fn accumulate_device(
+        &mut self,
+        client: &AlgebraClient,
+        ao: &crate::AoBlockDevice,
+        pr: &[f64],
+        pi: &[f64],
+    ) -> Result<(), AlgebraError> {
+        if ao.len() != self.n {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("resident ao len {}", self.n),
+                actual: ao.len().to_string(),
+            });
+        }
+        if pr.len() != self.nkpts || pi.len() != self.nkpts {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("pr/pi len {}", self.nkpts),
+                actual: format!("pr {} pi {}", pr.len(), pi.len()),
+            });
+        }
+        if self.nkpts == 0 || self.n == 0 {
+            return Ok(());
+        }
+        dispatch_backend!(client, c, Rt, {
+            let pr_h = upload(c, pr);
+            let pi_h = upload(c, pi);
+            launch_on_handles::<Rt, f64>(
+                c,
+                ao.handle(),
+                &pr_h,
+                &pi_h,
+                &self.re,
+                &self.im,
+                self.nkpts,
+                self.n,
+            )
+        });
+        Ok(())
+    }
+
+    /// Fold a resident AO sub-grid directly into full-grid accumulator positions.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accumulate_device_scatter(
+        &mut self,
+        client: &AlgebraClient,
+        ao: &crate::AoBlockDevice,
+        index: &[usize],
+        ngrids: usize,
+        nao: usize,
+        comp: usize,
+        pr: &[f64],
+        pi: &[f64],
+    ) -> Result<(), AlgebraError> {
+        let expected_sub = comp * index.len() * nao;
+        if ao.len() != expected_sub
+            || self.n != comp * ngrids * nao
+            || index.iter().any(|&g| g >= ngrids)
+        {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!(
+                    "resident sub-AO {expected_sub}, accumulator {}, indices < {ngrids}",
+                    comp * ngrids * nao
+                ),
+                actual: format!(
+                    "sub-AO {}, accumulator {}, max index {:?}",
+                    ao.len(),
+                    self.n,
+                    index.iter().max()
+                ),
+            });
+        }
+        if pr.len() != self.nkpts || pi.len() != self.nkpts {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("pr/pi len {}", self.nkpts),
+                actual: format!("pr {} pi {}", pr.len(), pi.len()),
+            });
+        }
+        if self.nkpts == 0 || expected_sub == 0 {
+            return Ok(());
+        }
+        let index_u32: Vec<u32> = index.iter().map(|&g| g as u32).collect();
+        dispatch_backend!(client, c, Rt, {
+            let index_h = c.create_from_slice(bytemuck::cast_slice(&index_u32));
+            let pr_h = upload(c, pr);
+            let pi_h = upload(c, pi);
+            launch_scatter_on_handles::<Rt, f64>(
+                c,
+                ao.handle(),
+                &index_h,
+                &pr_h,
+                &pi_h,
+                &self.re,
+                &self.im,
+                self.nkpts,
+                index.len(),
+                ngrids,
+                nao,
+                comp,
+            )
         });
         Ok(())
     }

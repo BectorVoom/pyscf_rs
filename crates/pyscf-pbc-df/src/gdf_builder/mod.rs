@@ -112,11 +112,7 @@ impl CcGdfBuilder {
     /// Propagates the auxiliary-cell build and (when
     /// [`Self::exclude_dd_block`]) the `RsCell` decontraction.
     pub fn build(&mut self) -> Result<(), PbcDfError> {
-        let aux = crate::incore::make_modrho_basis(
-            &self.cell,
-            self.auxbasis.as_deref(),
-            None,
-        )?;
+        let aux = crate::incore::make_modrho_basis(&self.cell, self.auxbasis.as_deref(), None)?;
         // `_guess_eta(auxcell, kpts, self.mesh)` — the AUXCELL, not the cell.
         let eta = eta::guess_eta(&aux.cell, &self.kpts, self.eta.map(|e| e.mesh))?;
         self.fused = Some(fuse::fuse_auxcell(

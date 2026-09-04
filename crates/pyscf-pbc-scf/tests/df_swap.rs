@@ -152,8 +152,8 @@ fn krhf_on_gdf_matches_upstream_he_fcc() {
     use pyscf_pbc_df::gdf::Gdf;
 
     let cell = he_all_electron();
-    let kpts = pyscf_pbc_gto::kpts_mesh::make_kpts(&cell, [2, 2, 2], false, true, None)
-        .expect("kpts");
+    let kpts =
+        pyscf_pbc_gto::kpts_mesh::make_kpts(&cell, [2, 2, 2], false, true, None).expect("kpts");
 
     // `measurements/ccdf.py`, PySCF 2.12.1.
     const UPSTREAM_RS: f64 = -2.808_425_087_170_97; // `_prefer_ccdf = False`
@@ -201,8 +201,8 @@ fn gdf_and_fftdf_differ_by_the_fitting_error() {
     use pyscf_pbc_df::gdf::Gdf;
 
     let cell = he_all_electron();
-    let kpts = pyscf_pbc_gto::kpts_mesh::make_kpts(&cell, [2, 2, 2], false, true, None)
-        .expect("kpts");
+    let kpts =
+        pyscf_pbc_gto::kpts_mesh::make_kpts(&cell, [2, 2, 2], false, true, None).expect("kpts");
     let mut c = KScfConfig::for_cell(&cell);
     c.conv_tol = 1e-11;
     c.max_cycle = 60;
@@ -408,7 +408,11 @@ fn krhf_on_mdf_matches_upstream_he_fcc() {
         let got = krhf_e(Box::new(d), &cell);
 
         let v = common::run_python(&py, MDF_ORACLE, &mdf_oracle_args(&cell, kmesh, mesh));
-        assert_eq!(v["converged"].as_bool(), Some(true), "upstream must converge");
+        assert_eq!(
+            v["converged"].as_bool(),
+            Some(true),
+            "upstream must converge"
+        );
         let want = v["e_tot"].as_f64().expect("e_tot");
         let dev = (got - want).abs();
         eprintln!(
@@ -430,11 +434,7 @@ fn krhf_on_mdf_matches_upstream_he_fcc() {
     }
 }
 
-fn mdf_oracle_args(
-    cell: &pyscf_pbc_gto::Cell,
-    kmesh: [usize; 3],
-    mesh: [usize; 3],
-) -> Vec<String> {
+fn mdf_oracle_args(cell: &pyscf_pbc_gto::Cell, kmesh: [usize; 3], mesh: [usize; 3]) -> Vec<String> {
     let a: Vec<Vec<f64>> = cell.a.iter().map(|r| r.to_vec()).collect();
     let xyz: Vec<Vec<f64>> = cell.mol.atom_coords().iter().map(|r| r.to_vec()).collect();
     let sym: Vec<String> = cell.mol._atom.iter().map(|(s, _)| s.clone()).collect();
@@ -526,12 +526,12 @@ fn wall_clock_per_builder() {
     for name in ["FFTDF", "AFTDF", "GDF", "MDF"] {
         let t0 = Instant::now();
         let mut df: Box<dyn PeriodicDf> = match name {
-            "FFTDF" => Box::new(
-                Fftdf::with_mesh(cell.clone(), &kpts, [31, 31, 31]).expect("fftdf"),
-            ),
-            "AFTDF" => Box::new(
-                Aftdf::with_mesh(cell.clone(), &kpts, [31, 31, 31]).expect("aftdf"),
-            ),
+            "FFTDF" => {
+                Box::new(Fftdf::with_mesh(cell.clone(), &kpts, [31, 31, 31]).expect("fftdf"))
+            }
+            "AFTDF" => {
+                Box::new(Aftdf::with_mesh(cell.clone(), &kpts, [31, 31, 31]).expect("aftdf"))
+            }
             "GDF" => Box::new(Gdf::new(cell.clone(), &kpts)),
             _ => Box::new(Mdf::new(cell.clone(), &kpts)),
         };
@@ -546,5 +546,7 @@ fn wall_clock_per_builder() {
             rows[rows.len() - 1].2
         );
     }
-    eprintln!("WALL (He-fcc/sto-3g 2x2x2; upstream's diamond 2x2x2 reference: GDF 6.4 s, MDF 16.9 s, FFTDF 30.0 s, AFTDF 450.6 s)");
+    eprintln!(
+        "WALL (He-fcc/sto-3g 2x2x2; upstream's diamond 2x2x2 reference: GDF 6.4 s, MDF 16.9 s, FFTDF 30.0 s, AFTDF 450.6 s)"
+    );
 }

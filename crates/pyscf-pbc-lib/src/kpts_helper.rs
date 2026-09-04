@@ -297,7 +297,10 @@ fn frac_component(a_over_2pi: &[[f64; 3]; 3], v: &[f64; 3]) -> [f64; 3] {
 
 /// `sum_w |s_w - rint(s_w)| < KCONSERV_TOL` — upstream's integrality test.
 fn is_integral(s: &[f64; 3]) -> bool {
-    s.iter().map(|x| (x - x.round_ties_even()).abs()).sum::<f64>() < KCONSERV_TOL
+    s.iter()
+        .map(|x| (x - x.round_ties_even()).abs())
+        .sum::<f64>()
+        < KCONSERV_TOL
 }
 
 /// `get_kconserv(cell, kpts)` — `kpts_helper.py:291-325`.
@@ -346,7 +349,10 @@ pub fn get_kconserv(a: &[[f64; 3]; 3], kpts: &[[f64; 3]]) -> Kconserv {
             }
         }
     }
-    Kconserv { nkpts, data: kconserv }
+    Kconserv {
+        nkpts,
+        data: kconserv,
+    }
 }
 
 /// One entry of `get_kconserv3`'s `kijkab` argument: either a whole index list
@@ -402,7 +408,11 @@ pub struct Kconserv3 {
 /// # Panics
 /// If `kijkab` does not have exactly 5 entries, or an index is out of range.
 pub fn get_kconserv3(a: &[[f64; 3]; 3], kpts: &[[f64; 3]], kijkab: &[KIdx]) -> Kconserv3 {
-    assert_eq!(kijkab.len(), 5, "kijkab must have 5 entries (ki, kj, kk, ka, kb)");
+    assert_eq!(
+        kijkab.len(),
+        5,
+        "kijkab must have 5 entries (ki, kj, kk, ka, kb)"
+    );
     let mut a2 = [[0.0_f64; 3]; 3];
     for i in 0..3 {
         for j in 0..3 {
@@ -452,7 +462,10 @@ pub fn get_kconserv3(a: &[[f64; 3]; 3], kpts: &[[f64; 3]], kijkab: &[KIdx]) -> K
         .filter(|x| !x.is_scalar())
         .map(KIdx::len)
         .collect();
-    Kconserv3 { shape: new_shape, data: out }
+    Kconserv3 {
+        shape: new_shape,
+        data: out,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +569,10 @@ pub fn group_by_conj_pairs(scaled: &[[f64; 3]], wrap_around: bool) -> Vec<ConjPa
         })
         .collect();
 
-    let mut pairs: Vec<ConjPair> = (0..n).filter(|k| self_conj[*k]).map(|k| (k, Some(k))).collect();
+    let mut pairs: Vec<ConjPair> = (0..n)
+        .filter(|k| self_conj[*k])
+        .map(|k| (k, Some(k)))
+        .collect();
     let mut seen = self_conj;
     for k in 0..n {
         if seen[k] {

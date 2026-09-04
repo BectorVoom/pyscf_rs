@@ -27,7 +27,7 @@ use crate::error::PbcDftError;
 use crate::gen_grid::PeriodicGrids;
 use crate::krks::{KsEnergyTags, unwrap_err};
 use crate::kuks::Kuks;
-use crate::numint::KNumInt;
+use crate::numint::KsNumInt;
 
 /// Restricted open-shell periodic Kohn-Sham.
 #[derive(Debug)]
@@ -40,7 +40,7 @@ pub struct Kroks {
     /// The integration grid.
     pub grids: PeriodicGrids,
     /// The numerical-integration driver.
-    pub ni: KNumInt,
+    pub ni: KsNumInt,
     tags: std::cell::Cell<Option<KsEnergyTags>>,
 }
 
@@ -50,9 +50,8 @@ impl Kroks {
     /// # Errors
     /// Propagates the `FFTDF` and grid construction.
     pub fn new(cell: Cell, kpts: &[[f64; 3]], xc: &str) -> Result<Self, PbcDftError> {
-        let with_df = Fftdf::new(cell, kpts).map_err(|e| {
-            crate::xc::err(format!("KROKS: FFTDF construction failed: {e}"))
-        })?;
+        let with_df = Fftdf::new(cell, kpts)
+            .map_err(|e| crate::xc::err(format!("KROKS: FFTDF construction failed: {e}")))?;
         Self::from_df(Box::new(with_df), xc)
     }
 
@@ -62,7 +61,7 @@ impl Kroks {
     /// Propagates the grid construction.
     pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
         let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
-        let ni = KNumInt::new(with_df.kpts());
+        let ni = KsNumInt::grid(with_df.kpts());
         Ok(Self {
             hf: Krohf::from_df(with_df),
             xc: xc.to_string(),
@@ -168,26 +167,15 @@ impl KOverrideHooks for Kroks {
         self.hf.diis_dms(dms)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         self.hf.eig(fock, s1e)
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         self.hf.get_occ(mo_energy)
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         self.hf.make_rdm1(mo_coeff, mo_occ)
     }
 
@@ -201,12 +189,7 @@ impl KOverrideHooks for Kroks {
         self.hf.get_grad(mo_coeff, mo_occ, h1e, vhf)
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         // kroks.py imports `energy_elec` straight from `kuks`.
         let tags = match self.tags.get() {
             Some(t) => t,

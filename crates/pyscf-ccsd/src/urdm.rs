@@ -117,7 +117,14 @@ impl SpinSplit {
     }
 }
 
-fn validate(t1: &[f64], t2: &[f64], l1: &[f64], l2: &[f64], no: usize, nv: usize) -> Result<(), CcsdError> {
+fn validate(
+    t1: &[f64],
+    t2: &[f64],
+    l1: &[f64],
+    l2: &[f64],
+    no: usize,
+    nv: usize,
+) -> Result<(), CcsdError> {
     let chk = |got: usize, expected: usize| -> Result<(), CcsdError> {
         if got != expected {
             return Err(CcsdError::ShapeMismatch { expected, got });
@@ -439,21 +446,15 @@ struct Gamma2 {
     dooov: Vec<f64>, // [no,no,no,nv]
 }
 
-fn gamma2(
-    t1: &[f64],
-    t2: &[f64],
-    l1: &[f64],
-    l2: &[f64],
-    no: usize,
-    nv: usize,
-) -> Gamma2 {
+fn gamma2(t1: &[f64], t2: &[f64], l1: &[f64], l2: &[f64], no: usize, nv: usize) -> Gamma2 {
     let t1e = |i: usize, a: usize| t1[t1_idx(nv, i, a)];
     let t2e = |i: usize, j: usize, a: usize, b: usize| t2[t2_idx(no, nv, i, j, a, b)];
     let l1e = |i: usize, a: usize| l1[t1_idx(nv, i, a)];
     let l2e = |i: usize, j: usize, a: usize, b: usize| l2[t2_idx(no, nv, i, j, a, b)];
 
     // tau[i,j,a,b] = t2 + 2*einsum('ia,jb->ijab', t1, t1) (l.50).
-    let tau = |i: usize, j: usize, a: usize, b: usize| t2e(i, j, a, b) + 2.0 * t1e(i, a) * t1e(j, b);
+    let tau =
+        |i: usize, j: usize, a: usize, b: usize| t2e(i, j, a, b) + 2.0 * t1e(i, a) * t1e(j, b);
 
     // miajb[i,a,j,b] = einsum('ikac,kjcb->iajb', l2, t2) (l.51).
     let mut miajb = vec![0.0_f64; no * nv * no * nv];
@@ -472,8 +473,7 @@ fn gamma2(
             }
         }
     }
-    let miajb_e =
-        |i: usize, a: usize, j: usize, b: usize| miajb[((i * nv + a) * no + j) * nv + b];
+    let miajb_e = |i: usize, a: usize, j: usize, b: usize| miajb[((i * nv + a) * no + j) * nv + b];
 
     // goovv[i,j,a,b] (l.53-67). Build element-wise.
     // tmp_ia[i,a] = einsum('kc,kica->ia', l1, t2)
@@ -819,7 +819,8 @@ fn gamma2(
             for a in 0..nv {
                 for b in 0..nv {
                     for j in 0..no {
-                        sym[idx(i, a, b, j)] = 0.5 * (dovvo[idx(i, a, b, j)] + dovvo[idx(j, b, a, i)]);
+                        sym[idx(i, a, b, j)] =
+                            0.5 * (dovvo[idx(i, a, b, j)] + dovvo[idx(j, b, a, i)]);
                     }
                 }
             }
@@ -917,7 +918,7 @@ fn make_rdm2_mo(
         for j in 0..no {
             for k in 0..no {
                 for l in 0..no {
-                    dm2[idx4(oi(i), oi(j), oi(k), oi(l)) ] = doooo(i, j, k, l);
+                    dm2[idx4(oi(i), oi(j), oi(k), oi(l))] = doooo(i, j, k, l);
                 }
             }
         }
@@ -1040,8 +1041,8 @@ fn pack_rdm2(dm2: &[f64], split: &SpinSplit) -> (Vec<f64>, Vec<f64>, Vec<f64>, u
                             (false, false) => dm2bb[ib(pi, qi, ri, si)] = val,
                             (true, false) => dm2ab[iab(pi, qi, ri, si)] = val,
                             (false, true) => { /* stored as (β,β|α,α): the αβ
-                                 transpose; the canonical αβ block is (α,α|β,β),
-                                 so skip — recovered from the (true,false) case. */
+                                transpose; the canonical αβ block is (α,α|β,β),
+                                so skip — recovered from the (true,false) case. */
                             }
                         }
                     }
@@ -1300,13 +1301,28 @@ mod tests {
         // Closed-shell make_rdm1 (MO, spin-traced: dm = 2× the α-spin block).
         let cs_amps = crate::ccsd_kernel(&refr, &Frozen::None, &crate::NoCcsdOverrides, &pool)
             .expect("rccsd");
-        let cs_t1 = cs_amps.amplitudes.t1_slice().map(|s| s.to_vec()).unwrap_or_default();
-        let cs_t2 = cs_amps.amplitudes.t2_slice().map(|s| s.to_vec()).unwrap_or_default();
+        let cs_t1 = cs_amps
+            .amplitudes
+            .t1_slice()
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        let cs_t2 = cs_amps
+            .amplitudes
+            .t2_slice()
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
         let eris_cs = crate::default_ao2mo(&refr, &Frozen::None).expect("cs eris");
         let cs_lam = crate::solve_lambda(&cs_t1, &cs_t2, &eris_cs, &pool).expect("cs lambda");
-        let cs_dm1 =
-            crate::make_rdm1(&cs_t1, &cs_t2, &cs_lam.l1, &cs_lam.l2, &eris_cs, false, &refr.mo_coeff)
-                .expect("cs rdm1");
+        let cs_dm1 = crate::make_rdm1(
+            &cs_t1,
+            &cs_t2,
+            &cs_lam.l1,
+            &cs_lam.l2,
+            &eris_cs,
+            false,
+            &refr.mo_coeff,
+        )
+        .expect("cs rdm1");
 
         // Open-shell α-block.
         let ures = crate::uccsd_kernel(&uref, &Frozen::None, &pool).expect("uccsd");
@@ -1442,12 +1458,27 @@ mod tests {
         // Closed-shell AO 2-RDM (the validated, byte-checked path).
         let cs_amps = crate::ccsd_kernel(&refr, &Frozen::None, &crate::NoCcsdOverrides, &pool)
             .expect("rccsd");
-        let cs_t1 = cs_amps.amplitudes.t1_slice().map(|s| s.to_vec()).unwrap_or_default();
-        let cs_t2 = cs_amps.amplitudes.t2_slice().map(|s| s.to_vec()).unwrap_or_default();
+        let cs_t1 = cs_amps
+            .amplitudes
+            .t1_slice()
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        let cs_t2 = cs_amps
+            .amplitudes
+            .t2_slice()
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
         let eris_cs = crate::default_ao2mo(&refr, &Frozen::None).expect("cs eris");
         let cs_lam = crate::solve_lambda(&cs_t1, &cs_t2, &eris_cs, &pool).expect("cs lambda");
         let cs_dm2_ao = crate::make_rdm2(
-            &cs_t1, &cs_t2, &cs_lam.l1, &cs_lam.l2, &eris_cs, true, &refr.mo_coeff, &pool,
+            &cs_t1,
+            &cs_t2,
+            &cs_lam.l1,
+            &cs_lam.l2,
+            &eris_cs,
+            true,
+            &refr.mo_coeff,
+            &pool,
         )
         .expect("cs rdm2 ao");
 

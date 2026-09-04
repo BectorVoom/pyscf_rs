@@ -85,8 +85,16 @@ pub fn get_gga_vrho_gs_fac(
     fac: f64,
 ) {
     assert_eq!(v.re.len(), ngrids, "get_gga_vrho_gs: v must be (ngrids,)");
-    assert_eq!(v1.re.len(), 3 * ngrids, "get_gga_vrho_gs: v1 must be (3,ngrids)");
-    assert_eq!(gv.len(), 3 * ngrids, "get_gga_vrho_gs: Gv must be (ngrids,3)");
+    assert_eq!(
+        v1.re.len(),
+        3 * ngrids,
+        "get_gga_vrho_gs: v1 must be (3,ngrids)"
+    );
+    assert_eq!(
+        gv.len(),
+        3 * ngrids,
+        "get_gga_vrho_gs: Gv must be (ngrids,3)"
+    );
     for g in 0..ngrids {
         let mut dot_re = 0.0f64;
         let mut dot_im = 0.0f64;

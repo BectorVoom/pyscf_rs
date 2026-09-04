@@ -63,7 +63,9 @@ pub enum PbcSymmError {
     /// atoms `.0` and `.1` are mapped onto each other by this operation but
     /// do not carry the same shell layout (AO count, shell count, or
     /// per-shell angular momentum).
-    #[error("_get_rotation_mat: atoms {0} and {1} are symmetry-equivalent but have different shell layouts")]
+    #[error(
+        "_get_rotation_mat: atoms {0} and {1} are symmetry-equivalent but have different shell layouts"
+    )]
     ShellLayoutMismatch(usize, usize),
 
     /// `basis.py:90` — `symm_adapted_basis`'s `assert nso == cell.nao`: the
@@ -78,21 +80,27 @@ pub enum PbcSymmError {
     /// due to KUHF calculations with integer occupation numbers. Try use
     /// smearing or turn off symmetry.")`. The two BZ k-points named are in
     /// the same star but carry different MO occupations.
-    #[error("symmetry-broken solution: MO occupations differ between BZ k-points {0} and {1} of the same star (probably a KUHF run with integer occupations - try smearing, or turn off symmetry)")]
+    #[error(
+        "symmetry-broken solution: MO occupations differ between BZ k-points {0} and {1} of the same star (probably a KUHF run with integer occupations - try smearing, or turn off symmetry)"
+    )]
     SymmetryBrokenOccupation(usize, usize),
 
     /// `kpts.py:415` — `symmetrize_wavefunction`'s own
     /// `raise RuntimeError('need verification')`. Upstream refuses to run
     /// this function AT ALL; this port refuses identically rather than
     /// shipping an unverified algorithm (17-05-PLAN.md Task 4).
-    #[error("symmetrize_wavefunction: upstream refuses this path with `raise RuntimeError('need verification')` (kpts.py:415); it is dead code there and is not resurrected here")]
+    #[error(
+        "symmetrize_wavefunction: upstream refuses this path with `raise RuntimeError('need verification')` (kpts.py:415); it is dead code there and is not resurrected here"
+    )]
     SymmetrizeWavefunctionUnverified,
 
     /// 17-05-PLAN.md Task 4: a rotated grid index did not land EXACTLY on a
     /// mesh point. `check_mesh_symmetry` (`symmetry.py:96`) is what
     /// guarantees it does; a silent round here would be a WRONG DENSITY, so
     /// this fails loudly instead.
-    #[error("symmetrize_density: fractional translation component {1} x mesh = {2} is not an integer for operation {0}; the mesh does not carry the lattice symmetry (see check_mesh_symmetry)")]
+    #[error(
+        "symmetrize_density: fractional translation component {1} x mesh = {2} is not an integer for operation {0}; the mesh does not carry the lattice symmetry (see check_mesh_symmetry)"
+    )]
     MeshNotSymmetric(usize, usize, f64),
 
     /// `kpts.py:301` — `make_k4_ibz`'s
@@ -115,7 +123,6 @@ pub enum PbcSymmError {
     // -----------------------------------------------------------------
     // 17-06 — `ktensor.py` / `KsymmArray`
     // -----------------------------------------------------------------
-
     /// `ktensor.py:62`, `:115`, `:123`, `:205` — the four
     /// `raise NotImplementedError` arms for a subarray rank other than 2 or
     /// 4. `KsymmArray` stores `nkpts^(rank-1)` blocks of a rank-`rank`
@@ -138,7 +145,11 @@ pub enum PbcSymmError {
     /// subarray shape demands. Upstream lets NumPy's own broadcast/reshape
     /// error fire (`ktensor.py:161`, `:174`, `:217`).
     #[error("KsymmArray: {what} has {got} elements, expected {expected}")]
-    KsymmShapeMismatch { what: &'static str, expected: usize, got: usize },
+    KsymmShapeMismatch {
+        what: &'static str,
+        expected: usize,
+        got: usize,
+    },
 
     /// The out-of-core branch of `_init` (`ktensor.py:78-80`,
     /// `lib.H5TmpFile()`). Every HDF5 create/read/write failure lands here.
@@ -164,6 +175,9 @@ pub enum PbcSymmError {
     /// the subarray rank. Upstream would fail later, inside
     /// `getattr(rmat, pi * 2)` (`ktensor.py:273`).
     #[error("KsymmArray: {kind} string '{value}' is invalid: {reason}")]
-    KsymmBadMetadataString { kind: &'static str, value: String, reason: &'static str },
-
+    KsymmBadMetadataString {
+        kind: &'static str,
+        value: String,
+        reason: &'static str,
+    },
 }

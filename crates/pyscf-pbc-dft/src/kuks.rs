@@ -29,7 +29,7 @@ use pyscf_pbc_scf::types::{KDms, KInitGuess, KMats, KScfConfig, KScfResult};
 use crate::error::PbcDftError;
 use crate::gen_grid::PeriodicGrids;
 use crate::krks::{KsEnergyTags, unwrap_err};
-use crate::numint::KNumInt;
+use crate::numint::KsNumInt;
 use crate::veff::{get_jk, sub_scaled, trace_dm_v, trace_dm_v_shared};
 use crate::xc::err;
 
@@ -45,7 +45,7 @@ pub struct Kuks {
     /// The integration grid.
     pub grids: PeriodicGrids,
     /// The numerical-integration driver.
-    pub ni: KNumInt,
+    pub ni: KsNumInt,
     /// Override the `(nalpha, nbeta)` derived from `cell.spin`.
     pub nelec: Option<(usize, usize)>,
     /// Smearing, when enabled.
@@ -78,7 +78,7 @@ impl Kuks {
     /// Propagates the grid construction.
     pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
         let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
-        let ni = KNumInt::new(with_df.kpts());
+        let ni = KsNumInt::grid(with_df.kpts());
         Ok(Self {
             with_df,
             xc: xc.to_string(),
@@ -201,7 +201,7 @@ impl Kuks {
         xc: &str,
         exxdiv: Option<ExxDiv>,
         grids: &PeriodicGrids,
-        ni: &KNumInt,
+        ni: &KsNumInt,
         dms: &KDms,
         kpts_band: Option<&[[f64; 3]]>,
     ) -> Result<(KDms, KsEnergyTags), PbcDftError> {
@@ -213,74 +213,58 @@ impl Kuks {
 
         // kuks.py:59-60 — one density SET per spin, each carrying every k-point.
         let sets: [KDms; 2] = [vec![dms[0].clone()], vec![dms[1].clone()]];
-        let nr = ni.nr_uks(cell, grids, xc, &sets, 1, kpts_band)?;
-        let mut exc = nr.excsum[0];
-        // U-06 step 3: `nr` is an OWNED `NrKUksResult`, so take the two vmat
-        // stacks out of it instead of cloning them. `nr.excsum` is read first
-        // because the move invalidates `nr`.
-        let mut nr_vmat = nr.vmat;
-        let vmat_b = nr_vmat[1].swap_remove(0);
-        let vmat_a = nr_vmat[0].swap_remove(0);
-        let mut vxc: KDms = vec![vmat_a, vmat_b];
+        let nr = ni.nr_uks(cell, grids, xc, &sets, 1, with_df.kpts(), kpts_band)?;
+        let mut exc = nr.exc;
+        let mut vxc: KDms = vec![nr.vmat[0].clone(), nr.vmat[1].clone()];
 
-        let jk = get_jk(
-            with_df,
-            xc,
-            dms,
-            1,
-            with_df.kpts(),
-            kpts_band,
-            exxdiv,
-            true,
-        )?;
-        let vj = jk
-            .vj
-            .ok_or_else(|| err("KUKS: the density-fitting object returned no vj"))?;
-        // kuks.py:82 — vj = vj[0] + vj[1], ONE Coulomb matrix for both spins.
-        let nband = vj[0].len();
-        let jtot: KMats = (0..nband)
-            .map(|k| {
-                let mut m = vj[0][k].clone();
-                for i in 0..m.len() {
-                    m.re[i] += vj[1][k].re[i];
-                    m.im[i] += vj[1][k].im[i];
-                }
-                m
-            })
-            .collect();
-        for set in vxc.iter_mut() {
-            for (k, m) in set.iter_mut().enumerate() {
-                for i in 0..m.len() {
-                    m.re[i] += jtot[k].re[i];
-                    m.im[i] += jtot[k].im[i];
-                }
-            }
-        }
-        // kuks.py:87 — ecoul = einsum('nKij,Kji->', dm, vj).real * .5 * weight
-        //
-        // U-06 step 1: `jtot` is shared by both channels, so trace against it
-        // directly rather than cloning it into a two-set stack. Bit-exact.
-        let ecoul = if ground_state {
-            0.5 * weight * trace_dm_v_shared(dms, &jtot, nao).0
+        let ecoul = if let Some(ecoul) = nr.ecoul {
+            ecoul
         } else {
-            0.0
-        };
-
-        if let Some(vk) = jk.vk.as_ref() {
-            // kuks.py:89 — vxc -= vk (the FULL exchange, per spin).
-            sub_scaled(&mut vxc, 1.0, vk);
-            if ground_state {
-                // kuks.py:91
-                exc -= 0.5 * weight * trace_dm_v(dms, vk, nao).0;
+            let jk = get_jk(with_df, xc, dms, 1, with_df.kpts(), kpts_band, exxdiv, true)?;
+            let vj = jk
+                .vj
+                .ok_or_else(|| err("KUKS: the density-fitting object returned no vj"))?;
+            // kuks.py:82 — vj = vj[0] + vj[1], ONE Coulomb matrix for both spins.
+            let nband = vj[0].len();
+            let jtot: KMats = (0..nband)
+                .map(|k| {
+                    let mut m = vj[0][k].clone();
+                    for i in 0..m.len() {
+                        m.re[i] += vj[1][k].re[i];
+                        m.im[i] += vj[1][k].im[i];
+                    }
+                    m
+                })
+                .collect();
+            for set in vxc.iter_mut() {
+                for (k, m) in set.iter_mut().enumerate() {
+                    for i in 0..m.len() {
+                        m.re[i] += jtot[k].re[i];
+                        m.im[i] += jtot[k].im[i];
+                    }
+                }
             }
-        }
+            let ecoul = if ground_state {
+                0.5 * weight * trace_dm_v_shared(dms, &jtot, nao).0
+            } else {
+                0.0
+            };
+
+            if let Some(vk) = jk.vk.as_ref() {
+                sub_scaled(&mut vxc, 1.0, vk);
+                if ground_state {
+                    exc -= 0.5 * weight * trace_dm_v(dms, vk, nao).0;
+                }
+            }
+            ecoul
+        };
 
         Ok((
             vxc,
             KsEnergyTags {
                 ecoul,
                 exc,
-                nelec: nr.nelec[0].0 + nr.nelec[0].1,
+                nelec: nr.nelec.0 + nr.nelec.1,
             },
         ))
     }
@@ -328,11 +312,7 @@ impl KOverrideHooks for Kuks {
         Ok(v)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         let (mut e, mut c) = eig_channel(&fock[0], s1e, nao)?;
         let (eb, cb) = eig_channel(&fock[1], s1e, nao)?;
@@ -341,10 +321,7 @@ impl KOverrideHooks for Kuks {
         Ok((e, c))
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         let nkpts = self.kpts().len();
         let (na, nb) = self.nelec()?;
         let (ea, eb) = mo_energy.split_at(nkpts);
@@ -360,11 +337,7 @@ impl KOverrideHooks for Kuks {
         Ok((occ, fermi.to_vec()))
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         let nkpts = self.kpts().len();
         Ok(vec![
@@ -373,12 +346,7 @@ impl KOverrideHooks for Kuks {
         ])
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         let tags = match self.tags.get() {
             Some(t) => t,
             None => {

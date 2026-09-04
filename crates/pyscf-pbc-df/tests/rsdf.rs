@@ -153,9 +153,13 @@ fn rsdf_guesses_omega_and_builds() {
     let mut d = Rsdf::new(cell, &kpts);
 
     let (omega, mesh, ke) = d.guess_omega().expect("the omega estimator");
-    assert!((omega - 0.739_358_637_866_536).abs() < 1e-12, "omega: {omega}");
+    assert!(
+        (omega - 0.739_358_637_866_536).abs() < 1e-12,
+        "omega: {omega}"
+    );
     assert_eq!(mesh, [11, 11, 11]);
     assert!((ke - 30.708_567_591_994_9).abs() < 1e-10, "ke_cutoff: {ke}");
 
-    d.build().expect("the range-separated 3-centre route builds");
+    d.build()
+        .expect("the range-separated 3-centre route builds");
 }

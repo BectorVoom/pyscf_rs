@@ -893,10 +893,7 @@ impl NumInt {
         // through the same call, so the two cannot drift.
         let backend = XcBackend::default();
         let spec: XcSpec = backend.parse(xc_code).map_err(PyscfRsError::from)?;
-        match backend
-            .family(&spec)
-            .map_err(PyscfRsError::from)?
-        {
+        match backend.family(&spec).map_err(PyscfRsError::from)? {
             Family::Lda => Ok(XcType::Lda),
             Family::Gga => Ok(XcType::Gga),
             Family::Mgga => Err(PyscfRsError::NotYetImplemented {

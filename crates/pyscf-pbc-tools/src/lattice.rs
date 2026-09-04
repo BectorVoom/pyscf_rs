@@ -17,7 +17,7 @@
 //! used for `mesh::cutoff_to_mesh` / `Cell::cutoff_to_mesh`.
 
 use crate::mat3::norm3;
-use pyscf_pbc_lib::kpts_helper::{round_to_fbz, intersection};
+use pyscf_pbc_lib::kpts_helper::{intersection, round_to_fbz};
 
 /// Row 2 of `R` from the QR factorization of the `3 x n` matrix whose COLUMNS
 /// are `cols`.

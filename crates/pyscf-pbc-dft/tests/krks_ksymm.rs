@@ -95,11 +95,7 @@ fn unfolded_ibz_density_equals_full_bz_density() {
     // Under test: keep only the IBZ representatives, unfold them back, and
     // evaluate. This is exactly what a Group-A site does to a caller that
     // hands it an IBZ-length density.
-    let dm_ibz: Vec<_> = kpts
-        .ibz2bz
-        .iter()
-        .map(|&k| r.dm[0][k].clone())
-        .collect();
+    let dm_ibz: Vec<_> = kpts.ibz2bz.iter().map(|&k| r.dm[0][k].clone()).collect();
     let ni_sym = KNumInt::with_symmetry(&kpts);
     assert!(matches!(ni_sym.kset, KSet::Ibz(_)));
     assert_eq!(
@@ -113,10 +109,12 @@ fn unfolded_ibz_density_equals_full_bz_density() {
         "Group B reaches the IBZ points through kpts_ibz()"
     );
 
-    let dm_unfolded = ni_sym
-        .unfold_dms(&cell, &dm_ibz, nao)
-        .expect("unfold_dms");
-    assert_eq!(dm_unfolded.len(), kpts.nkpts(), "unfold must reach the full BZ");
+    let dm_unfolded = ni_sym.unfold_dms(&cell, &dm_ibz, nao).expect("unfold_dms");
+    assert_eq!(
+        dm_unfolded.len(),
+        kpts.nkpts(),
+        "unfold must reach the full BZ"
+    );
     let rho_sym = ni_sym
         .get_rho(&cell, &dm_unfolded, &grids)
         .expect("unfolded get_rho");
@@ -257,8 +255,8 @@ fn krks_ibz_energy_matches_full_bz() {
     // Under test, both `use_ao_symmetry` values — the plain branch exists so a
     // 17-04 defect stays bisectable.
     for use_ao_symmetry in [false, true] {
-        let mut mf = KsymAdaptedKrks::new(cell.clone(), kpts.clone(), "lda,vwn")
-            .expect("KsymAdaptedKrks");
+        let mut mf =
+            KsymAdaptedKrks::new(cell.clone(), kpts.clone(), "lda,vwn").expect("KsymAdaptedKrks");
         mf.use_ao_symmetry = use_ao_symmetry;
         let r = mf.kernel(&cfg).expect("IBZ KRKS");
         assert!(
@@ -291,7 +289,10 @@ fn si_222_stars_have_unequal_sizes_so_the_weighting_is_observable() {
     let kpts_abs = make_kpts_default(&cell, [2, 2, 2]).expect("make_kpts_default");
     let kpts = make_kpts(&cell, &kpts_abs, true, TIME_REVERSAL).expect("make_kpts");
     let sizes: Vec<usize> = kpts.stars.iter().map(Vec::len).collect();
-    println!("star sizes = {sizes:?}, weights_ibz = {:?}", kpts.weights_ibz);
+    println!(
+        "star sizes = {sizes:?}, weights_ibz = {:?}",
+        kpts.weights_ibz
+    );
     assert!(
         sizes.iter().any(|&s| s != sizes[0]),
         "this fixture's stars all have size {}, so `weights_ibz` and `1/nkpts` \
@@ -388,9 +389,7 @@ fn hubbard_e_u_over_the_ibz_matches_the_full_bz() {
                 .collect()
         })
         .collect();
-    let dm_bz_c = kpts
-        .transform_dm(&cell, &dm_c, nao)
-        .expect("transform_dm");
+    let dm_bz_c = kpts.transform_dm(&cell, &dm_c, nao).expect("transform_dm");
     let dm_bz: Vec<pyscf_algebra::CTensor> = dm_bz_c
         .iter()
         .map(|m| pyscf_algebra::CTensor {
@@ -413,7 +412,10 @@ fn hubbard_e_u_over_the_ibz_matches_the_full_bz() {
     let e_u_full = add_vhubbard(&mut v_full, &cell, &kpts.kpts, &vec![dm_bz], &cfg)
         .expect("add_vhubbard (full BZ)");
 
-    let mut v_ibz = vec![vec![pyscf_algebra::CTensor::zeros(nao * nao); kpts.nkpts_ibz()]];
+    let mut v_ibz = vec![vec![
+        pyscf_algebra::CTensor::zeros(nao * nao);
+        kpts.nkpts_ibz()
+    ]];
     let e_u_ibz = add_vhubbard_weighted(
         &mut v_ibz,
         &cell,
@@ -571,8 +573,7 @@ fn kuks_ibz_energy_matches_full_bz() {
          effectively closed-shell and the unrestricted path is untested"
     );
 
-    let ibz = KsymAdaptedKuks::new(cell.clone(), kpts.clone(), "lda,vwn")
-        .expect("KsymAdaptedKuks");
+    let ibz = KsymAdaptedKuks::new(cell.clone(), kpts.clone(), "lda,vwn").expect("KsymAdaptedKuks");
     let r_ibz = ibz.kernel(&cfg).expect("IBZ KUKS");
     assert!(r_ibz.converged, "IBZ KUKS did not converge");
 
@@ -690,7 +691,10 @@ fn kuks_ibz_runs_and_stays_symmetric() {
                 .fold(0.0_f64, f64::max)
         })
         .fold(0.0_f64, f64::max);
-    println!("IBZ KUKS: e_tot = {:.12}, max |dm_a - dm_b| = {spin_diff:e}", r.e_tot);
+    println!(
+        "IBZ KUKS: e_tot = {:.12}, max |dm_a - dm_b| = {spin_diff:e}",
+        r.e_tot
+    );
     assert!(
         spin_diff > 1e-6,
         "RULE U: the converged IBZ solution must still be spin-polarised"
@@ -811,11 +815,8 @@ fn krks_ibz_energy_matches_full_bz_on_gdf() {
     // Both sides on GDF, and both DF objects built over the FULL BZ — the
     // ksymm adapter selects its IBZ output through `kpts_band`, so the DF
     // still never learns about symmetry (D-PBC-15).
-    let full = Krks::from_df(
-        Box::new(Gdf::new(cell.clone(), &kpts.kpts)),
-        "lda,vwn",
-    )
-    .expect("full-BZ GDF KRKS");
+    let full = Krks::from_df(Box::new(Gdf::new(cell.clone(), &kpts.kpts)), "lda,vwn")
+        .expect("full-BZ GDF KRKS");
     let r_full = full.kernel(&cfg).expect("full-BZ GDF KRKS run");
     assert!(r_full.converged, "full-BZ GDF KRKS did not converge");
 
@@ -884,8 +885,7 @@ fn gdf_band_route_matches_the_direct_route() {
     let kpts_abs = make_kpts_default(&cell, [2, 2, 2]).expect("make_kpts_default");
 
     // A converged density to evaluate against.
-    let mf = Krks::from_df(Box::new(Gdf::new(cell.clone(), &kpts_abs)), "lda,vwn")
-        .expect("Krks");
+    let mf = Krks::from_df(Box::new(Gdf::new(cell.clone(), &kpts_abs)), "lda,vwn").expect("Krks");
     let r = mf
         .kernel(&KScfConfig {
             conv_tol: 1e-10,

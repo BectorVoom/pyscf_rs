@@ -62,8 +62,7 @@ pub fn is_kconserv(cell: &Cell, k: &[[f64; 3]; 4]) -> bool {
     ];
     let a = cell.a;
     (0..3).all(|i| {
-        let x = (d[0] * a[i][0] + d[1] * a[i][1] + d[2] * a[i][2])
-            / (2.0 * std::f64::consts::PI);
+        let x = (d[0] * a[i][0] + d[1] * a[i][1] + d[2] * a[i][2]) / (2.0 * std::f64::consts::PI);
         (x - x.round()).abs() < 1e-9
     })
 }
@@ -197,9 +196,7 @@ pub fn aft_get_eri(df: &Aftdf, kptijkl: [[f64; 3]; 4]) -> Result<CTensor, PbcDfE
     let nao = cell.mol.nao_nr;
     let n2 = nao * nao;
     if !is_kconserv(cell, &kptijkl) {
-        tracing::warn!(
-            "aft_ao2mo: momentum conservation not found in the given k-points"
-        );
+        tracing::warn!("aft_ao2mo: momentum conservation not found in the given k-points");
         return Ok(CTensor {
             re: vec![0.0; n2 * n2],
             im: vec![0.0; n2 * n2],
@@ -403,7 +400,10 @@ pub fn get_mo_pairs_g(
                     continue;
                 }
                 for q in 0..nao {
-                    let (lr, li) = (ao_pairs.0[base + p * nao + q], ao_pairs.1[base + p * nao + q]);
+                    let (lr, li) = (
+                        ao_pairs.0[base + p * nao + q],
+                        ao_pairs.1[base + p * nao + q],
+                    );
                     t.re[i * nao + q] += cr * lr - ci * li;
                     t.im[i * nao + q] += cr * li + ci * lr;
                 }

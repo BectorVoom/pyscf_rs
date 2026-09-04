@@ -114,8 +114,10 @@ impl ExtendedMole {
         let bvk_atom_coords = image_atom_coords(&bvkmesh_ls, &cell.mol.atom_coords());
         let a_bvk = scale_lattice(&a, &kmesh);
         let inv_a_bvk = inv3(&a_bvk).map_err(PbcDfError::from)?;
-        let scaled_bvk_coords: Vec<[f64; 3]> =
-            bvk_atom_coords.iter().map(|r| frac(r, &inv_a_bvk)).collect();
+        let scaled_bvk_coords: Vec<[f64; 3]> = bvk_atom_coords
+            .iter()
+            .map(|r| frac(r, &inv_a_bvk))
+            .collect();
 
         let dim = pyscf_pbc_gto::lattice::lattice_sum_dimension(cell);
         let mut ls = pyscf_pbc_tools::lattice::get_lattice_ls(
@@ -134,8 +136,7 @@ impl ExtendedMole {
         let rs_nbas = cell.mol.nbas;
         let bas_mask = vec![true; bvk_ncells * rs_nbas * nimgs];
 
-        let (seg_loc, seg2sh) =
-            bas_mask_to_segment(rs_cell, &bas_mask, bvk_ncells, rs_nbas, nimgs);
+        let (seg_loc, seg2sh) = bas_mask_to_segment(rs_cell, &bas_mask, bvk_ncells, rs_nbas, nimgs);
 
         Ok(ExtendedMole {
             rs_cell: rs_cell.clone(),
@@ -227,13 +228,15 @@ impl ExtendedMole {
                 .collect()
         };
         let cell_coords = rs.cell.mol.atom_coords();
-        let cell_bas_coords: Vec<[f64; 3]> =
-            (0..rs.cell.mol.nbas).map(|ib| cell_coords[self.atom_of(ib)]).collect();
+        let cell_bas_coords: Vec<[f64; 3]> = (0..rs.cell.mol.nbas)
+            .map(|ib| cell_coords[self.atom_of(ib)])
+            .collect();
 
         let cutoff = cutoff.unwrap_or_else(|| {
             let theta_ij = cell_exps.iter().cloned().fold(f64::INFINITY, f64::min) / 2.0;
             let vol = rs.cell.vol();
-            let lattice_sum_factor = (2.0 * std::f64::consts::PI * rs.cell.rcut / (vol * theta_ij)).max(1.0);
+            let lattice_sum_factor =
+                (2.0 * std::f64::consts::PI * rs.cell.rcut / (vol * theta_ij)).max(1.0);
             rs.cell.precision / lattice_sum_factor * 0.1
         });
 
@@ -322,7 +325,10 @@ impl ExtendedMole {
     /// entry per (bvk-cell, ref_cell-shell) pair plus a trailing sentinel,
     /// giving the supmol shell-offset range for every reference shell.
     pub fn sh_loc(&self) -> Vec<i32> {
-        self.seg_loc.iter().map(|&i| self.seg2sh[i as usize]).collect()
+        self.seg_loc
+            .iter()
+            .map(|&i| self.seg2sh[i as usize])
+            .collect()
     }
 
     /// `self.bas_map` property (`ft_ao.py:590-593`) -- ravel indices of the

@@ -26,7 +26,8 @@ fn model_dm(nao: usize, nkpts: usize) -> KMats {
             let mut m = CTensor::zeros(nao * nao);
             for p in 0..nao {
                 for q in 0..nao {
-                    let v = 0.3 / (1.0 + (p as f64 - q as f64).abs()) + if p == q { 1.0 } else { 0.0 };
+                    let v =
+                        0.3 / (1.0 + (p as f64 - q as f64).abs()) + if p == q { 1.0 } else { 0.0 };
                     m.re[p * nao + q] = v * (1.0 + 0.1 * k as f64);
                 }
             }
@@ -198,5 +199,8 @@ fn omega_is_refused() {
             },
         )
         .expect_err("omega is 14-07");
-    assert!(format!("{e}").contains("omega") || format!("{e}").contains("14-07"), "got: {e}");
+    assert!(
+        format!("{e}").contains("omega") || format!("{e}").contains("14-07"),
+        "got: {e}"
+    );
 }

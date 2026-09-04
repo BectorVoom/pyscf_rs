@@ -16,14 +16,14 @@ use pyscf_algebra::CTensor;
 use pyscf_pbc_df::Fftdf;
 use pyscf_pbc_dft::gen_grid::PeriodicGrids;
 use pyscf_pbc_dft::kgks::Kgks;
-use pyscf_pbc_dft::kroks::Kroks;
 use pyscf_pbc_dft::krks::Krks;
+use pyscf_pbc_dft::kroks::Kroks;
 use pyscf_pbc_dft::kuks::Kuks;
 use pyscf_pbc_dft::numint::KNumInt;
 use pyscf_pbc_dft::xc::XcType;
-use pyscf_pbc_gto::{make_kpts_default, Cell};
-use pyscf_pbc_scf::types::KDms;
+use pyscf_pbc_gto::{Cell, make_kpts_default};
 use pyscf_pbc_scf::KScfConfig;
+use pyscf_pbc_scf::types::KDms;
 
 /// A small FFT mesh: every test here is about STRUCTURE, and structure is
 /// mesh-independent.
@@ -111,16 +111,18 @@ fn vxc_derivative_identity(xc: &str, tol: f64) {
         .collect();
 
     let shifted = |eps: f64| -> KDms {
-        vec![(0..nkpts)
-            .map(|k| {
-                let mut m = dm[0][k].clone();
-                for i in 0..nao * nao {
-                    m.re[i] += eps * delta[k].re[i];
-                    m.im[i] += eps * delta[k].im[i];
-                }
-                m
-            })
-            .collect()]
+        vec![
+            (0..nkpts)
+                .map(|k| {
+                    let mut m = dm[0][k].clone();
+                    for i in 0..nao * nao {
+                        m.re[i] += eps * delta[k].re[i];
+                        m.im[i] += eps * delta[k].im[i];
+                    }
+                    m
+                })
+                .collect(),
+        ]
     };
 
     let exc = |eps: f64| -> f64 {
@@ -134,9 +136,7 @@ fn vxc_derivative_identity(xc: &str, tol: f64) {
     let eps = 1e-5;
     let fd = (exc(eps) - exc(-eps)) / (2.0 * eps);
 
-    let r = ni
-        .nr_rks(&cell, &grids, xc, &dm, 1, None)
-        .expect("nr_rks");
+    let r = ni.nr_rks(&cell, &grids, xc, &dm, 1, None).expect("nr_rks");
     // Re Tr[V^k Δ^k], summed over k, divided by N_k.
     let mut an = 0.0;
     for k in 0..nkpts {
@@ -144,8 +144,7 @@ fn vxc_derivative_identity(xc: &str, tol: f64) {
         for i in 0..nao {
             for j in 0..nao {
                 // Tr[V D] = Σ_ij V[i,j] D[j,i]; both are Hermitian.
-                an += v.re[i * nao + j] * d.re[j * nao + i]
-                    - v.im[i * nao + j] * d.im[j * nao + i];
+                an += v.re[i * nao + j] * d.re[j * nao + i] - v.im[i * nao + j] * d.im[j * nao + i];
             }
         }
     }
@@ -232,7 +231,10 @@ fn periodic_density_is_real() {
         .expect("nr_rks");
     let imag = ni.last_rho_imag();
     println!("max |Im rho| = {imag:.3e}");
-    assert!(imag < 1e-10, "the discarded imaginary density is {imag:e}, which is signal");
+    assert!(
+        imag < 1e-10,
+        "the discarded imaginary density is {imag:e}, which is signal"
+    );
 }
 
 /// `V_xc^k` is Hermitian at every k-point — the `V + V^H` symmetrisation.
@@ -269,15 +271,23 @@ fn krks_energy_is_independent_of_the_grid_block_size() {
         let mut ni = KNumInt::new(&kpts);
         ni.max_memory = mb;
         let blocks = ni.block_ranges(grids.size(), XcType::Gga, kpts.len()).len();
-        let r = ni.nr_rks(&cell, &grids, "pbe", &dm, 1, None).expect("nr_rks");
-        println!("max_memory {mb:>7} MB -> {blocks:>4} blocks, E_xc = {:.15}", r.excsum[0]);
+        let r = ni
+            .nr_rks(&cell, &grids, "pbe", &dm, 1, None)
+            .expect("nr_rks");
+        println!(
+            "max_memory {mb:>7} MB -> {blocks:>4} blocks, E_xc = {:.15}",
+            r.excsum[0]
+        );
         seen.push(r.excsum[0]);
     }
     let spread = seen
         .iter()
         .map(|e| (e - seen[0]).abs())
         .fold(0.0_f64, f64::max);
-    assert!(spread < 1e-10, "E_xc moved by {spread:e} across block sizes");
+    assert!(
+        spread < 1e-10,
+        "E_xc moved by {spread:e} across block sizes"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -395,9 +405,14 @@ fn he_all_electron_krks_converges_and_integrates() {
     let ni = KNumInt::new(&kpts);
     // At the gate mesh, where the all-electron cusp is actually resolved.
     let grids = PeriodicGrids::uniform(&cell, Some([31, 31, 31])).expect("grids");
-    let r = ni.nr_rks(&cell, &grids, "pbe", &dm, 1, None).expect("nr_rks");
+    let r = ni
+        .nr_rks(&cell, &grids, "pbe", &dm, 1, None)
+        .expect("nr_rks");
     let d = (r.nelec[0] - nelec).abs();
-    println!("He-fcc integrated rho = {:.12} (expected {nelec}), delta {d:.3e}", r.nelec[0]);
+    println!(
+        "He-fcc integrated rho = {:.12} (expected {nelec}), delta {d:.3e}",
+        r.nelec[0]
+    );
     assert!(d < 1e-8, "He-fcc integrated density is {d:e} from {nelec}");
 }
 
@@ -407,6 +422,10 @@ fn silicon_krks_pbe_converges() {
     let r = krks(silicon(), [2, 2, 2], "pbe")
         .kernel(&tight())
         .expect("KRKS");
-    assert!(r.converged, "Si/PBE did not converge in {} cycles", r.cycles);
+    assert!(
+        r.converged,
+        "Si/PBE did not converge in {} cycles",
+        r.cycles
+    );
     println!("KRKS(Si,2x2x2,PBE) @ mesh 11 = {:.15}", r.e_tot);
 }

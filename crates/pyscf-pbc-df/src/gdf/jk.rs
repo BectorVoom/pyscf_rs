@@ -50,11 +50,7 @@ use crate::incore::Aosym;
 ///
 /// # Errors
 /// [`PbcDfError::Core`] when the builder has not run, or a k-pair is missing.
-pub fn get_j_kpts(
-    df: &Gdf,
-    dms: &[KMats],
-    kpts: &[[f64; 3]],
-) -> Result<Vec<KMats>, PbcDfError> {
+pub fn get_j_kpts(df: &Gdf, dms: &[KMats], kpts: &[[f64; 3]]) -> Result<Vec<KMats>, PbcDfError> {
     let nao = df.cell.mol.nao_nr;
     let nkpts = kpts.len();
     let nset = dms.len();
@@ -426,7 +422,11 @@ pub(crate) fn kpts_union(kpts: &[[f64; 3]], kpts_band: &[[f64; 3]]) -> Vec<[f64;
 /// [`Gdf::sr_loop`]/[`crate::gdf_builder::j3c::Cderi`] are purely positional —
 /// see `.planning/phases/17-ksymm-multigrid/17-10-SUMMARY.md`'s "Follow-up
 /// completion" section for why no structural change to `Cderi` was needed).
-pub(crate) fn build_band_gdf(df: &Gdf, kpts: &[[f64; 3]], kpts_band: &[[f64; 3]]) -> (Gdf, Vec<[f64; 3]>) {
+pub(crate) fn build_band_gdf(
+    df: &Gdf,
+    kpts: &[[f64; 3]],
+    kpts_band: &[[f64; 3]],
+) -> (Gdf, Vec<[f64; 3]>) {
     let union = kpts_union(kpts, kpts_band);
 
     let mut g = Gdf::new(df.cell.clone(), &union);
@@ -687,7 +687,14 @@ pub fn get_jk(
                 None
             },
             vk: if opts.with_k {
-                Some(get_k_kpts_band(&band_df, &union, dms, kpts, kpts_band, opts.exxdiv)?)
+                Some(get_k_kpts_band(
+                    &band_df,
+                    &union,
+                    dms,
+                    kpts,
+                    kpts_band,
+                    opts.exxdiv,
+                )?)
             } else {
                 None
             },

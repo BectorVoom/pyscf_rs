@@ -42,7 +42,10 @@ fn gate1a_g0_equals_overlap_at_upstream_rcut() {
     let s = pbc_intor(&cell, "int1e_ovlp", &[[0.0; 3]], PbcIntorOpts::default())
         .expect("periodic overlap");
     let w = dev_vs_overlap(&ft.re, &ft.im, s.at(0), nao);
-    assert!(w < 2e-9, "Gate 1a: ft[G=0] deviates from int1e_ovlp by {w:e}");
+    assert!(
+        w < 2e-9,
+        "Gate 1a: ft[G=0] deviates from int1e_ovlp by {w:e}"
+    );
 }
 
 /// **Gate 1c** — the real gate on the McMurchie–Davidson algebra. Both sides
@@ -109,8 +112,7 @@ fn ss_primitive_matches_the_closed_form() {
         [-1.25, 3.0, 0.75],
     ];
     let rcut = 1.5 * cell.try_rcut().expect("rcut");
-    let ls =
-        pyscf_pbc_gto::lattice::get_lattice_ls(&cell, Some(rcut), None, true).expect("images");
+    let ls = pyscf_pbc_gto::lattice::get_lattice_ls(&cell, Some(rcut), None, true).expect("images");
     let got = ft_aopair_kpt_with_images(&cell, &gv, [0.0; 3], [0.0; 3], &ls).expect("ft");
 
     // Host reference: the same lattice sum, written from the closed form.
@@ -199,8 +201,7 @@ fn gate1_holds_at_every_kpoint() {
     let nao = cell.mol.nao_nr;
     let kpts = pyscf_pbc_gto::make_kpts_default(&cell, [2, 2, 2]).expect("2x2x2 k-mesh");
     let rcut = 1.5 * cell.try_rcut().expect("rcut");
-    let ls =
-        pyscf_pbc_gto::lattice::get_lattice_ls(&cell, Some(rcut), None, true).expect("images");
+    let ls = pyscf_pbc_gto::lattice::get_lattice_ls(&cell, Some(rcut), None, true).expect("images");
     let s = intor_cross_with_images(
         "int1e_ovlp",
         &cell,
@@ -256,8 +257,7 @@ fn matches_a_dense_grid_numerical_ft() {
                     // AO block is F-order `(ngrids, nao)`; gamma → imag dropped.
                     let a = ao.kaos[0].re[r + i * ngrids];
                     let b = ao.kaos[0].re[r + j * ngrids];
-                    let th =
-                        -(g[0] * coords[r][0] + g[1] * coords[r][1] + g[2] * coords[r][2]);
+                    let th = -(g[0] * coords[r][0] + g[1] * coords[r][1] + g[2] * coords[r][2]);
                     sr += a * b * th.cos();
                     si += a * b * th.sin();
                 }
@@ -339,10 +339,8 @@ out = {'nao': int(c.nao_nr()), 'ng': int(Gv.shape[0]),
        'im': np.imag(val).ravel().tolist()}
 print(json.dumps(out))
 "#;
-    let gv_json = serde_json::to_string(
-        &gv.iter().map(|g| g.to_vec()).collect::<Vec<_>>(),
-    )
-    .expect("json");
+    let gv_json =
+        serde_json::to_string(&gv.iter().map(|g| g.to_vec()).collect::<Vec<_>>()).expect("json");
     let mut args = common::cell_args(&cell, &[]);
     args.insert(3, "gth-szv".into());
     args.insert(4, "gth-pade".into());
@@ -381,7 +379,13 @@ print(json.dumps(out))
     let (g, rem) = (at / (nao * nao), at % (nao * nao));
     eprintln!(
         "worst at G[{g}] ({:?}) elem ({},{}) got {:.17e}{:+.17e}i want {:.17e}{:+.17e}i",
-        gv[g], rem / nao, rem % nao, got.re[at], got.im[at], re[at], im[at]
+        gv[g],
+        rem / nao,
+        rem % nao,
+        got.re[at],
+        got.im[at],
+        re[at],
+        im[at]
     );
     assert!(w < 1e-9, "ft_aopair deviates from upstream by {w:e}");
 }

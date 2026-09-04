@@ -313,11 +313,7 @@ impl KOverrideHooks for KsymAdaptedKrks {
         Ok(v)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         if !self.use_ao_symmetry {
             return pyscf_pbc_scf::krhf::eig_channel(&fock[0], s1e, self.nao());
         }
@@ -346,20 +342,13 @@ impl KOverrideHooks for KsymAdaptedKrks {
         Ok((es, cs))
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         // ONE Fermi level over the UNFOLDED BZ (17-CONTEXT §3.4). Shared with
         // `KsymAdaptedKrhf`, which upstream reaches by inheritance.
         ksymm_get_occ_restricted(&self.kpts, mo_energy, self.nelectron())
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         Ok(vec![pyscf_pbc_scf::krdm::make_rdm1(
             mo_coeff,
             mo_occ,
@@ -369,12 +358,7 @@ impl KOverrideHooks for KsymAdaptedKrks {
 
     /// `krks_ksymm.py:118-138` — `e1` is a **`weights_ibz`** sum, and the
     /// Coulomb/XC parts come from the tags `get_veff` left behind.
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         let nao = self.nao();
         let tags = self.tags.get().ok_or_else(|| {
             PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
@@ -484,35 +468,19 @@ impl KOverrideHooks for KsymAdaptedKrkspu {
         Ok(v)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         self.ks.eig(fock, s1e)
     }
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         self.ks.get_occ(mo_energy)
     }
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         self.ks.make_rdm1(mo_coeff, mo_occ)
     }
 
     /// `krkspu.energy_elec` (`krkspu.py:145-160`), which is itself
     /// `weights_ibz`-aware — the ksymm class reuses it unchanged.
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         let (e, ecoul) = self.ks.energy_elec(dms, h1e, vhf)?;
         Ok((e + self.e_u.get(), ecoul))
     }
@@ -810,11 +778,7 @@ impl KOverrideHooks for KsymAdaptedKuks {
         Ok(v)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         let nao = self.nao();
         if !self.use_ao_symmetry {
             let mut es = Vec::new();
@@ -840,13 +804,12 @@ impl KOverrideHooks for KsymAdaptedKuks {
         let mut cs = Vec::new();
         for (spin, set) in fock.iter().enumerate() {
             for (k, f) in set.iter().enumerate() {
-                let (e, c) =
-                    eig_symm_adapted(f, &s1e[k], &so[k], &ids[k], nao).map_err(|err| {
-                        PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
-                            "KUKS/ksymm: symmetry-adapted eig failed at spin {spin}, \
+                let (e, c) = eig_symm_adapted(f, &s1e[k], &so[k], &ids[k], nao).map_err(|err| {
+                    PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
+                        "KUKS/ksymm: symmetry-adapted eig failed at spin {spin}, \
                              IBZ k = {k}: {err}"
-                        )))
-                    })?;
+                    )))
+                })?;
                 es.push(e);
                 cs.push(c);
             }
@@ -854,23 +817,12 @@ impl KOverrideHooks for KsymAdaptedKuks {
         Ok((es, cs))
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         // TWO Fermi levels, each over the UNFOLDED BZ (17-CONTEXT §3.4).
-        pyscf_pbc_scf::khf_ksymm::ksymm_get_occ_unrestricted(
-            &self.kpts,
-            mo_energy,
-            self.nelec()?,
-        )
+        pyscf_pbc_scf::khf_ksymm::ksymm_get_occ_unrestricted(&self.kpts, mo_energy, self.nelec()?)
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         let nao = self.nao();
         let nk = self.kpts_ibz.len();
         Ok(vec![
@@ -879,12 +831,7 @@ impl KOverrideHooks for KsymAdaptedKuks {
         ])
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         let nao = self.nao();
         let tags = self.tags.get().ok_or_else(|| {
             PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
@@ -987,34 +934,18 @@ impl KOverrideHooks for KsymAdaptedKukspu {
         Ok(v)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         self.ks.eig(fock, s1e)
     }
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         self.ks.get_occ(mo_energy)
     }
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         self.ks.make_rdm1(mo_coeff, mo_occ)
     }
 
     /// `kukspu.energy_elec` (`kukspu.py:125-140`), itself `weights_ibz`-aware.
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         let (e, ecoul) = self.ks.energy_elec(dms, h1e, vhf)?;
         Ok((e + self.e_u.get(), ecoul))
     }

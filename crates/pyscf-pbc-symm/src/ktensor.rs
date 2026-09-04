@@ -195,11 +195,19 @@ impl<'a> KsymmMeta<'a> {
     /// The minimum viable metadata: a `KPoints` and nothing else. Enough for
     /// a rank-2 array that is only ever written and read at its IBZ keys.
     pub fn new(kpts: &'a KPoints) -> Self {
-        Self { kpts, kqrts: None, rmat: None, label: None, trans: None, incore: true }
+        Self {
+            kpts,
+            kqrts: None,
+            rmat: None,
+            label: None,
+            trans: None,
+            incore: true,
+        }
     }
 
     fn need_kqrts(&self) -> Result<&'a KQuartets, PbcSymmError> {
-        self.kqrts.ok_or(PbcSymmError::KsymmMissingMetadata("kqrts"))
+        self.kqrts
+            .ok_or(PbcSymmError::KsymmMissingMetadata("kqrts"))
     }
 
     fn need_rmat(&self) -> Result<&'a MORotationMatrix, PbcSymmError> {
@@ -207,7 +215,9 @@ impl<'a> KsymmMeta<'a> {
     }
 
     fn need_label(&self, rank: usize) -> Result<&'a [OrbSpace], PbcSymmError> {
-        let l = self.label.ok_or(PbcSymmError::KsymmMissingMetadata("label"))?;
+        let l = self
+            .label
+            .ok_or(PbcSymmError::KsymmMissingMetadata("label"))?;
         if l.len() != rank {
             return Err(PbcSymmError::KsymmBadMetadataString {
                 kind: "label",
@@ -219,7 +229,9 @@ impl<'a> KsymmMeta<'a> {
     }
 
     fn need_trans(&self, rank: usize) -> Result<&'a [Conj], PbcSymmError> {
-        let t = self.trans.ok_or(PbcSymmError::KsymmMissingMetadata("trans"))?;
+        let t = self
+            .trans
+            .ok_or(PbcSymmError::KsymmMissingMetadata("trans"))?;
         if t.len() != rank {
             return Err(PbcSymmError::KsymmBadMetadataString {
                 kind: "trans",
@@ -275,7 +287,10 @@ impl<'d> Blocks<'d> {
     /// [`PbcSymmError::KsymmIndexOutOfRange`] when `i >= n_blocks()`.
     pub fn block(&self, i: usize) -> Result<&'d [Complex64], PbcSymmError> {
         if i >= self.n_blocks() {
-            return Err(PbcSymmError::KsymmIndexOutOfRange(i as i64, self.n_blocks()));
+            return Err(PbcSymmError::KsymmIndexOutOfRange(
+                i as i64,
+                self.n_blocks(),
+            ));
         }
         Ok(&self.data[i * self.block_len..(i + 1) * self.block_len])
     }
@@ -501,7 +516,10 @@ impl BlockSink for FlatBlocks<'_> {
     }
     fn put_block(&mut self, i: usize, v: &[Complex64]) -> Result<(), PbcSymmError> {
         if i >= self.n_blocks() {
-            return Err(PbcSymmError::KsymmIndexOutOfRange(i as i64, self.n_blocks()));
+            return Err(PbcSymmError::KsymmIndexOutOfRange(
+                i as i64,
+                self.n_blocks(),
+            ));
         }
         if v.len() != self.block_len {
             return Err(PbcSymmError::KsymmShapeMismatch {
@@ -901,7 +919,11 @@ impl OutcoreStore {
     fn create(len: usize) -> Result<Self, PbcSymmError> {
         let uid = Self::next_uid();
         let mut path = std::env::temp_dir();
-        path.push(format!("pyscf_ksymm_ktensor_{}_{}.h5", std::process::id(), uid));
+        path.push(format!(
+            "pyscf_ksymm_ktensor_{}_{}.h5",
+            std::process::id(),
+            uid
+        ));
 
         let file = hdf5::File::create(&path)
             .map_err(|e| PbcSymmError::KsymmOutcore(format!("create {}: {e}", path.display())))?;
@@ -912,7 +934,11 @@ impl OutcoreStore {
             .create(Self::DATASET)
             .and_then(|ds| ds.write(&arr))
             .map_err(|e| PbcSymmError::KsymmOutcore(format!("create dataset: {e}")))?;
-        Ok(Self { file: Some(file), path, len })
+        Ok(Self {
+            file: Some(file),
+            path,
+            len,
+        })
     }
 
     fn handle(&self) -> Result<&hdf5::File, PbcSymmError> {
@@ -948,7 +974,9 @@ impl OutcoreStore {
             )));
         }
         let arr = ndarray::Array1::from_vec(
-            data.iter().map(|z| H5Complex { r: z.re, i: z.im }).collect::<Vec<_>>(),
+            data.iter()
+                .map(|z| H5Complex { r: z.re, i: z.im })
+                .collect::<Vec<_>>(),
         );
         self.handle()?
             .dataset(Self::DATASET)
@@ -1322,8 +1350,11 @@ impl<'a> KsymmArray<'a> {
         match self.subarray_ndim() {
             2 => {
                 let coords = index_to_coords(key, &[nkpts])?;
-                let ki: Result<Vec<usize>, PbcSymmError> =
-                    coords.rows().iter().map(|r| checked_index(r[0], nkpts)).collect();
+                let ki: Result<Vec<usize>, PbcSymmError> = coords
+                    .rows()
+                    .iter()
+                    .map(|r| checked_index(r[0], nkpts))
+                    .collect();
                 self.get_2d_many(&ki?)
             }
             4 => {
@@ -1414,8 +1445,10 @@ impl<'a> KsymmArray<'a> {
         match out.subarray_ndim() {
             2 => {
                 let keys: Vec<usize> = meta.kpts.ibz2bz.clone();
-                let vals: Vec<&[Complex64]> =
-                    keys.iter().map(|&ki| &arr[ki * bl..(ki + 1) * bl]).collect();
+                let vals: Vec<&[Complex64]> = keys
+                    .iter()
+                    .map(|&ki| &arr[ki * bl..(ki + 1) * bl])
+                    .collect();
                 out.set_2d_many(&keys, &vals)?;
             }
             4 => {
@@ -1427,8 +1460,7 @@ impl<'a> KsymmArray<'a> {
                     keys.push([ki, kj, ka]);
                     offs.push(((ki * nkpts + kj) * nkpts + ka) * bl);
                 }
-                let vals: Vec<&[Complex64]> =
-                    offs.iter().map(|&o| &arr[o..o + bl]).collect();
+                let vals: Vec<&[Complex64]> = offs.iter().map(|&o| &arr[o..o + bl]).collect();
                 out.set_4d_many(&keys, &vals)?;
             }
             r => return Err(PbcSymmError::KsymmUnsupportedRank(r)),

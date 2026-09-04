@@ -366,7 +366,9 @@ pub fn eval_xc_eff_uks(
 ) -> Result<VxcEff, PbcDftError> {
     let ty = XcType::of(xc_code)?;
     if rho_a.ngrids != rho_b.ngrids || rho_a.nvar != rho_b.nvar {
-        return Err(err("pbc NumInt: alpha and beta density blocks differ in shape"));
+        return Err(err(
+            "pbc NumInt: alpha and beta density blocks differ in shape",
+        ));
     }
     let ngrids = rho_a.ngrids;
     let nvar = ty.nvar();
@@ -573,7 +575,14 @@ fn eval_raw1_rks(
     } else {
         None
     };
-    backend_eval(xc_code, &half, &half, sigma_q.as_deref(), sigma_q.as_deref(), sigma_q.as_deref())
+    backend_eval(
+        xc_code,
+        &half,
+        &half,
+        sigma_q.as_deref(),
+        sigma_q.as_deref(),
+        sigma_q.as_deref(),
+    )
 }
 
 /// Drive the spin-resolved backend for an OPEN-SHELL pair.

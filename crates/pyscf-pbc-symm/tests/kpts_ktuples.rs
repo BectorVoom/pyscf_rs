@@ -12,7 +12,6 @@
 // belongs to.
 #![allow(clippy::needless_range_loop)]
 
-
 use pyscf_pbc_gto::Cell;
 use pyscf_pbc_gto::test_systems::diamond;
 use pyscf_pbc_symm::kpts::{KPoints, KQuartets, make_kpts};
@@ -57,7 +56,10 @@ fn addition_and_inverse_tables_are_consistent() {
             gamma,
             "add(k={k}, inv(k)={ik}) must be Gamma"
         );
-        assert_eq!(inv[ik] as usize, k, "inverse_table is not an involution at {k}");
+        assert_eq!(
+            inv[ik] as usize, k,
+            "inverse_table is not an involution at {k}"
+        );
     }
 
     for i in 0..nk {
@@ -70,7 +72,11 @@ fn addition_and_inverse_tables_are_consistent() {
         );
         // The group is abelian: k_i + k_j == k_j + k_i.
         for j in 0..nk {
-            assert_eq!(add[i * nk + j], add[j * nk + i], "addition_table is not symmetric");
+            assert_eq!(
+                add[i * nk + j],
+                add[j * nk + i],
+                "addition_table is not symmetric"
+            );
         }
     }
 }
@@ -115,8 +121,15 @@ fn ktuple_index_round_trips_over_the_whole_range() {
         for t in 0..n {
             let digits = kpts.index_to_ktuple(t, ntuple);
             assert_eq!(digits.len(), ntuple);
-            assert!(digits.iter().all(|&d| d < nk), "digit out of range at t = {t}");
-            assert_eq!(kpts.ktuple_to_index(&digits), t, "round-trip failed at t = {t}");
+            assert!(
+                digits.iter().all(|&d| d < nk),
+                "digit out of range at t = {t}"
+            );
+            assert_eq!(
+                kpts.ktuple_to_index(&digits),
+                t,
+                "round-trip failed at t = {t}"
+            );
         }
     }
 }
@@ -144,15 +157,24 @@ fn make_ktuples_ibz_partitions_the_full_tuple_space() {
                 seen[k] = true;
             }
         }
-        assert!(seen.iter().all(|b| *b), "ntuple={ntuple}: some tuple is in no star");
+        assert!(
+            seen.iter().all(|b| *b),
+            "ntuple={ntuple}: some tuple is in no star"
+        );
 
         assert_eq!(t.ibz2bz.len(), t.stars.len());
         assert_eq!(t.weight_ibz.len(), t.stars.len());
         let wsum: f64 = t.weight_ibz.iter().sum();
-        assert!((wsum - 1.0).abs() < 1e-14, "ntuple={ntuple}: weights sum to {wsum}");
+        assert!(
+            (wsum - 1.0).abs() < 1e-14,
+            "ntuple={ntuple}: weights sum to {wsum}"
+        );
         for (i, star) in t.stars.iter().enumerate() {
             assert!((t.weight_ibz[i] - star.len() as f64 / n as f64).abs() < 1e-15);
-            assert!(star.contains(&t.ibz2bz[i]), "the representative is not in its own star");
+            assert!(
+                star.contains(&t.ibz2bz[i]),
+                "the representative is not in its own star"
+            );
             // stars_ops[i][j] == stars_ops_bz[stars[i][j]] — the same
             // consistency identity Task 1 asserts for single k-points.
             for (j, &k) in star.iter().enumerate() {
@@ -197,8 +219,7 @@ fn kquartets_stabilizer_fixes_the_first_index() {
     for (i, quartet) in kq.kqrts_ibz.iter().enumerate() {
         for (klcd, iop) in kq.loop_stabilizer(i) {
             assert_eq!(
-                kpts.k2opk[quartet[0]][iop] as usize,
-                quartet[0],
+                kpts.k2opk[quartet[0]][iop] as usize, quartet[0],
                 "stabilizer op {iop} does not fix quartet {i}'s first index"
             );
             for d in 0..4 {
@@ -233,10 +254,17 @@ fn little_cogroups_are_conjugates_of_the_ibz_representatives() {
         );
         let mut perm = indices[ki].clone();
         perm.sort_unstable();
-        assert_eq!(perm, (0..order_ibz).collect::<Vec<_>>(), "indices[{ki}] is not a permutation");
+        assert_eq!(
+            perm,
+            (0..order_ibz).collect::<Vec<_>>(),
+            "indices[{ki}] is not a permutation"
+        );
         // Every op in the little co-group really does fix the IBZ k-point.
         for &iop in &kpts.little_cogroup_ops[ki_ibz] {
-            assert_eq!(kpts.k2opk[kpts.ibz2bz[ki_ibz]][iop] as usize, kpts.ibz2bz[ki_ibz]);
+            assert_eq!(
+                kpts.k2opk[kpts.ibz2bz[ki_ibz]][iop] as usize,
+                kpts.ibz2bz[ki_ibz]
+            );
         }
     }
 

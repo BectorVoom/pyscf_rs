@@ -52,7 +52,8 @@ fn copy_rebuild_with_new_basis_via_mole_build() {
 
     let mut mol = reference_small.clone();
     mol.basis = "cc-pvdz".to_string(); // raw name assignment, upstream-style
-    mol.build().expect("Mole::build() must dispatch to the gto hook");
+    mol.build()
+        .expect("Mole::build() must dispatch to the gto hook");
 
     assert_eq!(mol.natm, 2, "atoms preserved across rebuild");
     assert_eq!(
@@ -75,16 +76,26 @@ fn rebuild_same_basis_is_value_stable() {
     let reference = M(h2("sto-3g")).unwrap();
 
     let mut mol = reference.clone();
-    mol.build().expect("Mole::build() must dispatch to the gto hook");
+    mol.build()
+        .expect("Mole::build() must dispatch to the gto hook");
 
     assert_eq!(mol.nao_nr, reference.nao_nr);
     assert_eq!(mol.natm, reference.natm);
-    assert_eq!(mol._atm, reference._atm, "_atm stable across same-basis rebuild");
-    assert_eq!(mol._bas, reference._bas, "_bas stable across same-basis rebuild");
+    assert_eq!(
+        mol._atm, reference._atm,
+        "_atm stable across same-basis rebuild"
+    );
+    assert_eq!(
+        mol._bas, reference._bas,
+        "_bas stable across same-basis rebuild"
+    );
     // Coordinates must NOT drift (Bohr fed back as Bohr — no re-conversion).
     for (a, b) in mol._atom.iter().zip(reference._atom.iter()) {
         assert_eq!(a.0, b.0, "atom symbol stable");
-        assert_eq!(a.1, b.1, "atom coordinates stable (no double unit conversion)");
+        assert_eq!(
+            a.1, b.1,
+            "atom coordinates stable (no double unit conversion)"
+        );
     }
 }
 

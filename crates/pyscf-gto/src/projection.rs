@@ -613,8 +613,12 @@ pub fn build_image_expanded_with_aux(
     }
 
     let aux_base = (atoms.len() * shifts.len()) as u32;
-    let (aux_cintx_atoms, aux_shells) =
-        build_atoms_and_shells_with_base(aux_atoms, aux_basis, representation_of(aux_cart), aux_base)?;
+    let (aux_cintx_atoms, aux_shells) = build_atoms_and_shells_with_base(
+        aux_atoms,
+        aux_basis,
+        representation_of(aux_cart),
+        aux_base,
+    )?;
     let n_aux = aux_shells.len();
     all_atoms.extend(aux_cintx_atoms);
     all_shells.extend(aux_shells);

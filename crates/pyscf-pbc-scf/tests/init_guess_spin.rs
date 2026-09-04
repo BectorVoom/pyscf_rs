@@ -64,7 +64,10 @@ fn li_atom_spin1() -> Cell {
 fn h2_stretched_spin0() -> Cell {
     build(
         8.0,
-        vec![("H".into(), [0.0, 0.0, -1.5]), ("H".into(), [0.0, 0.0, 1.5])],
+        vec![
+            ("H".into(), [0.0, 0.0, -1.5]),
+            ("H".into(), [0.0, 0.0, 1.5]),
+        ],
         "6-31g",
         0,
     )
@@ -140,11 +143,13 @@ fn breaksym_makes_the_two_channels_differ_at_spin_zero() {
 fn breaksym_one_zeroes_the_inter_atomic_beta_blocks() {
     let cell = h2_stretched_spin0();
     let nao = cell.mol.nao_nr;
-    assert_eq!(nao, 4, "6-31g on H2 must give 4 AOs; the block layout below assumes it");
+    assert_eq!(
+        nao, 4,
+        "6-31g on H2 must give 4 AOs; the block layout below assumes it"
+    );
     let kpts = gamma();
     let s1e = overlap(&cell, &kpts);
-    let dms =
-        get_init_guess(&cell, 1, 2, &KInitGuess::Minao, &s1e, &[1.0, 1.0], 1).expect("guess");
+    let dms = get_init_guess(&cell, 1, 2, &KInitGuess::Minao, &s1e, &[1.0, 1.0], 1).expect("guess");
     let (a, b) = (&dms[0][0], &dms[1][0]);
 
     let mut ratio: Option<f64> = None;

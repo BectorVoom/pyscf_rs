@@ -31,8 +31,8 @@ use pyscf_pbc_gto::test_systems::{diamond, graphene, he_fcc, lif, si};
 use pyscf_pbc_scf::{KInitGuess, KScfConfig, KScfResult, Krhf};
 use pyscf_pbc_symm::space_group::SPGElement;
 use pyscf_pbc_symm::symmetry::{
-    self, check_mesh_symmetry, get_rotation_mat, make_dmats, transform_1e_operator, transform_dm,
-    transform_mo_coeff, DmatSet, Symmetry,
+    self, DmatSet, Symmetry, check_mesh_symmetry, get_rotation_mat, make_dmats,
+    transform_1e_operator, transform_dm, transform_mo_coeff,
 };
 
 const TOL: f64 = 1e-6;
@@ -58,7 +58,9 @@ fn f_order_square_to_rowmajor(ct: &CTensor, n: usize) -> Vec<Complex64> {
 
 /// Row-major (C-order) `n x n` `CTensor` -> `Vec<Complex64>` (plain copy).
 fn rowmajor_square(ct: &CTensor, n: usize) -> Vec<Complex64> {
-    (0..n * n).map(|k| Complex64::new(ct.re[k], ct.im[k])).collect()
+    (0..n * n)
+        .map(|k| Complex64::new(ct.re[k], ct.im[k]))
+        .collect()
 }
 
 /// Column-major `nrows x ncols` -> row-major `Vec<Complex64>` — `mo_coeff`'s
@@ -206,7 +208,11 @@ fn assert_homomorphism(cell: &Cell) {
             // via `a2r` + `make_dmats` rather than requiring a
             // group-membership lookup.
             let composed_rot = composed.a2r(cell).expect("a2r").rot;
-            let composed_dmats = make_dmats(cell, &[composed_rot], None).0.into_iter().next().unwrap();
+            let composed_dmats = make_dmats(cell, &[composed_rot], None)
+                .0
+                .into_iter()
+                .next()
+                .unwrap();
 
             let r1 = get_rotation_mat(cell, [0.0, 0.0, 0.0], nao, op1, &sym.dmats[i], false, TOL)
                 .expect("R(op1)");
@@ -298,11 +304,17 @@ fn check_mesh_symmetry_is_a_noop_for_a_symmorphic_group() {
 fn check_mesh_symmetry_grows_a_mesh_incompatible_with_the_glide() {
     let cell = diamond();
     let sg = pyscf_pbc_symm::space_group::SpaceGroup::build(&cell, 1e-6).expect("space group");
-    assert!(sg.ops.iter().any(|op| !op.trans_is_zero()), "diamond must have a glide");
+    assert!(
+        sg.ops.iter().any(|op| !op.trans_is_zero()),
+        "diamond must have a glide"
+    );
 
     let mesh = [6usize, 6, 6];
     let (rm_list, mesh1) = check_mesh_symmetry(&cell, &sg.ops, Some(mesh), 1e-6, true);
-    assert!(!rm_list.is_empty(), "the glide must be incompatible with mesh {mesh:?}");
+    assert!(
+        !rm_list.is_empty(),
+        "the glide must be incompatible with mesh {mesh:?}"
+    );
     let mesh1 = mesh1.unwrap();
     assert!(
         mesh1.iter().zip(mesh.iter()).all(|(&a, &b)| a >= b),
@@ -359,9 +371,13 @@ fn symmetry_build_check_mesh_symmetry_false_keeps_the_full_group() {
 /// 4's point that "both branches ship; the flag is not a nicety".
 #[test]
 fn symmetry_build_check_mesh_symmetry_true_reduces_to_the_symmorphic_subgroup_on_diamonds_default_mesh()
-{
+ {
     let cell = diamond();
-    assert_eq!(cell.mesh, [47, 47, 47], "this test pins the specific mesh the claim depends on");
+    assert_eq!(
+        cell.mesh,
+        [47, 47, 47],
+        "this test pins the specific mesh the claim depends on"
+    );
     let sym = Symmetry::build(&cell, true, false, true).expect("Symmetry::build");
     assert_eq!(sym.nop, 24);
     assert!(sym.ops.iter().all(|op| op.trans_is_zero()));
@@ -385,7 +401,10 @@ fn has_inversion_matches_point_group() {
         assert!(sym.has_inversion, "{name} (m-3m) must have an inversion op");
     }
     let sym = Symmetry::build(&graphene(), true, false, false).expect("Symmetry::build");
-    assert!(!sym.has_inversion, "graphene (6mm) must NOT have an inversion op");
+    assert!(
+        !sym.has_inversion,
+        "graphene (6mm) must NOT have an inversion op"
+    );
 }
 
 /// `build_lattice_symmetry` populates `Cell::lattice_symmetry` and — since
@@ -395,9 +414,15 @@ fn build_lattice_symmetry_wires_cell_lattice_symmetry() {
     let mut cell = diamond();
     let mesh_before = cell.mesh;
     symmetry::build_lattice_symmetry(&mut cell, true).expect("build_lattice_symmetry");
-    let sym = cell.lattice_symmetry.as_ref().expect("lattice_symmetry must be Some");
+    let sym = cell
+        .lattice_symmetry
+        .as_ref()
+        .expect("lattice_symmetry must be Some");
     assert_eq!(sym.point_group_symbol, "m-3m");
-    assert_eq!(cell.mesh, mesh_before, "check_mesh_symmetry=true must not change the mesh");
+    assert_eq!(
+        cell.mesh, mesh_before,
+        "check_mesh_symmetry=true must not change the mesh"
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -445,14 +470,27 @@ fn converged_diamond_gamma() -> &'static Converged {
         let mo_coeff = colmajor_rect_to_rowmajor(&r.mo_coeff[0], nao, nao);
         let mo_occ = r.mo_occ[0].clone();
         let mo_energy = r.mo_energy[0].clone();
-        Converged { cell, nao, s, dm, mo_coeff, mo_occ, mo_energy }
+        Converged {
+            cell,
+            nao,
+            s,
+            dm,
+            mo_coeff,
+            mo_occ,
+            mo_energy,
+        }
     })
 }
 
 /// Build a density matrix (row-major `nao x nao`) from a row-major
 /// `mo_coeff` (`nao x nmo`) and occupations — the ONLY way `mo_coeff` is
 /// ever compared in this test file (17-CONTEXT §3.1).
-fn make_rdm1_rowmajor(mo_coeff: &[Complex64], occ: &[f64], nao: usize, nmo: usize) -> Vec<Complex64> {
+fn make_rdm1_rowmajor(
+    mo_coeff: &[Complex64],
+    occ: &[f64],
+    nao: usize,
+    nmo: usize,
+) -> Vec<Complex64> {
     let mut dm = vec![Complex64::new(0.0, 0.0); nao * nao];
     for (i, &o) in occ.iter().enumerate() {
         if o == 0.0 {
@@ -525,7 +563,11 @@ fn transform_dm_idempotent_under_op_then_its_inverse() {
     let sym = Symmetry::build(&c.cell, true, false, true).expect("Symmetry::build");
     let dmats_for = |op: &SPGElement| -> DmatSet {
         let op_rot = op.a2r(&c.cell).expect("a2r").rot;
-        make_dmats(&c.cell, &[op_rot], None).0.into_iter().next().unwrap()
+        make_dmats(&c.cell, &[op_rot], None)
+            .0
+            .into_iter()
+            .next()
+            .unwrap()
     };
     for (iop, op) in sym.ops.iter().enumerate() {
         let inv = op.inv().expect("inv");
@@ -535,7 +577,10 @@ fn transform_dm_idempotent_under_op_then_its_inverse() {
         let dm3 = transform_dm(&c.cell, [0.0, 0.0, 0.0], &dm2, c.nao, &inv, &dmats_inv)
             .expect("transform_dm(op^-1)");
         let d = max_abs_diff(&dm3, &c.dm);
-        assert!(d < 1e-7, "transform_dm(., op then op^-1) != dm for op {iop}: {d:e}");
+        assert!(
+            d < 1e-7,
+            "transform_dm(., op then op^-1) != dm for op {iop}: {d:e}"
+        );
     }
 }
 

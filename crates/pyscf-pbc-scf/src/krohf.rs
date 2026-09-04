@@ -41,7 +41,9 @@ impl Krohf {
     /// # Errors
     /// Propagates the `FFTDF` construction.
     pub fn new(cell: Cell, kpts: &[[f64; 3]]) -> Result<Self, PyscfRsError> {
-        Ok(Self::from_df(Box::new(Fftdf::new(cell, kpts).map_err(df_err)?)))
+        Ok(Self::from_df(Box::new(
+            Fftdf::new(cell, kpts).map_err(df_err)?,
+        )))
     }
 
     /// `KROHF` over an explicit density-fitting object.
@@ -322,18 +324,11 @@ impl KOverrideHooks for Krohf {
         vec![sum]
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         eig_channel(&fock[0], s1e, self.cell().mol.nao_nr)
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         // krohf.py:121-160. Without the `mo_ea` tag (which upstream only has
         // when the caller kept the alpha Fock around) `mo_ea == mo_energy`,
         // which is the branch this port implements: the core level fills
@@ -372,11 +367,7 @@ impl KOverrideHooks for Krohf {
         Ok((occ, vec![fermi, core_level]))
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         // krohf.py:38-51 — alpha from `occ > 0`, beta from `occ == 2`, each
         // with unit weight.
         let nao = self.cell().mol.nao_nr;
@@ -441,12 +432,7 @@ impl KOverrideHooks for Krohf {
         g
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         Ok(energy_elec(dms, h1e, vhf, self.cell().mol.nao_nr))
     }
 }

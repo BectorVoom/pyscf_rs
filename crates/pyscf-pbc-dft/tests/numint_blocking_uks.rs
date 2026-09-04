@@ -36,19 +36,21 @@ const MESH: [usize; 3] = [15, 15, 15];
 /// would collapse `nr_uks` onto `nr_rks` and prove nothing.
 fn model_dms(nao: usize, nkpts: usize) -> [Vec<Vec<CTensor>>; 2] {
     let build = |scale: f64, tilt: f64| -> Vec<Vec<CTensor>> {
-        vec![(0..nkpts)
-            .map(|k| {
-                let mut m = CTensor::zeros(nao * nao);
-                for p in 0..nao {
-                    for q in 0..nao {
-                        let v = 0.3 / (1.0 + tilt * (p as f64 - q as f64).abs())
-                            + if p == q { 1.0 } else { 0.0 };
-                        m.re[p * nao + q] = scale * v * (1.0 + 0.1 * k as f64);
+        vec![
+            (0..nkpts)
+                .map(|k| {
+                    let mut m = CTensor::zeros(nao * nao);
+                    for p in 0..nao {
+                        for q in 0..nao {
+                            let v = 0.3 / (1.0 + tilt * (p as f64 - q as f64).abs())
+                                + if p == q { 1.0 } else { 0.0 };
+                            m.re[p * nao + q] = scale * v * (1.0 + 0.1 * k as f64);
+                        }
                     }
-                }
-                m
-            })
-            .collect()]
+                    m
+                })
+                .collect(),
+        ]
     };
     [build(1.0, 1.0), build(0.72, 1.6)]
 }
@@ -67,7 +69,8 @@ fn nr_uks_is_bit_identical_for_the_default_whole_grid_partition() {
 
     let run = || {
         let ni = KNumInt::new(&kpts);
-        ni.nr_uks(&cell, &grids, "PBE", &dms, 1, None).expect("nr_uks")
+        ni.nr_uks(&cell, &grids, "PBE", &dms, 1, None)
+            .expect("nr_uks")
     };
     let a = run();
     let b = run();
@@ -116,7 +119,8 @@ fn nr_uks_agrees_across_block_partitions_far_inside_the_gate() {
         if let Some(w) = want {
             ni.max_memory = max_memory_for_block(w, comp, kpts.len());
         }
-        ni.nr_uks(&cell, &grids, "PBE", &dms, 1, None).expect("nr_uks")
+        ni.nr_uks(&cell, &grids, "PBE", &dms, 1, None)
+            .expect("nr_uks")
     };
     let reference = run(None);
     const TOL: f64 = 1e-13;

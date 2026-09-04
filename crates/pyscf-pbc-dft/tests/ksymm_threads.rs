@@ -34,9 +34,9 @@ mod common;
 
 use pyscf_algebra::CTensor;
 use pyscf_pbc_dft::krks_ksymm::{KsymAdaptedKrks, KsymAdaptedKuks};
-use pyscf_pbc_gto::{make_kpts_default, Cell};
+use pyscf_pbc_gto::{Cell, make_kpts_default};
 use pyscf_pbc_scf::{KInitGuess, KScfConfig, KScfResult};
-use pyscf_pbc_symm::kpts::{make_kpts, KPoints};
+use pyscf_pbc_symm::kpts::{KPoints, make_kpts};
 
 /// `3` is deliberately not a divisor of `nkpts` (8), `nkpts_ibz` (3) or `nao`.
 const THREADS: [usize; 4] = [1, 2, 3, 8];
@@ -105,7 +105,11 @@ fn same_bits(what: &str, t: usize, a: f64, b: f64) {
 }
 
 fn same_ctensor(what: &str, t: usize, a: &CTensor, b: &CTensor) {
-    assert_eq!(a.re.len(), b.re.len(), "{what}: length moved at {t} threads");
+    assert_eq!(
+        a.re.len(),
+        b.re.len(),
+        "{what}: length moved at {t} threads"
+    );
     for i in 0..a.re.len() {
         assert_eq!(
             a.re[i].to_bits(),
@@ -226,7 +230,11 @@ fn ksymm_kuks_is_bit_identical_across_thread_counts() {
         })
     };
     let reference = run(THREADS[0]);
-    assert_eq!(reference.dm.len(), 2, "KUKS must carry two density channels");
+    assert_eq!(
+        reference.dm.len(),
+        2,
+        "KUKS must carry two density channels"
+    );
     // RULE U, asserted rather than assumed: if the two channels had collapsed
     // this test would be a KRKS test wearing a KUKS name.
     let spin_diff = reference.dm[0]

@@ -86,10 +86,26 @@ pub fn takebak_4d(
     let idx1 = resolve(indices[1], out_shape[1]);
     let idx2 = resolve(indices[2], out_shape[2]);
     let idx3 = resolve(indices[3], out_shape[3]);
-    assert_eq!(idx0.len(), a_shape[0], "_takebak_4d: axis 0 length mismatch");
-    assert_eq!(idx1.len(), a_shape[1], "_takebak_4d: axis 1 length mismatch");
-    assert_eq!(idx2.len(), a_shape[2], "_takebak_4d: axis 2 length mismatch");
-    assert_eq!(idx3.len(), a_shape[3], "_takebak_4d: axis 3 length mismatch");
+    assert_eq!(
+        idx0.len(),
+        a_shape[0],
+        "_takebak_4d: axis 0 length mismatch"
+    );
+    assert_eq!(
+        idx1.len(),
+        a_shape[1],
+        "_takebak_4d: axis 1 length mismatch"
+    );
+    assert_eq!(
+        idx2.len(),
+        a_shape[2],
+        "_takebak_4d: axis 2 length mismatch"
+    );
+    assert_eq!(
+        idx3.len(),
+        a_shape[3],
+        "_takebak_4d: axis 3 length mismatch"
+    );
     assert_eq!(
         a.len(),
         a_shape[0] * a_shape[1] * a_shape[2] * a_shape[3],

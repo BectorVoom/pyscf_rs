@@ -133,8 +133,7 @@ pub fn estimate_omega_for_ke_cutoff(cell: &Cell, ke_cutoff: f64, precision: Opti
         .max()
         .unwrap_or(0);
     let kmax = (ke_cutoff * 2.0).sqrt();
-    let log_rest =
-        (precision / (16.0 * std::f64::consts::PI.powi(2) * kmax.powi(lmax))).ln();
+    let log_rest = (precision / (16.0 * std::f64::consts::PI.powi(2) * kmax.powi(lmax))).ln();
     (-0.5 * ke_cutoff / log_rest).sqrt()
 }
 
@@ -182,9 +181,8 @@ pub fn estimate_rs_2c2e_rcut(auxcell: &Cell, omega: f64, precision: Option<f64>)
     } else {
         1.0 / (2.0 / aux_exp + omega.powi(-2))
     };
-    let fac = 2.0 * std::f64::consts::PI.powf(3.5) / auxcell.vol()
-        * aux_exp.powi(-3)
-        * theta.powf(-1.5);
+    let fac =
+        2.0 * std::f64::consts::PI.powf(3.5) / auxcell.vol() * aux_exp.powi(-3) * theta.powf(-1.5);
     ((fac / auxcell.rcut / precision + 1.0).ln() / theta).sqrt()
 }
 
@@ -203,12 +201,7 @@ pub fn estimate_rs_2c2e_rcut(auxcell: &Cell, omega: f64, precision: Option<f64>)
 /// This port has no `_RangeSeparatedCell`, so it is called with the PLAIN cell.
 /// `measurements/omega.out` records both, and the maxima agree exactly — the
 /// split only refines the SMALLER radii.
-pub fn estimate_rcut(
-    cell: &Cell,
-    auxcell: &Cell,
-    omega: f64,
-    precision: Option<f64>,
-) -> Vec<f64> {
+pub fn estimate_rcut(cell: &Cell, auxcell: &Cell, omega: f64, precision: Option<f64>) -> Vec<f64> {
     let precision = precision.unwrap_or(cell.precision * 1e-1);
     if cell.mol.nbas == 0 || auxcell.mol.nbas == 0 {
         return vec![0.0];
@@ -239,8 +232,7 @@ pub fn estimate_rcut(
     let ci = cs[ai_idx];
 
     // `ck` normalises the auxiliary basis so `\int chi_k dr = 1`.
-    let ck = 1.0 / (4.0 * std::f64::consts::PI)
-        / crate::incore::auxcell::gaussian_int(lk + 2, ak);
+    let ck = 1.0 / (4.0 * std::f64::consts::PI) / crate::incore::auxcell::gaussian_int(lk + 2, ak);
 
     let r_init = cell.rcut;
     (0..cell.mol.nbas)
@@ -257,10 +249,8 @@ pub fn estimate_rcut(
             let c1 = ci * cj * ck * norm_ang;
             let sfac = aij * aj / (aij * aj + ai * theta);
             let fl = 2.0;
-            let mut fac = 2.0_f64.powi(li)
-                * std::f64::consts::PI.powf(2.5)
-                * c1
-                * theta.powf(l3 - 0.5);
+            let mut fac =
+                2.0_f64.powi(li) * std::f64::consts::PI.powf(2.5) * c1 * theta.powf(l3 - 0.5);
             fac *= 2.0 * std::f64::consts::PI / cell.vol() / theta;
             fac /= aij.powf(f64::from(li) + 1.5) * ak.powf(f64::from(lk) + 1.5) * aj.powi(lj);
             fac *= fl / precision;

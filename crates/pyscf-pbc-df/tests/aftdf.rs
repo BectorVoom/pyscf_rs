@@ -67,7 +67,10 @@ fn get_pp_is_hermitian_and_real_at_gamma() {
         "V_pp anti-Hermitian by {w:e}, past the 1e-10 precision target"
     );
     let imax = vpp[0].im.iter().fold(0.0f64, |a, v| a.max(v.abs()));
-    assert!(imax < 1e-12, "V_pp at gamma should be real, |Im| = {imax:e}");
+    assert!(
+        imax < 1e-12,
+        "V_pp at gamma should be real, |Im| = {imax:e}"
+    );
 
     let mut conv = Aftdf::with_mesh(diamond(), &kpts, [15, 15, 15]).expect("aftdf");
     conv.rcut = pyscf_pbc_df::ft_ao::RcutChoice::Scaled(1.5);
@@ -93,13 +96,23 @@ fn get_pp_converges_against_fftdf() {
     for m in [11usize, 15, 21] {
         let a = Aftdf::with_mesh(diamond(), &kpts, [m, m, m]).expect("aftdf");
         let f = Fftdf::with_mesh(diamond(), &kpts, [m, m, m]).expect("fftdf");
-        let d = max_dev(&a.get_pp(&kpts).expect("aft pp"), &f.get_pp(&kpts).expect("fft pp"));
+        let d = max_dev(
+            &a.get_pp(&kpts).expect("aft pp"),
+            &f.get_pp(&kpts).expect("fft pp"),
+        );
         eprintln!("mesh {m}: |get_pp_AFT − get_pp_FFT| = {d:e}");
         devs.push(d);
     }
     assert!(devs[1] < devs[0], "mesh 15 must improve on mesh 11");
-    assert!(devs[2] <= devs[1] * 1.05, "mesh 21 must not regress on mesh 15");
-    assert!(devs[2] < 1e-6, "get_pp still {:e} apart at mesh 21", devs[2]);
+    assert!(
+        devs[2] <= devs[1] * 1.05,
+        "mesh 21 must not regress on mesh 15"
+    );
+    assert!(
+        devs[2] < 1e-6,
+        "get_pp still {:e} apart at mesh 21",
+        devs[2]
+    );
 }
 
 /// The all-electron `get_nuc` branch — the one a `gth-pade` cell never reaches,
@@ -211,7 +224,13 @@ print(json.dumps(out))
     type CellFn = fn() -> pyscf_pbc_gto::Cell;
     for (cell_fn, basis, pseudo, what, tol) in [
         (diamond as CellFn, "gth-szv", "gth-pade", "pp", 5e-9),
-        (diamond as CellFn, "gth-szv", "gth-pade", "pp_int_part2", 5e-11),
+        (
+            diamond as CellFn,
+            "gth-szv",
+            "gth-pade",
+            "pp_int_part2",
+            5e-11,
+        ),
         (he_all_electron as CellFn, "sto-3g", "", "nuc", 5e-9),
         (diamond as CellFn, "gth-szv", "gth-pade", "vj", 5e-9),
         (diamond as CellFn, "gth-szv", "gth-pade", "vk", 5e-9),
@@ -245,10 +264,14 @@ print(json.dumps(out))
                     ..Default::default()
                 };
                 let r = df.get_jk(&[dm], &kpts, opts).expect("get_jk");
-                if what == "vj" { r.vj.expect("vj") } else { r.vk.expect("vk") }
-                    .into_iter()
-                    .flatten()
-                    .collect()
+                if what == "vj" {
+                    r.vj.expect("vj")
+                } else {
+                    r.vk.expect("vk")
+                }
+                .into_iter()
+                .flatten()
+                .collect()
             }
         };
         let w = common::max_dev(&got, &want);

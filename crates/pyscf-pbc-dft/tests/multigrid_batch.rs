@@ -33,6 +33,9 @@
 
 mod common;
 
+use pyscf_kernels::multigrid_pair::{
+    PairSlotBatchDevice, collocate_pairs_integrate_batched, collocate_pairs_rho_batched,
+};
 use pyscf_pbc_dft::multigrid::pair::{
     build_pair_level_tables, build_pair_task_list, pairlevel_pass2_with, pairlevel_rho_with,
 };
@@ -105,7 +108,10 @@ fn same_bits(what: &str, a: &[f64], b: &[f64]) {
             x - y
         );
     }
-    println!("{what}: bit-identical over {} values (max |d| = {worst:e})", a.len());
+    println!(
+        "{what}: bit-identical over {} values (max |d| = {worst:e})",
+        a.len()
+    );
 }
 
 /// The comparison itself, for one cell.
@@ -119,7 +125,7 @@ fn compare(name: &str, cell: &Cell) {
     let mut levels_with_batch = 0usize;
     for (l, lv) in tables.iter().enumerate() {
         let Some(lv) = lv.as_ref() else { continue };
-        if lv.batch.is_some() {
+        if !lv.batches.is_empty() {
             levels_with_batch += 1;
         }
 
@@ -155,6 +161,70 @@ fn batched_and_streamed_launches_agree_bit_for_bit_on_diamond() {
     compare("diamond", &small_diamond());
 }
 
+/// A cell whose basis carries a d shell.
+///
+/// The batched kernels hold one instance's slot accumulators in a fixed
+/// 10-wide register array (`MAX_SLOTS_PER_INSTANCE`), and an instance owns one
+/// slot per distinct `(k1,k2,k3)` monomial of its pair — `C(l_p+l_q+3, 3)`,
+/// which is exactly 10 at `l_p+l_q = 2` (the `gth-szv` fixtures' widest pair)
+/// but 20 at 3 and 35 at 4. Every polarized basis has p·d pairs, so this is
+/// not an exotic input.
+fn d_shell_cell() -> Cell {
+    let h = 2.834589;
+    let basis = "He    S\n      3.0   1.0\nHe    P\n      1.2   1.0\nHe    D\n      0.8   1.0\n";
+    let mut cell = Cell::build(pyscf_pbc_gto::CellBuildArgs {
+        mole: pyscf_gto::MoleBuildArgs {
+            atom: pyscf_gto::AtomInput::Tuples(vec![("He".into(), [0.0, 0.0, 0.0])]),
+            basis: pyscf_gto::BasisInput::NwchemText(basis.into()),
+            unit: pyscf_core::Unit::Bohr,
+            ..Default::default()
+        },
+        a: pyscf_pbc_gto::ALattice::Matrix([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]),
+        ..Default::default()
+    })
+    .expect("d-shell cell must build");
+    cell.mesh = MESH;
+    cell
+}
+
+/// **M-08 — a level the batched kernels cannot hold streams, it does not
+/// fail.**
+///
+/// The 10-slot-per-instance bound used to be guarded only by a `debug_assert!`
+/// in the batch builder, so a release build handed the over-wide batch to
+/// `validate_batch`, which refused it — and the refusal propagated out of the
+/// density evaluation instead of falling back. The whole v2 driver was
+/// therefore unusable in release for any basis with d functions.
+#[test]
+fn a_level_over_the_register_bound_falls_back_to_streaming() {
+    let cell = d_shell_cell();
+    let decon = build_pshells(&cell).expect("build_pshells");
+    let task_list = build_pair_task_list(&cell, &decon).expect("task list");
+    let tables = build_pair_level_tables(&cell, &decon, &task_list).expect("tables");
+    let dm = random_symmetric_dm(cell.mol.nao_nr, 0x00D_5EED);
+    let dm_p = pyscf_pbc_dft::multigrid::colloc::expand_dm(&decon, &dm);
+
+    let mut levels = 0usize;
+    for (l, lv) in tables.iter().enumerate() {
+        let Some(lv) = lv.as_ref() else { continue };
+        levels += 1;
+        assert!(
+            lv.batches.is_empty(),
+            "level {l}: a d-shell pair owns 20 monomials, which cannot be batched"
+        );
+        // The production entry point, batching requested: it must succeed by
+        // streaming rather than error out at launch validation.
+        let rho = pairlevel_rho_with(lv, &decon, &dm_p, true).expect("rho must not fail");
+        assert!(rho.iter().all(|v| v.is_finite()));
+
+        let w = model_weight(lv.ngrids, 0x5EED_1000 + l as u64);
+        let mut v_p = vec![0.0f64; decon.nao_p * decon.nao_p];
+        pairlevel_pass2_with(lv, &decon, &w, &mut v_p, true).expect("pass2 must not fail");
+        assert!(v_p.iter().all(|v| v.is_finite()));
+    }
+    assert!(levels > 0, "the fixture built no level at all");
+}
+
 /// The batch's own shape, reported: how many launches M-03 replaces, and how
 /// much memory the concatenation costs. This is the number the plan's GATE S
 /// ledger wants, and it is printed rather than asserted because the block
@@ -168,11 +238,62 @@ fn the_batch_is_actually_built() {
         for (l, lv) in tables.iter().enumerate() {
             let Some(lv) = lv.as_ref() else { continue };
             let nblocks = lv.blocks.len();
-            let streamed_slots: usize = lv.block_sel.iter().map(Vec::len).len();
-            match lv.batch.as_ref() {
-                Some(bl) => {
+            let streamed_slots: usize = lv.block_sel.iter().map(Vec::len).sum();
+            if lv.batches.is_empty() {
+                println!(
+                    "{name} level {l}: {nblocks} blocks, {streamed_slots} selections — \
+                     a single block exceeds the batch budget, streaming"
+                );
+            } else {
+                let total_points: usize = lv.batches.iter().map(|bl| bl.batch.npoints()).sum();
+                for (chunk, bl) in lv.batches.iter().enumerate() {
                     let b = &bl.batch;
-                    let bytes = b.coords.len() * 8
+                    let mut host_batch = b.clone();
+                    for (i, x) in host_batch.slot_coef.iter_mut().enumerate() {
+                        *x = ((i * 17 + 3) as f64).sin();
+                    }
+                    let client = pyscf_algebra::select_backend().expect("backend").client;
+                    let resident =
+                        PairSlotBatchDevice::new(&client, &host_batch).expect("resident");
+                    let plain_rho = collocate_pairs_rho_batched(&client, &host_batch).expect("rho");
+                    let resident_rho = resident
+                        .rho(&client, &host_batch.slot_coef)
+                        .expect("resident rho");
+                    same_bits("resident rho", &plain_rho, &resident_rho);
+                    let coef_b: Vec<f64> = host_batch
+                        .slot_coef
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &x)| x * 0.37 - (i as f64 * 0.013).cos())
+                        .collect();
+                    let single_rho_b = resident.rho(&client, &coef_b).expect("single rho b");
+                    let fused_rho = resident
+                        .rho2(&client, [&host_batch.slot_coef, &coef_b])
+                        .expect("fused rho");
+                    same_bits("fused rho alpha", &resident_rho, &fused_rho[0]);
+                    same_bits("fused rho beta", &single_rho_b, &fused_rho[1]);
+                    let weight = model_weight(b.npoints(), 0xABCD_0000 + chunk as u64);
+                    let plain_int =
+                        collocate_pairs_integrate_batched(&client, &host_batch, &weight)
+                            .expect("integrate");
+                    let resident_int = resident
+                        .integrate(&client, &host_batch.slot_coef, &weight)
+                        .expect("resident integrate");
+                    same_bits("resident integrate", &plain_int, &resident_int);
+                    let weight_b = model_weight(b.npoints(), 0xDCBA_0000 + chunk as u64);
+                    let single_int_b = resident
+                        .integrate(&client, &coef_b, &weight_b)
+                        .expect("single integrate b");
+                    let fused_int = resident
+                        .integrate2(
+                            &client,
+                            [&host_batch.slot_coef, &coef_b],
+                            [&weight, &weight_b],
+                        )
+                        .expect("fused integrate");
+                    same_bits("fused integrate alpha", &resident_int, &fused_int[0]);
+                    same_bits("fused integrate beta", &single_int_b, &fused_int[1]);
+                    let bytes = (b.coords_x.len() + b.coords_y.len() + b.coords_z.len()) * 8
                         + b.point_block.len() * 4
                         + b.slot_pow.len() * 4
                         + b.slot_coef.len() * 8
@@ -180,9 +301,10 @@ fn the_batch_is_actually_built() {
                         + b.instance_alpha.len() * 8
                         + b.instance_center.len() * 8;
                     println!(
-                        "{name} level {l}: mesh {:?}, {nblocks} blocks -> 1 launch per \
+                        "{name} level {l} chunk {chunk}: mesh {:?}, {nblocks} blocks -> {} launch(es) per \
                          direction; batch = {} points, {} instances, {} slots, {:.1} MiB",
                         lv.mesh,
+                        lv.batches.len(),
                         b.npoints(),
                         b.ninstances(),
                         b.nslots(),
@@ -190,8 +312,8 @@ fn the_batch_is_actually_built() {
                     );
                     assert_eq!(
                         b.npoints(),
-                        lv.ngrids,
-                        "{name} level {l}: the blocks must partition the mesh exactly"
+                        bl.point_global.len(),
+                        "{name} level {l} chunk {chunk}: point map must match the batch"
                     );
                     assert_eq!(
                         b.inst_slot0.len(),
@@ -208,10 +330,10 @@ fn the_batch_is_actually_built() {
                         "{name} level {l}: the instance prefix must end at the slot count"
                     );
                 }
-                None => println!(
-                    "{name} level {l}: {nblocks} blocks, {streamed_slots} selections — \
-                     over the batch budget, streaming (this is the intended fallback)"
-                ),
+                assert_eq!(
+                    total_points, lv.ngrids,
+                    "{name} level {l}: chunks must partition the mesh exactly"
+                );
             }
         }
     }

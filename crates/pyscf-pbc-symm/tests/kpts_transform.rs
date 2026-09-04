@@ -60,14 +60,13 @@
 // belongs to.
 #![allow(clippy::needless_range_loop)]
 
-
 use num_complex::Complex64;
 
 use pyscf_algebra::CTensor;
 use pyscf_pbc_df::JkOpts;
 use pyscf_pbc_gto::Cell;
-use pyscf_pbc_gto::test_systems::{diamond, si_precision};
 use pyscf_pbc_gto::make_kpts_default;
+use pyscf_pbc_gto::test_systems::{diamond, si_precision};
 use pyscf_pbc_scf::krhf::to_row_major;
 use pyscf_pbc_scf::{KInitGuess, KScfConfig, KScfResult, Krhf};
 use pyscf_pbc_symm::error::PbcSymmError;
@@ -92,7 +91,10 @@ struct Worst {
 
 impl Worst {
     fn new() -> Self {
-        Worst { val: 0.0, at: (0, 0, 0) }
+        Worst {
+            val: 0.0,
+            at: (0, 0, 0),
+        }
     }
     fn see(&mut self, val: f64, k: usize, p: usize, q: usize) {
         if val > self.val {
@@ -102,7 +104,10 @@ impl Worst {
     }
     fn report(&self, what: &str, tol: f64) {
         let (k, p, q) = self.at;
-        println!("  Gate B: max {what:<38} = {:e}   (tol {tol:e}, at k={k} p={p} q={q})", self.val);
+        println!(
+            "  Gate B: max {what:<38} = {:e}   (tol {tol:e}, at k={k} p={p} q={q})",
+            self.val
+        );
         assert!(
             self.val < tol,
             "Gate B: max {what} = {:e} exceeds {tol:e} at k={k} p={p} q={q}. \
@@ -120,14 +125,17 @@ impl Worst {
 // ---------------------------------------------------------------------
 
 fn rowmajor_square(ct: &CTensor, n: usize) -> Vec<Complex64> {
-    (0..n * n).map(|k| Complex64::new(ct.re[k], ct.im[k])).collect()
+    (0..n * n)
+        .map(|k| Complex64::new(ct.re[k], ct.im[k]))
+        .collect()
 }
 
 fn colmajor_rect_to_rowmajor(ct: &CTensor, nrows: usize, ncols: usize) -> Vec<Complex64> {
     let mut out = vec![Complex64::new(0.0, 0.0); nrows * ncols];
     for row in 0..nrows {
         for col in 0..ncols {
-            out[row * ncols + col] = Complex64::new(ct.re[row + col * nrows], ct.im[row + col * nrows]);
+            out[row * ncols + col] =
+                Complex64::new(ct.re[row + col * nrows], ct.im[row + col * nrows]);
         }
     }
     out
@@ -184,7 +192,10 @@ fn gate_b() -> &'static GateB {
         // has inversion, so `KPoints::build` forces it back off
         // (`kpts.py:1024`) — asserted below so the fixture cannot drift.
         let kpts = make_kpts(&cell, &kpts_abs, true, true).expect("make_kpts");
-        assert!(!kpts.time_reversal, "si has inversion: time reversal must be OFF");
+        assert!(
+            !kpts.time_reversal,
+            "si has inversion: time reversal must be OFF"
+        );
 
         let mf = Krhf::new(cell.clone(), &kpts_abs).expect("Krhf::new");
         let cfg = KScfConfig {
@@ -195,7 +206,11 @@ fn gate_b() -> &'static GateB {
             ..KScfConfig::default()
         };
         let r: KScfResult = mf.kernel(&cfg).expect("full-BZ KRHF must run");
-        assert!(r.converged, "full-BZ KRHF did not converge in {} cycles", r.cycles);
+        assert!(
+            r.converged,
+            "full-BZ KRHF did not converge in {} cycles",
+            r.cycles
+        );
 
         let nao = cell.mol.nao_nr;
         let nkpts = kpts_abs.len();
@@ -234,13 +249,19 @@ fn gate_b() -> &'static GateB {
         GateB {
             nao,
             nmo,
-            dm: (0..nkpts).map(|k| rowmajor_square(&r.dm[0][k], nao)).collect(),
-            fock: (0..nkpts).map(|k| rowmajor_square(&fock_ct[k], nao)).collect(),
+            dm: (0..nkpts)
+                .map(|k| rowmajor_square(&r.dm[0][k], nao))
+                .collect(),
+            fock: (0..nkpts)
+                .map(|k| rowmajor_square(&fock_ct[k], nao))
+                .collect(),
             mo_coeff: (0..nkpts)
                 .map(|k| colmajor_rect_to_rowmajor(&r.mo_coeff[r.idx(0, k)], nao, nmo))
                 .collect(),
             mo_occ: (0..nkpts).map(|k| r.mo_occ[r.idx(0, k)].clone()).collect(),
-            mo_energy: (0..nkpts).map(|k| r.mo_energy[r.idx(0, k)].clone()).collect(),
+            mo_energy: (0..nkpts)
+                .map(|k| r.mo_energy[r.idx(0, k)].clone())
+                .collect(),
             cell,
             kpts,
         }
@@ -259,12 +280,20 @@ fn ibz_slice<T: Clone>(kpts: &KPoints, full: &[T]) -> Vec<T> {
 fn gate_b_transform_dm() {
     let g = gate_b();
     let dm_ibz = ibz_slice(&g.kpts, &g.dm);
-    let dm_bz = g.kpts.transform_dm(&g.cell, &dm_ibz, g.nao).expect("transform_dm");
+    let dm_bz = g
+        .kpts
+        .transform_dm(&g.cell, &dm_ibz, g.nao)
+        .expect("transform_dm");
     let mut worst = Worst::new();
     for k in 0..g.kpts.nkpts() {
         for p in 0..g.nao {
             for q in 0..g.nao {
-                worst.see((dm_bz[k][p * g.nao + q] - g.dm[k][p * g.nao + q]).norm(), k, p, q);
+                worst.see(
+                    (dm_bz[k][p * g.nao + q] - g.dm[k][p * g.nao + q]).norm(),
+                    k,
+                    p,
+                    q,
+                );
             }
         }
     }
@@ -283,7 +312,12 @@ fn gate_b_transform_1e_operator() {
     for k in 0..g.kpts.nkpts() {
         for p in 0..g.nao {
             for q in 0..g.nao {
-                worst.see((fock_bz[k][p * g.nao + q] - g.fock[k][p * g.nao + q]).norm(), k, p, q);
+                worst.see(
+                    (fock_bz[k][p * g.nao + q] - g.fock[k][p * g.nao + q]).norm(),
+                    k,
+                    p,
+                    q,
+                );
             }
         }
     }
@@ -360,7 +394,10 @@ fn gate_b_transform_mo_occ_and_mo_energy() {
 
     // check_mo_occ_symmetry is the IBZ slice's own guard: it verifies the
     // occupations really are constant across every star before slicing.
-    let occ_ibz = g.kpts.check_mo_occ_symmetry(&g.mo_occ, 1e-5).expect("check_mo_occ_symmetry");
+    let occ_ibz = g
+        .kpts
+        .check_mo_occ_symmetry(&g.mo_occ, 1e-5)
+        .expect("check_mo_occ_symmetry");
     assert_eq!(occ_ibz.len(), g.kpts.nkpts_ibz());
     let occ_bz = g.kpts.transform_mo_occ(&occ_ibz).expect("transform_mo_occ");
     let mut worst = Worst::new();
@@ -370,11 +407,17 @@ fn gate_b_transform_mo_occ_and_mo_energy() {
         }
     }
     // A pure index mapping: this must be EXACTLY zero, not merely small.
-    assert_eq!(worst.val, 0.0, "transform_mo_occ is a pure index map and must be exact");
+    assert_eq!(
+        worst.val, 0.0,
+        "transform_mo_occ is a pure index map and must be exact"
+    );
     println!("  Gate B: max |transform_mo_occ - mo_occ|             = 0 (exact index map)");
 
     let e_ibz = ibz_slice(&g.kpts, &g.mo_energy);
-    let e_bz = g.kpts.transform_mo_energy(&e_ibz).expect("transform_mo_energy");
+    let e_bz = g
+        .kpts
+        .transform_mo_energy(&e_ibz)
+        .expect("transform_mo_energy");
     let mut worst = Worst::new();
     for k in 0..g.kpts.nkpts() {
         for i in 0..g.nmo {
@@ -388,7 +431,10 @@ fn gate_b_transform_mo_occ_and_mo_energy() {
 fn gate_b_dm_at_ref_cell() {
     let g = gate_b();
     let dm_ibz = ibz_slice(&g.kpts, &g.dm);
-    let dm0 = g.kpts.dm_at_ref_cell(&g.cell, &dm_ibz, g.nao).expect("dm_at_ref_cell");
+    let dm0 = g
+        .kpts
+        .dm_at_ref_cell(&g.cell, &dm_ibz, g.nao)
+        .expect("dm_at_ref_cell");
     let nk = g.kpts.nkpts() as f64;
     let mut worst = Worst::new();
     for p in 0..g.nao {
@@ -417,8 +463,14 @@ fn check_mo_occ_symmetry_refuses_a_broken_solution() {
         .expect("si [2,2,2] must have a non-trivial star");
     let mut broken = g.mo_occ.clone();
     broken[star[1]][0] += 1.0;
-    let err = g.kpts.check_mo_occ_symmetry(&broken, 1e-5).expect_err("must refuse");
-    assert!(matches!(err, PbcSymmError::SymmetryBrokenOccupation(..)), "got {err:?}");
+    let err = g
+        .kpts
+        .check_mo_occ_symmetry(&broken, 1e-5)
+        .expect_err("must refuse");
+    assert!(
+        matches!(err, PbcSymmError::SymmetryBrokenOccupation(..)),
+        "got {err:?}"
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -426,16 +478,31 @@ fn check_mo_occ_symmetry_refuses_a_broken_solution() {
 // ---------------------------------------------------------------------
 
 fn pool(n: usize) -> rayon::ThreadPool {
-    rayon::ThreadPoolBuilder::new().num_threads(n).build().expect("thread pool")
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n)
+        .build()
+        .expect("thread pool")
 }
 
 fn assert_bits_equal(a: &[Vec<Complex64>], b: &[Vec<Complex64>], who: &str) {
-    assert_eq!(a.len(), b.len(), "{who}: length changed with the thread count");
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "{who}: length changed with the thread count"
+    );
     for (k, (x, y)) in a.iter().zip(b).enumerate() {
         assert_eq!(x.len(), y.len(), "{who}: shape changed at k = {k}");
         for i in 0..x.len() {
-            assert_eq!(x[i].re.to_bits(), y[i].re.to_bits(), "{who}: re[{i}] at k = {k}");
-            assert_eq!(x[i].im.to_bits(), y[i].im.to_bits(), "{who}: im[{i}] at k = {k}");
+            assert_eq!(
+                x[i].re.to_bits(),
+                y[i].re.to_bits(),
+                "{who}: re[{i}] at k = {k}"
+            );
+            assert_eq!(
+                x[i].im.to_bits(),
+                y[i].im.to_bits(),
+                "{who}: im[{i}] at k = {k}"
+            );
         }
     }
 }
@@ -460,19 +527,39 @@ fn unfolds_are_bit_identical_at_1_and_8_threads() {
         "transform_dm",
     );
     assert_bits_equal(
-        &one.install(|| g.kpts.transform_1e_operator(&g.cell, &fock_ibz, g.nao).expect("1")),
-        &eight.install(|| g.kpts.transform_1e_operator(&g.cell, &fock_ibz, g.nao).expect("8")),
+        &one.install(|| {
+            g.kpts
+                .transform_1e_operator(&g.cell, &fock_ibz, g.nao)
+                .expect("1")
+        }),
+        &eight.install(|| {
+            g.kpts
+                .transform_1e_operator(&g.cell, &fock_ibz, g.nao)
+                .expect("8")
+        }),
         "transform_1e_operator",
     );
     assert_bits_equal(
-        &one.install(|| g.kpts.transform_mo_coeff(&g.cell, &mo_ibz, g.nao, g.nmo).expect("1")),
-        &eight.install(|| g.kpts.transform_mo_coeff(&g.cell, &mo_ibz, g.nao, g.nmo).expect("8")),
+        &one.install(|| {
+            g.kpts
+                .transform_mo_coeff(&g.cell, &mo_ibz, g.nao, g.nmo)
+                .expect("1")
+        }),
+        &eight.install(|| {
+            g.kpts
+                .transform_mo_coeff(&g.cell, &mo_ibz, g.nao, g.nmo)
+                .expect("8")
+        }),
         "transform_mo_coeff",
     );
 
     let d1 = one.install(|| g.kpts.dm_at_ref_cell(&g.cell, &dm_ibz, g.nao).expect("1"));
     let d8 = eight.install(|| g.kpts.dm_at_ref_cell(&g.cell, &dm_ibz, g.nao).expect("8"));
-    assert_bits_equal(std::slice::from_ref(&d1), std::slice::from_ref(&d8), "dm_at_ref_cell");
+    assert_bits_equal(
+        std::slice::from_ref(&d1),
+        std::slice::from_ref(&d8),
+        "dm_at_ref_cell",
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -512,7 +599,12 @@ fn synthetic_rho(mesh: [usize; 3]) -> Vec<f64> {
 /// `(int)(ft * n)` offset. This is the ORACLE for
 /// [`symmetrize_density_matches_upstreams_c_kernel`] — an independent
 /// transcription of the algorithm being ported, not a re-call of the port.
-fn upstream_symmetrize(kpts: &KPoints, rho_k: &[f64], ibz_k_idx: usize, mesh: [usize; 3]) -> Vec<f64> {
+fn upstream_symmetrize(
+    kpts: &KPoints,
+    rho_k: &[f64],
+    ibz_k_idx: usize,
+    mesh: [usize; 3],
+) -> Vec<f64> {
     let (nx, ny, nz) = (mesh[0] as i64, mesh[1] as i64, mesh[2] as i64);
     let mut out = vec![0.0_f64; rho_k.len()];
     for &iop in &kpts.stars_ops[ibz_k_idx] {
@@ -563,14 +655,19 @@ fn symmetrize_density_matches_upstreams_c_kernel() {
 
     let mut max = 0.0_f64;
     for i in 0..kpts.nkpts_ibz() {
-        let got = kpts.symmetrize_density(&rho, i, mesh).expect("symmetrize_density");
+        let got = kpts
+            .symmetrize_density(&rho, i, mesh)
+            .expect("symmetrize_density");
         let want = upstream_symmetrize(&kpts, &rho, i, mesh);
         for (a, b) in got.iter().zip(want.iter()) {
             max = max.max((a - b).abs());
         }
     }
     println!("  Task 4: max |symmetrize_density - upstream C kernel| = {max:e}");
-    assert!(max < 1e-12, "symmetrize_density disagrees with upstream's C kernel by {max:e}");
+    assert!(
+        max < 1e-12,
+        "symmetrize_density disagrees with upstream's C kernel by {max:e}"
+    );
 }
 
 /// The rotated-index map of EVERY operation must be a PERMUTATION of the
@@ -587,7 +684,9 @@ fn every_star_operation_permutes_the_grid() {
     // star gives all ones. Use the full star and check the count instead.
     for i in 0..kpts.nkpts_ibz() {
         let ones = vec![1.0_f64; ngrids];
-        let out = kpts.symmetrize_density(&ones, i, mesh).expect("symmetrize_density");
+        let out = kpts
+            .symmetrize_density(&ones, i, mesh)
+            .expect("symmetrize_density");
         let nops = kpts.stars_ops[i].len() as f64;
         for (g, v) in out.iter().enumerate() {
             assert!(
@@ -614,17 +713,112 @@ fn symmetrize_density_is_bit_identical_at_1_and_8_threads() {
         let a = one.install(|| kpts.symmetrize_density(&rho, i, mesh).expect("1"));
         let b = eight.install(|| kpts.symmetrize_density(&rho, i, mesh).expect("8"));
         for (g, (x, y)) in a.iter().zip(b.iter()).enumerate() {
-            assert_eq!(x.to_bits(), y.to_bits(), "star {i} grid {g} moved between 1 and 8 threads");
+            assert_eq!(
+                x.to_bits(),
+                y.to_bits(),
+                "star {i} grid {g} moved between 1 and 8 threads"
+            );
         }
-        let (ar, ai) = one.install(|| kpts.symmetrize_density_complex(&rho, &im, i, mesh).expect("1"));
-        let (br, bi) =
-            eight.install(|| kpts.symmetrize_density_complex(&rho, &im, i, mesh).expect("8"));
+        let (ar, ai) = one.install(|| {
+            kpts.symmetrize_density_complex(&rho, &im, i, mesh)
+                .expect("1")
+        });
+        let (br, bi) = eight.install(|| {
+            kpts.symmetrize_density_complex(&rho, &im, i, mesh)
+                .expect("8")
+        });
         for g in 0..ar.len() {
-            assert_eq!(ar[g].to_bits(), br[g].to_bits(), "complex re, star {i} grid {g}");
-            assert_eq!(ai[g].to_bits(), bi[g].to_bits(), "complex im, star {i} grid {g}");
+            assert_eq!(
+                ar[g].to_bits(),
+                br[g].to_bits(),
+                "complex re, star {i} grid {g}"
+            );
+            assert_eq!(
+                ai[g].to_bits(),
+                bi[g].to_bits(),
+                "complex im, star {i} grid {g}"
+            );
             // The real part of the complex path must equal the real path.
             assert_eq!(ar[g].to_bits(), a[g].to_bits(), "complex re != real path");
         }
+    }
+}
+
+#[test]
+fn density_permutation_is_cached_once_per_star_and_mesh() {
+    let mesh = [8usize, 8, 8];
+    let (_cell, kpts) = density_fixture(mesh);
+    let rho = synthetic_rho(mesh);
+    assert_eq!(kpts.density_grid_cache_len(), 0);
+
+    let first = kpts.symmetrize_density(&rho, 0, mesh).expect("first");
+    assert_eq!(kpts.density_grid_cache_len(), 1);
+    let second = kpts.symmetrize_density(&rho, 0, mesh).expect("second");
+    assert_eq!(kpts.density_grid_cache_len(), 1);
+    assert_eq!(first, second);
+
+    let other_mesh = [4usize, 4, 4];
+    let other = synthetic_rho(other_mesh);
+    kpts.symmetrize_density(&other, 0, other_mesh)
+        .expect("second mesh");
+    assert_eq!(kpts.density_grid_cache_len(), 2);
+}
+
+#[test]
+fn vector_density_uses_l1_rotation_and_is_thread_bit_exact() {
+    let mesh = [8usize, 8, 8];
+    let (_cell, kpts) = density_fixture(mesh);
+    let base = synthetic_rho(mesh);
+    let vy: Vec<f64> = base.iter().map(|v| 0.7 * v - 0.2).collect();
+    let vz: Vec<f64> = base.iter().map(|v| -0.3 * v + 0.4).collect();
+    let rho = [&base[..], &vy[..], &vz[..]];
+
+    let one = pool(1);
+    let eight = pool(8);
+    for ibz in 0..kpts.nkpts_ibz() {
+        let got = one.install(|| {
+            kpts.symmetrize_density_vec(rho, ibz, mesh)
+                .expect("vector density")
+        });
+        let parallel = eight.install(|| {
+            kpts.symmetrize_density_vec(rho, ibz, mesh)
+                .expect("vector density")
+        });
+        for component in 0..3 {
+            for g in 0..got[component].len() {
+                assert_eq!(
+                    got[component][g].to_bits(),
+                    parallel[component][g].to_bits(),
+                    "component {component}, star {ibz}, grid {g}"
+                );
+            }
+        }
+
+        // Independent scalar construction: rotate each complete input
+        // component by one operation at a time, then use the established
+        // scalar grid oracle for that single-operation star.
+        let mut want: [Vec<f64>; 3] = std::array::from_fn(|_| vec![0.0; base.len()]);
+        for &iop in &kpts.stars_ops[ibz] {
+            let mut single = kpts.clone();
+            single.stars_ops[ibz] = vec![iop];
+            let d = &kpts.dmats()[iop][1];
+            for row in 0..3 {
+                let rotated: Vec<f64> = (0..base.len())
+                    .map(|g| d[row][0] * rho[0][g] + d[row][1] * rho[1][g] + d[row][2] * rho[2][g])
+                    .collect();
+                let contribution = upstream_symmetrize(&single, &rotated, ibz, mesh);
+                for g in 0..base.len() {
+                    want[row][g] += contribution[g];
+                }
+            }
+        }
+        let mut max = 0.0_f64;
+        for component in 0..3 {
+            for g in 0..base.len() {
+                max = max.max((got[component][g] - want[component][g]).abs());
+            }
+        }
+        assert!(max < 1e-12, "l=1 vector rotation residual {max:e}");
     }
 }
 
@@ -683,7 +877,10 @@ fn symmetrize_density_fractional_translation_branch_matches_upstream() {
     );
     // Confirm the premise: as shipped, no star names one of them.
     assert!(
-        kpts.stars_ops.iter().flatten().all(|iop| kpts.ops()[*iop].trans_is_zero()),
+        kpts.stars_ops
+            .iter()
+            .flatten()
+            .all(|iop| kpts.ops()[*iop].trans_is_zero()),
         "the star search unexpectedly picked a non-symmorphic op; this test's premise          (and ft_offsets' doc comment) needs revisiting"
     );
 
@@ -691,9 +888,16 @@ fn symmetrize_density_fractional_translation_branch_matches_upstream() {
     let rho = synthetic_rho(mesh);
     let got = kpts.symmetrize_density(&rho, 0, mesh).expect("ft branch");
     let want = upstream_symmetrize(&kpts, &rho, 0, mesh);
-    let max = got.iter().zip(want.iter()).map(|(a, b)| (a - b).abs()).fold(0.0_f64, f64::max);
+    let max = got
+        .iter()
+        .zip(want.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
     println!("  Task 4: max |symmetrize_ft - upstream C kernel|      = {max:e}");
-    assert!(max < 1e-12, "the fractional-translation branch disagrees by {max:e}");
+    assert!(
+        max < 1e-12,
+        "the fractional-translation branch disagrees by {max:e}"
+    );
 }
 
 /// `symmetrize_wavefunction` — upstream's very first statement is

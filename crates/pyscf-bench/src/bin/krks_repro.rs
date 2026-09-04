@@ -126,7 +126,14 @@ fn report(label: &str, r: &Run) {
 fn provenance() {
     for repo in ["../libxc_rs", "../cintx", "../xcfun_rs"] {
         let rev = std::process::Command::new("git")
-            .args(["-C", repo, "log", "-1", "--format=%h %ad %s", "--date=short"])
+            .args([
+                "-C",
+                repo,
+                "log",
+                "-1",
+                "--format=%h %ad %s",
+                "--date=short",
+            ])
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -155,14 +162,22 @@ fn main() {
     let all: Vec<String> = std::env::args().collect();
     let xc = arg(&all, "--xc").unwrap_or_else(|| "pbe0".into());
     let nk = arg(&all, "--nk").map_or([2, 2, 2], |s| {
-        let v: Vec<usize> = s.split(',').map(|t| t.trim().parse().expect("int")).collect();
+        let v: Vec<usize> = s
+            .split(',')
+            .map(|t| t.trim().parse().expect("int"))
+            .collect();
         [v[0], v[1], v[2]]
     });
     let mesh = arg(&all, "--mesh").map_or(MESH_GATE, |s| {
-        let v: Vec<usize> = s.split(',').map(|t| t.trim().parse().expect("int")).collect();
+        let v: Vec<usize> = s
+            .split(',')
+            .map(|t| t.trim().parse().expect("int"))
+            .collect();
         [v[0], v[1], v[2]]
     });
-    let repeat: usize = arg(&all, "--repeat").and_then(|s| s.parse().ok()).unwrap_or(1);
+    let repeat: usize = arg(&all, "--repeat")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
     let concurrent: usize = arg(&all, "--concurrent")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
@@ -181,7 +196,10 @@ fn main() {
             let handles: Vec<_> = (0..concurrent)
                 .map(|_| s.spawn(|| run_one(nk, mesh, &xc)))
                 .collect();
-            handles.into_iter().map(|h| h.join().expect("thread")).collect()
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("thread"))
+                .collect()
         });
         for (i, r) in runs.iter().enumerate() {
             report(&format!("concurrent[{i}]"), r);

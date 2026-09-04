@@ -10,8 +10,8 @@ use pyscf_core::{CoreError, PyscfRsError};
 use pyscf_diis::Diis;
 
 use crate::kdiis::{KFockSubspace, diis_step};
-use crate::kocc::norm;
 use crate::khooks::KOverrideHooks;
+use crate::kocc::norm;
 use crate::types::{KDms, KMats, KScfConfig, KScfResult};
 
 /// `F = H + V_HF`, per `(set, k)` — `khf.py:137`.
@@ -107,10 +107,7 @@ fn mm(a: &CTensor, b: &CTensor, n: usize) -> CTensor {
 ///
 /// # Errors
 /// Propagates every hook, `cell.ewald()`, and the DIIS solve.
-pub fn kernel<H: KOverrideHooks>(
-    hooks: &H,
-    cfg: &KScfConfig,
-) -> Result<KScfResult, PyscfRsError> {
+pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResult, PyscfRsError> {
     let nao = hooks.nao();
     let nkpts = hooks.kpts().len();
     let nset = hooks.nset();

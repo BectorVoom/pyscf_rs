@@ -50,7 +50,11 @@ fn compensated_trace_ab(a: &CTensor, b: &CTensor, n: usize) -> f64 {
             let (br, bi) = (b.re[j * n + i], b.im[j * n + i]);
             let x = ar * br - ai * bi;
             let s = acc + x;
-            comp += if acc.abs() >= x.abs() { (acc - s) + x } else { (x - s) + acc };
+            comp += if acc.abs() >= x.abs() {
+                (acc - s) + x
+            } else {
+                (x - s) + acc
+            };
             acc = s;
         }
     }
@@ -97,7 +101,11 @@ fn krdm_trace_ab_is_bit_identical_below_the_pairwise_chunk() {
                 nr.to_bits(),
                 "nao={nao} spread={spread}: e1 would move ({gr} vs {nr})"
             );
-            assert_eq!(gi.to_bits(), ni.to_bits(), "nao={nao} spread={spread}: imag moved");
+            assert_eq!(
+                gi.to_bits(),
+                ni.to_bits(),
+                "nao={nao} spread={spread}: imag moved"
+            );
         }
     }
 }
@@ -110,12 +118,21 @@ fn energy_elec_is_bit_identical_at_the_reference_cell_size() {
     let nao = 8;
     for (nset, nkpts) in [(1_usize, 1_usize), (1, 8), (2, 8)] {
         let dms: Vec<Vec<CTensor>> = (0..nset)
-            .map(|s| (0..nkpts).map(|k| matrix(nao, 0x1234 + (s * 64 + k) as u64, false)).collect())
+            .map(|s| {
+                (0..nkpts)
+                    .map(|k| matrix(nao, 0x1234 + (s * 64 + k) as u64, false))
+                    .collect()
+            })
             .collect();
-        let h1e: Vec<CTensor> =
-            (0..nkpts).map(|k| matrix(nao, 0x4321 + k as u64, false)).collect();
+        let h1e: Vec<CTensor> = (0..nkpts)
+            .map(|k| matrix(nao, 0x4321 + k as u64, false))
+            .collect();
         let vhf: Vec<Vec<CTensor>> = (0..nset)
-            .map(|s| (0..nkpts).map(|k| matrix(nao, 0x9876 + (s * 64 + k) as u64, false)).collect())
+            .map(|s| {
+                (0..nkpts)
+                    .map(|k| matrix(nao, 0x9876 + (s * 64 + k) as u64, false))
+                    .collect()
+            })
             .collect();
 
         // The PRE-CHANGE `energy_elec`: naive inner traces folded by a naive
@@ -140,7 +157,11 @@ fn energy_elec_is_bit_identical_at_the_reference_cell_size() {
             got.0,
             want.0
         );
-        assert_eq!(got.1.to_bits(), want.1.to_bits(), "nset={nset} nkpts={nkpts}: e_coul moved");
+        assert_eq!(
+            got.1.to_bits(),
+            want.1.to_bits(),
+            "nset={nset} nkpts={nkpts}: e_coul moved"
+        );
     }
 }
 

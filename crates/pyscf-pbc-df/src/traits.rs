@@ -83,7 +83,10 @@ impl JkOpts<'_> {
         static ON: OnceLock<bool> = OnceLock::new();
         *ON.get_or_init(|| {
             std::env::var("PYSCF_PBC_KK_SYMMETRY").is_ok_and(|v| {
-                matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
             })
         })
     }

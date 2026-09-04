@@ -266,7 +266,12 @@ fn crystal_class_matches_known_crystallography() {
 /// translation representative at the natural origin.
 #[test]
 fn diamond_is_non_symmorphic_lif_and_he_fcc_are_symmorphic() {
-    for (name, want_symmorphic) in [("diamond", false), ("si", false), ("lif", true), ("he_fcc", true)] {
+    for (name, want_symmorphic) in [
+        ("diamond", false),
+        ("si", false),
+        ("lif", true),
+        ("he_fcc", true),
+    ] {
         let cell = pyscf_pbc_gto::test_systems::all()
             .into_iter()
             .find(|(n, _)| *n == name)
@@ -330,5 +335,8 @@ fn ghost_atoms_are_refused() {
         }
     };
     let err = geom::search_space_group_ops(&cell, None, SYMPREC).unwrap_err();
-    assert!(matches!(err, pyscf_pbc_symm::PbcSymmError::GhostAtomUnsupported(_)));
+    assert!(matches!(
+        err,
+        pyscf_pbc_symm::PbcSymmError::GhostAtomUnsupported(_)
+    ));
 }

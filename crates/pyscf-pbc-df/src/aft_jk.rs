@@ -107,7 +107,10 @@ pub fn get_j_kpts(
     })?;
 
     // Upstream drops the imaginary part for an all-gamma k-set with a real dm.
-    if kpts.iter().all(|k| k[0].abs() + k[1].abs() + k[2].abs() < 1e-9) {
+    if kpts
+        .iter()
+        .all(|k| k[0].abs() + k[1].abs() + k[2].abs() < 1e-9)
+    {
         for m in vj.iter_mut().flatten() {
             m.im.iter_mut().for_each(|v| *v = 0.0);
         }
@@ -185,14 +188,12 @@ pub fn get_k_kpts(
                         let mut ti = vec![0.0f64; n2];
                         for i in 0..nao {
                             for qq in 0..nao {
-                                let (gr, gim) =
-                                    (br[base + i * nao + qq], bi[base + i * nao + qq]);
+                                let (gr, gim) = (br[base + i * nao + qq], bi[base + i * nao + qq]);
                                 if gr == 0.0 && gim == 0.0 {
                                     continue;
                                 }
                                 for kk in 0..nao {
-                                    let (dr, di) =
-                                        (d.re[qq * nao + kk], d.im[qq * nao + kk]);
+                                    let (dr, di) = (d.re[qq * nao + kk], d.im[qq * nao + kk]);
                                     tr[i * nao + kk] += gr * dr - gim * di;
                                     ti[i * nao + kk] += gr * di + gim * dr;
                                 }
@@ -219,7 +220,10 @@ pub fn get_k_kpts(
         }
     }
 
-    if kpts.iter().all(|k| k[0].abs() + k[1].abs() + k[2].abs() < 1e-9) {
+    if kpts
+        .iter()
+        .all(|k| k[0].abs() + k[1].abs() + k[2].abs() < 1e-9)
+    {
         for m in vk.iter_mut().flatten() {
             m.im.iter_mut().for_each(|v| *v = 0.0);
         }
@@ -294,7 +298,10 @@ pub fn get_j_kpts_band(
             for (k, out) in vj[n].iter_mut().enumerate() {
                 let (br, bi) = (&b.re[k], &b.im[k]);
                 for gi in 0..nblk {
-                    let (vr, vi) = (rho_re[n * ngrids + b.p0 + gi], rho_im[n * ngrids + b.p0 + gi]);
+                    let (vr, vi) = (
+                        rho_re[n * ngrids + b.p0 + gi],
+                        rho_im[n * ngrids + b.p0 + gi],
+                    );
                     let base = gi * n2;
                     for p in 0..n2 {
                         out.re[p] += vr * br[base + p] - vi * bi[base + p];
@@ -306,7 +313,10 @@ pub fn get_j_kpts_band(
         Ok(())
     })?;
 
-    if kpts_band.iter().all(|k| k[0].abs() + k[1].abs() + k[2].abs() < 1e-9) {
+    if kpts_band
+        .iter()
+        .all(|k| k[0].abs() + k[1].abs() + k[2].abs() < 1e-9)
+    {
         for m in vj.iter_mut().flatten() {
             m.im.iter_mut().for_each(|v| *v = 0.0);
         }
@@ -379,14 +389,12 @@ pub fn get_k_kpts_band(
                         let mut ti = vec![0.0f64; n2];
                         for i in 0..nao {
                             for qq in 0..nao {
-                                let (gr, gim) =
-                                    (br[base + i * nao + qq], bim[base + i * nao + qq]);
+                                let (gr, gim) = (br[base + i * nao + qq], bim[base + i * nao + qq]);
                                 if gr == 0.0 && gim == 0.0 {
                                     continue;
                                 }
                                 for kk in 0..nao {
-                                    let (dr, di) =
-                                        (d.re[qq * nao + kk], d.im[qq * nao + kk]);
+                                    let (dr, di) = (d.re[qq * nao + kk], d.im[qq * nao + kk]);
                                     tr[i * nao + kk] += gr * dr - gim * di;
                                     ti[i * nao + kk] += gr * di + gim * dr;
                                 }
@@ -412,7 +420,10 @@ pub fn get_k_kpts_band(
         }
     }
 
-    if kpts_band.iter().all(|k| k[0].abs() + k[1].abs() + k[2].abs() < 1e-9) {
+    if kpts_band
+        .iter()
+        .all(|k| k[0].abs() + k[1].abs() + k[2].abs() < 1e-9)
+    {
         for m in vk.iter_mut().flatten() {
             m.im.iter_mut().for_each(|v| *v = 0.0);
         }
@@ -438,7 +449,14 @@ pub fn get_jk(
                 None
             };
             let vk = if opts.with_k {
-                Some(get_k_kpts_band(df, dms, kpts, kpts_band, opts.exxdiv, opts.omega)?)
+                Some(get_k_kpts_band(
+                    df,
+                    dms,
+                    kpts,
+                    kpts_band,
+                    opts.exxdiv,
+                    opts.omega,
+                )?)
             } else {
                 None
             };

@@ -45,8 +45,10 @@ use pyscf_core::{CoreError, ParsedBasis, PyscfRsError, ShellSpec};
 use pyscf_pbc_gto::Cell;
 
 use crate::error::PbcDfError;
-use crate::incore::auxcell::{HALF_SPH_NORM, apply_modrho, build_aux_cell, gaussian_int, resolve_auxbasis};
 use crate::incore::AuxCell;
+use crate::incore::auxcell::{
+    HALF_SPH_NORM, apply_modrho, build_aux_cell, gaussian_int, resolve_auxbasis,
+};
 
 /// The auxiliary cell fused with its model-charge partner, plus the index maps
 /// [`FusedCell::fuse`] needs.
@@ -105,12 +107,7 @@ impl FusedCell {
     }
 
     /// [`Self::fuse_rows`] on a planar-complex block.
-    pub fn fuse_rows_complex(
-        &self,
-        re: &[f64],
-        im: &[f64],
-        ncol: usize,
-    ) -> (Vec<f64>, Vec<f64>) {
+    pub fn fuse_rows_complex(&self, re: &[f64], im: &[f64], ncol: usize) -> (Vec<f64>, Vec<f64>) {
         (self.fuse_rows(re, ncol), self.fuse_rows(im, ncol))
     }
 
@@ -236,7 +233,11 @@ fn build_index_maps(
     let ao_count = |c: &Cell, ib: usize| -> usize {
         let l = c.mol._bas[ib * BAS_SLOTS + ANG_OF].max(0) as usize;
         let nctr = c.mol._bas[ib * BAS_SLOTS + NCTR_OF].max(0) as usize;
-        nctr * if c.mol.cart { (l + 1) * (l + 2) / 2 } else { 2 * l + 1 }
+        nctr * if c.mol.cart {
+            (l + 1) * (l + 2) / 2
+        } else {
+            2 * l + 1
+        }
     };
     let atom_of = |c: &Cell, ib: usize| c.mol._bas[ib * BAS_SLOTS + ATOM_OF] as usize;
     let ang_of = |c: &Cell, ib: usize| c.mol._bas[ib * BAS_SLOTS + ANG_OF].max(0);
@@ -256,16 +257,19 @@ fn build_index_maps(
     for ib in 0..fused.mol.nbas {
         let ia = atom_of(fused, ib);
         let sym = &fused.mol._atom[ia].0;
-        let n_aux = *n_aux_shells.get(sym).or_else(|| {
-            n_aux_shells
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case(sym))
-                .map(|(_, v)| v)
-        }).ok_or_else(|| {
-            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                "fuse_auxcell: no auxiliary shell count for element '{sym}'"
-            )))
-        })?;
+        let n_aux = *n_aux_shells
+            .get(sym)
+            .or_else(|| {
+                n_aux_shells
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(sym))
+                    .map(|(_, v)| v)
+            })
+            .ok_or_else(|| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "fuse_auxcell: no auxiliary shell count for element '{sym}'"
+                )))
+            })?;
         let seen = seen_per_atom.entry(ia).or_insert(0);
         if *seen < n_aux {
             is_aux[ib] = true;

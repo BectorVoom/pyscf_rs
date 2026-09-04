@@ -88,10 +88,9 @@ pub fn fft_dd_block(
     let mut kpt_list: Vec<[f64; 3]> = Vec::new();
     let mut kpt_index = |k: [f64; 3]| -> usize {
         const TOL: f64 = 1e-12;
-        if let Some(i) = kpt_list
-            .iter()
-            .position(|x| (x[0] - k[0]).abs() < TOL && (x[1] - k[1]).abs() < TOL && (x[2] - k[2]).abs() < TOL)
-        {
+        if let Some(i) = kpt_list.iter().position(|x| {
+            (x[0] - k[0]).abs() < TOL && (x[1] - k[1]).abs() < TOL && (x[2] - k[2]).abs() < TOL
+        }) {
             i
         } else {
             kpt_list.push(k);
@@ -148,7 +147,14 @@ pub fn fft_dd_block(
         for a in 0..naux {
             let col_re: Vec<f64> = (0..ngrids).map(|g| auxg_re[g * naux + a]).collect();
             let col_im: Vec<f64> = (0..ngrids).map(|g| auxg_im[g * naux + a]).collect();
-            let ct = ifft(&CTensor { re: col_re, im: col_im }, mesh).map_err(PbcDfError::from)?;
+            let ct = ifft(
+                &CTensor {
+                    re: col_re,
+                    im: col_im,
+                },
+                mesh,
+            )
+            .map_err(PbcDfError::from)?;
             for g in 0..ngrids {
                 vaux_re[a * ngrids + g] = ct.re[g];
                 vaux_im[a * ngrids + g] = ct.im[g];

@@ -60,10 +60,10 @@ pub use fock::{
     default_get_fock, default_get_hcore, default_get_jk, default_get_ovlp, default_get_veff,
 };
 pub use init_guess::default_get_init_guess;
-pub use uhf_init_guess::{break_atom_guess_spin_symm, break_dm_spin_symm, BREAKSYM_TOL};
 pub use occ::default_get_occ;
 pub use rdm::default_make_rdm1;
 pub use scanner::as_scanner;
+pub use uhf_init_guess::{BREAKSYM_TOL, break_atom_guess_spin_symm, break_dm_spin_symm};
 
 // Plan 03-06 re-exports — top-level chkfile helpers (Checkpointable impl
 // lives in `chkfile::` and is available transparently on ScfResult).

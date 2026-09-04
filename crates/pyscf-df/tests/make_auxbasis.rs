@@ -25,7 +25,14 @@ fn load(name: &str, sym: &str) -> ParsedBasis {
     pyscf_gto::basis::load_basis(name, sym).expect("basis loads")
 }
 
-fn setup(sym: &str, orbital: &str) -> (Vec<ParsedAtom>, HashMap<String, String>, HashMap<String, ParsedBasis>) {
+fn setup(
+    sym: &str,
+    orbital: &str,
+) -> (
+    Vec<ParsedAtom>,
+    HashMap<String, String>,
+    HashMap<String, ParsedBasis>,
+) {
     let atoms: Vec<ParsedAtom> = vec![(sym.to_string(), [0.0, 0.0, 0.0])];
     let names = HashMap::from([(sym.to_string(), orbital.to_string())]);
     let parsed = HashMap::from([(sym.to_string(), load(orbital, sym))]);
@@ -36,11 +43,26 @@ fn setup(sym: &str, orbital: &str) -> (Vec<ParsedAtom>, HashMap<String, String>,
 /// and its keys are `_format_basis_name`-canonical, not dash-preserving.
 #[test]
 fn predefined_auxbasis_matches_upstream_psi4_table() {
-    assert_eq!(predefined_auxbasis("sto-3g", true, false), Some("def2-svp-jkfit"));
-    assert_eq!(predefined_auxbasis("STO-3G", true, false), Some("def2-svp-jkfit"));
-    assert_eq!(predefined_auxbasis("sto-3g", true, true), Some("def2-svp-ri"));
-    assert_eq!(predefined_auxbasis("cc-pvdz", true, false), Some("cc-pvdz-jkfit"));
-    assert_eq!(predefined_auxbasis("def2-svp", true, false), Some("def2-svp-jkfit"));
+    assert_eq!(
+        predefined_auxbasis("sto-3g", true, false),
+        Some("def2-svp-jkfit")
+    );
+    assert_eq!(
+        predefined_auxbasis("STO-3G", true, false),
+        Some("def2-svp-jkfit")
+    );
+    assert_eq!(
+        predefined_auxbasis("sto-3g", true, true),
+        Some("def2-svp-ri")
+    );
+    assert_eq!(
+        predefined_auxbasis("cc-pvdz", true, false),
+        Some("cc-pvdz-jkfit")
+    );
+    assert_eq!(
+        predefined_auxbasis("def2-svp", true, false),
+        Some("def2-svp-jkfit")
+    );
     // gth-szv is in neither table — this is what sends diamond to the ETB route.
     assert_eq!(predefined_auxbasis("gth-szv", true, false), None);
 }

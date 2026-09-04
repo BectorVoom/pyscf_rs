@@ -120,7 +120,12 @@ fn screened_matches_unscreened_on_both_cells() {
     let exe = std::env::current_exe().expect("test binary path");
     for (label, which) in [("si", "si"), ("he", "he")] {
         let out = Command::new(&exe)
-            .args(["--exact", "print_reference_unscreened", "--nocapture", "--ignored"])
+            .args([
+                "--exact",
+                "print_reference_unscreened",
+                "--nocapture",
+                "--ignored",
+            ])
             .env("PYSCF_PBC_AO_SCREEN", "0")
             .env("PYSCF_AO_SCREEN_TEST_CELL", which)
             .output()
@@ -134,7 +139,11 @@ fn screened_matches_unscreened_on_both_cells() {
         let ref_max: f64 = it.next().expect("max").parse().expect("max f64");
         let ref_sq: f64 = it.next().expect("sq").parse().expect("sq f64");
 
-        let cell = if which == "si" { silicon() } else { he_all_electron() };
+        let cell = if which == "si" {
+            silicon()
+        } else {
+            he_all_electron()
+        };
         let kpts = make_kpts_default(&cell, [2, 2, 2]).expect("kpts");
         let coords = grid(&cell);
         let (m, flat) = max_abs("GTOval_sph", &cell, &kpts, &coords);
@@ -145,7 +154,9 @@ fn screened_matches_unscreened_on_both_cells() {
         // whose AOs are not.
         let rel_max = (m - ref_max).abs() / ref_max.max(1e-30);
         let rel_sq = (sq - ref_sq).abs() / ref_sq.max(1e-30);
-        println!("{label}: screened vs unscreened — max {rel_max:.3e}, sum-of-squares {rel_sq:.3e}");
+        println!(
+            "{label}: screened vs unscreened — max {rel_max:.3e}, sum-of-squares {rel_sq:.3e}"
+        );
         assert!(
             rel_max < 1e-12 && rel_sq < 1e-12,
             "{label}: the screen changed the AO table by more than 1e-12 relative \
@@ -161,7 +172,11 @@ fn screened_matches_unscreened_on_both_cells() {
 #[ignore = "child process of screened_matches_unscreened_on_both_cells"]
 fn print_reference_unscreened() {
     let which = std::env::var("PYSCF_AO_SCREEN_TEST_CELL").unwrap_or_else(|_| "si".into());
-    let cell = if which == "si" { silicon() } else { he_all_electron() };
+    let cell = if which == "si" {
+        silicon()
+    } else {
+        he_all_electron()
+    };
     let kpts = make_kpts_default(&cell, [2, 2, 2]).expect("kpts");
     let coords = grid(&cell);
     let (m, flat) = max_abs("GTOval_sph", &cell, &kpts, &coords);
@@ -191,8 +206,7 @@ fn the_screened_answer_is_still_converged_in_the_image_list() {
         "the wide image list must actually be wider, else this test is vacuous"
     );
 
-    let a = eval_ao_kpts_with_images(&cell, "GTOval_sph", &coords, &kpts, &narrow)
-        .expect("narrow");
+    let a = eval_ao_kpts_with_images(&cell, "GTOval_sph", &coords, &kpts, &narrow).expect("narrow");
     let b = eval_ao_kpts_with_images(&cell, "GTOval_sph", &coords, &kpts, &wide).expect("wide");
 
     let mut worst = 0.0_f64;

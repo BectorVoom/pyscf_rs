@@ -116,7 +116,11 @@ fn strip_basis_surviving_count_matches_upstream_diamond() {
 
     let mut supmol =
         ExtendedMole::from_cell(&rs, [2, 2, 2], Some(rcut_max)).expect("ExtendedMole::from_cell");
-    assert_eq!(supmol.bas_mask.len(), 12864, "raw (bvk,shell,image) triple count");
+    assert_eq!(
+        supmol.bas_mask.len(),
+        12864,
+        "raw (bvk,shell,image) triple count"
+    );
     assert_eq!(supmol.ls.len(), 201, "nimgs");
 
     supmol.strip_basis(&rcut);

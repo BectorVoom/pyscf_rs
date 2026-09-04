@@ -44,12 +44,7 @@ use pyscf_pbc_dft::veff::{weighted_trace_dm_v, weighted_trace_dm_v_shared};
 /// reproduced verbatim. The two differed only in whether they iterated the
 /// channel axis, so one function with a channel loop covers both: the
 /// restricted form is this with `dms.len() == 1`.
-fn naive_weighted_trace(
-    dms: &[Vec<CTensor>],
-    v: &[Vec<CTensor>],
-    w: &[f64],
-    nao: usize,
-) -> f64 {
+fn naive_weighted_trace(dms: &[Vec<CTensor>], v: &[Vec<CTensor>], w: &[f64], nao: usize) -> f64 {
     let mut acc = 0.0;
     for (spin, dset) in dms.iter().enumerate() {
         for (k, d) in dset.iter().enumerate() {

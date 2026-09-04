@@ -319,11 +319,7 @@ fn blas_engine(f: &CTensor, mesh: [usize; 3], backward: bool) -> Result<CTensor,
     // `g = lib.transpose(f.reshape(n, -1))` -> (ngrids, n).
     let mut g = ztranspose_dense(&client, f, nb, ngrids).map_err(algebra_err)?;
 
-    for (m, rest) in [
-        (mx, my * mz * nb),
-        (my, mz * nb * mx),
-        (mz, nb * mx * my),
-    ] {
+    for (m, rest) in [(mx, my * mz * nb), (my, mz * nb * mx), (mz, nb * mx * my)] {
         let mat = dft_matrix(m, backward);
         g = contract_axis(&client, &g, m, rest, &mat)?;
         if backward {

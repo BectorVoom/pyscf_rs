@@ -155,7 +155,11 @@ fn unique_with_wrap_around_folds_reciprocal_vectors() {
         [1.0, 0.0, 0.0],
     ];
     let (index, inverse) = unique_with_wrap_around(&k);
-    assert_eq!(index.len(), 2, "only gamma and the zone boundary are distinct");
+    assert_eq!(
+        index.len(),
+        2,
+        "only gamma and the zone boundary are distinct"
+    );
     assert_eq!(inverse[0], inverse[3], "1.0 folds onto gamma");
     assert_eq!(inverse[1], inverse[2], "-0.5 folds onto +0.5");
     assert_ne!(inverse[0], inverse[1]);
@@ -171,7 +175,11 @@ fn group_by_conj_pairs_labels_all_three_cases() {
         [0.25, 0.0, 0.0],
     ];
     let p = group_by_conj_pairs(&k, true);
-    assert_eq!(p[0], (0, Some(0)), "gamma is self-conjugate and comes first");
+    assert_eq!(
+        p[0],
+        (0, Some(0)),
+        "gamma is self-conjugate and comes first"
+    );
     assert!(p.contains(&(1, Some(2))) || p.contains(&(2, Some(1))));
     assert!(p.contains(&(3, None)), "+1/4 has no conjugate in the set");
 }

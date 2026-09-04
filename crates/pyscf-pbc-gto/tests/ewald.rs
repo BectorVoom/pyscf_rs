@@ -208,7 +208,10 @@ fn ewald_dimension_2_matches_the_recorded_upstream_target() {
         .ewald
         .expect("the graphene target was recorded in Phase 9 for plan 12-08");
     let cell = bohr_cell(r);
-    assert_eq!(cell.dimension, 2, "graphene must be the dimension = 2 system");
+    assert_eq!(
+        cell.dimension, 2,
+        "graphene must be the dimension = 2 system"
+    );
     let got = ewald(&cell, None, None).expect("dimension = 2 ewald");
     let d = (got - want).abs();
     println!("ewald(graphene, dim=2): rust {got:.15}  upstream {want:.15}  delta {d:.3e}");

@@ -477,11 +477,7 @@ impl KOverrideHooks for KsymAdaptedKrhf {
         }
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         if !self.use_ao_symmetry {
             // `use_ao_symmetry = false` — the plain generalised eigenproblem
             // `Krhf` solves, one IBZ k-point at a time. Not a fallback for
@@ -494,8 +490,8 @@ impl KOverrideHooks for KsymAdaptedKrhf {
         let mut es = Vec::with_capacity(fock[0].len());
         let mut cs = Vec::with_capacity(fock[0].len());
         for (k, f) in fock[0].iter().enumerate() {
-            let (e, c) = eig_symm_adapted(f, &s1e[k], &symm_orb[k], &irrep_id[k], nao)
-                .map_err(|err| {
+            let (e, c) =
+                eig_symm_adapted(f, &s1e[k], &symm_orb[k], &irrep_id[k], nao).map_err(|err| {
                     PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
                         "khf_ksymm: symmetry-adapted eig failed at IBZ k = {k}: {err}"
                     )))
@@ -506,30 +502,18 @@ impl KOverrideHooks for KsymAdaptedKrhf {
         Ok((es, cs))
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         // 17-CONTEXT §3.4, and the trait's own contract: ONE Fermi level over
         // the UNFOLDED BZ. Shared with the DFT ksymm adapters (17-08), which
         // upstream gets by inheritance instead.
         ksymm_get_occ_restricted(&self.kpts, mo_energy, self.nelectron())
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         Ok(vec![make_rdm1(mo_coeff, mo_occ, self.nao())])
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         // `khf_ksymm.py:69-86`. **`weights_ibz`, NOT `1/nkpts`** — see the
         // module doc's table. `weights_ibz` already sums to 1.
         let nao = self.nao();
@@ -588,8 +572,10 @@ pub fn eig_symm_adapted(
         }
     }
 
-    let col = |t: &CTensor, i: usize, p: usize| Complex64::new(t.re[p * nao + i], t.im[p * nao + i]);
-    let row = |t: &CTensor, i: usize, j: usize| Complex64::new(t.re[i * nao + j], t.im[i * nao + j]);
+    let col =
+        |t: &CTensor, i: usize, p: usize| Complex64::new(t.re[p * nao + i], t.im[p * nao + i]);
+    let row =
+        |t: &CTensor, i: usize, j: usize| Complex64::new(t.re[i * nao + j], t.im[i * nao + j]);
 
     // (energy, full-length column) pairs, gathered across irreps and sorted
     // by energy at the end — upstream returns one ascending list per k-point.

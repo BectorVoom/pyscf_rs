@@ -214,7 +214,8 @@ fn ewald_gs_kernel(
         let coulg = params[3] / absg2 * weights;
         // cell.py:767 — ZexpG2 = ZSI * exp(-absG2/(4*eta^2)).
         let four_eta2 = 4.0 * eta * eta;
-        let expfac = cube_math::double::exp::exp(0.0 - absg2 / four_eta2, cube_math::MathConfig::EXACT);
+        let expfac =
+            cube_math::double::exp::exp(0.0 - absg2 / four_eta2, cube_math::MathConfig::EXACT);
         // cell.py:768 — real part of conj(ZSI) * ZexpG2 * coulG.
         let mut z2 = zsi_re[g] * zsi_re[g];
         z2 += zsi_im[g] * zsi_im[g];

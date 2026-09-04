@@ -136,10 +136,7 @@ impl Krhf {
                 f.im[i] += vj[0][k].im[i] - 0.5 * vk[0][k].im[i];
             }
         }
-        let s1e = to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), kpts_band)?,
-            nao,
-        );
+        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), kpts_band)?, nao);
         eig_channel(&fock, &s1e, nao)
     }
 }
@@ -251,21 +248,13 @@ impl KOverrideHooks for Krhf {
         Ok(out)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         eig_channel(&fock[0], s1e, self.cell().mol.nao_nr)
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         if let Some(sm) = self.smearing.as_ref() {
-            let (occ, fermi, entropy) =
-                sm.occupations(mo_energy, self.nelectron() as f64, 2.0)?;
+            let (occ, fermi, entropy) = sm.occupations(mo_energy, self.nelectron() as f64, 2.0)?;
             self.entropy.set(Some(entropy));
             return Ok((occ, vec![fermi]));
         }
@@ -273,20 +262,11 @@ impl KOverrideHooks for Krhf {
         Ok((occ, vec![fermi]))
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         Ok(vec![make_rdm1(mo_coeff, mo_occ, self.cell().mol.nao_nr)])
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         Ok(energy_elec(dms, h1e, vhf, self.cell().mol.nao_nr))
     }
 
@@ -322,9 +302,9 @@ impl KOverrideHooks for Krhf {
     }
 
     fn free_energy(&self) -> Option<f64> {
-        self.entropy.get().map(|s| {
-            -self.smearing.as_ref().map_or(0.0, |sm| sm.sigma) * s
-        })
+        self.entropy
+            .get()
+            .map(|s| -self.smearing.as_ref().map_or(0.0, |sm| sm.sigma) * s)
     }
 }
 

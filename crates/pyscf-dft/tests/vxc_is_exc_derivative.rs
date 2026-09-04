@@ -127,7 +127,10 @@ fn closed_shell_vrho_is_the_rho_derivative() {
 
         let rel = (fd - got).abs() / fd.abs().max(1e-30);
         println!("{xc:>8}: d f/d rho    fd {fd:.12e}  backend {got:.12e}  rel {rel:.3e}");
-        assert!(rel < 1e-5, "{xc}: vrho is not d f/d rho (relative error {rel:e})");
+        assert!(
+            rel < 1e-5,
+            "{xc}: vrho is not d f/d rho (relative error {rel:e})"
+        );
     }
 }
 
@@ -143,7 +146,15 @@ fn spin_resolved_vsigma_components_are_their_own_partials() {
 
     let f = |a: f64, b: f64, c: f64| -> f64 {
         backend
-            .eval_uks(&spec, &[ra], &[rb], Some(&[a]), Some(&[b]), Some(&[c]), DerivOrder::Exc)
+            .eval_uks(
+                &spec,
+                &[ra],
+                &[rb],
+                Some(&[a]),
+                Some(&[b]),
+                Some(&[c]),
+                DerivOrder::Exc,
+            )
             .expect("eval_uks")
             .exc[0]
     };
@@ -192,7 +203,7 @@ fn spin_resolved_vsigma_components_are_their_own_partials() {
 use pyscf_core::{Density, Unit};
 use pyscf_dft::NumInt;
 use pyscf_grids::Grids;
-use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, M};
+use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
 fn h2o() -> pyscf_core::Mole {
     M(MoleBuildArgs {
@@ -217,7 +228,11 @@ fn seeded_dm(nao: usize) -> Density {
     let mut data = vec![0.0_f64; nao * nao];
     for i in 0..nao {
         for j in i..nao {
-            let v = if i == j { 1.0 + next() } else { 0.15 * (next() - 0.5) };
+            let v = if i == j {
+                1.0 + next()
+            } else {
+                0.15 * (next() - 0.5)
+            };
             data[i * nao + j] = v;
             data[j * nao + i] = v;
         }

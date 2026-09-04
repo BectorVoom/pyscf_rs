@@ -145,4 +145,3 @@ impl Cell {
         make_kpts_default(self, nks)
     }
 }
-

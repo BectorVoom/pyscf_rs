@@ -93,42 +93,26 @@ pub trait KOverrideHooks {
     ///
     /// # Errors
     /// Implementation-specific.
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError>;
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError>;
 
     /// Assign occupations with ONE Fermi level per spin channel across the
     /// whole Brillouin zone. Returns `(mo_occ, fermi_per_channel)`.
     ///
     /// # Errors
     /// Implementation-specific.
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError>;
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError>;
 
     /// Build the density matrices from occupied orbitals.
     ///
     /// # Errors
     /// Implementation-specific.
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError>;
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError>;
 
     /// `(e_elec, e_coul)`.
     ///
     /// # Errors
     /// Implementation-specific.
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError>;
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError>;
 
     /// The Ewald nuclear repulsion of the cell.
     ///

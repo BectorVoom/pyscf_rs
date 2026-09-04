@@ -114,12 +114,7 @@ pub fn fermi_level(
 /// complements the energy change.
 ///
 /// `mo_coeff` is COLUMN-MAJOR `nao x nmo`; `fock` is ROW-MAJOR `nao x nao`.
-pub fn get_grad(
-    mo_coeff: &CTensor,
-    mo_occ: &[f64],
-    fock: &CTensor,
-    nao: usize,
-) -> Vec<f64> {
+pub fn get_grad(mo_coeff: &CTensor, mo_occ: &[f64], fock: &CTensor, nao: usize) -> Vec<f64> {
     let nmo = mo_occ.len();
     let occ: Vec<usize> = (0..nmo).filter(|i| mo_occ[*i] > 0.0).collect();
     let vir: Vec<usize> = (0..nmo).filter(|i| mo_occ[*i] <= 0.0).collect();

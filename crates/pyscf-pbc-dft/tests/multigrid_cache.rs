@@ -99,7 +99,9 @@ fn v1_cached_and_uncached_agree_bit_for_bit() {
     cold.reset();
     let a = cold.nr_rks(&cell, "PBE", &dm).expect("uncached nr_rks");
     cold.reset();
-    let a2 = cold.nr_rks(&cell, "PBE", &dm).expect("uncached nr_rks again");
+    let a2 = cold
+        .nr_rks(&cell, "PBE", &dm)
+        .expect("uncached nr_rks again");
 
     // A driver that keeps its geometry.
     let warm = MultiGridNumInt::new();
@@ -115,7 +117,11 @@ fn v1_cached_and_uncached_agree_bit_for_bit() {
             x.nelec
         );
         assert_eq!(a.exc.to_bits(), x.exc.to_bits(), "v1 {tag}: exc moved");
-        assert_eq!(a.ecoul.to_bits(), x.ecoul.to_bits(), "v1 {tag}: ecoul moved");
+        assert_eq!(
+            a.ecoul.to_bits(),
+            x.ecoul.to_bits(),
+            "v1 {tag}: ecoul moved"
+        );
         same_bits_slice(&format!("v1 {tag} veff"), &a.veff, &x.veff);
     }
 }
@@ -143,7 +149,11 @@ fn v1_does_not_serve_one_cell_the_geometry_of_another() {
     // The same driver, interleaved. A different CELL and — the harder case —
     // the same cell at a different MESH must both miss the cache.
     same_bits_slice("v1 si", &want_si, &ni.get_j(&si, &dm_si).expect("si"));
-    same_bits_slice("v1 diamond", &want_c, &ni.get_j(&c, &dm_c).expect("diamond"));
+    same_bits_slice(
+        "v1 diamond",
+        &want_c,
+        &ni.get_j(&c, &dm_c).expect("diamond"),
+    );
     same_bits_slice("v1 si", &want_si, &ni.get_j(&si, &dm_si).expect("si again"));
     same_bits_slice(
         "v1 si at a different mesh",
@@ -171,9 +181,17 @@ fn v2_cached_and_uncached_agree_bit_for_bit() {
     let b = warm.nr_rks(&cell, "LDA,VWN", &dm).expect("cached nr_rks");
 
     for (tag, x) in [("uncached-twice", &a2), ("cached", &b)] {
-        assert_eq!(a.nelec.to_bits(), x.nelec.to_bits(), "v2 {tag}: nelec moved");
+        assert_eq!(
+            a.nelec.to_bits(),
+            x.nelec.to_bits(),
+            "v2 {tag}: nelec moved"
+        );
         assert_eq!(a.exc.to_bits(), x.exc.to_bits(), "v2 {tag}: exc moved");
-        assert_eq!(a.ecoul.to_bits(), x.ecoul.to_bits(), "v2 {tag}: ecoul moved");
+        assert_eq!(
+            a.ecoul.to_bits(),
+            x.ecoul.to_bits(),
+            "v2 {tag}: ecoul moved"
+        );
         same_bits_slice(&format!("v2 {tag} veff"), &a.veff, &x.veff);
     }
 }
@@ -190,6 +208,10 @@ fn v2_does_not_serve_one_cell_the_geometry_of_another() {
     let want_c = MultiGridNumInt2::new().get_j(&c, &dm_c).expect("diamond");
 
     same_bits_slice("v2 si", &want_si, &ni.get_j(&si, &dm_si).expect("si"));
-    same_bits_slice("v2 diamond", &want_c, &ni.get_j(&c, &dm_c).expect("diamond"));
+    same_bits_slice(
+        "v2 diamond",
+        &want_c,
+        &ni.get_j(&c, &dm_c).expect("diamond"),
+    );
     same_bits_slice("v2 si", &want_si, &ni.get_j(&si, &dm_si).expect("si again"));
 }

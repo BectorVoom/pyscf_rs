@@ -70,7 +70,10 @@ fn compensated_trace_ab(a: &CTensor, b: &CTensor, n: usize) -> (f64, f64) {
         for j in 0..n {
             let (ar, ai) = (a.re[i * n + j], a.im[i * n + j]);
             let (br, bi) = (b.re[j * n + i], b.im[j * n + i]);
-            for (slot, x) in [ar * br - ai * bi, ar * bi + ai * br].into_iter().enumerate() {
+            for (slot, x) in [ar * br - ai * bi, ar * bi + ai * br]
+                .into_iter()
+                .enumerate()
+            {
                 let s = acc[slot] + x;
                 comp[slot] += if acc[slot].abs() >= x.abs() {
                     (acc[slot] - s) + x
@@ -127,7 +130,11 @@ fn trace_ab_is_bit_identical_below_the_pairwise_chunk() {
                  oracle_sum's base case is a strict left-to-right fold below \
                  PAIRWISE_CHUNK, so nothing may move here"
             );
-            assert_eq!(gi.to_bits(), ni.to_bits(), "nao={nao} spread={spread}: imag moved");
+            assert_eq!(
+                gi.to_bits(),
+                ni.to_bits(),
+                "nao={nao} spread={spread}: imag moved"
+            );
         }
     }
 }
@@ -157,7 +164,11 @@ fn trace_dm_v_is_bit_identical_at_the_reference_cell_size() {
             nr.to_bits(),
             "nset={nset} nkpts={nkpts}: ecoul would move ({gr} vs {nr})"
         );
-        assert_eq!(gi.to_bits(), ni.to_bits(), "nset={nset} nkpts={nkpts}: imag moved");
+        assert_eq!(
+            gi.to_bits(),
+            ni.to_bits(),
+            "nset={nset} nkpts={nkpts}: imag moved"
+        );
     }
 }
 

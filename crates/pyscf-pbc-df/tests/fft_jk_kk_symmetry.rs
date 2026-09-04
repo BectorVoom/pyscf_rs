@@ -77,8 +77,8 @@ fn symmetric_route_matches_the_full_pair_loop() {
 
         for omega in [None, Some(0.11), Some(-0.11)] {
             for exxdiv in [None, Some(ExxDiv::Ewald)] {
-                let full = get_k_kpts(&df, &dms, 1, &kpts, None, exxdiv, omega)
-                    .expect("full get_k_kpts");
+                let full =
+                    get_k_kpts(&df, &dms, 1, &kpts, None, exxdiv, omega).expect("full get_k_kpts");
                 let sym = get_k_kpts_opts(&df, &dms, 1, &kpts, None, exxdiv, omega, true)
                     .expect("symmetric get_k_kpts");
 
@@ -87,9 +87,8 @@ fn symmetric_route_matches_the_full_pair_loop() {
                     for (k, (a, b)) in sa.iter().zip(sb).enumerate() {
                         for i in 0..a.len() {
                             let scale = a.re[i].abs().max(a.im[i].abs()).max(1e-8);
-                            let d = ((a.re[i] - b.re[i]).abs())
-                                .max((a.im[i] - b.im[i]).abs())
-                                / scale;
+                            let d =
+                                ((a.re[i] - b.re[i]).abs()).max((a.im[i] - b.im[i]).abs()) / scale;
                             if d > worst {
                                 worst = d;
                             }

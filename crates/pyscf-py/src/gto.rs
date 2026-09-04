@@ -140,8 +140,7 @@ impl PyMole {
         let arr = ArrayD::from_shape_vec(IxDyn(&shape).f(), out.values).map_err(|e| {
             PyValueError::new_err(format!(
                 "eval_gto('{eval_name}'): cannot shape {} elements as {:?} (F-order): {e}",
-                n_vals,
-                shape,
+                n_vals, shape,
             ))
         })?;
         Ok(arr.into_pyarray(py))

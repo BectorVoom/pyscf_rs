@@ -45,7 +45,7 @@ use pyscf_core::raw_layout::{ANG_OF, ATOM_OF, BAS_SLOTS, NCTR_OF};
 use pyscf_pbc_gto::Cell;
 
 use crate::error::PbcSymmError;
-use crate::space_group::{SPGElement, SpaceGroup, SYMPREC, XYZ};
+use crate::space_group::{SPGElement, SYMPREC, SpaceGroup, XYZ};
 
 // ---------------------------------------------------------------------
 // Task 3 — Wigner-D matrices (symmetry.py:32-94)
@@ -341,7 +341,11 @@ pub fn get_dmat_cart(op: &[[f64; 3]; 3], l_max: usize) -> DmatSet {
         uniq_addr.dedup();
         let rev_addr: Vec<usize> = addr
             .iter()
-            .map(|a| uniq_addr.binary_search(a).expect("addr must be in uniq_addr"))
+            .map(|a| {
+                uniq_addr
+                    .binary_search(a)
+                    .expect("addr must be in uniq_addr")
+            })
             .collect();
         let ncart = (l + 1) * (l + 2) / 2;
         debug_assert_eq!(ncart, uniq_addr.len());
@@ -440,10 +444,11 @@ pub fn check_mesh_symmetry(
     return_mesh: bool,
 ) -> (Vec<usize>, Option<[usize; 3]>) {
     let mesh = mesh.unwrap_or(cell.mesh);
-    let core_ops: Vec<(bool, [f64; 3])> =
-        ops.iter().map(|op| (op.trans_is_zero(), op.trans)).collect();
-    let (rm_list, mesh1) =
-        pyscf_pbc_gto::check_mesh_symmetry_core(&core_ops, mesh, tol);
+    let core_ops: Vec<(bool, [f64; 3])> = ops
+        .iter()
+        .map(|op| (op.trans_is_zero(), op.trans))
+        .collect();
+    let (rm_list, mesh1) = pyscf_pbc_gto::check_mesh_symmetry_core(&core_ops, mesh, tol);
     if !rm_list.is_empty() && !return_mesh {
         tracing::warn!(
             "Input mesh {mesh:?} has lower symmetry than the lattice.\n\
@@ -544,7 +549,11 @@ impl Symmetry {
             }
             let all_ops = &sg.ops;
             ops = if symmorphic {
-                all_ops.iter().filter(|op| op.trans_is_zero()).copied().collect()
+                all_ops
+                    .iter()
+                    .filter(|op| op.trans_is_zero())
+                    .copied()
+                    .collect()
             } else if check_mesh_symmetry_flag {
                 let (rm_list, _) = check_mesh_symmetry(cell, all_ops, None, SYMPREC, false);
                 all_ops
@@ -828,8 +837,9 @@ pub fn get_phase(
         }
         let lshift_r = [lshift[0].round(), lshift[1].round(), lshift[2].round()];
         if !ignore_phase {
-            let dot =
-                kpt_scaled[0] * lshift_r[0] + kpt_scaled[1] * lshift_r[1] + kpt_scaled[2] * lshift_r[2];
+            let dot = kpt_scaled[0] * lshift_r[0]
+                + kpt_scaled[1] * lshift_r[1]
+                + kpt_scaled[2] * lshift_r[2];
             phase[iatm] = Complex64::from_polar(1.0, dot * 2.0 * std::f64::consts::PI);
         }
     }
@@ -883,7 +893,11 @@ pub fn get_rotation_mat(
         let shlid1 = aoslice[iatm][1];
         for ishl in shlid0..shlid1 {
             let l = bas_angular(cell, ishl);
-            let nao = if cell.cart { (l + 1) * (l + 2) / 2 } else { 2 * l + 1 };
+            let nao = if cell.cart {
+                (l + 1) * (l + 2) / 2
+            } else {
+                2 * l + 1
+            };
             let nc = bas_nctr(cell, ishl);
             for _ in 0..nc {
                 for r in 0..nao {

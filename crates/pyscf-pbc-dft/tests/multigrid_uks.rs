@@ -215,11 +215,26 @@ fn v1_nr_uks_reduces_to_nr_rks_on_a_closed_shell_density() {
                 u.nelec.0,
                 u.nelec.1
             );
-            assert!(dn < 1e-10 * scale, "{name} {xc}: nelec identity broke, {dn:.3e}");
-            assert!(dcoul < 1e-10 * scale, "{name} {xc}: ecoul identity broke, {dcoul:.3e}");
-            assert!(dexc < 1e-10 * scale, "{name} {xc}: exc identity broke, {dexc:.3e}");
-            assert!(dva < 1e-10 * scale, "{name} {xc}: alpha veff identity broke, {dva:.3e}");
-            assert!(dvb < 1e-10 * scale, "{name} {xc}: beta veff identity broke, {dvb:.3e}");
+            assert!(
+                dn < 1e-10 * scale,
+                "{name} {xc}: nelec identity broke, {dn:.3e}"
+            );
+            assert!(
+                dcoul < 1e-10 * scale,
+                "{name} {xc}: ecoul identity broke, {dcoul:.3e}"
+            );
+            assert!(
+                dexc < 1e-10 * scale,
+                "{name} {xc}: exc identity broke, {dexc:.3e}"
+            );
+            assert!(
+                dva < 1e-10 * scale,
+                "{name} {xc}: alpha veff identity broke, {dva:.3e}"
+            );
+            assert!(
+                dvb < 1e-10 * scale,
+                "{name} {xc}: beta veff identity broke, {dvb:.3e}"
+            );
         }
     }
 }
@@ -248,10 +263,19 @@ fn v2_nr_uks_reduces_to_nr_rks_on_a_closed_shell_density() {
     );
     let scale = r.exc.abs().max(r.ecoul.abs()).max(1.0);
     assert!(dn < 1e-10 * scale, "v2 nelec identity broke, {dn:.3e}");
-    assert!(dcoul < 1e-10 * scale, "v2 ecoul identity broke, {dcoul:.3e}");
+    assert!(
+        dcoul < 1e-10 * scale,
+        "v2 ecoul identity broke, {dcoul:.3e}"
+    );
     assert!(dexc < 1e-10 * scale, "v2 exc identity broke, {dexc:.3e}");
-    assert!(dva < 1e-10 * scale, "v2 alpha veff identity broke, {dva:.3e}");
-    assert!(dvb < 1e-10 * scale, "v2 beta veff identity broke, {dvb:.3e}");
+    assert!(
+        dva < 1e-10 * scale,
+        "v2 alpha veff identity broke, {dva:.3e}"
+    );
+    assert!(
+        dvb < 1e-10 * scale,
+        "v2 beta veff identity broke, {dvb:.3e}"
+    );
 }
 
 /// RULE U, asserted rather than assumed: if the fixture's two channels were

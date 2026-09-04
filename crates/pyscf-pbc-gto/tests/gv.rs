@@ -436,14 +436,23 @@ fn inf_vacuum_gv_weights_use_the_non_uniform_base() {
         uni.weights_per_grid.is_none(),
         "a 3-D-style uniform grid has ONE weight, not an array"
     );
-    assert_eq!(uni.mesh, MESH, "the uniform branch does not resize the mesh");
+    assert_eq!(
+        uni.mesh, MESH,
+        "the uniform branch does not resize the mesh"
+    );
 
     cell.low_dim_ft_type = LowDimFtType::InfVacuum;
     let vac = get_gv_weights(&cell, Some(MESH)).expect("inf_vacuum Gv");
 
     // (3) xy are periodic and keep the uniform frequencies; (1) z is reduced.
-    assert_eq!(vac.mesh[0], MESH[0], "x is periodic and must not be reduced");
-    assert_eq!(vac.mesh[1], MESH[1], "y is periodic and must not be reduced");
+    assert_eq!(
+        vac.mesh[0], MESH[0],
+        "x is periodic and must not be reduced"
+    );
+    assert_eq!(
+        vac.mesh[1], MESH[1],
+        "y is periodic and must not be reduced"
+    );
     assert_eq!(
         vac.mesh[2],
         2 * (MESH[2] / 2),
@@ -464,7 +473,11 @@ fn inf_vacuum_gv_weights_use_the_non_uniform_base() {
     for g in [0usize, w.len() / 2, w.len() - 1] {
         assert_eq!(vac.weight(g), w[g]);
     }
-    assert_eq!(uni.weight(0), uni.weights, "the scalar path still reads back");
+    assert_eq!(
+        uni.weight(0),
+        uni.weights,
+        "the scalar path still reads back"
+    );
 
     // `get_SI`'s separable branch runs through `get_Gv_weights`, so it now
     // WORKS on the reduced mesh rather than erroring.

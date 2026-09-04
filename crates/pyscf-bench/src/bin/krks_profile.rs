@@ -24,18 +24,22 @@
 //! `coulG`/`expmikr` cache (W-01) and the FFT plan cache are all paid for
 //! before the reported number.
 
-use std::time::Instant;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
-use pyscf_pbc_df::{Fftdf, get_hcore, get_j_kpts, get_k_kpts, get_k_kpts_opts};
+use pyscf_pbc_df::{Fftdf, Gdf, PeriodicDf, get_hcore, get_j_kpts, get_k_kpts, get_k_kpts_opts};
 use pyscf_pbc_dft::krks::{Krks, hybrid};
 use pyscf_pbc_dft::kuks::Kuks;
-use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs, make_kpts_default};
 use pyscf_pbc_gto::hcore::get_ovlp;
+use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs, make_kpts_default};
 use pyscf_pbc_scf::KScfConfig;
 use pyscf_pbc_tools::coulg::ExxDiv;
 use serde::Serialize;
+use tracing::{Subscriber, field::Visit, span::Id};
+use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan};
 
 // ---------------------------------------------------------------------------
 // Cells — same geometries as `pyscf-pbc-dft/tests/common/mod.rs` (not a
@@ -95,12 +99,7 @@ fn silicon_supercell(basis: &str) -> Cell {
         atoms.push(("Si".into(), shift));
         atoms.push(("Si".into(), [shift[0] + q, shift[1] + q, shift[2] + q]));
     }
-    bohr_cell(
-        [double(a1), double(a2), a3],
-        atoms,
-        Some("gth-pade"),
-        basis,
-    )
+    bohr_cell([double(a1), double(a2), a3], atoms, Some("gth-pade"), basis)
 }
 
 fn diamond(basis: &str) -> Cell {
@@ -135,7 +134,147 @@ fn cell_by_name(name: &str, basis: &str) -> Cell {
         "si-supercell" => silicon_supercell(basis),
         "diamond" => diamond(basis),
         "he" => he_all_electron(if basis == "gth-szv" { "sto-3g" } else { basis }),
-        other => panic!("unknown --cell {other} (expected si|si-supercell|diamond|he)"),
+        "li" => Cell::build(CellBuildArgs {
+            mole: MoleBuildArgs {
+                atom: AtomInput::Tuples(vec![("Li".into(), [0.0, 0.0, 0.0])]),
+                basis: BasisInput::Name("sto-3g".into()),
+                unit: Unit::Bohr,
+                spin: 1,
+                ..Default::default()
+            },
+            a: ALattice::Matrix([[6.0, 0.0, 0.0], [0.0, 6.0, 0.0], [0.0, 0.0, 6.0]]),
+            ..Default::default()
+        })
+        .expect("Li cell must build"),
+        other => panic!("unknown --cell {other} (expected si|si-supercell|diamond|he|li)"),
+    }
+}
+
+#[derive(Serialize)]
+struct MultigridReport {
+    driver: String,
+    numint: String,
+    cell: String,
+    mesh: [usize; 3],
+    kernel_ms: f64,
+    warm_get_veff_ms: f64,
+    build_tasks_cache_miss_ms: f64,
+    build_tasks_cache_hit_ms: f64,
+    warm_levels: Vec<MultigridLevelReport>,
+    e_tot: f64,
+    converged: bool,
+    max_dm_spin_delta: Option<f64>,
+    peak_rss_mib: f64,
+    load_average_at_start: f64,
+}
+
+#[derive(Clone, Default, Serialize)]
+struct MultigridLevelReport {
+    level: usize,
+    forward_ms: f64,
+    reverse_ms: f64,
+    forward_fft_ms: f64,
+    reverse_fft_ms: f64,
+    forward_launches: u64,
+    reverse_launches: u64,
+    transfer_bytes_before: u64,
+    transfer_bytes_after: u64,
+}
+
+fn run_multigrid(args: &[String]) {
+    use pyscf_pbc_dft::numint::KsNumInt;
+
+    let driver = arg_value(args, "--driver").unwrap_or_else(|| "krks".into());
+    let numint = arg_value(args, "--numint").unwrap_or_else(|| "v1".into());
+    assert!(matches!(driver.as_str(), "krks" | "kuks"));
+    assert!(matches!(numint.as_str(), "grid" | "v1" | "v2"));
+    let cell_name = arg_value(args, "--cell").unwrap_or_else(|| {
+        if driver == "kuks" {
+            "li".into()
+        } else {
+            "si".into()
+        }
+    });
+    let mesh = parse_triple(&arg_value(args, "--mesh").unwrap_or_else(|| "11,11,11".into()));
+    let load0 = load_average();
+    let json_path = arg_value(args, "--json");
+    if let Some(path) = json_path.as_deref() {
+        guard_idle_baseline_write(path, load0);
+    }
+    let mut cell = cell_by_name(&cell_name, "gth-szv");
+    cell.mesh = mesh;
+    let ni = || match numint.as_str() {
+        "grid" => KsNumInt::grid(&[[0.0; 3]]),
+        "v1" => KsNumInt::multigrid(),
+        "v2" => KsNumInt::multigrid2(),
+        _ => unreachable!(),
+    };
+    let cfg = KScfConfig {
+        conv_tol: 1e-9,
+        max_cycle: 40,
+        ..Default::default()
+    };
+    let kernel_stages = MgStageLayer::default();
+    let warm_stages = MgStageLayer::default();
+    let (result, kernel_ms, warm_ms, spin_delta) = if driver == "kuks" {
+        let mut mf = Kuks::new(cell, &[[0.0; 3]], "lda,vwn").expect("KUKS");
+        mf.ni = ni();
+        let (result, kernel_ms) = tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(kernel_stages.clone()),
+            || time_ms(|| mf.kernel(&cfg).expect("KUKS kernel")),
+        );
+        let (_, warm_ms) = tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(warm_stages.clone()),
+            || time_ms(|| mf.get_veff_tagged(&result.dm, None).expect("get_veff")),
+        );
+        let delta = result.dm[0]
+            .iter()
+            .zip(&result.dm[1])
+            .flat_map(|(dma, dmb)| dma.re.iter().zip(&dmb.re))
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max);
+        (result, kernel_ms, warm_ms, Some(delta))
+    } else {
+        let mut mf = Krks::new(cell, &[[0.0; 3]], "lda,vwn").expect("KRKS");
+        mf.ni = ni();
+        let (result, kernel_ms) = tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(kernel_stages.clone()),
+            || time_ms(|| mf.kernel(&cfg).expect("KRKS kernel")),
+        );
+        let (_, warm_ms) = tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(warm_stages.clone()),
+            || time_ms(|| mf.get_veff_tagged(&result.dm, None).expect("get_veff")),
+        );
+        (result, kernel_ms, warm_ms, None)
+    };
+    let kernel_timing = kernel_stages.snapshot();
+    let warm_timing = warm_stages.snapshot();
+    let report = MultigridReport {
+        driver,
+        numint,
+        cell: cell_name,
+        mesh,
+        kernel_ms,
+        warm_get_veff_ms: warm_ms,
+        build_tasks_cache_miss_ms: kernel_timing.build_miss_ms,
+        build_tasks_cache_hit_ms: warm_timing.build_hit_ms,
+        warm_levels: warm_timing.levels,
+        e_tot: result.e_tot,
+        converged: result.converged,
+        max_dm_spin_delta: spin_delta,
+        peak_rss_mib: peak_rss_mib(),
+        load_average_at_start: load0,
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("serialize")
+    );
+    if let Some(path) = json_path {
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&report).expect("serialize"),
+        )
+        .expect("write json");
     }
 }
 
@@ -147,6 +286,258 @@ fn time_ms<T>(mut f: impl FnMut() -> T) -> (T, f64) {
     let t0 = Instant::now();
     let out = f();
     (out, t0.elapsed().as_secs_f64() * 1e3)
+}
+
+const AO_STAGE_NAMES: [&str; 4] = [
+    "pbc_eval_ao_shift_pack",
+    "pbc_eval_ao_eval_gto",
+    "pbc_eval_ao_scatter",
+    "pbc_eval_ao_k08_accumulate",
+];
+
+#[derive(Clone, Default)]
+struct AoStageLayer {
+    inner: Arc<AoStageLayerInner>,
+}
+
+#[derive(Default)]
+struct AoStageLayerInner {
+    entered: Mutex<HashMap<Id, Instant>>,
+    elapsed: Mutex<[Duration; 4]>,
+}
+
+impl AoStageLayer {
+    fn milliseconds(&self) -> [f64; 4] {
+        let elapsed = self.inner.elapsed.lock().expect("AO stage elapsed mutex");
+        elapsed.map(|d| d.as_secs_f64() * 1e3)
+    }
+}
+
+impl<S> Layer<S> for AoStageLayer
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else { return };
+        if AO_STAGE_NAMES.contains(&span.metadata().name()) {
+            self.inner
+                .entered
+                .lock()
+                .expect("AO stage entered mutex")
+                .insert(id.clone(), Instant::now());
+        }
+    }
+
+    fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else { return };
+        let Some(stage) = AO_STAGE_NAMES
+            .iter()
+            .position(|name| *name == span.metadata().name())
+        else {
+            return;
+        };
+        let Some(started) = self
+            .inner
+            .entered
+            .lock()
+            .expect("AO stage entered mutex")
+            .remove(id)
+        else {
+            return;
+        };
+        self.inner.elapsed.lock().expect("AO stage elapsed mutex")[stage] += started.elapsed();
+    }
+}
+
+const MG_STAGE_NAMES: [&str; 5] = [
+    "pbc_mg_build_tasks_hit",
+    "pbc_mg_build_tasks_miss",
+    "pbc_mg_forward_level",
+    "pbc_mg_reverse_level",
+    "pbc_mg_fft",
+];
+
+#[derive(Clone, Default)]
+struct MgStageLayer {
+    inner: Arc<MgStageLayerInner>,
+}
+
+#[derive(Default)]
+struct MgStageLayerInner {
+    entered: Mutex<HashMap<Id, Instant>>,
+    metadata: Mutex<HashMap<Id, MgSpanMetadata>>,
+    timing: Mutex<MgTiming>,
+}
+
+#[derive(Clone, Default)]
+struct MgSpanMetadata {
+    name: &'static str,
+    level: usize,
+    launches: u64,
+    transfer_bytes_before: u64,
+    transfer_bytes_after: u64,
+    direction: String,
+}
+
+#[derive(Default)]
+struct MgFieldVisitor {
+    level: Option<u64>,
+    launches: Option<u64>,
+    transfer_bytes_before: Option<u64>,
+    transfer_bytes_after: Option<u64>,
+    direction: Option<String>,
+}
+
+impl Visit for MgFieldVisitor {
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        match field.name() {
+            "level" => self.level = Some(value),
+            "launches" => self.launches = Some(value),
+            "transfer_bytes_before" => self.transfer_bytes_before = Some(value),
+            "transfer_bytes_after" => self.transfer_bytes_after = Some(value),
+            _ => {}
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "direction" {
+            self.direction = Some(value.to_owned());
+        }
+    }
+
+    fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
+}
+
+#[derive(Clone, Default)]
+struct MgTiming {
+    build_hit_ms: f64,
+    build_miss_ms: f64,
+    levels: Vec<MultigridLevelReport>,
+}
+
+impl MgStageLayer {
+    fn snapshot(&self) -> MgTiming {
+        self.inner.timing.lock().expect("MG timing mutex").clone()
+    }
+}
+
+impl<S> Layer<S> for MgStageLayer
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
+        let name = attrs.metadata().name();
+        if !MG_STAGE_NAMES.contains(&name) {
+            return;
+        }
+        let mut visitor = MgFieldVisitor::default();
+        attrs.record(&mut visitor);
+        self.inner
+            .metadata
+            .lock()
+            .expect("MG metadata mutex")
+            .insert(
+                id.clone(),
+                MgSpanMetadata {
+                    name,
+                    level: visitor.level.unwrap_or(0) as usize,
+                    launches: visitor.launches.unwrap_or(0),
+                    transfer_bytes_before: visitor.transfer_bytes_before.unwrap_or(0),
+                    transfer_bytes_after: visitor.transfer_bytes_after.unwrap_or(0),
+                    direction: visitor.direction.unwrap_or_default(),
+                },
+            );
+    }
+
+    fn on_enter(&self, id: &Id, _ctx: Context<'_, S>) {
+        if self
+            .inner
+            .metadata
+            .lock()
+            .expect("MG metadata mutex")
+            .contains_key(id)
+        {
+            self.inner
+                .entered
+                .lock()
+                .expect("MG entered mutex")
+                .insert(id.clone(), Instant::now());
+        }
+    }
+
+    fn on_exit(&self, id: &Id, _ctx: Context<'_, S>) {
+        let Some(started) = self
+            .inner
+            .entered
+            .lock()
+            .expect("MG entered mutex")
+            .remove(id)
+        else {
+            return;
+        };
+        let Some(meta) = self
+            .inner
+            .metadata
+            .lock()
+            .expect("MG metadata mutex")
+            .get(id)
+            .cloned()
+        else {
+            return;
+        };
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1e3;
+        let mut timing = self.inner.timing.lock().expect("MG timing mutex");
+        match meta.name {
+            "pbc_mg_build_tasks_hit" => timing.build_hit_ms += elapsed_ms,
+            "pbc_mg_build_tasks_miss" => timing.build_miss_ms += elapsed_ms,
+            _ => {
+                if timing.levels.len() <= meta.level {
+                    timing
+                        .levels
+                        .resize_with(meta.level + 1, MultigridLevelReport::default);
+                }
+                let level = &mut timing.levels[meta.level];
+                level.level = meta.level;
+                match meta.name {
+                    "pbc_mg_forward_level" => {
+                        level.forward_ms += elapsed_ms;
+                        level.forward_launches += meta.launches;
+                        level.transfer_bytes_before = level
+                            .transfer_bytes_before
+                            .saturating_add(meta.transfer_bytes_before);
+                        level.transfer_bytes_after = level
+                            .transfer_bytes_after
+                            .saturating_add(meta.transfer_bytes_after);
+                    }
+                    "pbc_mg_reverse_level" => {
+                        level.reverse_ms += elapsed_ms;
+                        level.reverse_launches += meta.launches;
+                        level.transfer_bytes_before = level
+                            .transfer_bytes_before
+                            .saturating_add(meta.transfer_bytes_before);
+                        level.transfer_bytes_after = level
+                            .transfer_bytes_after
+                            .saturating_add(meta.transfer_bytes_after);
+                    }
+                    "pbc_mg_fft" if meta.direction == "forward" => {
+                        level.forward_fft_ms += elapsed_ms;
+                    }
+                    "pbc_mg_fft" if meta.direction == "reverse" => {
+                        level.reverse_fft_ms += elapsed_ms;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
+        self.inner
+            .metadata
+            .lock()
+            .expect("MG metadata mutex")
+            .remove(&id);
+    }
 }
 
 #[derive(Serialize, Default)]
@@ -261,8 +652,7 @@ fn run_jk(args: &[String]) {
     // U-01 step 2: the SAME density in both channels. This measures the
     // `nset` doubling and nothing else — no second SCF, no second cell, and
     // no second physical state to explain a difference away with.
-    let dm2: Vec<Vec<pyscf_algebra::CTensor>> =
-        vec![result.dm[0].clone(), result.dm[0].clone()];
+    let dm2: Vec<Vec<pyscf_algebra::CTensor>> = vec![result.dm[0].clone(), result.dm[0].clone()];
 
     // --- the one-off (per-SCF, not per-iteration) stages ---
     let (_, get_ovlp_ms) = time_ms(|| get_ovlp(&cell, &kpts).expect("get_ovlp"));
@@ -279,12 +669,12 @@ fn run_jk(args: &[String]) {
     krks.ni.reset();
     let (_, cold_nr_rks_ms) = time_ms(|| {
         krks.ni
-            .nr_rks(&cell, &krks.grids, &xc, &dm1, 1, None)
+            .nr_rks(&cell, &krks.grids, &xc, &dm1, 1, &kpts, None)
             .expect("cold nr_rks")
     });
     let (_, warm_nr_rks_ms) = time_ms(|| {
         krks.ni
-            .nr_rks(&cell, &krks.grids, &xc, &dm1, 1, None)
+            .nr_rks(&cell, &krks.grids, &xc, &dm1, 1, &kpts, None)
             .expect("warm nr_rks")
     });
 
@@ -296,12 +686,12 @@ fn run_jk(args: &[String]) {
     krks.ni.reset();
     let (_, cold_nr_uks_ms) = time_ms(|| {
         krks.ni
-            .nr_uks(&cell, &krks.grids, &xc, &uks_sets, 1, None)
+            .nr_uks(&cell, &krks.grids, &xc, &uks_sets, 1, &kpts, None)
             .expect("cold nr_uks")
     });
     let (_, warm_nr_uks_ms) = time_ms(|| {
         krks.ni
-            .nr_uks(&cell, &krks.grids, &xc, &uks_sets, 1, None)
+            .nr_uks(&cell, &krks.grids, &xc, &uks_sets, 1, &kpts, None)
             .expect("warm nr_uks")
     });
 
@@ -325,12 +715,26 @@ fn run_jk(args: &[String]) {
     let (warm_k_ms, warm_k_nset2_ms) = if is_hybrid {
         let mut run = |dms: &Vec<Vec<pyscf_algebra::CTensor>>| {
             let _ = get_k_kpts_opts(
-                &df, dms, 1, &kpts, None, Some(ExxDiv::Ewald), None, kk_symmetry,
+                &df,
+                dms,
+                1,
+                &kpts,
+                None,
+                Some(ExxDiv::Ewald),
+                None,
+                kk_symmetry,
             )
             .expect("warm get_k_kpts");
             let (_, ms) = time_ms(|| {
                 get_k_kpts_opts(
-                    &df, dms, 1, &kpts, None, Some(ExxDiv::Ewald), None, kk_symmetry,
+                    &df,
+                    dms,
+                    1,
+                    &kpts,
+                    None,
+                    Some(ExxDiv::Ewald),
+                    None,
+                    kk_symmetry,
                 )
                 .expect("get_k_kpts")
             });
@@ -359,7 +763,11 @@ fn run_jk(args: &[String]) {
         warm_get_j_kpts_nset2_ms: warm_j_nset2_ms,
         warm_get_k_kpts_nset2_ms: warm_k_nset2_ms,
         nset2_over_nset1_j: warm_j_nset2_ms / warm_j_ms,
-        nset2_over_nset1_k: if warm_k_ms > 0.0 { warm_k_nset2_ms / warm_k_ms } else { f64::NAN },
+        nset2_over_nset1_k: if warm_k_ms > 0.0 {
+            warm_k_nset2_ms / warm_k_ms
+        } else {
+            f64::NAN
+        },
         warm_nr_uks_ms,
         cold_nr_uks_ms,
         nr_uks_over_nr_rks: warm_nr_uks_ms / warm_nr_rks_ms,
@@ -440,12 +848,16 @@ fn run_jk(args: &[String]) {
             ),
             (
                 "get_j n=2 ",
-                baseline["warm_get_j_kpts_nset2_ms"].as_f64().unwrap_or(f64::NAN),
+                baseline["warm_get_j_kpts_nset2_ms"]
+                    .as_f64()
+                    .unwrap_or(f64::NAN),
                 report.warm_get_j_kpts_nset2_ms,
             ),
             (
                 "get_k n=2 ",
-                baseline["warm_get_k_kpts_nset2_ms"].as_f64().unwrap_or(f64::NAN),
+                baseline["warm_get_k_kpts_nset2_ms"]
+                    .as_f64()
+                    .unwrap_or(f64::NAN),
                 report.warm_get_k_kpts_nset2_ms,
             ),
             ("kernel()  ", base_full, report.full_kernel_ms),
@@ -776,9 +1188,11 @@ fn peak_rss_mib() -> f64 {
     std::fs::read_to_string("/proc/self/status")
         .ok()
         .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with("VmHWM:"))
-                .and_then(|l| l.split_whitespace().nth(1).and_then(|v| v.parse::<f64>().ok()))
+            s.lines().find(|l| l.starts_with("VmHWM:")).and_then(|l| {
+                l.split_whitespace()
+                    .nth(1)
+                    .and_then(|v| v.parse::<f64>().ok())
+            })
         })
         .map_or(f64::NAN, |kb| kb / 1024.0)
 }
@@ -791,6 +1205,19 @@ fn load_average() -> f64 {
         .ok()
         .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok()))
         .unwrap_or(f64::NAN)
+}
+
+/// RULE O: measurements written into a `baselines` directory are evidence,
+/// not scratch output.  Refuse to create them while the host is contended so
+/// an invalid timing row cannot accidentally become a checked-in baseline.
+fn guard_idle_baseline_write(path: &str, load: f64) {
+    let is_baseline = std::path::Path::new(path)
+        .components()
+        .any(|component| component.as_os_str() == "baselines");
+    assert!(
+        !is_baseline || load <= 4.0,
+        "refusing to write baseline {path:?}: 1-minute load average {load:.2} exceeds 4.0 (RULE O)"
+    );
 }
 
 #[derive(Serialize, Default)]
@@ -832,6 +1259,124 @@ struct KsymmReport {
     ksymm_converged: bool,
 }
 
+#[derive(Serialize)]
+struct KsymmJkRouteReport {
+    cell: String,
+    basis: String,
+    nk: [usize; 3],
+    mesh: [usize; 3],
+    df: String,
+    requested_route: String,
+    nkpts: usize,
+    nkpts_ibz: usize,
+    reference_ms: f64,
+    band_ms: f64,
+    reference_over_band: f64,
+    max_abs_delta: f64,
+    bit_exact: bool,
+    e_tot: f64,
+    converged: bool,
+    peak_rss_mib: f64,
+    load_average_at_start: f64,
+}
+
+fn write_json_report<T: Serialize>(path: Option<String>, report: &T) {
+    if let Some(path) = path {
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(report).expect("serialize"),
+        )
+        .expect("write json");
+        println!("wrote {path}");
+    }
+}
+
+fn run_ksymm_jk_route(
+    args: &[String],
+    cell_name: String,
+    basis: String,
+    nk: [usize; 3],
+    mesh: [usize; 3],
+    mut cell: Cell,
+    kpts: pyscf_pbc_symm::kpts::KPoints,
+    load0: f64,
+    json_path: Option<String>,
+) {
+    use pyscf_pbc_scf::khf_ksymm::{JkRoute, KsymAdaptedKrhf};
+    use pyscf_pbc_scf::khooks::KOverrideHooks;
+
+    cell.mesh = mesh;
+    let df_name = arg_value(args, "--df").unwrap_or_else(|| "fftdf".into());
+    let requested_route = arg_value(args, "--jk-route").unwrap_or_else(|| "both".into());
+    assert!(
+        matches!(requested_route.as_str(), "reference" | "band" | "both"),
+        "--jk-route must be reference, band, or both, got {requested_route:?}"
+    );
+    let mut with_df: Box<dyn PeriodicDf> = match df_name.as_str() {
+        "fftdf" => Box::new(Fftdf::with_mesh(cell.clone(), &kpts.kpts, mesh).expect("FFTDF")),
+        "gdf" => Box::new(Gdf::new(cell.clone(), &kpts.kpts)),
+        _ => panic!("--df must be fftdf or gdf, got {df_name:?}"),
+    };
+    // Make lazy setup explicit and exclude it from both route timings.
+    with_df.build().expect("density-fitting build");
+    let mut mf = KsymAdaptedKrhf::from_df(with_df, kpts.clone());
+    mf.use_ao_symmetry = !args.iter().any(|a| a == "--no-ao-symmetry");
+    let cfg = KScfConfig {
+        conv_tol: 1e-9,
+        max_cycle: 40,
+        ..KScfConfig::default()
+    };
+    mf.jk_route = JkRoute::Reference;
+    let result = mf.kernel(&cfg).expect("reference-route KRHF kernel");
+
+    // Prime both paths before timing. In particular GDF may lazily materialise
+    // band-pair data on the first band call.
+    mf.jk_route = JkRoute::Reference;
+    let reference = mf.get_veff(&result.dm).expect("reference get_veff warmup");
+    mf.jk_route = JkRoute::Band;
+    let band = mf.get_veff(&result.dm).expect("band get_veff warmup");
+
+    mf.jk_route = JkRoute::Reference;
+    let (_, reference_ms) = time_ms(|| mf.get_veff(&result.dm).expect("reference get_veff"));
+    mf.jk_route = JkRoute::Band;
+    let (_, band_ms) = time_ms(|| mf.get_veff(&result.dm).expect("band get_veff"));
+
+    let mut max_abs_delta = 0.0_f64;
+    let mut bit_exact = true;
+    for (a_set, b_set) in reference.iter().zip(&band) {
+        for (a, b) in a_set.iter().zip(b_set) {
+            for ((ar, ai), (br, bi)) in a.re.iter().zip(&a.im).zip(b.re.iter().zip(&b.im)) {
+                max_abs_delta = max_abs_delta.max((ar - br).abs()).max((ai - bi).abs());
+                bit_exact &= ar.to_bits() == br.to_bits() && ai.to_bits() == bi.to_bits();
+            }
+        }
+    }
+    let report = KsymmJkRouteReport {
+        cell: cell_name,
+        basis,
+        nk,
+        mesh,
+        df: df_name,
+        requested_route,
+        nkpts: kpts.nkpts(),
+        nkpts_ibz: kpts.nkpts_ibz(),
+        reference_ms,
+        band_ms,
+        reference_over_band: reference_ms / band_ms,
+        max_abs_delta,
+        bit_exact,
+        e_tot: result.e_tot,
+        converged: result.converged,
+        peak_rss_mib: peak_rss_mib(),
+        load_average_at_start: load0,
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&report).expect("serialize")
+    );
+    write_json_report(json_path, &report);
+}
+
 fn run_ksymm(args: &[String]) {
     use pyscf_pbc_dft::krks_ksymm::{KsymAdaptedKrks, KsymAdaptedKuks};
     // `cell()` is a `KOverrideHooks` method on both adapters, not an inherent
@@ -846,8 +1391,8 @@ fn run_ksymm(args: &[String]) {
     let xc = arg_value(args, "--xc").unwrap_or_else(|| "pbe".into());
     let driver = arg_value(args, "--driver").unwrap_or_else(|| "krks".into());
     assert!(
-        driver == "krks" || driver == "kuks",
-        "--driver must be krks or kuks, got {driver:?}"
+        matches!(driver.as_str(), "krks" | "kuks" | "krhf-ksymm"),
+        "--driver must be krks, kuks, or krhf-ksymm, got {driver:?}"
     );
     // D-17-07-01 (`17-07-SUMMARY.md`): `little_cogroup_ops` indexes `k2opk`'s
     // doubled column space while its consumers index `ops`, so time reversal
@@ -860,6 +1405,9 @@ fn run_ksymm(args: &[String]) {
     let compare_path = arg_value(args, "--compare");
 
     let load0 = load_average();
+    if let Some(path) = json_path.as_deref() {
+        guard_idle_baseline_write(path, load0);
+    }
     let mut cell = cell_by_name(&cell_name, &basis);
     cell.mesh = mesh;
     let kpts_abs = make_kpts_default(&cell, nk).expect("k-mesh");
@@ -879,6 +1427,12 @@ fn run_ksymm(args: &[String]) {
             dmats: kpts.symmetry.dmats.clone(),
         };
         basis::build_symmetry(&mut cell, &input).expect("build_symmetry");
+    }
+
+    if driver == "krhf-ksymm" {
+        return run_ksymm_jk_route(
+            args, cell_name, basis, nk, mesh, cell, kpts, load0, json_path,
+        );
     }
 
     let cfg = KScfConfig {
@@ -908,30 +1462,29 @@ fn run_ksymm(args: &[String]) {
     // ---- the k-symmetric driver ----
     let df_sym = Fftdf::with_mesh(cell.clone(), &kpts.kpts, mesh).expect("FFTDF");
     let grids = pyscf_pbc_dft::gen_grid::PeriodicGrids::uniform(&cell, Some(mesh)).expect("grids");
-    let (ksymm_result, ksymm_kernel_ms, warm_ksymm_get_veff_ms, warm_unfold_kdms_ms) =
-        if driver == "kuks" {
-            let mut mf =
-                KsymAdaptedKuks::new(cell.clone(), kpts.clone(), &xc).expect("KsymAdaptedKuks");
-            mf.with_df = Box::new(df_sym);
-            mf.grids = grids;
-            mf.use_ao_symmetry = use_ao_symmetry;
-            let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("ksymm KUKS kernel"));
-            let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
-            let (_, unfold_ms) =
-                time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
-            (r, ms, veff_ms, unfold_ms)
-        } else {
-            let mut mf =
-                KsymAdaptedKrks::new(cell.clone(), kpts.clone(), &xc).expect("KsymAdaptedKrks");
-            mf.with_df = Box::new(df_sym);
-            mf.grids = grids;
-            mf.use_ao_symmetry = use_ao_symmetry;
-            let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("ksymm KRKS kernel"));
-            let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
-            let (_, unfold_ms) =
-                time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
-            (r, ms, veff_ms, unfold_ms)
-        };
+    let (ksymm_result, ksymm_kernel_ms, warm_ksymm_get_veff_ms, warm_unfold_kdms_ms) = if driver
+        == "kuks"
+    {
+        let mut mf =
+            KsymAdaptedKuks::new(cell.clone(), kpts.clone(), &xc).expect("KsymAdaptedKuks");
+        mf.with_df = Box::new(df_sym);
+        mf.grids = grids;
+        mf.use_ao_symmetry = use_ao_symmetry;
+        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("ksymm KUKS kernel"));
+        let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
+        let (_, unfold_ms) = time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
+        (r, ms, veff_ms, unfold_ms)
+    } else {
+        let mut mf =
+            KsymAdaptedKrks::new(cell.clone(), kpts.clone(), &xc).expect("KsymAdaptedKrks");
+        mf.with_df = Box::new(df_sym);
+        mf.grids = grids;
+        mf.use_ao_symmetry = use_ao_symmetry;
+        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("ksymm KRKS kernel"));
+        let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
+        let (_, unfold_ms) = time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
+        (r, ms, veff_ms, unfold_ms)
+    };
 
     let report = KsymmReport {
         cell: cell_name,
@@ -1006,8 +1559,11 @@ fn run_ksymm(args: &[String]) {
     );
 
     if let Some(path) = json_path {
-        std::fs::write(&path, serde_json::to_string_pretty(&report).expect("serialize"))
-            .expect("write json");
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&report).expect("serialize"),
+        )
+        .expect("write json");
         println!("wrote {path}");
     }
     if let Some(path) = compare_path {
@@ -1026,9 +1582,216 @@ fn run_ksymm(args: &[String]) {
             "warm_unfold_kdms_ms",
             "peak_rss_mib",
         ] {
-            let (a, b) = (prev.get(key).and_then(|v| v.as_f64()), now.get(key).and_then(|v| v.as_f64()));
+            let (a, b) = (
+                prev.get(key).and_then(|v| v.as_f64()),
+                now.get(key).and_then(|v| v.as_f64()),
+            );
             if let (Some(a), Some(b)) = (a, b) {
-                println!("  {key:<28} {a:>12.3} -> {b:>12.3}   ({:+.1} %)", (b / a - 1.0) * 100.0);
+                println!(
+                    "  {key:<28} {a:>12.3} -> {b:>12.3}   ({:+.1} %)",
+                    (b / a - 1.0) * 100.0
+                );
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AoReport {
+    driver: String,
+    rho_route: String,
+    cell: String,
+    basis: String,
+    nk: [usize; 3],
+    mesh: [usize; 3],
+    deriv: usize,
+    screen: bool,
+    nao: usize,
+    nkpts: usize,
+    ngrids: usize,
+    nimgs: usize,
+    comp: usize,
+    ao_block_reals: usize,
+    ao_cache_bytes: usize,
+    legacy_round_trip_bytes_per_image: usize,
+    legacy_zero_fill_bytes_per_image: usize,
+    round_trip_bytes_per_image: usize,
+    zero_fill_bytes_per_image: usize,
+    phase_upload_bytes_per_image: usize,
+    cold_eval_ao_kpts_ms: f64,
+    shift_pack_ms: f64,
+    eval_gto_ms: f64,
+    scatter_ms: f64,
+    k08_accumulate_ms: f64,
+    peak_rss_mib: f64,
+    load_average_at_start: f64,
+}
+
+fn run_ao(args: &[String]) {
+    use pyscf_pbc_dft::gen_grid::PeriodicGrids;
+    use pyscf_pbc_gto::{estimate_rcut_for_eval, eval_ao_kpts, lattice};
+
+    let cell_name = arg_value(args, "--cell").unwrap_or_else(|| "si".into());
+    let driver = arg_value(args, "--driver").unwrap_or_else(|| "full".into());
+    let rho_route = arg_value(args, "--rho-route").unwrap_or_else(|| "unfold".into());
+    let basis = arg_value(args, "--basis").unwrap_or_else(|| "gth-szv".into());
+    let nk = parse_triple(&arg_value(args, "--nk").unwrap_or_else(|| "2,2,2".into()));
+    let mesh = parse_triple(&arg_value(args, "--mesh").unwrap_or_else(|| "31,31,31".into()));
+    let deriv: usize = arg_value(args, "--deriv")
+        .unwrap_or_else(|| "0".into())
+        .parse()
+        .expect("--deriv must be 0 or 1");
+    assert!(deriv <= 1, "--deriv must be 0 or 1");
+    let screen_arg = arg_value(args, "--screen").unwrap_or_else(|| "on".into());
+    let screen = match screen_arg.as_str() {
+        "on" => true,
+        "off" => false,
+        _ => panic!("--screen must be on or off, got {screen_arg:?}"),
+    };
+    // The screen setting is process-global and cached on first use.  This
+    // profiler performs exactly one AO run per process, so setting it here is
+    // deterministic and mirrors the public kill-switch contract.
+    unsafe { std::env::set_var("PYSCF_PBC_AO_SCREEN", if screen { "1" } else { "0" }) };
+
+    let load0 = load_average();
+    let json_path = arg_value(args, "--json");
+    if let Some(path) = json_path.as_deref() {
+        guard_idle_baseline_write(path, load0);
+    }
+    let compare_path = arg_value(args, "--compare");
+
+    let mut cell = cell_by_name(&cell_name, &basis);
+    cell.mesh = mesh;
+    let kpts_full = make_kpts_default(&cell, nk).expect("k-mesh");
+    let kpts = if driver == "kuks-ksymm" && rho_route == "symmetrize" {
+        pyscf_pbc_symm::kpts::make_kpts(&cell, &kpts_full, true, false)
+            .expect("symmetric k-mesh")
+            .kpts_ibz
+    } else {
+        kpts_full
+    };
+    let grids = PeriodicGrids::uniform(&cell, Some(mesh)).expect("uniform grid");
+    let coords = grids.coords().expect("uniform coordinates");
+    let eval_name = if deriv == 0 {
+        "GTOval_sph"
+    } else {
+        "GTOval_sph_deriv1"
+    };
+    let rcut = estimate_rcut_for_eval(&cell, deriv as u32).expect("AO rcut");
+    let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
+    let nimgs = lattice::get_lattice_ls(&cell, Some(rmax), None, false)
+        .expect("AO image list")
+        .len();
+
+    let stages = AoStageLayer::default();
+    let subscriber = tracing_subscriber::registry().with(stages.clone());
+    let (out, cold_eval_ao_kpts_ms) = tracing::subscriber::with_default(subscriber, || {
+        time_ms(|| eval_ao_kpts(&cell, eval_name, coords, &kpts).expect("eval_ao_kpts"))
+    });
+    let [shift_pack_ms, eval_gto_ms, scatter_ms, k08_accumulate_ms] = stages.milliseconds();
+    let n = out.comp * out.ngrids * out.nao;
+    let report = AoReport {
+        driver,
+        rho_route,
+        cell: cell_name,
+        basis,
+        nk,
+        mesh,
+        deriv,
+        screen,
+        nao: out.nao,
+        nkpts: out.nkpts(),
+        ngrids: out.ngrids,
+        nimgs,
+        comp: out.comp,
+        ao_block_reals: n,
+        ao_cache_bytes: out.nkpts() * n * 2 * size_of::<f64>(),
+        legacy_round_trip_bytes_per_image: 2 * n * size_of::<f64>(),
+        legacy_zero_fill_bytes_per_image: n * size_of::<f64>(),
+        round_trip_bytes_per_image: 0,
+        zero_fill_bytes_per_image: 0,
+        phase_upload_bytes_per_image: 2 * out.nkpts() * size_of::<f64>(),
+        cold_eval_ao_kpts_ms,
+        shift_pack_ms,
+        eval_gto_ms,
+        scatter_ms,
+        k08_accumulate_ms,
+        peak_rss_mib: peak_rss_mib(),
+        load_average_at_start: load0,
+    };
+    println!(
+        "driver={} rho_route={} cell={} basis={} nk={:?} mesh={:?} deriv={} screen={}\n  \
+         nao={} nkpts={} ngrids={} nimgs={} comp={} n={} cache={} bytes\n  \
+         RULE T/image: legacy round-trip={} bytes + zero-fill={} bytes; \
+         resident round-trip={} bytes + zero-fill={} bytes + phases={} bytes\n  \
+         load average at start={:.2} peak RSS={:.1} MiB\n  \
+         eval_ao_kpts cold={:.3} ms\n  \
+         shift+pack={:.3} ms ({:.1}%) eval_gto={:.3} ms ({:.1}%)\n  \
+         scatter={:.3} ms ({:.1}%) k08_accumulate={:.3} ms ({:.1}%)",
+        report.driver,
+        report.rho_route,
+        report.cell,
+        report.basis,
+        report.nk,
+        report.mesh,
+        report.deriv,
+        report.screen,
+        report.nao,
+        report.nkpts,
+        report.ngrids,
+        report.nimgs,
+        report.comp,
+        report.ao_block_reals,
+        report.ao_cache_bytes,
+        report.legacy_round_trip_bytes_per_image,
+        report.legacy_zero_fill_bytes_per_image,
+        report.round_trip_bytes_per_image,
+        report.zero_fill_bytes_per_image,
+        report.phase_upload_bytes_per_image,
+        report.load_average_at_start,
+        report.peak_rss_mib,
+        report.cold_eval_ao_kpts_ms,
+        report.shift_pack_ms,
+        100.0 * report.shift_pack_ms / report.cold_eval_ao_kpts_ms,
+        report.eval_gto_ms,
+        100.0 * report.eval_gto_ms / report.cold_eval_ao_kpts_ms,
+        report.scatter_ms,
+        100.0 * report.scatter_ms / report.cold_eval_ao_kpts_ms,
+        report.k08_accumulate_ms,
+        100.0 * report.k08_accumulate_ms / report.cold_eval_ao_kpts_ms,
+    );
+
+    if let Some(path) = json_path {
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&report).expect("serialize"),
+        )
+        .expect("write json");
+        println!("wrote {path}");
+    }
+    if let Some(path) = compare_path {
+        let prev: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read baseline"))
+                .expect("parse baseline");
+        let now = serde_json::to_value(&report).expect("serialize");
+        println!("--- compare against {path} (RULE O: ONE variable changed) ---");
+        for key in [
+            "cold_eval_ao_kpts_ms",
+            "shift_pack_ms",
+            "eval_gto_ms",
+            "scatter_ms",
+            "k08_accumulate_ms",
+            "peak_rss_mib",
+        ] {
+            let (a, b) = (
+                prev.get(key).and_then(|v| v.as_f64()),
+                now.get(key).and_then(|v| v.as_f64()),
+            );
+            if let (Some(a), Some(b)) = (a, b) {
+                println!(
+                    "  {key:<28} {a:>12.3} -> {b:>12.3}   ({:+.1} %)",
+                    (b / a - 1.0) * 100.0
+                );
             }
         }
     }
@@ -1042,7 +1805,10 @@ fn arg_value(args: &[String], key: &str) -> Option<String> {
 }
 
 fn parse_triple(s: &str) -> [usize; 3] {
-    let parts: Vec<usize> = s.split(',').map(|t| t.trim().parse().expect("integer")).collect();
+    let parts: Vec<usize> = s
+        .split(',')
+        .map(|t| t.trim().parse().expect("integer"))
+        .collect();
     assert_eq!(parts.len(), 3, "expected a,b,c, got {s}");
     [parts[0], parts[1], parts[2]]
 }
@@ -1056,8 +1822,12 @@ fn main() {
         "jk" => run_jk(rest),
         "contract" => run_contract(rest),
         "ksymm" => run_ksymm(rest),
+        "ao" => run_ao(rest),
+        "multigrid" => run_multigrid(rest),
         other => {
-            eprintln!("unknown subcommand {other:?} (expected transform|jk|contract|ksymm)");
+            eprintln!(
+                "unknown subcommand {other:?} (expected transform|jk|contract|ksymm|ao|multigrid)"
+            );
             std::process::exit(1);
         }
     }

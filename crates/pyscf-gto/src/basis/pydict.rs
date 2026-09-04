@@ -37,15 +37,9 @@ use pyscf_core::{BasisLoadError, ParsedBasis, ShellSpec};
 /// # Errors
 /// [`BasisLoadError::UnknownName`] when the element is absent from the file;
 /// [`BasisLoadError::Parse`] when the literal does not have the expected shape.
-pub fn parse_pydict(
-    text: &str,
-    symbol: &str,
-    path: &str,
-) -> Result<ParsedBasis, BasisLoadError> {
-    let body = extract_assignment(text, symbol).ok_or_else(|| {
-        BasisLoadError::UnknownName {
-            name: format!("{symbol} is not defined in {path}"),
-        }
+pub fn parse_pydict(text: &str, symbol: &str, path: &str) -> Result<ParsedBasis, BasisLoadError> {
+    let body = extract_assignment(text, symbol).ok_or_else(|| BasisLoadError::UnknownName {
+        name: format!("{symbol} is not defined in {path}"),
     })?;
     let node = parse_list(&body).ok_or_else(|| BasisLoadError::Parse {
         file: path.to_string(),
@@ -168,11 +162,7 @@ fn extract_assignment(text: &str, symbol: &str) -> Option<String> {
             continue;
         }
         // Take everything from the `=` to the point where the brackets balance.
-        let rest: String = stripped
-            .lines()
-            .skip(i)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rest: String = stripped.lines().skip(i).collect::<Vec<_>>().join("\n");
         let start = rest.find('=')? + 1;
         let tail = &rest[start..];
         let open = tail.find('[')?;
@@ -242,8 +232,7 @@ fn parse_node(s: &[char], pos: &mut usize) -> Option<Node> {
             || s[*pos] == '.'
             || s[*pos] == 'e'
             || s[*pos] == 'E'
-            || ((s[*pos] == '+' || s[*pos] == '-')
-                && matches!(s[*pos - 1], 'e' | 'E')))
+            || ((s[*pos] == '+' || s[*pos] == '-') && matches!(s[*pos - 1], 'e' | 'E')))
     {
         *pos += 1;
     }

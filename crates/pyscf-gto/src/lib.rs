@@ -45,8 +45,8 @@ pub use intor::{
     intor_with_rinv_origin,
 };
 pub use projection::{
-    build_cintx_basis_set, build_combined_basis, build_combined_basis_raw, build_image_expanded_basis,
-    build_image_expanded_cross_basis, build_image_expanded_with_aux,
+    build_cintx_basis_set, build_combined_basis, build_combined_basis_raw,
+    build_image_expanded_basis, build_image_expanded_cross_basis, build_image_expanded_with_aux,
 };
 pub use pyscf_core::{Mole, Unit};
 pub use range_coulomb::{PTR_RANGE_OMEGA, get_k_with_omega, intor_with_omega};

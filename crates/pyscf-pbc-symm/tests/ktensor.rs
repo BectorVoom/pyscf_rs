@@ -65,7 +65,10 @@ struct Worst {
 
 impl Worst {
     fn new() -> Self {
-        Worst { val: 0.0, at: String::new() }
+        Worst {
+            val: 0.0,
+            at: String::new(),
+        }
     }
     fn see(&mut self, val: f64, at: impl FnOnce() -> String) {
         if val > self.val {
@@ -74,7 +77,10 @@ impl Worst {
         }
     }
     fn report(&self, what: &str, tol: f64) {
-        println!("  max {what:<56} = {:e}   (tol {tol:e}, at {})", self.val, self.at);
+        println!(
+            "  max {what:<56} = {:e}   (tol {tol:e}, at {})",
+            self.val, self.at
+        );
         assert!(
             self.val < tol,
             "max {what} = {:e} exceeds {tol:e} at {}",
@@ -95,7 +101,10 @@ impl Rng {
         Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
     }
     fn next_f64(&mut self) -> f64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let x = (self.0 >> 11) as f64 / (1u64 << 53) as f64;
         2.0 * x - 1.0
     }
@@ -144,14 +153,24 @@ fn identity(n: usize) -> Vec<Complex64> {
 /// A synthetic [`MORotationMatrix`] with `nkpts x nops` unitaries per block.
 /// `MORotationMatrix`'s fields are `pub`, so no SCF is needed to exercise
 /// the contraction algebra.
-fn synthetic_rmat(nkpts: usize, nops: usize, nocc: usize, nvir: usize, seed: u64) -> MORotationMatrix {
+fn synthetic_rmat(
+    nkpts: usize,
+    nops: usize,
+    nocc: usize,
+    nvir: usize,
+    seed: u64,
+) -> MORotationMatrix {
     let mut rng = Rng::new(seed);
     let mut r = MORotationMatrix::new(nocc, nocc + nvir);
     r.oo = Some(
-        (0..nkpts).map(|_| (0..nops).map(|_| unitary(nocc, &mut rng)).collect()).collect(),
+        (0..nkpts)
+            .map(|_| (0..nops).map(|_| unitary(nocc, &mut rng)).collect())
+            .collect(),
     );
     r.vv = Some(
-        (0..nkpts).map(|_| (0..nops).map(|_| unitary(nvir, &mut rng)).collect()).collect(),
+        (0..nkpts)
+            .map(|_| (0..nops).map(|_| unitary(nvir, &mut rng)).collect())
+            .collect(),
     );
     r
 }
@@ -160,8 +179,16 @@ fn synthetic_rmat(nkpts: usize, nops: usize, nocc: usize, nvir: usize, seed: u64
 /// invariant `transform_*(block, identity) == block`.
 fn identity_rmat(nkpts: usize, nops: usize, nocc: usize, nvir: usize) -> MORotationMatrix {
     let mut r = MORotationMatrix::new(nocc, nocc + nvir);
-    r.oo = Some((0..nkpts).map(|_| (0..nops).map(|_| identity(nocc)).collect()).collect());
-    r.vv = Some((0..nkpts).map(|_| (0..nops).map(|_| identity(nvir)).collect()).collect());
+    r.oo = Some(
+        (0..nkpts)
+            .map(|_| (0..nops).map(|_| identity(nocc)).collect())
+            .collect(),
+    );
+    r.vv = Some(
+        (0..nkpts)
+            .map(|_| (0..nops).map(|_| identity(nvir)).collect())
+            .collect(),
+    );
     r
 }
 
@@ -179,7 +206,13 @@ fn ref_conj(m: &[Complex64], t: Conj) -> Vec<Complex64> {
 /// `out[k,l] = sum_{i,j} a[i,j] ri[i,k] rj[j,l]` — upstream's
 /// `reduce(np.dot, (rot_i.T, arr, rot_j))` (`ktensor.py:286`), written as a
 /// direct summation.
-fn ref_2d(a: &[Complex64], di: usize, dj: usize, ri: &[Complex64], rj: &[Complex64]) -> Vec<Complex64> {
+fn ref_2d(
+    a: &[Complex64],
+    di: usize,
+    dj: usize,
+    ri: &[Complex64],
+    rj: &[Complex64],
+) -> Vec<Complex64> {
     let mut out = vec![C0; di * dj];
     for k in 0..di {
         for l in 0..dj {
@@ -260,7 +293,10 @@ fn sym() -> &'static Sym {
         build_lattice_symmetry(&mut cell, check_mesh_symmetry).expect("build_lattice_symmetry");
         let kpts_abs = make_kpts_default(&cell, [2, 2, 2]).expect("make_kpts_default");
         let kpts = make_kpts(&cell, &kpts_abs, true, true).expect("make_kpts");
-        assert!(!kpts.time_reversal, "si has inversion: time reversal must be OFF");
+        assert!(
+            !kpts.time_reversal,
+            "si has inversion: time reversal must be OFF"
+        );
         let kqrts = KQuartets::build(&kpts, &cell).expect("KQuartets::build");
         Sym { cell, kpts, kqrts }
     })
@@ -338,10 +374,12 @@ fn slice_to_coords_is_exhaustively_numpy_arange() {
     // None, for n = 1..6.
     let mut cases = 0usize;
     for n in 1i64..=6 {
-        let bounds: Vec<Option<i64>> =
-            std::iter::once(None).chain((-2 * n..=2 * n).map(Some)).collect();
-        let steps: Vec<Option<i64>> =
-            std::iter::once(None).chain((-n..=n).filter(|s| *s != 0).map(Some)).collect();
+        let bounds: Vec<Option<i64>> = std::iter::once(None)
+            .chain((-2 * n..=2 * n).map(Some))
+            .collect();
+        let steps: Vec<Option<i64>> = std::iter::once(None)
+            .chain((-n..=n).filter(|s| *s != 0).map(Some))
+            .collect();
         for &start in &bounds {
             for &stop in &bounds {
                 for &step in &steps {
@@ -357,7 +395,17 @@ fn slice_to_coords_is_exhaustively_numpy_arange() {
     assert!(cases > 5000, "the sweep must be exhaustive, not a sample");
 
     // step == 0 is NumPy's ZeroDivisionError.
-    assert!(slice_to_coords(SliceSpec { start: None, stop: None, step: Some(0) }, 4).is_err());
+    assert!(
+        slice_to_coords(
+            SliceSpec {
+                start: None,
+                stop: None,
+                step: Some(0)
+            },
+            4
+        )
+        .is_err()
+    );
 }
 
 /// A reference `lib.cartesian_prod` — LAST axis varying fastest.
@@ -387,9 +435,21 @@ fn index_to_coords_is_exhaustive_over_a_full_generator_set_at_small_nkpts() {
         .map(Key::Index)
         .chain([
             Key::Slice(SliceSpec::full()),
-            Key::Slice(SliceSpec { start: Some(1), stop: None, step: None }),
-            Key::Slice(SliceSpec { start: None, stop: Some(-1), step: None }),
-            Key::Slice(SliceSpec { start: None, stop: None, step: Some(2) }),
+            Key::Slice(SliceSpec {
+                start: Some(1),
+                stop: None,
+                step: None,
+            }),
+            Key::Slice(SliceSpec {
+                start: None,
+                stop: Some(-1),
+                step: None,
+            }),
+            Key::Slice(SliceSpec {
+                start: None,
+                stop: None,
+                step: Some(2),
+            }),
             Key::Array(vec![2, 0]),
         ])
         .collect();
@@ -444,7 +504,13 @@ fn index_to_coords_is_exhaustive_over_a_full_generator_set_at_small_nkpts() {
     assert!(cases > 500, "the sweep must be exhaustive, not a sample");
 
     // A key longer than the shape is upstream's bare `raise RuntimeError`.
-    assert!(index_to_coords(&[Key::Index(0), Key::Index(0), Key::Index(0), Key::Index(0)], &shape).is_err());
+    assert!(
+        index_to_coords(
+            &[Key::Index(0), Key::Index(0), Key::Index(0), Key::Index(0)],
+            &shape
+        )
+        .is_err()
+    );
 }
 
 // =====================================================================
@@ -509,7 +575,10 @@ fn set_4d_stores_each_triple_where_an_independent_dense_tensor_says() {
     }
 
     assert_eq!(nb, kqrts.kqrts_ibz.len());
-    println!("  set_4d: nkpts = {n}, nkpts^3 = {}, stored blocks = {nb}", n * n * n);
+    println!(
+        "  set_4d: nkpts = {n}, nkpts^3 = {}, stored blocks = {nb}",
+        n * n * n
+    );
     for m in 0..nb {
         for p in 0..block_len {
             assert_eq!(
@@ -548,7 +617,10 @@ fn set_2d_stores_each_bz_key_at_its_ibz_slot_and_discards_the_rest() {
     for (m, &k) in kpts.ibz2bz.iter().enumerate() {
         expect[m * block_len..(m + 1) * block_len].copy_from_slice(&dense_block_2d(k, block_len));
     }
-    println!("  set_2d: nkpts = {n}, nkpts_ibz = {nb}, ibz2bz = {:?}", kpts.ibz2bz);
+    println!(
+        "  set_2d: nkpts = {n}, nkpts_ibz = {nb}, ibz2bz = {:?}",
+        kpts.ibz2bz
+    );
     assert_eq!(data, expect);
 }
 
@@ -606,23 +678,17 @@ fn transform_2d_matches_an_independent_einsum_for_every_label_and_trans() {
             let (di, dj) = (dim_of(pi), dim_of(pj));
             // One stored block per (label) — every stored slot filled so a
             // wrong `ki_ibz` reads different numbers.
-            let flat: Vec<Complex64> =
-                (0..kpts.nkpts_ibz() * di * dj).map(|_| rng.next_c()).collect();
+            let flat: Vec<Complex64> = (0..kpts.nkpts_ibz() * di * dj)
+                .map(|_| rng.next_c())
+                .collect();
             let blocks = Blocks::new(&flat, di * dj).expect("Blocks");
             let stored = blocks.block(ki_ibz).expect("block");
 
             for &ti in &CONJS {
                 for &tj in &CONJS {
-                    let got = transform_2d(
-                        &blocks,
-                        kpts,
-                        ki,
-                        &rmat,
-                        &[pi, pj],
-                        &[ti, tj],
-                        [di, dj],
-                    )
-                    .expect("transform_2d");
+                    let got =
+                        transform_2d(&blocks, kpts, ki, &rmat, &[pi, pj], &[ti, tj], [di, dj])
+                            .expect("transform_2d");
                     let ri = ref_conj(rot_ref(&rmat, pi, ki_ibz_bz, iop), ti);
                     let rj = ref_conj(rot_ref(&rmat, pj, ki_ibz_bz, iop), tj);
                     let want = ref_2d(stored, di, dj, &ri, &rj);
@@ -638,7 +704,10 @@ fn transform_2d_matches_an_independent_einsum_for_every_label_and_trans() {
         }
     }
     println!("  transform_2d: {combos} (label, trans) combinations");
-    assert_eq!(combos, 16, "every (label, trans) combination must be tested");
+    assert_eq!(
+        combos, 16,
+        "every (label, trans) combination must be tested"
+    );
     worst.report("|transform_2d - independent einsum|", EINSUM_TOL);
 }
 
@@ -664,8 +733,9 @@ fn transform_4d_matches_an_independent_einsum_for_every_label_and_trans() {
                 for &pb in &SPACES {
                     let d = [dim_of(pi), dim_of(pj), dim_of(pa), dim_of(pb)];
                     let bl: usize = d.iter().product();
-                    let flat: Vec<Complex64> =
-                        (0..kqrts.kqrts_ibz.len() * bl).map(|_| rng.next_c()).collect();
+                    let flat: Vec<Complex64> = (0..kqrts.kqrts_ibz.len() * bl)
+                        .map(|_| rng.next_c())
+                        .collect();
                     let blocks = Blocks::new(&flat, bl).expect("Blocks");
                     let stored = blocks.block(kk_ibz).expect("block");
 
@@ -708,7 +778,10 @@ fn transform_4d_matches_an_independent_einsum_for_every_label_and_trans() {
         }
     }
     println!("  transform_4d: {combos} (label, trans) combinations");
-    assert_eq!(combos, 256, "every (label, trans) combination must be tested");
+    assert_eq!(
+        combos, 256,
+        "every (label, trans) combination must be tested"
+    );
     worst.report("|transform_4d - independent einsum|", EINSUM_TOL);
 }
 
@@ -724,7 +797,9 @@ fn transform_with_an_identity_rotation_returns_the_block_bit_exactly() {
     let ki = a_non_representative_k(kpts);
     let ki_ibz = kpts.bz2ibz[ki];
     let (di, dj) = (NOCC, NVIR);
-    let flat: Vec<Complex64> = (0..kpts.nkpts_ibz() * di * dj).map(|_| rng.next_c()).collect();
+    let flat: Vec<Complex64> = (0..kpts.nkpts_ibz() * di * dj)
+        .map(|_| rng.next_c())
+        .collect();
     let blocks = Blocks::new(&flat, di * dj).expect("Blocks");
     let stored = blocks.block(ki_ibz).expect("block").to_vec();
     for &ti in &CONJS {
@@ -755,7 +830,9 @@ fn transform_with_an_identity_rotation_returns_the_block_bit_exactly() {
     let kk_ibz = kqrts.bz2ibz[kpts.ktuple_to_index(&klc)];
     let d = [NOCC, NOCC, NVIR, NVIR];
     let bl: usize = d.iter().product();
-    let flat4: Vec<Complex64> = (0..kqrts.kqrts_ibz.len() * bl).map(|_| rng.next_c()).collect();
+    let flat4: Vec<Complex64> = (0..kqrts.kqrts_ibz.len() * bl)
+        .map(|_| rng.next_c())
+        .collect();
     let blocks4 = Blocks::new(&flat4, bl).expect("Blocks");
     let stored4 = blocks4.block(kk_ibz).expect("block").to_vec();
     let label = [OrbSpace::Occ, OrbSpace::Occ, OrbSpace::Vir, OrbSpace::Vir];
@@ -825,9 +902,8 @@ fn hermiticity_survives_exactly_the_mixed_trans_combinations() {
         let mut broken_min = f64::INFINITY;
         for &ti in &CONJS {
             for &tj in &CONJS {
-                let got =
-                    transform_2d(&blocks, kpts, ki, &rmat, &[p, p], &[ti, tj], [n, n])
-                        .expect("transform_2d");
+                let got = transform_2d(&blocks, kpts, ki, &rmat, &[p, p], &[ti, tj], [n, n])
+                    .expect("transform_2d");
                 let mut dev: f64 = 0.0;
                 for i in 0..n {
                     for j in 0..n {
@@ -927,7 +1003,18 @@ fn shape_ndim_and_order_accessors_match_upstream() {
         meta_4d(kpts, kqrts, &rmat, &label4, &trans4, true),
     )
     .expect("empty 4d");
-    assert_eq!(b.shape(), vec![kpts.nkpts(), kpts.nkpts(), kpts.nkpts(), NOCC, NOCC, NVIR, NVIR]);
+    assert_eq!(
+        b.shape(),
+        vec![
+            kpts.nkpts(),
+            kpts.nkpts(),
+            kpts.nkpts(),
+            NOCC,
+            NOCC,
+            NVIR,
+            NVIR
+        ]
+    );
     assert_eq!(b.ndim(), 7);
     assert_eq!(b.subarray_order(), SubarrayOrder::F);
     assert_eq!(b.n_blocks(), kqrts.kqrts_ibz.len());
@@ -940,8 +1027,12 @@ fn shape_ndim_and_order_accessors_match_upstream() {
 
     // A rank other than 2 or 4 is upstream's `NotImplementedError`.
     assert!(
-        KsymmArray::empty(&[2, 2, 2], SubarrayOrder::C, meta_2d(kpts, &rmat, &label2, &trans2, true))
-            .is_err()
+        KsymmArray::empty(
+            &[2, 2, 2],
+            SubarrayOrder::C,
+            meta_2d(kpts, &rmat, &label2, &trans2, true)
+        )
+        .is_err()
     );
     // Bad label / trans strings.
     assert!(parse_label("ox", 2).is_err());
@@ -996,7 +1087,11 @@ fn from_dense_to_dense_round_trips_bit_exactly() {
         let x = a.stored_block(m).expect("x");
         let y = a2.stored_block(m).expect("y");
         for p in 0..x.len() {
-            assert_eq!(x[p].to_bits_pair(), y[p].to_bits_pair(), "2d slot {m} elem {p}");
+            assert_eq!(
+                x[p].to_bits_pair(),
+                y[p].to_bits_pair(),
+                "2d slot {m} elem {p}"
+            );
         }
     }
 
@@ -1016,7 +1111,11 @@ fn from_dense_to_dense_round_trips_bit_exactly() {
     let n = kpts.nkpts();
     for (m, q) in kqrts.kqrts_ibz.iter().enumerate() {
         let off = ((q[0] * n + q[1]) * n + q[2]) * bl;
-        assert_eq!(b.stored_block(m).expect("stored"), &dense4[off..off + bl], "4d slot {m}");
+        assert_eq!(
+            b.stored_block(m).expect("stored"),
+            &dense4[off..off + bl],
+            "4d slot {m}"
+        );
     }
     let d4 = b.to_dense().expect("to_dense");
     assert_eq!(d4.len(), n * n * n * bl);
@@ -1031,7 +1130,11 @@ fn from_dense_to_dense_round_trips_bit_exactly() {
         let x = b.stored_block(m).expect("x");
         let y = b2.stored_block(m).expect("y");
         for p in 0..x.len() {
-            assert_eq!(x[p].to_bits_pair(), y[p].to_bits_pair(), "4d slot {m} elem {p}");
+            assert_eq!(
+                x[p].to_bits_pair(),
+                y[p].to_bits_pair(),
+                "4d slot {m} elem {p}"
+            );
         }
     }
 }
@@ -1055,10 +1158,18 @@ fn from_raw_to_raw_round_trips_for_both_subarray_orders() {
             meta_2d(kpts, &rmat, &label, &trans, true),
         )
         .expect("from_raw");
-        assert_eq!(a.subarray_order(), order, "the declared order must round-trip");
+        assert_eq!(
+            a.subarray_order(),
+            order,
+            "the declared order must round-trip"
+        );
         let back = a.to_raw().expect("to_raw");
         for p in 0..raw.len() {
-            assert_eq!(back[p].to_bits_pair(), raw[p].to_bits_pair(), "order {order:?} elem {p}");
+            assert_eq!(
+                back[p].to_bits_pair(),
+                raw[p].to_bits_pair(),
+                "order {order:?} elem {p}"
+            );
         }
     }
     // A buffer of the wrong length is refused.
@@ -1091,8 +1202,11 @@ fn setitem_at_a_non_irreducible_key_writes_the_representative_and_reads_back_tra
 
     // Fill every IBZ representative.
     let mut rng = Rng::new(0x5E7);
-    let blocks: Vec<Vec<Complex64>> =
-        kpts.ibz2bz.iter().map(|_| (0..bl).map(|_| rng.next_c()).collect()).collect();
+    let blocks: Vec<Vec<Complex64>> = kpts
+        .ibz2bz
+        .iter()
+        .map(|_| (0..bl).map(|_| rng.next_c()).collect())
+        .collect();
     let keys = kpts.ibz2bz.clone();
     let vals: Vec<&[Complex64]> = blocks.iter().map(|b| b.as_slice()).collect();
     a.set_2d_many(&keys, &vals).expect("set");
@@ -1101,11 +1215,17 @@ fn setitem_at_a_non_irreducible_key_writes_the_representative_and_reads_back_tra
     // warning branch, `ktensor.py:245-247`) — the store must be unchanged.
     let ki = a_non_representative_k(kpts);
     let junk = vec![Complex64::new(1e9, -1e9); bl];
-    let snapshot: Vec<Vec<Complex64>> =
-        (0..a.n_blocks()).map(|m| a.stored_block(m).expect("s")).collect();
-    a.set_2d_at(ki, &junk).expect("set at a reducible key must not error");
+    let snapshot: Vec<Vec<Complex64>> = (0..a.n_blocks())
+        .map(|m| a.stored_block(m).expect("s"))
+        .collect();
+    a.set_2d_at(ki, &junk)
+        .expect("set at a reducible key must not error");
     for m in 0..a.n_blocks() {
-        assert_eq!(a.stored_block(m).expect("s"), snapshot[m], "slot {m} must be untouched");
+        assert_eq!(
+            a.stored_block(m).expect("s"),
+            snapshot[m],
+            "slot {m} must be untouched"
+        );
     }
 
     // Reading back at that key gives the TRANSFORM of the representative,
@@ -1114,17 +1234,31 @@ fn setitem_at_a_non_irreducible_key_writes_the_representative_and_reads_back_tra
     let ki_ibz = kpts.bz2ibz[ki];
     let rep = a.stored_block(ki_ibz).expect("rep");
     let iop = kpts.stars_ops_bz[ki];
-    let ri = ref_conj(rot_ref(&rmat, OrbSpace::Occ, kpts.ibz2bz[ki_ibz], iop), Conj::C);
-    let rj = ref_conj(rot_ref(&rmat, OrbSpace::Occ, kpts.ibz2bz[ki_ibz], iop), Conj::N);
+    let ri = ref_conj(
+        rot_ref(&rmat, OrbSpace::Occ, kpts.ibz2bz[ki_ibz], iop),
+        Conj::C,
+    );
+    let rj = ref_conj(
+        rot_ref(&rmat, OrbSpace::Occ, kpts.ibz2bz[ki_ibz], iop),
+        Conj::N,
+    );
     let want = ref_2d(&rep, NOCC, NOCC, &ri, &rj);
     let mut w = Worst::new();
     for p in 0..bl {
         w.see((got[p] - want[p]).norm(), || format!("elem {p}"));
     }
-    w.report("|getitem at a reducible key - independent einsum|", EINSUM_TOL);
+    w.report(
+        "|getitem at a reducible key - independent einsum|",
+        EINSUM_TOL,
+    );
     // ... and it is NOT simply the stored block.
-    let differs = (0..bl).map(|p| (got[p] - rep[p]).norm()).fold(0.0_f64, f64::max);
-    assert!(differs > 1e-6, "a reducible key must NOT read back the raw representative");
+    let differs = (0..bl)
+        .map(|p| (got[p] - rep[p]).norm())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        differs > 1e-6,
+        "a reducible key must NOT read back the raw representative"
+    );
 
     // Reading back AT the representative is the stored block, bit-exactly.
     let at_rep = a.get_2d(kpts.ibz2bz[ki_ibz]).expect("get rep");
@@ -1166,7 +1300,11 @@ fn unfolding_the_whole_ibz_and_refolding_reproduces_the_stored_blocks_bit_exactl
         let x = a.stored_block(m).expect("x");
         let y = refolded.stored_block(m).expect("y");
         for p in 0..bl2 {
-            assert_eq!(x[p].to_bits_pair(), y[p].to_bits_pair(), "2d refold slot {m} elem {p}");
+            assert_eq!(
+                x[p].to_bits_pair(),
+                y[p].to_bits_pair(),
+                "2d refold slot {m} elem {p}"
+            );
         }
     }
 
@@ -1175,8 +1313,9 @@ fn unfolding_the_whole_ibz_and_refolding_reproduces_the_stored_blocks_bit_exactl
     let trans4 = parse_trans("nncc", 4).expect("t");
     let d = [NOCC, NOCC, NVIR, NVIR];
     let bl4: usize = d.iter().product();
-    let raw4: Vec<Complex64> =
-        (0..kqrts.kqrts_ibz.len() * bl4).map(|_| rng.next_c()).collect();
+    let raw4: Vec<Complex64> = (0..kqrts.kqrts_ibz.len() * bl4)
+        .map(|_| rng.next_c())
+        .collect();
     let b = KsymmArray::from_raw(
         &raw4,
         &d,
@@ -1206,7 +1345,11 @@ fn unfolding_the_whole_ibz_and_refolding_reproduces_the_stored_blocks_bit_exactl
         let x = b.stored_block(m).expect("x");
         let y = refolded4.stored_block(m).expect("y");
         for p in 0..bl4 {
-            assert_eq!(x[p].to_bits_pair(), y[p].to_bits_pair(), "4d refold slot {m} elem {p}");
+            assert_eq!(
+                x[p].to_bits_pair(),
+                y[p].to_bits_pair(),
+                "4d refold slot {m} elem {p}"
+            );
         }
     }
 }
@@ -1221,7 +1364,9 @@ fn incore_and_outcore_give_identical_results() {
     let d = [NOCC, NOCC, NVIR, NVIR];
     let bl: usize = d.iter().product();
     let mut rng = Rng::new(0x0C0);
-    let raw: Vec<Complex64> = (0..kqrts.kqrts_ibz.len() * bl).map(|_| rng.next_c()).collect();
+    let raw: Vec<Complex64> = (0..kqrts.kqrts_ibz.len() * bl)
+        .map(|_| rng.next_c())
+        .collect();
 
     let a_in = KsymmArray::from_raw(
         &raw,
@@ -1238,7 +1383,10 @@ fn incore_and_outcore_give_identical_results() {
     )
     .expect("outcore");
     assert!(a_in.is_incore());
-    assert!(!a_out.is_incore(), "the outcore branch must actually be out of core");
+    assert!(
+        !a_out.is_incore(),
+        "the outcore branch must actually be out of core"
+    );
 
     let n = kpts.nkpts();
     let mut triples = Vec::new();
@@ -1267,7 +1415,11 @@ fn incore_and_outcore_give_identical_results() {
     let dy = a_out.to_dense().expect("dense out");
     assert_eq!(dx.len(), dy.len());
     for p in 0..dx.len() {
-        assert_eq!(dx[p].to_bits_pair(), dy[p].to_bits_pair(), "to_dense differs at {p}");
+        assert_eq!(
+            dx[p].to_bits_pair(),
+            dy[p].to_bits_pair(),
+            "to_dense differs at {p}"
+        );
     }
 
     // And a WRITE through the out-of-core store lands where the incore one does.
@@ -1301,7 +1453,9 @@ fn the_unfold_is_bit_identical_at_1_and_8_rayon_workers() {
     let d = [NOCC, NOCC, NVIR, NVIR];
     let bl: usize = d.iter().product();
     let mut rng = Rng::new(0x8A0);
-    let raw: Vec<Complex64> = (0..kqrts.kqrts_ibz.len() * bl).map(|_| rng.next_c()).collect();
+    let raw: Vec<Complex64> = (0..kqrts.kqrts_ibz.len() * bl)
+        .map(|_| rng.next_c())
+        .collect();
     let a = KsymmArray::from_raw(
         &raw,
         &d,
@@ -1340,7 +1494,10 @@ fn the_unfold_is_bit_identical_at_1_and_8_rayon_workers() {
             );
         }
     }
-    println!("  unfold: {} triples bit-identical at 1 and 8 workers", triples.len());
+    println!(
+        "  unfold: {} triples bit-identical at 1 and 8 workers",
+        triples.len()
+    );
 }
 
 #[test]
@@ -1359,7 +1516,10 @@ fn missing_metadata_is_refused_not_guessed() {
     // A rank-2 array without `rmat` builds, stores and reads back its own
     // stored blocks, but cannot TRANSFORM.
     let a = KsymmArray::empty(&[NOCC, NOCC], SubarrayOrder::C, bare).expect("empty");
-    assert!(a.get_2d(0).is_err(), "no rmat/label/trans -> transform must refuse");
+    assert!(
+        a.get_2d(0).is_err(),
+        "no rmat/label/trans -> transform must refuse"
+    );
 
     // Wrong rank for the accessor.
     let m4 = meta_4d(kpts, kqrts, &rmat, &label, &trans, true);
@@ -1370,7 +1530,10 @@ fn missing_metadata_is_refused_not_guessed() {
         meta_2d(kpts, &rmat, &label, &trans, true),
     )
     .expect("empty");
-    assert!(a2.get_4d([0, 0, 0]).is_err(), "rank-2 array must refuse a 4-d getter");
+    assert!(
+        a2.get_4d([0, 0, 0]).is_err(),
+        "rank-2 array must refuse a 4-d getter"
+    );
 }
 
 /// D-17-06-01, made falsifiable on this fixture rather than argued on paper.
@@ -1386,21 +1549,39 @@ fn missing_metadata_is_refused_not_guessed() {
 fn upstreams_fromdense_key_choice_would_drop_two_of_three_blocks_here() {
     let s = sym();
     let kpts = &s.kpts;
-    assert_eq!(kpts.ibz2bz, vec![0, 6, 7], "the fixture's IBZ must be [0, 6, 7]");
+    assert_eq!(
+        kpts.ibz2bz,
+        vec![0, 6, 7],
+        "the fixture's IBZ must be [0, 6, 7]"
+    );
     let ibz_indices: Vec<usize> = (0..kpts.nkpts_ibz()).collect();
-    let survivors: Vec<usize> =
-        ibz_indices.iter().copied().filter(|k| kpts.ibz2bz.contains(k)).collect();
+    let survivors: Vec<usize> = ibz_indices
+        .iter()
+        .copied()
+        .filter(|k| kpts.ibz2bz.contains(k))
+        .collect();
     println!(
         "  upstream fromdense would pass keys {ibz_indices:?} to set_2d; \
          only {survivors:?} are in ibz2bz = {:?}",
         kpts.ibz2bz
     );
-    assert_eq!(survivors, vec![0], "upstream's key choice keeps only slot 0 here");
+    assert_eq!(
+        survivors,
+        vec![0],
+        "upstream's key choice keeps only slot 0 here"
+    );
 
     // The port's key choice (BZ indices) keeps all three.
-    let kept: Vec<usize> =
-        kpts.ibz2bz.iter().copied().filter(|k| kpts.ibz2bz.contains(k)).collect();
-    assert_eq!(kept, kpts.ibz2bz, "the ported key choice keeps every representative");
+    let kept: Vec<usize> = kpts
+        .ibz2bz
+        .iter()
+        .copied()
+        .filter(|k| kpts.ibz2bz.contains(k))
+        .collect();
+    assert_eq!(
+        kept, kpts.ibz2bz,
+        "the ported key choice keeps every representative"
+    );
 }
 
 // =====================================================================
@@ -1446,7 +1627,15 @@ fn measure_the_incore_outcore_crossover() {
         "nvir", "MiB", "incore", "outcore", "", "incore", "outcore", ""
     );
 
-    for &(nocc, nvir) in &[(1usize, 1usize), (2, 2), (3, 4), (4, 6), (6, 8), (8, 10), (10, 14)] {
+    for &(nocc, nvir) in &[
+        (1usize, 1usize),
+        (2, 2),
+        (3, 4),
+        (4, 6),
+        (6, 8),
+        (8, 10),
+        (10, 14),
+    ] {
         let rmat = synthetic_rmat(n, n_ops(kpts), nocc, nvir, 99);
         let label = vec![OrbSpace::Occ, OrbSpace::Occ, OrbSpace::Vir, OrbSpace::Vir];
         let trans = vec![Conj::N, Conj::N, Conj::C, Conj::C];
@@ -1573,7 +1762,9 @@ fn f_square_to_rowmajor(ct: &pyscf_algebra::CTensor, n: usize) -> Vec<Complex64>
 }
 
 fn rowmajor_square(ct: &pyscf_algebra::CTensor, n: usize) -> Vec<Complex64> {
-    (0..n * n).map(|k| Complex64::new(ct.re[k], ct.im[k])).collect()
+    (0..n * n)
+        .map(|k| Complex64::new(ct.re[k], ct.im[k]))
+        .collect()
 }
 
 fn colmajor_rect_to_rowmajor(
@@ -1603,8 +1794,14 @@ fn cols(mo: &[Complex64], nao: usize, nmo: usize, lo: usize, hi: usize) -> Vec<C
 }
 
 /// `C_l^H O C_r` for row-major `nao x nl`, `nao x nao`, `nao x nr`.
-fn project(cl: &[Complex64], nl: usize, op: &[Complex64], cr: &[Complex64], nr: usize, nao: usize)
--> Vec<Complex64> {
+fn project(
+    cl: &[Complex64],
+    nl: usize,
+    op: &[Complex64],
+    cr: &[Complex64],
+    nr: usize,
+    nao: usize,
+) -> Vec<Complex64> {
     // t = O @ C_r  (nao x nr)
     let mut t = vec![C0; nao * nr];
     for i in 0..nao {
@@ -1648,7 +1845,10 @@ fn real_fixture() -> &'static RealFixture {
         build_lattice_symmetry(&mut cell, check_mesh_symmetry).expect("build_lattice_symmetry");
         let kpts_abs = make_kpts_default(&cell, [2, 2, 2]).expect("make_kpts_default");
         let kpts = make_kpts(&cell, &kpts_abs, true, true).expect("make_kpts");
-        assert!(!kpts.time_reversal, "si has inversion: time reversal must be OFF");
+        assert!(
+            !kpts.time_reversal,
+            "si has inversion: time reversal must be OFF"
+        );
 
         let mf = Krhf::new(cell.clone(), &kpts_abs).expect("Krhf::new");
         let cfg = KScfConfig {
@@ -1659,7 +1859,11 @@ fn real_fixture() -> &'static RealFixture {
             ..KScfConfig::default()
         };
         let r: KScfResult = mf.kernel(&cfg).expect("full-BZ KRHF must run");
-        assert!(r.converged, "full-BZ KRHF did not converge in {} cycles", r.cycles);
+        assert!(
+            r.converged,
+            "full-BZ KRHF did not converge in {} cycles",
+            r.cycles
+        );
 
         let nao = cell.mol.nao_nr;
         let nkpts = kpts_abs.len();
@@ -1698,22 +1902,24 @@ fn real_fixture() -> &'static RealFixture {
             }
         }
 
-        let ovlp: Vec<Vec<Complex64>> =
-            pyscf_pbc_gto::hcore::get_ovlp(&cell, &kpts_abs)
-                .expect("get_ovlp")
-                .iter()
-                .map(|s| f_square_to_rowmajor(s, nao))
-                .collect();
+        let ovlp: Vec<Vec<Complex64>> = pyscf_pbc_gto::hcore::get_ovlp(&cell, &kpts_abs)
+            .expect("get_ovlp")
+            .iter()
+            .map(|s| f_square_to_rowmajor(s, nao))
+            .collect();
         let mo_coeff: Vec<Vec<Complex64>> = (0..nkpts)
             .map(|k| colmajor_rect_to_rowmajor(&r.mo_coeff[r.idx(0, k)], nao, nmo))
             .collect();
-        let hcore_rm: Vec<Vec<Complex64>> =
-            (0..nkpts).map(|k| rowmajor_square(&hcore[k], nao)).collect();
-        let fock_rm: Vec<Vec<Complex64>> =
-            (0..nkpts).map(|k| rowmajor_square(&fock_ct[k], nao)).collect();
+        let hcore_rm: Vec<Vec<Complex64>> = (0..nkpts)
+            .map(|k| rowmajor_square(&hcore[k], nao))
+            .collect();
+        let fock_rm: Vec<Vec<Complex64>> = (0..nkpts)
+            .map(|k| rowmajor_square(&fock_ct[k], nao))
+            .collect();
 
         let mut rmat = MORotationMatrix::new(nocc, nmo);
-        rmat.build(&kpts, &cell, &mo_coeff, &ovlp, nao).expect("MORotationMatrix::build");
+        rmat.build(&kpts, &cell, &mo_coeff, &ovlp, nao)
+            .expect("MORotationMatrix::build");
 
         let mut fock_oo = Vec::with_capacity(nkpts);
         let mut hcore_oo = Vec::with_capacity(nkpts);
@@ -1728,7 +1934,16 @@ fn real_fixture() -> &'static RealFixture {
             hcore_vv.push(project(&cv, nvir, &hcore_rm[k], &cv, nvir, nao));
         }
 
-        RealFixture { kpts, nocc, nvir, rmat, fock_oo, hcore_oo, hcore_ov, hcore_vv }
+        RealFixture {
+            kpts,
+            nocc,
+            nvir,
+            rmat,
+            fock_oo,
+            hcore_oo,
+            hcore_ov,
+            hcore_vv,
+        }
     })
 }
 
@@ -1793,7 +2008,10 @@ fn block_structure(dense: &[Vec<Complex64>], n: usize) -> (f64, f64) {
 
 /// `max |Im|` over every k of a rectangular MO block.
 fn max_imag(dense: &[Vec<Complex64>]) -> f64 {
-    dense.iter().flat_map(|a| a.iter()).fold(0.0f64, |m, z| m.max(z.im.abs()))
+    dense
+        .iter()
+        .flat_map(|a| a.iter())
+        .fold(0.0f64, |m, z| m.max(z.im.abs()))
 }
 
 #[test]
@@ -1818,7 +2036,10 @@ fn acceptance_real_converged_krhf_mo_blocks_round_trip_through_ksymmarray() {
     let (hoff, him) = block_structure(&g.hcore_oo, g.nocc);
     let (voff, vim) = block_structure(&g.hcore_vv, g.nvir);
     let ovim = max_imag(&g.hcore_ov);
-    println!("  block structure (max over all {} k-points):", g.kpts.nkpts());
+    println!(
+        "  block structure (max over all {} k-points):",
+        g.kpts.nkpts()
+    );
     println!("    C_o^H F C_o : max|off-diag| = {foff:e}   max|Im| = {fim:e}");
     println!("    C_o^H h C_o : max|off-diag| = {hoff:e}   max|Im| = {him:e}");
     println!("    C_v^H h C_v : max|off-diag| = {voff:e}   max|Im| = {vim:e}");
@@ -1826,8 +2047,13 @@ fn acceptance_real_converged_krhf_mo_blocks_round_trip_through_ksymmarray() {
 
     // (label, dense, di, dj, name)
     let cases: [(&str, &Vec<Vec<Complex64>>, usize, usize, &str); 4] = [
-        ("oo", &g.fock_oo, g.nocc, g.nocc,
-         "C_o^H F C_o  (upstream's eris.fock oo block, kintermediates_rhf_ksymm.py:26-33)"),
+        (
+            "oo",
+            &g.fock_oo,
+            g.nocc,
+            g.nocc,
+            "C_o^H F C_o  (upstream's eris.fock oo block, kintermediates_rhf_ksymm.py:26-33)",
+        ),
         ("oo", &g.hcore_oo, g.nocc, g.nocc, "C_o^H h C_o"),
         ("ov", &g.hcore_ov, g.nocc, g.nvir, "C_o^H h C_v"),
         ("vv", &g.hcore_vv, g.nvir, g.nvir, "C_v^H h C_v"),

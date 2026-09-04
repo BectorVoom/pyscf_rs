@@ -38,7 +38,6 @@ fn erf(x: f64) -> f64 {
     Erf::new().eval(x)
 }
 
-
 /// `get_coulG(..., exx='vcut_sph')` — `pbc.py:373-380`.
 ///
 /// ```text
@@ -268,8 +267,7 @@ pub fn coulg_vcut_ws(
         }
         let mut idx = [0_i64; 3];
         for (i, item) in idx.iter_mut().enumerate() {
-            let x = (kgv[0] * ws.a[i][0] + kgv[1] * ws.a[i][1] + kgv[2] * ws.a[i][2])
-                / (2.0 * PI);
+            let x = (kgv[0] * ws.a[i][0] + kgv[1] * ws.a[i][1] + kgv[2] * ws.a[i][2]) / (2.0 * PI);
             // pbc.py:401 — `.round(decimals=6).astype(int)`, i.e. truncation
             // toward zero of the 6-decimal-rounded value.
             let r = (x * 1e6).round() / 1e6;

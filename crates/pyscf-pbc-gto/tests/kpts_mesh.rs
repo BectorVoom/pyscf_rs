@@ -18,7 +18,7 @@ use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
 use pyscf_pbc_gto::kpts_mesh::{
     KIdx, WITH_GAMMA, WRAP_AROUND, get_kconserv, get_kconserv3, intersection, is_gamma_point,
-    is_zero, is_trim, make_kpts, make_kpts_default, member, unique,
+    is_trim, is_zero, make_kpts, make_kpts_default, member, unique,
 };
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs};
 

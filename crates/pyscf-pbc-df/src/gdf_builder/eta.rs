@@ -152,7 +152,11 @@ pub fn guess_eta(
             .into_iter()
             .fold(f64::INFINITY, f64::min);
         let eta = estimate_eta_for_ke_cutoff(cell, ke_cutoff, Some(cell.precision));
-        return Ok(EtaChoice { eta, mesh, ke_cutoff });
+        return Ok(EtaChoice {
+            eta,
+            mesh,
+            ke_cutoff,
+        });
     }
 
     // `eta_min = ETA_MIN` — upstream leaves the `estimate_eta_min` call
@@ -185,7 +189,11 @@ pub fn guess_eta(
         .copied()
         .fold(f64::INFINITY, f64::min);
     let eta = estimate_eta_for_ke_cutoff(cell, ke_cutoff, Some(cell.precision));
-    Ok(EtaChoice { eta, mesh, ke_cutoff })
+    Ok(EtaChoice {
+        eta,
+        mesh,
+        ke_cutoff,
+    })
 }
 
 /// `estimate_rcut(rs_cell, auxcell, precision, exclude_dd_block=False)` —
@@ -301,8 +309,7 @@ pub fn estimate_rcut_per_shell(
             let smooth_idx: Vec<usize> = (0..cell.mol.nbas)
                 .filter(|&j| rs_cell.bas_type[j] == crate::ft_ao::rs_cell::SMOOTH_BASIS)
                 .collect();
-            let overridden =
-                one_pass(cell_exps[best], f64::from(ls[best]), cs[best], &smooth_idx);
+            let overridden = one_pass(cell_exps[best], f64::from(ls[best]), cs[best], &smooth_idx);
             for (j, r) in smooth_idx.into_iter().zip(overridden) {
                 rcut[j] = r;
             }

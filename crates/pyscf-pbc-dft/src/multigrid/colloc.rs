@@ -26,6 +26,7 @@
 use pyscf_algebra::oracle_sum;
 use pyscf_kernels::multigrid_collocate::{PshellGridTable, collocate};
 use pyscf_pbc_gto::Cell;
+use rayon::prelude::*;
 
 use crate::error::PbcDftError;
 use crate::multigrid::tasks::{Decontracted, GridLevel, pshell_cart_powers};
@@ -42,6 +43,13 @@ pub struct LevelValues {
     pub values: Vec<f64>,
     pub ngrids: usize,
     pub mesh: [usize; 3],
+    /// Grid coordinates and periodic image centres retained only for the
+    /// opt-in pass2 radius screen.
+    pub coords: Vec<[f64; 3]>,
+    pub pshell_rec0: Vec<usize>,
+    pub pshell_nrec: Vec<usize>,
+    pub rec_center: Vec<[f64; 3]>,
+    pub rcut: Vec<f64>,
 }
 
 /// Collocate every pshell `level.dense ∪ level.sparse` needs on `level`'s own
@@ -96,18 +104,24 @@ pub fn collocate_level(
     let mut pshell_alpha = Vec::new();
     let mut pshell_coef = Vec::new();
     let mut rec_center = Vec::new();
+    let mut screen_center = Vec::new();
+    let mut screen_rec0 = Vec::new();
+    let mut screen_nrec = Vec::new();
+    let mut screen_rcut = Vec::new();
     let mut slot0 = vec![0usize; ids.len() + 1];
 
     for (local, &pid) in ids.iter().enumerate() {
         let p = &decon.pshells[pid];
-        let ls =
-            pyscf_pbc_gto::lattice::get_lattice_ls(cell, Some(p.rcut.max(1e-6)), None, false)?;
+        let ls = pyscf_pbc_gto::lattice::get_lattice_ls(cell, Some(p.rcut.max(1e-6)), None, false)?;
         let rec0 = (rec_center.len() / 3) as u32;
+        screen_rec0.push(screen_center.len());
         for l in &ls {
-            rec_center.push(p.center[0] + l[0]);
-            rec_center.push(p.center[1] + l[1]);
-            rec_center.push(p.center[2] + l[2]);
+            let c = [p.center[0] + l[0], p.center[1] + l[1], p.center[2] + l[2]];
+            rec_center.extend_from_slice(&c);
+            screen_center.push(c);
         }
+        screen_nrec.push(ls.len());
+        screen_rcut.push(p.rcut);
         pshell_rec0.push(rec0);
         pshell_nrec.push(ls.len() as u32);
         pshell_alpha.push(p.alpha);
@@ -160,6 +174,11 @@ pub fn collocate_level(
         values,
         ngrids,
         mesh: level.mesh,
+        coords: coords.to_vec(),
+        pshell_rec0: screen_rec0,
+        pshell_nrec: screen_nrec,
+        rec_center: screen_center,
+        rcut: screen_rcut,
     })
 }
 
@@ -271,8 +290,8 @@ pub fn level_pass2(lv: &LevelValues, decon: &Decontracted, weight: &[f64], v_p: 
     // BIT-EXACT: every element is assigned before it is read on every entry,
     // and the `oracle_sum` it feeds sees the identical values in the identical
     // order.
-    let mut buf = vec![0.0f64; ngrids];
-    let mut add_block = |i_range: std::ops::Range<usize>, j_range: std::ops::Range<usize>| {
+    let mut entries = Vec::new();
+    let mut append_block = |i_range: std::ops::Range<usize>, j_range: std::ops::Range<usize>| {
         for i in i_range.clone() {
             let pi = lv.ids[i];
             let (si0, si1) = (lv.slot0[i], lv.slot0[i + 1]);
@@ -283,18 +302,61 @@ pub fn level_pass2(lv: &LevelValues, decon: &Decontracted, weight: &[f64], v_p: 
                 let cj0 = decon.pshells[pj].cart_ao0;
                 for (si, ci) in (si0..si1).zip(ci0..ci0 + (si1 - si0)) {
                     for (sj, cj) in (sj0..sj1).zip(cj0..cj0 + (sj1 - sj0)) {
-                        for g in 0..ngrids {
-                            buf[g] =
-                                weight[g] * lv.values[si * ngrids + g] * lv.values[sj * ngrids + g];
-                        }
-                        v_p[ci * decon.nao_p + cj] += oracle_sum(&buf);
+                        entries.push((ci * decon.nao_p + cj, si, sj, i, j));
                     }
                 }
             }
         }
     };
-    add_block(0..lv.dense_count, 0..lv.ids.len());
-    add_block(lv.dense_count..lv.ids.len(), 0..lv.dense_count);
+    append_block(0..lv.dense_count, 0..lv.ids.len());
+    append_block(lv.dense_count..lv.ids.len(), 0..lv.dense_count);
+
+    let screen = std::env::var("PYSCF_PBC_MULTIGRID_PASS2_SCREEN")
+        .is_ok_and(|v| matches!(v.as_str(), "1" | "true" | "on" | "yes"));
+    let reach = screen.then(|| {
+        (0..lv.ids.len())
+            .map(|p| {
+                let r0 = lv.pshell_rec0[p];
+                let r1 = r0 + lv.pshell_nrec[p];
+                let cutoff2 = lv.rcut[p] * lv.rcut[p];
+                lv.coords
+                    .iter()
+                    .map(|g| {
+                        lv.rec_center[r0..r1].iter().any(|c| {
+                            let dx = g[0] - c[0];
+                            let dy = g[1] - c[1];
+                            let dz = g[2] - c[2];
+                            dx * dx + dy * dy + dz * dz <= cutoff2
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    });
+
+    // M-09: indexed parallel collection preserves the entry order above;
+    // `map_init` gives each Rayon worker one reusable grid buffer. Each
+    // entry's `oracle_sum` therefore sees exactly the old sequence, and the
+    // final `v_p +=` operations happen serially in the old entry order.
+    let values: Vec<(usize, f64)> = entries
+        .into_par_iter()
+        .map_init(
+            || vec![0.0f64; ngrids],
+            |buf, (idx, si, sj, pi, pj)| {
+                for g in 0..ngrids {
+                    buf[g] = if reach.as_ref().is_none_or(|mask| mask[pi][g] && mask[pj][g]) {
+                        weight[g] * lv.values[si * ngrids + g] * lv.values[sj * ngrids + g]
+                    } else {
+                        0.0
+                    };
+                }
+                (idx, oracle_sum(buf))
+            },
+        )
+        .collect();
+    for (idx, value) in values {
+        v_p[idx] += value;
+    }
 }
 
 /// `dm_p = E . dm . E^T` — contract a contracted-AO density matrix (`nao x

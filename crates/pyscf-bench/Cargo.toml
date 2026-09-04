@@ -42,6 +42,8 @@ pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
 pyscf-pbc-symm   = { path = "../pyscf-pbc-symm" }
 serde            = { workspace = true }
 serde_json       = { workspace = true }
+tracing          = { workspace = true }
+tracing-subscriber = { workspace = true }
 cubecl        = { workspace = true }
 cubecl-cpu    = { workspace = true, optional = true }
 cubecl-hip    = { workspace = true, optional = true }

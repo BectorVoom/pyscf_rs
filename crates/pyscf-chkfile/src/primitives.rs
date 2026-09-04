@@ -197,13 +197,12 @@ pub fn write_dataset_3d_complex(
     if group.link_exists(key) {
         group.unlink(key)?;
     }
-    let arr = ndarray::ArrayView3::from_shape(shape, data).map_err(|_| {
-        ChkfileError::ShapeMismatch {
+    let arr =
+        ndarray::ArrayView3::from_shape(shape, data).map_err(|_| ChkfileError::ShapeMismatch {
             key: key.into(),
             expected: shape.to_vec(),
             actual: vec![data.len()],
-        }
-    })?;
+        })?;
     group
         .new_dataset::<H5Complex>()
         .shape(shape)

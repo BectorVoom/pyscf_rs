@@ -21,7 +21,9 @@ fn main() {
         let e2 = t2.elapsed();
         println!(
             "mesh {m}^3 ({ng} pts) x{nrows} rows: fft {:?} ifft {:?} -> per K-build (64 pairs) {:.1} s",
-            e1, e2, 64.0 * (e1.as_secs_f64() + e2.as_secs_f64())
+            e1,
+            e2,
+            64.0 * (e1.as_secs_f64() + e2.as_secs_f64())
         );
     }
 }

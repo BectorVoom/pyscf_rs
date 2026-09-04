@@ -31,7 +31,10 @@ fn group_axioms_closure_identity_inverses() {
 
     // identity: exactly one element hashes to the identity's own hash.
     let eye = PgElement::new([[1, 0, 0], [0, 1, 0], [0, 0, 1]]);
-    assert!(ht.contains_key(&eye.hash_key()), "identity must be a member");
+    assert!(
+        ht.contains_key(&eye.hash_key()),
+        "identity must be a member"
+    );
     let e_idx = ht[&eye.hash_key()];
     for (i, g) in pg.elements.iter().enumerate() {
         let ge = g.compose(&eye);
@@ -86,13 +89,21 @@ fn multiplication_table_is_a_latin_square() {
     for (i, row) in mult.iter().enumerate() {
         let mut sorted = row.clone();
         sorted.sort_unstable();
-        assert_eq!(sorted, (0..n).collect::<Vec<_>>(), "row {i} is not a permutation");
+        assert_eq!(
+            sorted,
+            (0..n).collect::<Vec<_>>(),
+            "row {i} is not a permutation"
+        );
     }
     // every column is a permutation of 0..n
     for j in 0..n {
         let mut col: Vec<usize> = mult.iter().map(|row| row[j]).collect();
         col.sort_unstable();
-        assert_eq!(col, (0..n).collect::<Vec<_>>(), "column {j} is not a permutation");
+        assert_eq!(
+            col,
+            (0..n).collect::<Vec<_>>(),
+            "column {j} is not a permutation"
+        );
     }
 }
 
@@ -154,7 +165,11 @@ fn point_group_names_match_known_crystallography() {
         let elements: Vec<PgElement> = rots.into_iter().map(PgElement::new).collect();
         let pg = FiniteGroup::new(elements).unwrap();
         let (_, want_intl, want_scho) = expected.iter().find(|(n, _, _)| *n == name).unwrap();
-        assert_eq!(pg.group_name().unwrap(), *want_intl, "{name}: international symbol");
+        assert_eq!(
+            pg.group_name().unwrap(),
+            *want_intl,
+            "{name}: international symbol"
+        );
         assert_eq!(
             pg.group_name_schoenflies().unwrap(),
             *want_scho,
@@ -213,7 +228,10 @@ fn regular_representation_multiplicities_equal_irrep_dimensions() {
     let rep = Representation::chi_to_rep(&pg, &chi).unwrap();
     for (ir, &mult) in rep.iter().enumerate() {
         let dim = chartab_full[ir][e_idx].re.round() as i64;
-        assert_eq!(mult, dim, "irrep {ir}: regular-rep multiplicity != its own dimension");
+        assert_eq!(
+            mult, dim,
+            "irrep {ir}: regular-rep multiplicity != its own dimension"
+        );
     }
     // Sum dim_i^2 == |G|.
     let sum_sq: i64 = rep

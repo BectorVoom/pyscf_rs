@@ -12,7 +12,7 @@ pub use error::*;
 pub mod kpts_helper;
 
 pub use kpts_helper::{
-    KCONSERV_TOL, KPT_DIFF_TOL, KIdx, Kconserv, Kconserv3, UniqueKpts, gamma_point, get_kconserv,
+    KCONSERV_TOL, KIdx, KPT_DIFF_TOL, Kconserv, Kconserv3, UniqueKpts, gamma_point, get_kconserv,
     get_kconserv3, intersection, is_gamma_point, is_zero, member, round_to_fbz, unique,
 };
 // Plan 14-02 Task 2 — the wrap-around unique and the conjugation pairing that

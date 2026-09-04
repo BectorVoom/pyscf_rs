@@ -28,7 +28,8 @@ fn model_dm(nao: usize, nkpts: usize) -> KMats {
             let mut m = CTensor::zeros(nao * nao);
             for p in 0..nao {
                 for q in 0..nao {
-                    let v = 0.3 / (1.0 + (p as f64 - q as f64).abs()) + if p == q { 1.0 } else { 0.0 };
+                    let v =
+                        0.3 / (1.0 + (p as f64 - q as f64).abs()) + if p == q { 1.0 } else { 0.0 };
                     m.re[p * nao + q] = v * (1.0 + 0.1 * k as f64);
                 }
             }
@@ -95,7 +96,10 @@ fn cached_accessor_matches_the_uncached_formula() {
                     .coulg_and_expmikr(dk, omega, None, &kpts, &gv)
                     .expect("coulg_and_expmikr");
 
-                assert_eq!(got.0, want_coulg, "coulG mismatch at dk={dk:?} omega={omega:?}");
+                assert_eq!(
+                    got.0, want_coulg,
+                    "coulG mismatch at dk={dk:?} omega={omega:?}"
+                );
                 match (&got.1, &want_expmikr) {
                     (None, None) => {}
                     (Some(g), Some(w)) => {

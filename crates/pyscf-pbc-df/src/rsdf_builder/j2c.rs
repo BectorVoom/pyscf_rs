@@ -143,11 +143,8 @@ pub fn get_2c2e(
     // sum whose truncation no mesh can compensate, so erring long is right.
     let precision = auxcell.cell.precision.powf(1.5);
     let mut aux_sr = auxcell.clone();
-    aux_sr.cell.rcut = crate::rsdf_builder::omega::estimate_rs_2c2e_rcut(
-        &auxcell.cell,
-        omega,
-        Some(precision),
-    );
+    aux_sr.cell.rcut =
+        crate::rsdf_builder::omega::estimate_rs_2c2e_rcut(&auxcell.cell, omega, Some(precision));
 
     // `with auxcell_c.with_short_range_coulomb(omega): pbc_intor('int2c2e', hermi=1)`
     // — `rsdf_builder.py:276-278`. The SIGN is the whole point: `Some(-omega)`

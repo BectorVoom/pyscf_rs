@@ -59,7 +59,7 @@ pub use rintermediates::{
 pub use uccsd::{UccsdAmplitudes, UccsdResult, uccsd_kernel};
 pub use uintermediates::SpinOrbitalEris;
 pub use ulambda::{ULambdaAmplitudes, solve_ulambda, update_ulambda};
-pub use urdm::{URdm1, URdm2, umake_rdm1, umake_rdm2};
 pub use update_amps::{
     default_update_amps, default_update_amps_direct, default_update_amps_with_wvvvv,
 };
+pub use urdm::{URdm1, URdm2, umake_rdm1, umake_rdm2};

@@ -516,7 +516,16 @@ pub fn make_j3c_scheme(
     scheme: Scheme,
 ) -> Result<Cderi, PbcDfError> {
     make_j3c_scheme_dd(
-        cell, fused, kpts, aosym, mesh, j_only, j2c_eig_always, rcut, scheme, None,
+        cell,
+        fused,
+        kpts,
+        aosym,
+        mesh,
+        j_only,
+        j2c_eig_always,
+        rcut,
+        scheme,
+        None,
     )
 }
 
@@ -562,9 +571,7 @@ pub fn make_j3c_scheme_dd(
     // kernel that `get_coulG` zeroed, because no FT is applied to the
     // short-range 3-centre tensor (`rsdf_builder.py:739-740, :769`).
     let vbar_full = match scheme {
-        Scheme::CompensatedCharge | Scheme::Mixed => {
-            fused.fuse_rows(&auxbar(&fused.fused.cell), 1)
-        }
+        Scheme::CompensatedCharge | Scheme::Mixed => fused.fuse_rows(&auxbar(&fused.fused.cell), 1),
         Scheme::RangeSeparated { omega, .. } => {
             crate::rsdf_builder::j2c::rs_vbar(fused, omega, cell.vol())?
         }
@@ -660,8 +667,7 @@ pub fn make_j3c_scheme_dd(
         Scheme::CompensatedCharge | Scheme::Mixed => None,
         Scheme::RangeSeparated { omega, .. } => Some(-omega),
     };
-    let mut realspace_all =
-        outcore_auxe2(cell, fused, aosym, &flat_pairs, rcut, realspace_omega)?;
+    let mut realspace_all = outcore_auxe2(cell, fused, aosym, &flat_pairs, rcut, realspace_omega)?;
 
     // D-PBC-23's `exclude_dd_block` correction (plan 17-10 Task 3): re-route
     // the smooth-smooth block from the real-space sum above into an FFT.

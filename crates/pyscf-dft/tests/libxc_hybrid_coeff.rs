@@ -52,7 +52,11 @@ fn libxc_hybrid_and_rsh_coefficients_match_upstream() {
 fn hybrid_detection_separates_pure_from_hybrid() {
     let b = XcBackend::Libxc;
     for xc in ["lda,vwn", "pbe", "blyp"] {
-        assert_eq!(b.hybrid_coeff(xc).expect(xc), 0.0, "{xc} is a PURE functional");
+        assert_eq!(
+            b.hybrid_coeff(xc).expect(xc),
+            0.0,
+            "{xc} is a PURE functional"
+        );
     }
     for xc in ["b3lyp", "pbe0"] {
         assert!(b.hybrid_coeff(xc).expect(xc) > 0.0, "{xc} is a HYBRID");

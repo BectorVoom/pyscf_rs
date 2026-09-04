@@ -93,10 +93,7 @@ pub fn diamond_prec(precision: f64) -> Cell {
     let q = 1.68516;
     Cell::build(CellBuildArgs {
         mole: MoleBuildArgs {
-            atom: AtomInput::Tuples(vec![
-                ("C".into(), [0.0, 0.0, 0.0]),
-                ("C".into(), [q, q, q]),
-            ]),
+            atom: AtomInput::Tuples(vec![("C".into(), [0.0, 0.0, 0.0]), ("C".into(), [q, q, q])]),
             basis: BasisInput::Name("gth-szv".into()),
             unit: Unit::Bohr,
             ..Default::default()

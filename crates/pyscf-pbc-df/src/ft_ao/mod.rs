@@ -90,7 +90,7 @@ pub mod rs_cell;
 pub mod single;
 pub mod supmol;
 
-pub use rs_cell::{RsCell, LOCAL_BASIS, SMOOTH_BASIS, STEEP_BASIS};
+pub use rs_cell::{LOCAL_BASIS, RsCell, SMOOTH_BASIS, STEEP_BASIS};
 pub use single::{fake_nuc, ft_ao_kpt, ft_ao_mol};
 pub use supmol::ExtendedMole;
 
@@ -467,7 +467,11 @@ fn range_separated_groups(cell: &Cell) -> Result<(Vec<PrimGroup>, Vec<Vec<usize>
 /// # Errors
 /// Propagates cell access.
 pub fn rs_group_rcuts(cell: &Cell) -> Result<Vec<f64>, PbcDfError> {
-    Ok(range_separated_groups(cell)?.0.iter().map(|g| g.rcut).collect())
+    Ok(range_separated_groups(cell)?
+        .0
+        .iter()
+        .map(|g| g.rcut)
+        .collect())
 }
 
 #[inline]
@@ -503,11 +507,7 @@ fn shell_contractions(cell: &Cell) -> Vec<ShellCtr> {
         let pc0 = mol._bas[row + PTR_COEFF] as usize;
         let atom = mol._bas[row + ATOM_OF] as usize;
         let pcoord = mol._atm[atom * ATM_SLOTS + PTR_COORD] as usize;
-        let r = [
-            mol._env[pcoord],
-            mol._env[pcoord + 1],
-            mol._env[pcoord + 2],
-        ];
+        let r = [mol._env[pcoord], mol._env[pcoord + 1], mol._env[pcoord + 2]];
         for ictr in 0..nctr {
             v.push(ShellCtr {
                 l,
@@ -762,11 +762,7 @@ fn build_tables(
             let cfac = common_fac_sp(li) * common_fac_sp(lj);
 
             for l_vec in ls {
-                let b = [
-                    sj.r[0] + l_vec[0],
-                    sj.r[1] + l_vec[1],
-                    sj.r[2] + l_vec[2],
-                ];
+                let b = [sj.r[0] + l_vec[0], sj.r[1] + l_vec[1], sj.r[2] + l_vec[2]];
                 let d = [b[0] - si.r[0], b[1] - si.r[1], b[2] - si.r[2]];
                 let ab2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
 

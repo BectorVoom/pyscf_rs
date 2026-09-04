@@ -47,8 +47,8 @@
 
 mod common;
 
-use pyscf_pbc_df::traits::{JkOpts, PeriodicDf};
 use pyscf_pbc_df::Mdf;
+use pyscf_pbc_df::traits::{JkOpts, PeriodicDf};
 use pyscf_pbc_gto::Cell;
 
 fn kpts_of(cell: &Cell, mesh: [usize; 3]) -> Vec<[f64; 3]> {
@@ -107,11 +107,19 @@ fn mdf_default_mesh_is_the_builders_own_estimate() {
         "He-fcc 2x2x2: measured upstream at [9,9,9] (mdfladder_cc.out)"
     );
     let g = Mdf::new(cell.clone(), &[[0.0; 3]]);
-    assert_eq!(g.resolved_mesh().expect("mesh"), [11, 11, 11], "He-fcc gamma");
+    assert_eq!(
+        g.resolved_mesh().expect("mesh"),
+        [11, 11, 11],
+        "He-fcc gamma"
+    );
 
     let d = common::diamond();
     let dm = Mdf::new(d.clone(), &kpts_of(&d, [2, 2, 2]));
-    assert_eq!(dm.resolved_mesh().expect("mesh"), [11, 11, 11], "diamond 2x2x2");
+    assert_eq!(
+        dm.resolved_mesh().expect("mesh"),
+        [11, 11, 11],
+        "diamond 2x2x2"
+    );
 }
 
 /// An explicit mesh overrides the estimate, and `name()` reports MDF.
@@ -221,6 +229,8 @@ fn mdf_jk_is_the_sum_of_its_two_halves() {
             worst = worst.max((vk[0][k].im[i] - (g[0][k].im[i] + a[0][k].im[i])).abs());
         }
     }
-    assert!(worst == 0.0, "MDF vk is not exactly the two halves: {worst:e}");
+    assert!(
+        worst == 0.0,
+        "MDF vk is not exactly the two halves: {worst:e}"
+    );
 }
-

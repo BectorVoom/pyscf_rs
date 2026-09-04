@@ -155,7 +155,10 @@ fn stockham_matches_blas_on_200_random_cases() {
 
         let a = fft_stockham(&x, mesh, false).expect("fft_stockham");
         let b = fft_blas(&x, mesh).expect("fft_blas");
-        let scale = b.re.iter().chain(b.im.iter()).fold(1.0_f64, |m, v| m.max(v.abs()));
+        let scale =
+            b.re.iter()
+                .chain(b.im.iter())
+                .fold(1.0_f64, |m, v| m.max(v.abs()));
         let d = max_abs_diff(&a, &b) / scale;
         assert!(
             d < 1e-13,
@@ -165,7 +168,11 @@ fn stockham_matches_blas_on_200_random_cases() {
 
         let ia = fft_stockham(&x, mesh, true).expect("ifft_stockham");
         let ib = ifft_blas(&x, mesh).expect("ifft_blas");
-        let iscale = ib.re.iter().chain(ib.im.iter()).fold(1.0_f64, |m, v| m.max(v.abs()));
+        let iscale = ib
+            .re
+            .iter()
+            .chain(ib.im.iter())
+            .fold(1.0_f64, |m, v| m.max(v.abs()));
         let di = max_abs_diff(&ia, &ib) / iscale;
         assert!(
             di < 1e-13,
@@ -200,7 +207,10 @@ fn check_upstream(mesh: [usize; 3], want_re: &[f64], want_im: &[f64]) {
         ("blas", fft_blas(&x, mesh).expect("fft_blas")),
     ] {
         let d = max_abs_diff(&got, &want);
-        assert!(d < 1e-12, "{name} deviates from upstream by {d} on {mesh:?}");
+        assert!(
+            d < 1e-12,
+            "{name} deviates from upstream by {d} on {mesh:?}"
+        );
     }
 }
 
@@ -220,7 +230,9 @@ fn fftk_ifftk_round_trip() {
     let mut pr = vec![0.0; ng];
     let mut pi = vec![0.0; ng];
     for i in 0..ng {
-        let m = (ph.re[i] * ph.re[i] + ph.im[i] * ph.im[i]).sqrt().max(1e-12);
+        let m = (ph.re[i] * ph.re[i] + ph.im[i] * ph.im[i])
+            .sqrt()
+            .max(1e-12);
         pr[i] = ph.re[i] / m;
         pi[i] = ph.im[i] / m;
     }

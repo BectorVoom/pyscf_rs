@@ -103,11 +103,7 @@ impl Aftdf {
     ///
     /// # Errors
     /// As [`Aftdf::new`].
-    pub fn with_mesh(
-        cell: Cell,
-        kpts: &[[f64; 3]],
-        mesh: [usize; 3],
-    ) -> Result<Self, PbcDfError> {
+    pub fn with_mesh(cell: Cell, kpts: &[[f64; 3]], mesh: [usize; 3]) -> Result<Self, PbcDfError> {
         let kpts = if kpts.is_empty() {
             vec![[0.0; 3]]
         } else {
@@ -218,7 +214,11 @@ impl Aftdf {
     ///
     /// # Errors
     /// Propagates the G-vector build.
-    pub fn g_blocks(&self, mesh: [usize; 3], nkpts: usize) -> Result<Vec<(usize, usize)>, PbcDfError> {
+    pub fn g_blocks(
+        &self,
+        mesh: [usize; 3],
+        nkpts: usize,
+    ) -> Result<Vec<(usize, usize)>, PbcDfError> {
         let c = self.gv_weights(mesh)?;
         let ngrids = c.gv.len();
         let blk = self.gblksize(self.cell.mol.nao_nr, nkpts.max(1), ngrids);

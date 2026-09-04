@@ -41,8 +41,8 @@
 
 use std::collections::HashMap;
 
-use pyscf_core::{CoreError, ParsedBasis, PyscfRsError};
 use pyscf_core::raw_layout::{ANG_OF, BAS_SLOTS, NCTR_OF, NPRIM_OF, PTR_COEFF, PTR_EXP};
+use pyscf_core::{CoreError, ParsedBasis, PyscfRsError};
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs};
 
@@ -142,7 +142,10 @@ pub fn resolve_auxbasis(
                 &cell.mol._atom,
                 &names,
                 &cell.mol._basis,
-                |s| pyscf_gto::format_atom::charge_for_symbol(s).and_then(|z| usize::try_from(z).ok()),
+                |s| {
+                    pyscf_gto::format_atom::charge_for_symbol(s)
+                        .and_then(|z| usize::try_from(z).ok())
+                },
                 // `xc = 'HF'` is upstream's default and `is_hybrid_xc('HF')` is true.
                 true,
                 false,

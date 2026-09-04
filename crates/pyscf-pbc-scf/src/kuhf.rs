@@ -51,7 +51,9 @@ impl Kuhf {
     /// # Errors
     /// Propagates the `FFTDF` construction.
     pub fn new(cell: Cell, kpts: &[[f64; 3]]) -> Result<Self, PyscfRsError> {
-        Ok(Self::from_df(Box::new(Fftdf::new(cell, kpts).map_err(df_err)?)))
+        Ok(Self::from_df(Box::new(
+            Fftdf::new(cell, kpts).map_err(df_err)?,
+        )))
     }
 
     /// `KUHF` over an explicit density-fitting object.
@@ -190,11 +192,7 @@ impl KOverrideHooks for Kuhf {
         Ok(out)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         let (mut e, mut c) = eig_channel(&fock[0], s1e, nao)?;
         let (eb, cb) = eig_channel(&fock[1], s1e, nao)?;
@@ -203,10 +201,7 @@ impl KOverrideHooks for Kuhf {
         Ok((e, c))
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         let nkpts = self.kpts().len();
         let (na, nb) = self.nelec()?;
         let (ea, eb) = mo_energy.split_at(nkpts);
@@ -224,11 +219,7 @@ impl KOverrideHooks for Kuhf {
         Ok((occ, fermi.to_vec()))
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         let nkpts = self.kpts().len();
         Ok(vec![
@@ -237,12 +228,7 @@ impl KOverrideHooks for Kuhf {
         ])
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         Ok(energy_elec(dms, h1e, vhf, self.cell().mol.nao_nr))
     }
 

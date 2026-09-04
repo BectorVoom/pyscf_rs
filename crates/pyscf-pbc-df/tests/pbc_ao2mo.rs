@@ -29,7 +29,10 @@ fn gamma_eri_has_eightfold_symmetry() {
     let eri = aft_get_eri(&df, [[0.0; 3]; 4]).expect("get_eri");
 
     let imax = eri.im.iter().fold(0.0f64, |a, v| a.max(v.abs()));
-    assert!(imax < 1e-12, "a gamma-point ERI must be real, |Im| = {imax:e}");
+    assert!(
+        imax < 1e-12,
+        "a gamma-point ERI must be real, |Im| = {imax:e}"
+    );
 
     let at = |p: usize, q: usize, r: usize, s: usize| eri.re[(p * nao + q) * n2 + r * nao + s];
     let mut worst = 0.0f64;

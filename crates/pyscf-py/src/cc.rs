@@ -818,9 +818,7 @@ impl PyUCCSD {
         if is_overridden(&bridge_slf, py, "make_rdm1", &["UCCSD"]) {
             let args = PyTuple::new(py, Vec::<Bound<'_, PyAny>>::new())?;
             let result = bridge_slf.bind(py).call_method1("make_rdm1", args)?;
-            return result
-                .downcast_into::<PyTuple>()
-                .map_err(PyErr::from);
+            return result.downcast_into::<PyTuple>().map_err(PyErr::from);
         }
         let me = slf.borrow();
         let so = me.so.as_ref().ok_or_else(|| {
@@ -859,9 +857,7 @@ impl PyUCCSD {
         if is_overridden(&bridge_slf, py, "make_rdm2", &["UCCSD"]) {
             let args = PyTuple::new(py, Vec::<Bound<'_, PyAny>>::new())?;
             let result = bridge_slf.bind(py).call_method1("make_rdm2", args)?;
-            return result
-                .downcast_into::<PyTuple>()
-                .map_err(PyErr::from);
+            return result.downcast_into::<PyTuple>().map_err(PyErr::from);
         }
         let me = slf.borrow();
         let so = me.so.as_ref().ok_or_else(|| {

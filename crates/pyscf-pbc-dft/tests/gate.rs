@@ -20,11 +20,11 @@
 
 mod common;
 
-use common::{cell_args, he_all_electron, oracle_python, run_python, silicon, GATE};
+use common::{GATE, cell_args, he_all_electron, oracle_python, run_python, silicon};
 use pyscf_pbc_df::Fftdf;
 use pyscf_pbc_dft::krks::Krks;
 use pyscf_pbc_dft::kuks::Kuks;
-use pyscf_pbc_gto::{make_kpts_default, Cell};
+use pyscf_pbc_gto::{Cell, make_kpts_default};
 use pyscf_pbc_scf::{KScfConfig, KScfResult, Krhf};
 
 /// The mesh at which upstream's `ft_ao` non-local pseudopotential expansion has
@@ -185,7 +185,13 @@ fn krks_si_222_pbe_matches_upstream() {
         &cell,
         "gth-szv",
         "gth-pade",
-        &Oracle { nk: [2, 2, 2], mesh: MESH_GATE, method: "KRKS", xc: "pbe", xclib: "libxc" },
+        &Oracle {
+            nk: [2, 2, 2],
+            mesh: MESH_GATE,
+            method: "KRKS",
+            xc: "pbe",
+            xclib: "libxc",
+        },
     ) else {
         eprintln!("SKIP: {GATE} is not set");
         return;
@@ -207,7 +213,13 @@ fn krks_si_222_lda_matches_upstream() {
         &cell,
         "gth-szv",
         "gth-pade",
-        &Oracle { nk: [2, 2, 2], mesh: MESH_GATE, method: "KRKS", xc: "lda,vwn", xclib: "libxc" },
+        &Oracle {
+            nk: [2, 2, 2],
+            mesh: MESH_GATE,
+            method: "KRKS",
+            xc: "lda,vwn",
+            xclib: "libxc",
+        },
     ) else {
         eprintln!("SKIP: {GATE} is not set");
         return;
@@ -232,7 +244,13 @@ fn krks_he_all_electron_222_pbe_matches_upstream() {
         &cell,
         "sto-3g",
         "",
-        &Oracle { nk: [2, 2, 2], mesh: MESH_GATE, method: "KRKS", xc: "pbe", xclib: "libxc" },
+        &Oracle {
+            nk: [2, 2, 2],
+            mesh: MESH_GATE,
+            method: "KRKS",
+            xc: "pbe",
+            xclib: "libxc",
+        },
     ) else {
         eprintln!("SKIP: {GATE} is not set");
         return;
@@ -255,7 +273,13 @@ fn krhf_si_222_is_the_pseudopotential_floor() {
         &cell,
         "gth-szv",
         "gth-pade",
-        &Oracle { nk: [2, 2, 2], mesh: MESH_GATE, method: "KRHF", xc: "", xclib: "" },
+        &Oracle {
+            nk: [2, 2, 2],
+            mesh: MESH_GATE,
+            method: "KRHF",
+            xc: "",
+            xclib: "",
+        },
     ) else {
         eprintln!("SKIP: {GATE} is not set");
         return;
@@ -278,7 +302,13 @@ fn kuks_si_222_pbe_matches_upstream() {
         &cell,
         "gth-szv",
         "gth-pade",
-        &Oracle { nk: [2, 2, 2], mesh: MESH_GATE, method: "KUKS", xc: "pbe", xclib: "libxc" },
+        &Oracle {
+            nk: [2, 2, 2],
+            mesh: MESH_GATE,
+            method: "KUKS",
+            xc: "pbe",
+            xclib: "libxc",
+        },
     ) else {
         eprintln!("SKIP: {GATE} is not set");
         return;
@@ -303,7 +333,13 @@ fn krks_si_222_pbe0_matches_upstream() {
         &cell,
         "gth-szv",
         "gth-pade",
-        &Oracle { nk: [2, 2, 2], mesh: MESH_GATE, method: "KRKS", xc: "pbe0", xclib: "libxc" },
+        &Oracle {
+            nk: [2, 2, 2],
+            mesh: MESH_GATE,
+            method: "KRKS",
+            xc: "pbe0",
+            xclib: "libxc",
+        },
     ) else {
         eprintln!("SKIP: {GATE} is not set");
         return;
@@ -329,7 +365,13 @@ fn krks_si_222_pbe_against_xcfun() {
         &cell,
         "gth-szv",
         "gth-pade",
-        &Oracle { nk: [2, 2, 2], mesh: MESH_GATE, method: "KRKS", xc: "pbe", xclib: "xcfun" },
+        &Oracle {
+            nk: [2, 2, 2],
+            mesh: MESH_GATE,
+            method: "KRKS",
+            xc: "pbe",
+            xclib: "xcfun",
+        },
     ) else {
         eprintln!("SKIP: {GATE} is not set");
         return;

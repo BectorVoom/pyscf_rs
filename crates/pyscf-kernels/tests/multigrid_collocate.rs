@@ -26,7 +26,7 @@ use pyscf_core::raw_layout::{
     PTR_EXP,
 };
 use pyscf_kernels::multigrid_collocate::{PshellGridTable, collocate};
-use pyscf_kernels::{cart2sph_l_matrix, cart_powers, common_fac_sp, eval_gto_sph};
+use pyscf_kernels::{cart_powers, cart2sph_l_matrix, common_fac_sp, eval_gto_sph};
 
 fn client() -> AlgebraClient {
     AlgebraClient::Cpu(cubecl_cpu::CpuRuntime::client(&cubecl_cpu::CpuDevice))
@@ -343,13 +343,7 @@ fn periodic_wrap_is_exact() {
     let total_for = |centre: [f64; 3]| -> f64 {
         let rec_center: Vec<f64> = images
             .iter()
-            .flat_map(|l| {
-                [
-                    centre[0] + l[0],
-                    centre[1] + l[1],
-                    centre[2] + l[2],
-                ]
-            })
+            .flat_map(|l| [centre[0] + l[0], centre[1] + l[1], centre[2] + l[2]])
             .collect();
         let nrec = images.len() as u32;
         let t = PshellGridTable {
@@ -382,4 +376,3 @@ fn periodic_wrap_is_exact() {
     let analytic = coef * (std::f64::consts::PI / alpha).powf(1.5);
     assert!((corner_total - analytic).abs() < 1e-9);
 }
-

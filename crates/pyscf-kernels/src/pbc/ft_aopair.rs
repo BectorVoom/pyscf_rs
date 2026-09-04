@@ -181,10 +181,8 @@ fn ft_aopair_kernel(
             }
 
             // e^{−|G|²/4p} · e^{−iG·P}
-            let expo = cube_math::double::exp::exp(
-                0.0 - g2 / (4.0 * pexp),
-                cube_math::MathConfig::EXACT,
-            );
+            let expo =
+                cube_math::double::exp::exp(0.0 - g2 / (4.0 * pexp), cube_math::MathConfig::EXACT);
             let theta = 0.0 - (gx * px + gy * py + gz * pz);
             let (sn, cs) = cube_math::double::trig::sincos(theta, cube_math::MathConfig::EXACT);
 
@@ -322,7 +320,10 @@ pub fn ft_aopair(
         actual,
     };
     if !t.gv.len().is_multiple_of(3) {
-        return Err(shape("gv length a multiple of 3", format!("{}", t.gv.len())));
+        return Err(shape(
+            "gv length a multiple of 3",
+            format!("{}", t.gv.len()),
+        ));
     }
     let nslots = t.slot_pair.len();
     if t.slot_out.len() != nslots || t.slot_pow.len() != 6 * nslots {

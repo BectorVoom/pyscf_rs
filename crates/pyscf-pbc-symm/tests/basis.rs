@@ -87,7 +87,10 @@ struct Worst {
 
 impl Worst {
     fn new() -> Self {
-        Worst { val: 0.0, at: (0, 0, 0) }
+        Worst {
+            val: 0.0,
+            at: (0, 0, 0),
+        }
     }
 
     fn see(&mut self, val: f64, k: usize, p: usize, q: usize) {
@@ -254,8 +257,14 @@ fn build_fixture(mut cell: Cell, mesh: [usize; 3]) -> Fixture {
         dmats: sym.dmats.clone(),
     };
     basis::build_symmetry(&mut cell, &input).expect("build_symmetry");
-    let symm_orb = cell.symm_orb.clone().expect("symm_orb must be Some after build_symmetry");
-    let irrep_id = cell.irrep_id.clone().expect("irrep_id must be Some after build_symmetry");
+    let symm_orb = cell
+        .symm_orb
+        .clone()
+        .expect("symm_orb must be Some after build_symmetry");
+    let irrep_id = cell
+        .irrep_id
+        .clone()
+        .expect("irrep_id must be Some after build_symmetry");
 
     Fixture {
         cell,
@@ -355,7 +364,10 @@ fn check_completeness(fx: &Fixture) {
     let nao = fx.cell.mol.nao_nr;
     for (k, blocks) in fx.blocks.iter().enumerate() {
         let total: usize = blocks.iter().map(|b| b.ncol).sum();
-        assert_eq!(total, nao, "k={k}: irrep columns sum to {total}, want nao={nao}");
+        assert_eq!(
+            total, nao,
+            "k={k}: irrep columns sum to {total}, want nao={nao}"
+        );
         assert_eq!(
             fx.irrep_id[k].len(),
             nao,
@@ -416,7 +428,11 @@ fn check_fock_block_diagonal(fx: &Fixture, name: &str) {
         ..KScfConfig::default()
     };
     let r = mf.kernel(&cfg).expect("full-BZ KRHF must run");
-    assert!(r.converged, "full-BZ KRHF did not converge in {} cycles", r.cycles);
+    assert!(
+        r.converged,
+        "full-BZ KRHF did not converge in {} cycles",
+        r.cycles
+    );
 
     let fock = converged_fock(&mf, &r.dm);
 
@@ -466,7 +482,10 @@ fn check_invariance(fx: &Fixture, name: &str) {
             }
             let ir = block.irrep_id as usize;
             let dim_ir = chartab[ir][0].re;
-            assert!(dim_ir > 0.5, "k={k} ir={ir}: irrep dimension must be >= 1, got {dim_ir}");
+            assert!(
+                dim_ir > 0.5,
+                "k={k} ir={ir}: irrep dimension must be >= 1, got {dim_ir}"
+            );
             let multiplicity = block.ncol as f64 / dim_ir;
 
             for iop in 0..pg.order() {
@@ -538,7 +557,11 @@ fn si_2x2x2() {
 
 #[test]
 fn diamond_2x2x2() {
-    run_all_checks("diamond_2x2x2", diamond_precision(FIXTURE_PRECISION), [2, 2, 2]);
+    run_all_checks(
+        "diamond_2x2x2",
+        diamond_precision(FIXTURE_PRECISION),
+        [2, 2, 2],
+    );
 }
 
 #[test]
@@ -548,7 +571,11 @@ fn si_3x3x3() {
 
 #[test]
 fn diamond_3x3x3() {
-    run_all_checks("diamond_3x3x3", diamond_precision(FIXTURE_PRECISION), [3, 3, 3]);
+    run_all_checks(
+        "diamond_3x3x3",
+        diamond_precision(FIXTURE_PRECISION),
+        [3, 3, 3],
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -568,9 +595,18 @@ fn build_symmetry_refuses_mismatched_lengths() {
     };
     let err = basis::build_symmetry(&mut cell, &input)
         .expect_err("mismatched kpts_scaled_ibz/little_cogroup_ops lengths must be refused");
-    assert!(matches!(err, pyscf_pbc_symm::PbcSymmError::KptsSymmInputMismatch(_)));
-    assert!(cell.symm_orb.is_none(), "a refused build must not touch cell.symm_orb");
-    assert!(cell.irrep_id.is_none(), "a refused build must not touch cell.irrep_id");
+    assert!(matches!(
+        err,
+        pyscf_pbc_symm::PbcSymmError::KptsSymmInputMismatch(_)
+    ));
+    assert!(
+        cell.symm_orb.is_none(),
+        "a refused build must not touch cell.symm_orb"
+    );
+    assert!(
+        cell.irrep_id.is_none(),
+        "a refused build must not touch cell.irrep_id"
+    );
 }
 
 #[test]
@@ -585,7 +621,10 @@ fn build_symmetry_refuses_out_of_range_op_index() {
     };
     let err = basis::build_symmetry(&mut cell, &input)
         .expect_err("an out-of-range little-co-group op index must be refused");
-    assert!(matches!(err, pyscf_pbc_symm::PbcSymmError::KptsSymmInputMismatch(_)));
+    assert!(matches!(
+        err,
+        pyscf_pbc_symm::PbcSymmError::KptsSymmInputMismatch(_)
+    ));
 }
 
 #[test]
@@ -600,5 +639,8 @@ fn build_symmetry_refuses_ops_dmats_length_mismatch() {
     };
     let err = basis::build_symmetry(&mut cell, &input)
         .expect_err("ops/dmats length mismatch must be refused");
-    assert!(matches!(err, pyscf_pbc_symm::PbcSymmError::KptsSymmInputMismatch(_)));
+    assert!(matches!(
+        err,
+        pyscf_pbc_symm::PbcSymmError::KptsSymmInputMismatch(_)
+    ));
 }

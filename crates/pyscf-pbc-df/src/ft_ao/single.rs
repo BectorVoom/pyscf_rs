@@ -25,11 +25,11 @@
 //! cell, where `nao = natm` and every shell is a single `s` primitive. A launch
 //! would cost more than the arithmetic.
 
+use pyscf_core::Mole;
 use pyscf_core::raw_layout::{
     ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, CHARGE_OF, NCTR_OF, NPRIM_OF, PTR_COEFF, PTR_COORD,
     PTR_ENV_START, PTR_EXP,
 };
-use pyscf_core::Mole;
 use pyscf_kernels::{cart_powers, cart2sph_l_matrix, common_fac_sp};
 use pyscf_pbc_gto::Cell;
 
@@ -52,7 +52,12 @@ pub fn ft_ao_mol(mol: &Mole, gv: &[[f64; 3]]) -> Result<(Vec<f64>, Vec<f64>), Pb
     for ib in 0..mol.nbas {
         let l = mol._bas[ib * BAS_SLOTS + ANG_OF] as u32;
         let nctr = mol._bas[ib * BAS_SLOTS + NCTR_OF] as usize;
-        nao_out += nctr * if mol.cart { ncart(l) } else { 2 * l as usize + 1 };
+        nao_out += nctr
+            * if mol.cart {
+                ncart(l)
+            } else {
+                2 * l as usize + 1
+            };
     }
     let mut re = vec![0.0f64; ngrids * nao_out];
     let mut im = vec![0.0f64; ngrids * nao_out];
@@ -67,11 +72,7 @@ pub fn ft_ao_mol(mol: &Mole, gv: &[[f64; 3]]) -> Result<(Vec<f64>, Vec<f64>), Pb
         let pc = mol._bas[row + PTR_COEFF] as usize;
         let atom = mol._bas[row + ATOM_OF] as usize;
         let pcoord = mol._atm[atom * ATM_SLOTS + PTR_COORD] as usize;
-        let a = [
-            mol._env[pcoord],
-            mol._env[pcoord + 1],
-            mol._env[pcoord + 2],
-        ];
+        let a = [mol._env[pcoord], mol._env[pcoord + 1], mol._env[pcoord + 2]];
         let nc = ncart(l);
         let powers = cart_powers(l);
         let cfac = common_fac_sp(l);
@@ -224,16 +225,7 @@ pub fn fake_nuc(cell: &Cell, with_pseudo: bool) -> Result<Mole, PbcDfError> {
         env.push(eta);
         env.push(norm);
         // [atom, l=0, nprim=1, nctr=1, kappa=0, ptr_exp, ptr_coeff, 0]
-        bas.extend_from_slice(&[
-            ia as i32,
-            0,
-            1,
-            1,
-            0,
-            ptr as i32,
-            (ptr + 1) as i32,
-            0,
-        ]);
+        bas.extend_from_slice(&[ia as i32, 0, 1, 1, 0, ptr as i32, (ptr + 1) as i32, 0]);
         ptr += 2;
     }
     m._atm = atm;

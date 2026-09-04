@@ -2,8 +2,8 @@
 
 mod common;
 
-use pyscf_pbc_df::ft_ao::rs_cell::{LOCAL_BASIS, RCUT_THRESHOLD, RsCell, SMOOTH_BASIS};
 use pyscf_pbc_df::ft_ao::ft_aopair_kpt_with_images;
+use pyscf_pbc_df::ft_ao::rs_cell::{LOCAL_BASIS, RCUT_THRESHOLD, RsCell, SMOOTH_BASIS};
 
 // ---------------------------------------------------------------------------
 // He-fcc / sto-3g — D-PBC-23's all-electron control: no smooth shell.
@@ -18,9 +18,17 @@ fn he_fcc_has_no_smooth_shell() {
     // mesh on this system (`measurements`/oracle: 19.65348325887675). The
     // KECUT/RCUT thresholds are the module defaults, exactly as
     // `gdf_builder.py:127` calls `_RangeSeparatedCell.from_cell`.
-    let rs = RsCell::from_cell(&cell, Some(19.653_483_258_876_75), Some(RCUT_THRESHOLD), false)
-        .expect("He-fcc decontracts");
-    assert_eq!(rs.cell.mol.nbas, cell.mol.nbas, "no shell splits for He-fcc");
+    let rs = RsCell::from_cell(
+        &cell,
+        Some(19.653_483_258_876_75),
+        Some(RCUT_THRESHOLD),
+        false,
+    )
+    .expect("He-fcc decontracts");
+    assert_eq!(
+        rs.cell.mol.nbas, cell.mol.nbas,
+        "no shell splits for He-fcc"
+    );
     assert_eq!(rs.bas_type, vec![LOCAL_BASIS]);
     assert_eq!(rs.bas_map, vec![0]);
     assert_eq!(rs.sh_loc, vec![0, 1]);
@@ -43,8 +51,13 @@ fn he_fcc_has_no_smooth_shell() {
 #[test]
 fn diamond_gth_szv_splits_every_shell_into_local_and_smooth() {
     let cell = common::diamond();
-    let rs = RsCell::from_cell(&cell, Some(21.721_883_440_437_864), Some(RCUT_THRESHOLD), false)
-        .expect("diamond decontracts");
+    let rs = RsCell::from_cell(
+        &cell,
+        Some(21.721_883_440_437_864),
+        Some(RCUT_THRESHOLD),
+        false,
+    )
+    .expect("diamond decontracts");
     assert_eq!(cell.mol.nbas, 4);
     assert_eq!(rs.cell.mol.nbas, 8);
     assert_eq!(rs.bas_type, vec![1, 2, 1, 2, 1, 2, 1, 2]);
@@ -69,8 +82,8 @@ fn decontraction_is_a_bit_exact_permutation_of_primitives() {
         ("he_fcc", common::he_all_electron(), 19.653_483_258_876_75),
         ("diamond", common::diamond(), 21.721_883_440_437_864),
     ] {
-        let rs = RsCell::from_cell(&cell, Some(ke), Some(RCUT_THRESHOLD), false)
-            .expect("decontracts");
+        let rs =
+            RsCell::from_cell(&cell, Some(ke), Some(RCUT_THRESHOLD), false).expect("decontracts");
         use pyscf_core::raw_layout::{ANG_OF, BAS_SLOTS, NCTR_OF, NPRIM_OF, PTR_COEFF, PTR_EXP};
 
         for ib in 0..cell.mol.nbas {
@@ -82,7 +95,9 @@ fn decontraction_is_a_bit_exact_permutation_of_primitives() {
             let mut orig: Vec<(u64, Vec<u64>)> = (0..nprim)
                 .map(|p| {
                     let e = cell.mol._env[pe + p].to_bits();
-                    let c: Vec<u64> = (0..nctr).map(|ic| cell.mol._env[pc + ic * nprim + p].to_bits()).collect();
+                    let c: Vec<u64> = (0..nctr)
+                        .map(|ic| cell.mol._env[pc + ic * nprim + p].to_bits())
+                        .collect();
                     (e, c)
                 })
                 .collect();
@@ -101,13 +116,17 @@ fn decontraction_is_a_bit_exact_permutation_of_primitives() {
                 let cpc = crow[PTR_COEFF] as usize;
                 for p in 0..cnprim {
                     let e = rs.cell.mol._env[cpe + p].to_bits();
-                    let c: Vec<u64> =
-                        (0..nctr).map(|ic| rs.cell.mol._env[cpc + ic * cnprim + p].to_bits()).collect();
+                    let c: Vec<u64> = (0..nctr)
+                        .map(|ic| rs.cell.mol._env[cpc + ic * cnprim + p].to_bits())
+                        .collect();
                     got.push((e, c));
                 }
             }
             got.sort();
-            assert_eq!(got, orig, "{label} shell {ib}: decontraction is not a bit-exact permutation");
+            assert_eq!(
+                got, orig,
+                "{label} shell {ib}: decontraction is not a bit-exact permutation"
+            );
         }
     }
 }
@@ -139,8 +158,8 @@ fn recontracted_ft_aopair_matches_direct_lattice_sum_with_screens_off() {
         ("he_fcc", common::he_all_electron(), 19.653_483_258_876_75),
         ("diamond", common::diamond(), 21.721_883_440_437_864),
     ] {
-        let rs = RsCell::from_cell(&cell, Some(ke), Some(RCUT_THRESHOLD), false)
-            .expect("decontracts");
+        let rs =
+            RsCell::from_cell(&cell, Some(ke), Some(RCUT_THRESHOLD), false).expect("decontracts");
 
         // Same image list on both sides — `rs.cell.rcut` is inherited
         // UNCHANGED from `cell.rcut` (module docs), so this is a fair,
@@ -148,10 +167,8 @@ fn recontracted_ft_aopair_matches_direct_lattice_sum_with_screens_off() {
         // (Gate 1c's own mechanism) intends.
         let ls = pyscf_pbc_gto::lattice::get_lattice_ls_default(&cell).expect("Ls");
 
-        let out_ref =
-            ft_aopair_kpt_with_images(&cell, &gv, q, kpt, &ls).expect("ref ft_aopair");
-        let out_rs =
-            ft_aopair_kpt_with_images(&rs.cell, &gv, q, kpt, &ls).expect("rs ft_aopair");
+        let out_ref = ft_aopair_kpt_with_images(&cell, &gv, q, kpt, &ls).expect("ref ft_aopair");
+        let out_rs = ft_aopair_kpt_with_images(&rs.cell, &gv, q, kpt, &ls).expect("rs ft_aopair");
 
         let recon = rs.recontract2d(&out_rs.at(0).re);
         let want = &out_ref.at(0).re;
@@ -179,8 +196,8 @@ fn reverse_bas_map_matches_sh_loc() {
         (common::he_all_electron(), 19.653_483_258_876_75),
         (common::diamond(), 21.721_883_440_437_864),
     ] {
-        let rs = RsCell::from_cell(&cell, Some(ke), Some(RCUT_THRESHOLD), false)
-            .expect("decontracts");
+        let rs =
+            RsCell::from_cell(&cell, Some(ke), Some(RCUT_THRESHOLD), false).expect("decontracts");
         assert_eq!(RsCell::reverse_bas_map(&rs.bas_map), rs.sh_loc);
     }
 }
@@ -206,14 +223,25 @@ fn no_threshold_is_a_trivial_wrap() {
 #[test]
 fn smooth_and_compact_cells_partition_the_decontracted_shells() {
     let cell = common::diamond();
-    let rs = RsCell::from_cell(&cell, Some(21.721_883_440_437_864), Some(RCUT_THRESHOLD), false)
-        .expect("decontracts");
+    let rs = RsCell::from_cell(
+        &cell,
+        Some(21.721_883_440_437_864),
+        Some(RCUT_THRESHOLD),
+        false,
+    )
+    .expect("decontracts");
 
     let smooth = rs.smooth_basis_cell().expect("smooth_basis_cell");
     let compact = rs.compact_basis_cell().expect("compact_basis_cell");
 
-    assert_eq!(smooth.mol.nbas, 4, "one SMOOTH shell per original shell here");
-    assert_eq!(compact.cell.mol.nbas, 4, "one LOCAL shell per original shell here");
+    assert_eq!(
+        smooth.mol.nbas, 4,
+        "one SMOOTH shell per original shell here"
+    );
+    assert_eq!(
+        compact.cell.mol.nbas, 4,
+        "one LOCAL shell per original shell here"
+    );
     assert_eq!(smooth.mol.nbas + compact.cell.mol.nbas, rs.cell.mol.nbas);
     assert!(compact.bas_type.iter().all(|&t| t != SMOOTH_BASIS));
 }
@@ -223,8 +251,13 @@ fn smooth_and_compact_cells_partition_the_decontracted_shells() {
 #[test]
 fn he_fcc_smooth_basis_cell_is_empty() {
     let cell = common::he_all_electron();
-    let rs = RsCell::from_cell(&cell, Some(19.653_483_258_876_75), Some(RCUT_THRESHOLD), false)
-        .expect("decontracts");
+    let rs = RsCell::from_cell(
+        &cell,
+        Some(19.653_483_258_876_75),
+        Some(RCUT_THRESHOLD),
+        false,
+    )
+    .expect("decontracts");
     let smooth = rs.smooth_basis_cell().expect("smooth_basis_cell");
     assert_eq!(smooth.mol.nbas, 0);
     let compact = rs.compact_basis_cell().expect("compact_basis_cell");
@@ -238,8 +271,13 @@ fn he_fcc_smooth_basis_cell_is_empty() {
 #[test]
 fn get_ao_type_tags_every_ao() {
     let cell = common::diamond();
-    let rs = RsCell::from_cell(&cell, Some(21.721_883_440_437_864), Some(RCUT_THRESHOLD), false)
-        .expect("decontracts");
+    let rs = RsCell::from_cell(
+        &cell,
+        Some(21.721_883_440_437_864),
+        Some(RCUT_THRESHOLD),
+        false,
+    )
+    .expect("decontracts");
     let tags = rs.get_ao_type();
     assert_eq!(tags.len(), rs.cell.mol.nao_nr);
     let n_smooth_ao = tags.iter().filter(|&&t| t == SMOOTH_BASIS).count();

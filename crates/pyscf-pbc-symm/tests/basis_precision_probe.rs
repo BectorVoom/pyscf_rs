@@ -208,8 +208,18 @@ fn fock_block_diagonality_floor() {
     // the OLD loose fixture, and the one `tests/basis.rs` now uses.
     // (precision, conv_tol, conv_tol_grad, what it shows)
     let points: [(f64, f64, f64, &str); 2] = [
-        (1e-8, 1e-11, 1e-8, "the OLD fixture: expect max|F| ~ 3.99e-10, 40x OVER the 1e-11 gate"),
-        (1e-10, 1e-11, 1e-10, "the FIXED fixture: expect max|F| ~ 5.5e-13, ~18x INSIDE the gate"),
+        (
+            1e-8,
+            1e-11,
+            1e-8,
+            "the OLD fixture: expect max|F| ~ 3.99e-10, 40x OVER the 1e-11 gate",
+        ),
+        (
+            1e-10,
+            1e-11,
+            1e-10,
+            "the FIXED fixture: expect max|F| ~ 5.5e-13, ~18x INSIDE the gate",
+        ),
     ];
     for &(prec, conv_tol, grad, note) in &points {
         let (wf, ws) = max_off_block_grad(prec, conv_tol, grad);

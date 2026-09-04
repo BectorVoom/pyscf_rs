@@ -130,8 +130,10 @@ impl MultiGridNumInt {
             && let Some((k, v)) = g.as_ref()
             && *k == key
         {
+            let _span = tracing::info_span!("pbc_mg_build_tasks_hit").entered();
             return Ok(Arc::clone(v));
         }
+        let _span = tracing::info_span!("pbc_mg_build_tasks_miss").entered();
         let decon = tasks::build_pshells(cell)?;
         let levels = tasks::multi_grids_tasks_for_ke_cut(cell, &decon, cell.mesh)?;
         let out = Arc::new((decon, levels));
@@ -229,13 +231,29 @@ impl MultiGridNumInt {
         let prep = self.build_tasks(cell)?;
         let (decon, levels) = (&prep.0, &prep.1);
         let dm_p = colloc::expand_dm(decon, dm);
-        // M-02 — see `get_j`: one collocation sweep, used by both directions.
-        let lvs = collocate_all_levels(cell, decon, levels)?;
-        let rho_g = rho_g_from_level_values(cell, decon, &lvs, &dm_p)?;
+        let keep = keep_level_values(decon, levels);
+        tracing::debug!(
+            target: "pyscf_pbc_dft::multigrid",
+            keep_all_levels = keep,
+            estimated_bytes = estimated_level_value_bytes(decon, levels),
+            "v1 level-value memory decision"
+        );
+        let lvs = keep
+            .then(|| collocate_all_levels(cell, decon, levels))
+            .transpose()?;
+        let rho_g = if let Some(lvs) = &lvs {
+            rho_g_from_level_values(cell, decon, lvs, &dm_p)?
+        } else {
+            rho_g_streaming(cell, decon, levels, &[dm_p.as_slice()])?.remove(0)
+        };
 
         // M-00: the middle is shared with `nr_uks` and with the v2 driver.
         let parts = mg_xc_parts(cell, xc_code, std::slice::from_ref(&rho_g))?;
-        let v_p = pass2_from_level_values(cell, decon, &lvs, &parts.wv_freq0[0])?;
+        let v_p = if let Some(lvs) = &lvs {
+            pass2_from_level_values(cell, decon, lvs, &parts.wv_freq0[0])?
+        } else {
+            pass2_streaming(cell, decon, levels, &[&parts.wv_freq0[0]])?.remove(0)
+        };
         let veff = colloc::contract_v(decon, &v_p);
 
         Ok(MgNrRksResult {
@@ -273,20 +291,44 @@ impl MultiGridNumInt {
     ) -> Result<MgNrUksResult, PbcDftError> {
         let prep = self.build_tasks(cell)?;
         let (decon, levels) = (&prep.0, &prep.1);
-        let lvs = collocate_all_levels(cell, decon, levels)?;
-
-        let mut rho_g = Vec::with_capacity(2);
-        for d in dm {
-            let dm_p = colloc::expand_dm(decon, d);
-            rho_g.push(rho_g_from_level_values(cell, decon, &lvs, &dm_p)?);
-        }
+        let dm_p = dm.map(|d| colloc::expand_dm(decon, d));
+        let keep = keep_level_values(decon, levels);
+        tracing::debug!(
+            target: "pyscf_pbc_dft::multigrid",
+            keep_all_levels = keep,
+            estimated_bytes = estimated_level_value_bytes(decon, levels),
+            "v1 level-value memory decision"
+        );
+        let lvs = keep
+            .then(|| collocate_all_levels(cell, decon, levels))
+            .transpose()?;
+        let rho_g = if let Some(lvs) = &lvs {
+            vec![
+                rho_g_from_level_values(cell, decon, lvs, &dm_p[0])?,
+                rho_g_from_level_values(cell, decon, lvs, &dm_p[1])?,
+            ]
+        } else {
+            rho_g_streaming(cell, decon, levels, &[&dm_p[0], &dm_p[1]])?
+        };
 
         let parts = mg_xc_parts(cell, xc_code, &rho_g)?;
-        let mut veff = Vec::with_capacity(2);
-        for w in &parts.wv_freq0 {
-            let v_p = pass2_from_level_values(cell, decon, &lvs, w)?;
-            veff.push(colloc::contract_v(decon, &v_p));
-        }
+        let vps = if let Some(lvs) = &lvs {
+            vec![
+                pass2_from_level_values(cell, decon, lvs, &parts.wv_freq0[0])?,
+                pass2_from_level_values(cell, decon, lvs, &parts.wv_freq0[1])?,
+            ]
+        } else {
+            pass2_streaming(
+                cell,
+                decon,
+                levels,
+                &[&parts.wv_freq0[0], &parts.wv_freq0[1]],
+            )?
+        };
+        let mut veff: Vec<Vec<f64>> = vps
+            .iter()
+            .map(|v_p| colloc::contract_v(decon, v_p))
+            .collect();
         let vb = veff.pop().expect("two channels");
         let va = veff.pop().expect("two channels");
 
@@ -508,6 +550,32 @@ pub(crate) fn wrap_df(e: pyscf_pbc_df::PbcDfError) -> PbcDftError {
 ///
 /// # Errors
 /// Propagates [`colloc::collocate_level`].
+fn estimated_level_value_bytes(decon: &Decontracted, levels: &[GridLevel]) -> usize {
+    levels
+        .iter()
+        .map(|level| {
+            let nslots: usize = level
+                .dense
+                .iter()
+                .chain(&level.sparse)
+                .map(|&p| crate::multigrid::tasks::pshell_cart_powers(decon.pshells[p].l).len())
+                .sum();
+            nslots
+                .saturating_mul(level.mesh.iter().product::<usize>())
+                .saturating_mul(core::mem::size_of::<f64>())
+        })
+        .sum()
+}
+
+fn keep_level_values(decon: &Decontracted, levels: &[GridLevel]) -> bool {
+    let max_mb = std::env::var("PYSCF_MAX_MEMORY")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|x| x.is_finite() && *x >= 0.0)
+        .unwrap_or(4000.0);
+    estimated_level_value_bytes(decon, levels) as f64 <= 0.25 * max_mb * 1.0e6
+}
+
 fn collocate_all_levels(
     cell: &Cell,
     decon: &Decontracted,
@@ -517,6 +585,82 @@ fn collocate_all_levels(
         .iter()
         .map(|level| colloc::collocate_level(cell, decon, level))
         .collect()
+}
+
+/// Bounded-memory forward phase. Since the XC field is known only after all
+/// levels contribute, the reverse phase necessarily re-collocates levels.
+fn rho_g_streaming(
+    cell: &Cell,
+    decon: &Decontracted,
+    levels: &[GridLevel],
+    dm_p: &[&[f64]],
+) -> Result<Vec<CTensor>, PbcDftError> {
+    let mesh = cell.mesh;
+    let ngrids: usize = mesh.iter().product();
+    let mut out: Vec<CTensor> = dm_p.iter().map(|_| CTensor::zeros(ngrids)).collect();
+    let vol = cell.vol();
+    for (level_idx, level) in levels.iter().enumerate() {
+        let _level_span = tracing::info_span!(
+            "pbc_mg_forward_level",
+            level = level_idx as u64,
+            launches = 1_u64,
+            mesh = ?level.mesh,
+        )
+        .entered();
+        let lv = colloc::collocate_level(cell, decon, level)?;
+        let scale = vol / lv.ngrids as f64;
+        for (dst, dm) in out.iter_mut().zip(dm_p) {
+            let rr = CTensor::from_planes(colloc::level_rho(&lv, decon, dm), vec![0.0; lv.ngrids]);
+            let mut freq = {
+                let _fft_span = tracing::info_span!(
+                    "pbc_mg_fft",
+                    level = level_idx as u64,
+                    direction = "forward",
+                )
+                .entered();
+                pyscf_pbc_tools::fft(&rr, lv.mesh).map_err(wrap_tools)?
+            };
+            for x in freq.re.iter_mut().chain(freq.im.iter_mut()) {
+                *x *= scale;
+            }
+            insert_gspace_window(dst, mesh, &freq, lv.mesh);
+        }
+    }
+    Ok(out)
+}
+
+fn pass2_streaming(
+    cell: &Cell,
+    decon: &Decontracted,
+    levels: &[GridLevel],
+    vg_full: &[&CTensor],
+) -> Result<Vec<Vec<f64>>, PbcDftError> {
+    let mesh = cell.mesh;
+    let mut out = vec![vec![0.0f64; decon.nao_p * decon.nao_p]; vg_full.len()];
+    for (level_idx, level) in levels.iter().enumerate() {
+        let _level_span = tracing::info_span!(
+            "pbc_mg_reverse_level",
+            level = level_idx as u64,
+            launches = 0_u64,
+            mesh = ?level.mesh,
+        )
+        .entered();
+        let lv = colloc::collocate_level(cell, decon, level)?;
+        for (dst, vg) in out.iter_mut().zip(vg_full) {
+            let sub = extract_gspace_window(vg, mesh, lv.mesh);
+            let vr = {
+                let _fft_span = tracing::info_span!(
+                    "pbc_mg_fft",
+                    level = level_idx as u64,
+                    direction = "reverse",
+                )
+                .entered();
+                pyscf_pbc_tools::ifft(&sub, lv.mesh).map_err(wrap_tools)?
+            };
+            colloc::level_pass2(&lv, decon, &vr.re, dst);
+        }
+    }
+    Ok(out)
 }
 
 /// Combine every level's real-space `rho` into `rho(G)` on `cell.mesh`,
@@ -535,12 +679,24 @@ fn rho_g_from_level_values(
     let ngrids_full = mesh[0] * mesh[1] * mesh[2];
     let mut rho_g = CTensor::zeros(ngrids_full);
     let vol = cell.vol();
-    for lv in lvs {
+    for (level, lv) in lvs.iter().enumerate() {
+        let _level_span = tracing::info_span!(
+            "pbc_mg_forward_level",
+            level = level as u64,
+            launches = 1_u64,
+            mesh = ?lv.mesh,
+        )
+        .entered();
         let rho_r = colloc::level_rho(lv, decon, dm_p);
         let ngrids_level = lv.ngrids;
         let weight = vol / ngrids_level as f64;
         let rr = CTensor::from_planes(rho_r, vec![0.0; ngrids_level]);
-        let mut freq = pyscf_pbc_tools::fft(&rr, lv.mesh).map_err(wrap_tools)?;
+        let mut freq = {
+            let _fft_span =
+                tracing::info_span!("pbc_mg_fft", level = level as u64, direction = "forward",)
+                    .entered();
+            pyscf_pbc_tools::fft(&rr, lv.mesh).map_err(wrap_tools)?
+        };
         for x in freq.re.iter_mut().chain(freq.im.iter_mut()) {
             *x *= weight;
         }
@@ -567,9 +723,21 @@ fn pass2_from_level_values(
 ) -> Result<Vec<f64>, PbcDftError> {
     let mesh = cell.mesh;
     let mut v_p = vec![0.0f64; decon.nao_p * decon.nao_p];
-    for lv in lvs {
+    for (level, lv) in lvs.iter().enumerate() {
+        let _level_span = tracing::info_span!(
+            "pbc_mg_reverse_level",
+            level = level as u64,
+            launches = 0_u64,
+            mesh = ?lv.mesh,
+        )
+        .entered();
         let sub = extract_gspace_window(vg_full, mesh, lv.mesh);
-        let v_r = pyscf_pbc_tools::ifft(&sub, lv.mesh).map_err(wrap_tools)?;
+        let v_r = {
+            let _fft_span =
+                tracing::info_span!("pbc_mg_fft", level = level as u64, direction = "reverse",)
+                    .entered();
+            pyscf_pbc_tools::ifft(&sub, lv.mesh).map_err(wrap_tools)?
+        };
         colloc::level_pass2(lv, decon, &v_r.re, &mut v_p);
     }
     Ok(v_p)
@@ -632,7 +800,11 @@ pub(crate) fn insert_gspace_window(
     }
 }
 
-pub(crate) fn extract_gspace_window(big: &CTensor, mesh_big: [usize; 3], mesh_small: [usize; 3]) -> CTensor {
+pub(crate) fn extract_gspace_window(
+    big: &CTensor,
+    mesh_big: [usize; 3],
+    mesh_small: [usize; 3],
+) -> CTensor {
     let map = window_index_map(mesh_small, mesh_big);
     let mut small = CTensor::zeros(map.len());
     for (i, &bi) in map.iter().enumerate() {

@@ -101,26 +101,22 @@ impl ULambdaImds {
         let fvo = |a: usize, i: usize| eris.fock[imd::fock_idx(nmo, no + a, i)];
         let fvv = |a: usize, b: usize| eris.fock[imd::fock_idx(nmo, no + a, no + b)];
         // physicist antisymmetrized blocks.
-        let oovv = |i: usize, j: usize, a: usize, b: usize| {
-            eris.oovv[imd::oovv_idx(no, nv, i, j, a, b)]
-        };
-        let oooo = |i: usize, j: usize, k: usize, l: usize| eris.oooo[imd::oooo_idx(no, i, j, k, l)];
-        let ovvo = |i: usize, a: usize, b: usize, j: usize| {
-            eris.ovvo[imd::ovvo_idx(no, nv, i, a, b, j)]
-        };
-        let ooov = |i: usize, j: usize, k: usize, a: usize| {
-            eris.ooov[imd::ooov_idx(no, nv, i, j, k, a)]
-        };
-        let ovvv = |i: usize, a: usize, b: usize, c: usize| {
-            eris.ovvv[imd::ovvv_idx(nv, i, a, b, c)]
-        };
+        let oovv =
+            |i: usize, j: usize, a: usize, b: usize| eris.oovv[imd::oovv_idx(no, nv, i, j, a, b)];
+        let oooo =
+            |i: usize, j: usize, k: usize, l: usize| eris.oooo[imd::oooo_idx(no, i, j, k, l)];
+        let ovvo =
+            |i: usize, a: usize, b: usize, j: usize| eris.ovvo[imd::ovvo_idx(no, nv, i, a, b, j)];
+        let ooov =
+            |i: usize, j: usize, k: usize, a: usize| eris.ooov[imd::ooov_idx(no, nv, i, j, k, a)];
+        let ovvv =
+            |i: usize, a: usize, b: usize, c: usize| eris.ovvv[imd::ovvv_idx(nv, i, a, b, c)];
 
         // tau[i,j,a,b] = t2 + 2*einsum('ia,jb->ijab', t1, t1)
         //   (gccsd_lambda.py:41). NB this is the GCCSD lambda's own tau — t1·t1
         //   WITHOUT the i<->j antisymmetrizing term; the *2 absorbs it.
-        let tau = |i: usize, j: usize, a: usize, b: usize| {
-            t2e(i, j, a, b) + 2.0 * t1e(i, a) * t1e(j, b)
-        };
+        let tau =
+            |i: usize, j: usize, a: usize, b: usize| t2e(i, j, a, b) + 2.0 * t1e(i, a) * t1e(j, b);
 
         // v1[b,a] = fvv[b,a] - einsum('ja,jb->ba', fov, t1)
         //   - einsum('jbac,jc->ba', ovvv, t1) + 0.5*einsum('jkca,jkbc->ba', oovv, tau)
@@ -446,9 +442,12 @@ pub fn update_ulambda(
     let l2e = |i: usize, j: usize, a: usize, b: usize| l2[t2_idx(no, nv, i, j, a, b)];
 
     let fov = |i: usize, a: usize| eris.fock[imd::fock_idx(nmo, i, no + a)];
-    let oovv = |i: usize, j: usize, a: usize, b: usize| eris.oovv[imd::oovv_idx(no, nv, i, j, a, b)];
-    let ovvo = |i: usize, a: usize, b: usize, j: usize| eris.ovvo[imd::ovvo_idx(no, nv, i, a, b, j)];
-    let ooov = |i: usize, j: usize, k: usize, a: usize| eris.ooov[imd::ooov_idx(no, nv, i, j, k, a)];
+    let oovv =
+        |i: usize, j: usize, a: usize, b: usize| eris.oovv[imd::oovv_idx(no, nv, i, j, a, b)];
+    let ovvo =
+        |i: usize, a: usize, b: usize, j: usize| eris.ovvo[imd::ovvo_idx(no, nv, i, a, b, j)];
+    let ooov =
+        |i: usize, j: usize, k: usize, a: usize| eris.ooov[imd::ooov_idx(no, nv, i, j, k, a)];
     let ovvv = |i: usize, a: usize, b: usize, c: usize| eris.ovvv[imd::ovvv_idx(nv, i, a, b, c)];
     let vvvv = |a: usize, b: usize, c: usize, d: usize| eris.vvvv[imd::vvvv_idx(nv, a, b, c, d)];
 
@@ -472,7 +471,8 @@ pub fn update_ulambda(
     let w3e = |c: usize, k: usize| imds.w3[c * no + k];
 
     // tau[i,j,a,b] = t2 + 2*einsum('ia,jb->ijab', t1, t1) (the lambda tau, l.119).
-    let tau = |i: usize, j: usize, a: usize, b: usize| t2e(i, j, a, b) + 2.0 * t1e(i, a) * t1e(j, b);
+    let tau =
+        |i: usize, j: usize, a: usize, b: usize| t2e(i, j, a, b) + 2.0 * t1e(i, a) * t1e(j, b);
 
     // mba[b,a] = 0.5*einsum('klca,klcb->ba', l2, t2) (l.116).
     let mut mba = vec![0.0_f64; nv * nv];
@@ -1036,7 +1036,9 @@ mod tests {
 
     /// Antisymmetric synthetic amplitudes (i<->j, a<->b).
     fn synthetic_amps(no: usize, nv: usize) -> (Vec<f64>, Vec<f64>) {
-        let t1: Vec<f64> = (0..no * nv).map(|i| 0.01 + ((i % 5) as f64) * 0.007).collect();
+        let t1: Vec<f64> = (0..no * nv)
+            .map(|i| 0.01 + ((i % 5) as f64) * 0.007)
+            .collect();
         let mut t2 = vec![0.0_f64; no * no * nv * nv];
         let raw = |i: usize, j: usize, a: usize, b: usize| -> f64 {
             0.003 + (((i * 7 + j * 5 + a * 3 + b) % 11) as f64) * 0.002
@@ -1046,7 +1048,8 @@ mod tests {
                 for a in 0..nv {
                     for b in 0..nv {
                         let v = 0.25
-                            * (raw(i, j, a, b) - raw(j, i, a, b) - raw(i, j, b, a) + raw(j, i, b, a));
+                            * (raw(i, j, a, b) - raw(j, i, a, b) - raw(i, j, b, a)
+                                + raw(j, i, b, a));
                         t2[t2_idx(no, nv, i, j, a, b)] = v;
                     }
                 }
@@ -1167,8 +1170,16 @@ mod tests {
         let eris_cs = crate::default_ao2mo(&refr, &Frozen::None).expect("cs eris");
         let cs_amps = crate::ccsd_kernel(&refr, &Frozen::None, &crate::NoCcsdOverrides, &pool)
             .expect("rccsd");
-        let cs_t1 = cs_amps.amplitudes.t1_slice().map(|s| s.to_vec()).unwrap_or_default();
-        let cs_t2 = cs_amps.amplitudes.t2_slice().map(|s| s.to_vec()).unwrap_or_default();
+        let cs_t1 = cs_amps
+            .amplitudes
+            .t1_slice()
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
+        let cs_t2 = cs_amps
+            .amplitudes
+            .t2_slice()
+            .map(|s| s.to_vec())
+            .unwrap_or_default();
         let cs_lam = solve_lambda(&cs_t1, &cs_t2, &eris_cs, &pool).expect("cs lambda");
         assert!(cs_lam.converged, "closed-shell lambda converges");
 
@@ -1187,8 +1198,8 @@ mod tests {
             beta: chan,
         };
         let ures = crate::uccsd_kernel(&uref, &Frozen::None, &pool).expect("uccsd");
-        let ulam = solve_ulambda(&ures.so_t1, &ures.so_t2, &ures.so_eris, &pool)
-            .expect("solve_ulambda");
+        let ulam =
+            solve_ulambda(&ures.so_t1, &ures.so_t2, &ures.so_eris, &pool).expect("solve_ulambda");
         assert!(ulam.converged, "spin-orbital lambda converges");
         for &x in ulam.l1.iter().chain(ulam.l2.iter()) {
             assert!(x.is_finite());

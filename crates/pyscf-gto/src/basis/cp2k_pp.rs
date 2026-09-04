@@ -103,9 +103,9 @@ pub fn parse_cp2k_pp_with_suffix(
             file: source.into(),
             line: 0,
             reason: match suffix {
-                None => format!(
-                    "pseudopotential for element '{symbol}' not found in CP2K/GTH text"
-                ),
+                None => {
+                    format!("pseudopotential for element '{symbol}' not found in CP2K/GTH text")
+                }
                 Some(q) => format!(
                     "pseudopotential for element '{symbol}' with suffix '{q}' \
                      not found in CP2K/GTH text"

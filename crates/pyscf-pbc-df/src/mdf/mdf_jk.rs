@@ -36,11 +36,7 @@ fn add_into(dst: &mut [KMats], src: &[KMats]) {
 ///
 /// # Errors
 /// Propagates both halves.
-pub fn get_j_kpts(
-    df: &Mdf,
-    dms: &[KMats],
-    kpts: &[[f64; 3]],
-) -> Result<Vec<KMats>, PbcDfError> {
+pub fn get_j_kpts(df: &Mdf, dms: &[KMats], kpts: &[[f64; 3]]) -> Result<Vec<KMats>, PbcDfError> {
     let mut vj = crate::gdf::jk::get_j_kpts(df.gdf()?, dms, kpts)?;
     let pw = crate::aft_jk::get_j_kpts(df.aftdf()?, dms, kpts, None)?;
     add_into(&mut vj, &pw);

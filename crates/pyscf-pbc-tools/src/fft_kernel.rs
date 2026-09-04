@@ -518,10 +518,7 @@ fn primitive_root(p: u64) -> u64 {
     let factors = prime_factors_distinct(phi);
     let mut g = 2u64;
     loop {
-        if factors
-            .iter()
-            .all(|&f| mod_pow(g, phi / f, p) != 1)
-        {
+        if factors.iter().all(|&f| mod_pow(g, phi / f, p) != 1) {
             return g;
         }
         g += 1;

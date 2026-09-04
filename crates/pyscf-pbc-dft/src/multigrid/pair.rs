@@ -66,11 +66,12 @@
 
 use pyscf_algebra::AlgebraError;
 use pyscf_kernels::multigrid_pair::{
-    PairSlotBatch, PairSlotTable, collocate_pairs_integrate, collocate_pairs_integrate_batched,
-    collocate_pairs_rho, collocate_pairs_rho_batched,
+    MAX_SLOTS_PER_INSTANCE, PairSlotBatch, PairSlotBatchDevice, PairSlotTable,
+    collocate_pairs_integrate, collocate_pairs_rho,
 };
 use pyscf_pbc_gto::Cell;
 use pyscf_pbc_gto::lattice::get_lattice_ls;
+use tracing::span::EnteredSpan;
 
 use crate::error::PbcDftError;
 use crate::multigrid::tasks::{Decontracted, Pshell, pshell_cart_powers};
@@ -341,7 +342,7 @@ pub struct PairLevelTable {
     /// which case the per-block streaming path is used unchanged — the
     /// fallback D-PBC-26 point 6 and 17-12's own OOM both argue for. The
     /// stored batch carries geometry only; `slot_coef` is filled per call.
-    pub batch: Option<BatchedLevel>,
+    pub batches: Vec<BatchedLevel>,
 }
 
 /// The M-03 concatenated launch tables for one level, plus the two maps that
@@ -354,6 +355,8 @@ pub struct BatchedLevel {
     pub point_global: Vec<u32>,
     /// Concatenated slot index -> this level's kernel-slot index.
     pub slot_global: Vec<u32>,
+    /// M-06: invariant geometry, uploaded lazily on first use.
+    pub device: std::sync::OnceLock<PairSlotBatchDevice>,
 }
 
 /// The largest concatenated batch M-03 will build, in bytes.
@@ -376,6 +379,22 @@ impl PairLevelTable {
     pub fn nkslots(&self) -> usize {
         self.kslot_term.len()
     }
+
+    /// Number of kernel launches used by either direction for this level.
+    /// Batched execution launches once per M-07 chunk; the oversized-block
+    /// fallback launches once for each non-empty reach list.
+    pub fn launch_count(&self) -> usize {
+        if self.batches.is_empty() {
+            self.block_sel.iter().filter(|sel| !sel.is_empty()).count()
+        } else {
+            self.batches.len()
+        }
+    }
+}
+
+#[inline]
+fn pairlevel_launch_count(lv: &PairLevelTable) -> usize {
+    lv.launch_count()
 }
 
 fn wrap_alg(e: AlgebraError) -> PbcDftError {
@@ -744,7 +763,7 @@ pub fn build_pair_level_table(
         instance_radius,
         blocks: Vec::new(),
         block_sel: Vec::new(),
-        batch: None,
+        batches: Vec::new(),
     };
     // M-02: the block partition and the per-block reach lists are geometry, so
     // they are built here, once, rather than inside each direction of each
@@ -757,7 +776,7 @@ pub fn build_pair_level_table(
         .map(|b| block_slots(&table, b))
         .collect();
     // M-03: the concatenated single-launch tables, when they fit.
-    table.batch = build_batched_level(&table);
+    table.batches = build_batched_levels(&table);
     Ok(table)
 }
 
@@ -767,27 +786,112 @@ pub fn build_pair_level_table(
 /// kernel sees each block's instances and slots in exactly the order the
 /// per-block launch presented them. Returns `None` above
 /// [`BATCH_BUDGET_BYTES`], leaving the caller on the streaming path.
-fn build_batched_level(lv: &PairLevelTable) -> Option<BatchedLevel> {
-    let npoints: usize = lv.blocks.iter().map(|b| b.points.len()).sum();
-    let nslots: usize = lv.block_sel.iter().map(Vec::len).sum();
-    // An upper bound on the instance count: one per slot. Cheap and safe.
-    let bytes = npoints * (3 * 8 + 4) + nslots * (3 * 4 + 8 + 4) + nslots * (8 + 3 * 8 + 4 + 4);
-    if bytes > BATCH_BUDGET_BYTES || npoints == 0 || nslots == 0 {
+fn batch_counts(lv: &PairLevelTable, range: std::ops::Range<usize>) -> (usize, usize, usize) {
+    let mut npoints = 0;
+    let mut nslots = 0;
+    let mut ninst = 0;
+    for bi in range {
+        npoints += lv.blocks[bi].points.len();
+        nslots += lv.block_sel[bi].len();
+        let mut last = u32::MAX;
+        for &k in &lv.block_sel[bi] {
+            let inst = lv.kslot_instance[k as usize];
+            if inst != last {
+                ninst += 1;
+                last = inst;
+            }
+        }
+    }
+    (npoints, nslots, ninst)
+}
+
+fn batch_bytes(npoints: usize, nslots: usize, ninst: usize, nblocks: usize) -> usize {
+    // Geometry, both varying arrays, both outputs, and the two host scatter maps.
+    npoints * (3 * 8 + 4 + 8 + 4)
+        + nslots * (3 * 4 + 8 + 8 + 4)
+        + ninst * (4 + 8 + 3 * 8 + 4)
+        + (nblocks + 1) * 2 * 4
+}
+
+/// The most slots any one instance owns in any block's reach list — the
+/// quantity [`MAX_SLOTS_PER_INSTANCE`] bounds.
+///
+/// An instance's slots are the distinct `(k1,k2,k3)` monomials of its pair,
+/// so this is `C(l_p+l_q+3, 3)` for the level's widest pair: 10 at
+/// `l_p+l_q = 2`, but 20 at 3 and 35 at 4.
+fn max_instance_span(lv: &PairLevelTable) -> usize {
+    let mut max = 0usize;
+    for sel in &lv.block_sel {
+        let mut run = 0usize;
+        let mut last = u32::MAX;
+        for &k in sel {
+            let inst = lv.kslot_instance[k as usize];
+            if inst == last {
+                run += 1;
+            } else {
+                last = inst;
+                run = 1;
+            }
+            max = max.max(run);
+        }
+    }
+    max
+}
+
+fn build_batched_levels(lv: &PairLevelTable) -> Vec<BatchedLevel> {
+    // M-08: the batched kernels hold one instance's slot accumulators in a
+    // fixed `MAX_SLOTS_PER_INSTANCE`-wide register array. A level whose
+    // widest pair reaches `l_p + l_q >= 3` — every polarized basis has
+    // p·d pairs — exceeds it, and streams instead. Checked here rather than
+    // left to `validate_batch`, which would turn the whole density
+    // evaluation into an error at launch time.
+    if max_instance_span(lv) > MAX_SLOTS_PER_INSTANCE {
+        return Vec::new();
+    }
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    while start < lv.blocks.len() {
+        let mut end = start;
+        while end < lv.blocks.len() {
+            let (np, ns, ni) = batch_counts(lv, start..end + 1);
+            if batch_bytes(np, ns, ni, end + 1 - start) > BATCH_BUDGET_BYTES {
+                break;
+            }
+            end += 1;
+        }
+        if end == start {
+            // The sole allowed streaming fallback: one block cannot fit.
+            return Vec::new();
+        }
+        ranges.push(start..end);
+        start = end;
+    }
+    ranges
+        .into_iter()
+        .filter_map(|range| build_batched_range(lv, range))
+        .collect()
+}
+
+fn build_batched_range(lv: &PairLevelTable, range: std::ops::Range<usize>) -> Option<BatchedLevel> {
+    let (npoints, nslots, _) = batch_counts(lv, range.clone());
+    if npoints == 0 || nslots == 0 {
         return None;
     }
 
     let mut b = PairSlotBatch {
-        coords: Vec::with_capacity(npoints * 3),
+        coords_x: Vec::with_capacity(npoints),
+        coords_y: Vec::with_capacity(npoints),
+        coords_z: Vec::with_capacity(npoints),
         point_block: Vec::with_capacity(npoints),
-        block_point0: Vec::with_capacity(lv.blocks.len() + 1),
-        block_inst0: Vec::with_capacity(lv.blocks.len() + 1),
+        block_point0: Vec::with_capacity(range.len() + 1),
+        block_inst0: Vec::with_capacity(range.len() + 1),
         inst_block: Vec::new(),
         instance_alpha: Vec::new(),
         instance_center: Vec::new(),
         // Filled below: one START per instance, then the final end, which is
         // exactly the `ninst + 1` prefix shape the kernel indexes.
         inst_slot0: Vec::new(),
-        slot_pow: Vec::with_capacity(nslots * 3),
+        slot_pow: Vec::with_capacity(nslots),
         // Geometry only: the coefficients are per call.
         slot_coef: Vec::new(),
     };
@@ -796,11 +900,15 @@ fn build_batched_level(lv: &PairLevelTable) -> Option<BatchedLevel> {
 
     b.block_point0.push(0);
     b.block_inst0.push(0);
-    for (bi, (block, sel)) in lv.blocks.iter().zip(&lv.block_sel).enumerate() {
+    for (local_bi, global_bi) in range.enumerate() {
+        let block = &lv.blocks[global_bi];
+        let sel = &lv.block_sel[global_bi];
         for &g in &block.points {
             let g = g as usize;
-            b.coords.extend_from_slice(&lv.coords[g * 3..g * 3 + 3]);
-            b.point_block.push(bi as u32);
+            b.coords_x.push(lv.coords[g * 3]);
+            b.coords_y.push(lv.coords[g * 3 + 1]);
+            b.coords_z.push(lv.coords[g * 3 + 2]);
+            b.point_block.push(local_bi as u32);
             point_global.push(g as u32);
         }
         // Same instance grouping `block_table` performs: a new instance opens
@@ -815,12 +923,15 @@ fn build_batched_level(lv: &PairLevelTable) -> Option<BatchedLevel> {
                 b.instance_alpha.push(lv.instance_alpha[i]);
                 b.instance_center
                     .extend_from_slice(&lv.instance_center[i * 3..i * 3 + 3]);
-                b.inst_block.push(bi as u32);
+                b.inst_block.push(local_bi as u32);
                 // This instance's slots start at the running slot count.
                 b.inst_slot0.push(slot_global.len() as u32);
             }
-            b.slot_pow
-                .extend_from_slice(&lv.kslot_pow[k * 3..k * 3 + 3]);
+            let ix = lv.kslot_pow[k * 3];
+            let iy = lv.kslot_pow[k * 3 + 1];
+            let iz = lv.kslot_pow[k * 3 + 2];
+            debug_assert!(ix < 256 && iy < 256 && iz < 256);
+            b.slot_pow.push(ix | (iy << 8) | (iz << 16));
             slot_global.push(k as u32);
         }
         b.block_point0.push(b.point_block.len() as u32);
@@ -830,13 +941,34 @@ fn build_batched_level(lv: &PairLevelTable) -> Option<BatchedLevel> {
     b.inst_slot0.push(slot_global.len() as u32);
     debug_assert_eq!(b.inst_slot0.len(), b.instance_alpha.len() + 1);
     debug_assert_eq!(b.inst_slot0[0], 0);
+    debug_assert!(
+        b.inst_slot0
+            .windows(2)
+            .all(|w| (w[1] - w[0]) as usize <= MAX_SLOTS_PER_INSTANCE),
+        "M-08 reverse register bound exceeded"
+    );
     b.slot_coef = vec![0.0; slot_global.len()];
 
     Some(BatchedLevel {
         batch: b,
         point_global,
         slot_global,
+        device: std::sync::OnceLock::new(),
     })
+}
+
+fn resident_batch<'a>(
+    bl: &'a BatchedLevel,
+    client: &pyscf_algebra::AlgebraClient,
+) -> Result<&'a PairSlotBatchDevice, PbcDftError> {
+    if let Some(device) = bl.device.get() {
+        return Ok(device);
+    }
+    let candidate = PairSlotBatchDevice::new(client, &bl.batch).map_err(wrap_alg)?;
+    // `get_or_init` rather than `set` + a second `get`: a concurrent caller
+    // that won the race keeps its upload and both callers see it, so there is
+    // no "initialization failed" state to invent an error for.
+    Ok(bl.device.get_or_init(move || candidate))
 }
 
 /// Every non-empty level's [`PairLevelTable`], built ONCE per density
@@ -979,28 +1111,6 @@ fn block_table(lv: &PairLevelTable, block: &GridBlock, sel: &[u32], coef: &[f64]
     table
 }
 
-/// Shallow-copy a batch's GEOMETRY, leaving `slot_coef` for the caller.
-///
-/// M-03. The geometry is cached on the [`PairLevelTable`] and the coefficients
-/// change per call, so each call assembles a `PairSlotBatch` from the two.
-/// The clone is of the index and coordinate tables only; it is the price of
-/// the kernel API taking one owned struct, and it is a fraction of the launch
-/// overhead it removes.
-fn clone_batch_geometry(b: &PairSlotBatch) -> PairSlotBatch {
-    PairSlotBatch {
-        coords: b.coords.clone(),
-        point_block: b.point_block.clone(),
-        block_point0: b.block_point0.clone(),
-        block_inst0: b.block_inst0.clone(),
-        inst_block: b.inst_block.clone(),
-        instance_alpha: b.instance_alpha.clone(),
-        instance_center: b.instance_center.clone(),
-        inst_slot0: b.inst_slot0.clone(),
-        slot_pow: b.slot_pow.clone(),
-        slot_coef: Vec::new(),
-    }
-}
-
 /// `grid_collocate_drv`'s forward direction at one level —
 /// `rho(r) = Σ_k C_{term(k)} · kslot_k(r)`, `C_t` the density-contracted
 /// fused-term coefficient (see [`PairLevelTable`]).
@@ -1064,19 +1174,15 @@ pub fn pairlevel_rho_with(
     // M-03: ONE launch for the whole level when the concatenated tables fit.
     // Bit-identical to the per-block route below — each lane runs the same
     // slot list in the same order, and every output is written by one lane.
-    if let Some(bl) = lv.batch.as_ref().filter(|_| use_batch) {
-        let mut batch = PairSlotBatch {
-            slot_coef: bl
-                .slot_global
-                .iter()
-                .map(|&k| kcoef[k as usize])
-                .collect(),
-            ..clone_batch_geometry(&bl.batch)
-        };
-        let out = collocate_pairs_rho_batched(&client, &batch).map_err(wrap_alg)?;
-        batch.slot_coef.clear();
-        for (p, v) in out.into_iter().enumerate() {
-            rho[bl.point_global[p] as usize] = v;
+    if use_batch && !lv.batches.is_empty() {
+        for bl in &lv.batches {
+            let slot_coef: Vec<f64> = bl.slot_global.iter().map(|&k| kcoef[k as usize]).collect();
+            let out = resident_batch(bl, &client)?
+                .rho(&client, &slot_coef)
+                .map_err(wrap_alg)?;
+            for (p, v) in out.into_iter().enumerate() {
+                rho[bl.point_global[p] as usize] = v;
+            }
         }
         return Ok(rho);
     }
@@ -1091,6 +1197,56 @@ pub fn pairlevel_rho_with(
         let out = collocate_pairs_rho(&client, &table).map_err(wrap_alg)?;
         for (pi, v) in out.into_iter().enumerate() {
             rho[block.points[pi] as usize] = v;
+        }
+    }
+    Ok(rho)
+}
+
+/// Two-spin forward sweep. Batched tables traverse geometry once; the
+/// streaming fallback retains the two proven single-channel paths.
+pub fn pairlevel_rho2(
+    lv: &PairLevelTable,
+    decon: &Decontracted,
+    dm_p: [&[f64]; 2],
+) -> Result<[Vec<f64>; 2], PbcDftError> {
+    if lv.batches.is_empty() {
+        // The two channels share no state, so the fallback costs one channel's
+        // wall time rather than two — the batched route's own advantage.
+        let (a, b) = rayon::join(
+            || pairlevel_rho_with(lv, decon, dm_p[0], false),
+            || pairlevel_rho_with(lv, decon, dm_p[1], false),
+        );
+        return Ok([a?, b?]);
+    }
+    let mut term_coef = [vec![0.0f64; lv.nterms], vec![0.0f64; lv.nterms]];
+    for s in 0..lv.nslots() {
+        let idx = lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize;
+        let t = lv.slot_term[s] as usize;
+        term_coef[0][t] += dm_p[0][idx] * lv.slot_coef[s];
+        term_coef[1][t] += dm_p[1][idx] * lv.slot_coef[s];
+    }
+    let kcoef = term_coef.map(|tc| {
+        lv.kslot_term
+            .iter()
+            .map(|&t| tc[t as usize])
+            .collect::<Vec<_>>()
+    });
+    let client = backend_client()?;
+    let mut rho = [vec![0.0; lv.ngrids], vec![0.0; lv.ngrids]];
+    for bl in &lv.batches {
+        let coef = kcoef.each_ref().map(|kc| {
+            bl.slot_global
+                .iter()
+                .map(|&k| kc[k as usize])
+                .collect::<Vec<_>>()
+        });
+        let out = resident_batch(bl, &client)?
+            .rho2(&client, [&coef[0], &coef[1]])
+            .map_err(wrap_alg)?;
+        for spin in 0..2 {
+            for (p, &v) in out[spin].iter().enumerate() {
+                rho[spin][bl.point_global[p] as usize] = v;
+            }
         }
     }
     Ok(rho)
@@ -1146,19 +1302,20 @@ pub fn pairlevel_pass2_with(
     // order the per-block loop accumulated in (D-PBC-17's fixed-order
     // property, preserved).
     let mut batched = false;
-    if let Some(bl) = lv.batch.as_ref().filter(|_| use_batch) {
-        let batch = PairSlotBatch {
-            slot_coef: vec![1.0; bl.slot_global.len()],
-            ..clone_batch_geometry(&bl.batch)
-        };
-        let w: Vec<f64> = bl
-            .point_global
-            .iter()
-            .map(|&g| weight[g as usize])
-            .collect();
-        let out = collocate_pairs_integrate_batched(&client, &batch, &w).map_err(wrap_alg)?;
-        for (s, v) in out.into_iter().enumerate() {
-            kint[bl.slot_global[s] as usize] += v;
+    if use_batch && !lv.batches.is_empty() {
+        for bl in &lv.batches {
+            let slot_coef = vec![1.0; bl.slot_global.len()];
+            let w: Vec<f64> = bl
+                .point_global
+                .iter()
+                .map(|&g| weight[g as usize])
+                .collect();
+            let out = resident_batch(bl, &client)?
+                .integrate(&client, &slot_coef, &w)
+                .map_err(wrap_alg)?;
+            for (s, v) in out.into_iter().enumerate() {
+                kint[bl.slot_global[s] as usize] += v;
+            }
         }
         batched = true;
     }
@@ -1185,6 +1342,58 @@ pub fn pairlevel_pass2_with(
     for s in 0..lv.nslots() {
         let idx = lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize;
         v_p[idx] += lv.slot_coef[s] * integrals[lv.slot_term[s] as usize];
+    }
+    Ok(())
+}
+
+/// Two-spin reverse sweep sharing each resident geometry traversal.
+pub fn pairlevel_pass2_2(
+    lv: &PairLevelTable,
+    decon: &Decontracted,
+    weight: [&[f64]; 2],
+    v_p: [&mut [f64]; 2],
+) -> Result<(), PbcDftError> {
+    let [vpa, vpb] = v_p;
+    if lv.batches.is_empty() {
+        // `vpa` and `vpb` are disjoint, so the two channels run concurrently
+        // for the same reason `pairlevel_rho2`'s fallback does.
+        let (a, b) = rayon::join(
+            || pairlevel_pass2_with(lv, decon, weight[0], vpa, false),
+            || pairlevel_pass2_with(lv, decon, weight[1], vpb, false),
+        );
+        a?;
+        b?;
+        return Ok(());
+    }
+    let client = backend_client()?;
+    let mut kint = [vec![0.0f64; lv.nkslots()], vec![0.0f64; lv.nkslots()]];
+    for bl in &lv.batches {
+        let ones = vec![1.0; bl.slot_global.len()];
+        let w = weight.map(|src| {
+            bl.point_global
+                .iter()
+                .map(|&g| src[g as usize])
+                .collect::<Vec<_>>()
+        });
+        let out = resident_batch(bl, &client)?
+            .integrate2(&client, [&ones, &ones], [&w[0], &w[1]])
+            .map_err(wrap_alg)?;
+        for spin in 0..2 {
+            for (s, &v) in out[spin].iter().enumerate() {
+                kint[spin][bl.slot_global[s] as usize] += v;
+            }
+        }
+    }
+    let mut integrals = [vec![0.0f64; lv.nterms], vec![0.0f64; lv.nterms]];
+    for spin in 0..2 {
+        for k in 0..lv.nkslots() {
+            integrals[spin][lv.kslot_term[k] as usize] += kint[spin][k];
+        }
+        for s in 0..lv.nslots() {
+            let idx = lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize;
+            let target = if spin == 0 { &mut *vpa } else { &mut *vpb };
+            target[idx] += lv.slot_coef[s] * integrals[spin][lv.slot_term[s] as usize];
+        }
     }
     Ok(())
 }
@@ -1267,8 +1476,10 @@ impl MultiGridNumInt2 {
             && let Some((k, v)) = g.as_ref()
             && *k == key
         {
+            let _span = tracing::info_span!("pbc_mg_build_tasks_hit").entered();
             return Ok(std::sync::Arc::clone(v));
         }
+        let _span = tracing::info_span!("pbc_mg_build_tasks_miss").entered();
         let decon = tasks::build_pshells(cell)?;
         let task_list = build_pair_task_list(cell, &decon)?;
         let tables = build_pair_level_tables(cell, &decon, &task_list)?;
@@ -1403,28 +1614,162 @@ impl MultiGridNumInt2 {
         let prep = self.build_tasks(cell)?;
         let (decon, tables) = (&prep.0, &prep.1);
 
-        let mut rho_g = Vec::with_capacity(2);
-        for d in dm {
-            let dm_p = crate::multigrid::colloc::expand_dm(decon, d);
-            rho_g.push(rho_g_from_pair_levels(cell, decon, tables, &dm_p)?);
-        }
+        let dm_p = dm.map(|d| crate::multigrid::colloc::expand_dm(decon, d));
+        let rho_g = rho_g_from_pair_levels2(cell, decon, tables, [&dm_p[0], &dm_p[1]])?;
 
         let parts = mg_xc_parts(cell, xc_code, &rho_g)?;
-        let mut veff = Vec::with_capacity(2);
-        for w in &parts.wv_freq0 {
-            let v_p = pass2_from_full_vg_pair(cell, decon, tables, w)?;
-            veff.push(crate::multigrid::colloc::contract_v(decon, &v_p));
-        }
-        let vb = veff.pop().expect("two channels");
-        let va = veff.pop().expect("two channels");
+        let v_p = pass2_from_full_vg_pair2(
+            cell,
+            decon,
+            tables,
+            [&parts.wv_freq0[0], &parts.wv_freq0[1]],
+        )?;
+        let veff = v_p.map(|v| crate::multigrid::colloc::contract_v(decon, &v));
 
         Ok(Mg2NrUksResult {
             nelec: (parts.nelec[0], parts.nelec[1]),
             exc: parts.exc,
             ecoul: parts.ecoul,
-            veff: [va, vb],
+            veff,
         })
     }
+}
+
+/// The per-level tracing span both directions of both spin counts open.
+fn batch_geometry_bytes(batch: &PairSlotBatch) -> u64 {
+    let f64_bytes = batch
+        .coords_x
+        .len()
+        .saturating_add(batch.coords_y.len())
+        .saturating_add(batch.coords_z.len())
+        .saturating_add(batch.instance_alpha.len())
+        .saturating_add(batch.instance_center.len())
+        .saturating_mul(core::mem::size_of::<f64>());
+    let u32_bytes = batch
+        .point_block
+        .len()
+        .saturating_add(batch.block_point0.len())
+        .saturating_add(batch.block_inst0.len())
+        .saturating_add(batch.inst_block.len())
+        .saturating_add(batch.inst_slot0.len())
+        .saturating_add(batch.slot_pow.len())
+        .saturating_mul(core::mem::size_of::<u32>());
+    f64_bytes.saturating_add(u32_bytes) as u64
+}
+
+/// RULE T transfer model for the resident M-06 path. `before` is the former
+/// per-call upload of invariant geometry plus a zero output, varying inputs,
+/// and the read-back; `after` retains only varying inputs and read-backs.
+fn pair_level_transfer_bytes(
+    direction: &'static str,
+    channels: usize,
+    lv: &PairLevelTable,
+) -> (u64, u64) {
+    lv.batches
+        .iter()
+        .fold((0_u64, 0_u64), |(before, after), bl| {
+            let batch = &bl.batch;
+            let geometry = batch_geometry_bytes(batch);
+            let coef = batch.nslots().saturating_mul(8).saturating_mul(channels) as u64;
+            let (varying, output) = if direction == "forward" {
+                (
+                    coef,
+                    batch.npoints().saturating_mul(8).saturating_mul(channels) as u64,
+                )
+            } else {
+                (
+                    coef.saturating_add(
+                        batch.npoints().saturating_mul(8).saturating_mul(channels) as u64
+                    ),
+                    batch.nslots().saturating_mul(8).saturating_mul(channels) as u64,
+                )
+            };
+            let after_chunk = varying.saturating_add(output); // one read-back
+            let before_chunk = geometry
+                .saturating_add(varying)
+                .saturating_add(output) // zero upload
+                .saturating_add(output); // read-back
+            (
+                before.saturating_add(before_chunk),
+                after.saturating_add(after_chunk),
+            )
+        })
+}
+
+fn pair_level_span(
+    direction: &'static str,
+    level: usize,
+    channels: usize,
+    lv: &PairLevelTable,
+) -> EnteredSpan {
+    let launches = pairlevel_launch_count(lv) as u64;
+    let (transfer_bytes_before, transfer_bytes_after) =
+        pair_level_transfer_bytes(direction, channels, lv);
+    match direction {
+        "forward" => tracing::info_span!(
+            "pbc_mg_forward_level",
+            level = level as u64,
+            launches,
+            transfer_bytes_before,
+            transfer_bytes_after,
+            mesh = ?lv.mesh,
+        ),
+        _ => tracing::info_span!(
+            "pbc_mg_reverse_level",
+            level = level as u64,
+            launches,
+            transfer_bytes_before,
+            transfer_bytes_after,
+            mesh = ?lv.mesh,
+        ),
+    }
+    .entered()
+}
+
+/// Transform one level's real-space `rho` to G-space, apply the level's grid
+/// weight, and fold the result into the full-mesh `rho(G)`.
+fn insert_level_rho_g(
+    rho_r: Vec<f64>,
+    lv: &PairLevelTable,
+    level: usize,
+    vol: f64,
+    mesh: [usize; 3],
+    rho_g: &mut CTensor,
+) -> Result<(), PbcDftError> {
+    let rr = CTensor::from_planes(rho_r, vec![0.0; lv.ngrids]);
+    let mut freq = {
+        let _fft_span =
+            tracing::info_span!("pbc_mg_fft", level = level as u64, direction = "forward")
+                .entered();
+        pyscf_pbc_tools::fft(&rr, lv.mesh).map_err(crate::multigrid::numint::wrap_tools)?
+    };
+    let weight = vol / lv.ngrids as f64;
+    for x in freq.re.iter_mut().chain(freq.im.iter_mut()) {
+        *x *= weight;
+    }
+    insert_gspace_window(rho_g, mesh, &freq, lv.mesh);
+    Ok(())
+}
+
+/// This level's window of a full-mesh G-space field, back in real space.
+fn level_v_r(
+    vg_full: &CTensor,
+    mesh: [usize; 3],
+    lv: &PairLevelTable,
+    level: usize,
+) -> Result<CTensor, PbcDftError> {
+    let sub = extract_gspace_window(vg_full, mesh, lv.mesh);
+    let _fft_span =
+        tracing::info_span!("pbc_mg_fft", level = level as u64, direction = "reverse").entered();
+    pyscf_pbc_tools::ifft(&sub, lv.mesh).map_err(crate::multigrid::numint::wrap_tools)
+}
+
+/// Every non-empty level, paired with its index.
+fn each_level(tables: &[Option<PairLevelTable>]) -> impl Iterator<Item = (usize, &PairLevelTable)> {
+    tables
+        .iter()
+        .enumerate()
+        .filter_map(|(i, lv)| lv.as_ref().map(|v| (i, v)))
 }
 
 /// Combine every level's real-space pair-fused `rho` into `rho(G)` on
@@ -1439,17 +1784,31 @@ fn rho_g_from_pair_levels(
     let ngrids_full = mesh[0] * mesh[1] * mesh[2];
     let mut rho_g = CTensor::zeros(ngrids_full);
     let vol = cell.vol();
-    for lv in tables.iter().flatten() {
+    for (level, lv) in each_level(tables) {
+        let _level_span = pair_level_span("forward", level, 1, lv);
         let rho_r = pairlevel_rho(lv, decon, dm_p)?;
-        let ngrids_level = lv.ngrids;
-        let weight = vol / ngrids_level as f64;
-        let rr = CTensor::from_planes(rho_r, vec![0.0; ngrids_level]);
-        let mut freq =
-            pyscf_pbc_tools::fft(&rr, lv.mesh).map_err(crate::multigrid::numint::wrap_tools)?;
-        for x in freq.re.iter_mut().chain(freq.im.iter_mut()) {
-            *x *= weight;
+        insert_level_rho_g(rho_r, lv, level, vol, mesh, &mut rho_g)?;
+    }
+    Ok(rho_g)
+}
+
+fn rho_g_from_pair_levels2(
+    cell: &Cell,
+    decon: &Decontracted,
+    tables: &[Option<PairLevelTable>],
+    dm_p: [&[f64]; 2],
+) -> Result<[CTensor; 2], PbcDftError> {
+    let mesh = cell.mesh;
+    let ngrids: usize = mesh.iter().product();
+    let mut rho_g = [CTensor::zeros(ngrids), CTensor::zeros(ngrids)];
+    let vol = cell.vol();
+    for (level, lv) in each_level(tables) {
+        let _level_span = pair_level_span("forward", level, 2, lv);
+        let mut rho_r = pairlevel_rho2(lv, decon, dm_p)?;
+        for spin in 0..2 {
+            let r = core::mem::take(&mut rho_r[spin]);
+            insert_level_rho_g(r, lv, level, vol, mesh, &mut rho_g[spin])?;
         }
-        insert_gspace_window(&mut rho_g, mesh, &freq, lv.mesh);
     }
     Ok(rho_g)
 }
@@ -1465,11 +1824,33 @@ fn pass2_from_full_vg_pair(
 ) -> Result<Vec<f64>, PbcDftError> {
     let mesh = cell.mesh;
     let mut v_p = vec![0.0f64; decon.nao_p * decon.nao_p];
-    for lv in tables.iter().flatten() {
-        let sub = extract_gspace_window(vg_full, mesh, lv.mesh);
-        let v_r =
-            pyscf_pbc_tools::ifft(&sub, lv.mesh).map_err(crate::multigrid::numint::wrap_tools)?;
+    for (level, lv) in each_level(tables) {
+        let _level_span = pair_level_span("reverse", level, 1, lv);
+        let v_r = level_v_r(vg_full, mesh, lv, level)?;
         pairlevel_pass2(lv, decon, &v_r.re, &mut v_p)?;
+    }
+    Ok(v_p)
+}
+
+fn pass2_from_full_vg_pair2(
+    cell: &Cell,
+    decon: &Decontracted,
+    tables: &[Option<PairLevelTable>],
+    vg_full: [&CTensor; 2],
+) -> Result<[Vec<f64>; 2], PbcDftError> {
+    let mesh = cell.mesh;
+    let mut v_p = [
+        vec![0.0f64; decon.nao_p * decon.nao_p],
+        vec![0.0f64; decon.nao_p * decon.nao_p],
+    ];
+    for (level, lv) in each_level(tables) {
+        let _level_span = pair_level_span("reverse", level, 2, lv);
+        let vr = [
+            level_v_r(vg_full[0], mesh, lv, level)?,
+            level_v_r(vg_full[1], mesh, lv, level)?,
+        ];
+        let [va, vb] = &mut v_p;
+        pairlevel_pass2_2(lv, decon, [&vr[0].re, &vr[1].re], [va, vb])?;
     }
     Ok(v_p)
 }

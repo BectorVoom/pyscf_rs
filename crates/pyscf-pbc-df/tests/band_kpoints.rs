@@ -43,7 +43,8 @@ fn model_dm(nao: usize, nkpts: usize) -> KMats {
             let mut m = CTensor::zeros(nao * nao);
             for p in 0..nao {
                 for q in 0..nao {
-                    let v = 0.3 / (1.0 + (p as f64 - q as f64).abs()) + if p == q { 1.0 } else { 0.0 };
+                    let v =
+                        0.3 / (1.0 + (p as f64 - q as f64).abs()) + if p == q { 1.0 } else { 0.0 };
                     m.re[p * nao + q] = v * (1.0 + 0.1 * k as f64);
                 }
             }
@@ -191,7 +192,9 @@ fn gdf_get_jk_at_band_kpoints_matches_upstream() {
         omega: None,
         ..Default::default()
     };
-    let res = df.get_jk(&dms, &k, opts).expect("GDF::get_jk at band k-points");
+    let res = df
+        .get_jk(&dms, &k, opts)
+        .expect("GDF::get_jk at band k-points");
     let vj = res.vj.expect("vj requested");
     let vk = res.vk.expect("vk requested");
 
@@ -247,7 +250,9 @@ fn mdf_get_jk_at_band_kpoints_matches_upstream() {
         omega: None,
         ..Default::default()
     };
-    let res = df.get_jk(&dms, &k, opts).expect("MDF::get_jk at band k-points");
+    let res = df
+        .get_jk(&dms, &k, opts)
+        .expect("MDF::get_jk at band k-points");
     let vj = res.vj.expect("vj requested");
     let vk = res.vk.expect("vk requested");
 

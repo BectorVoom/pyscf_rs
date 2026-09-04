@@ -36,7 +36,7 @@ use pyscf_pbc_scf::types::{KDms, KInitGuess, KMats, KScfConfig, KScfResult};
 
 use crate::error::PbcDftError;
 use crate::gen_grid::PeriodicGrids;
-use crate::numint::KNumInt;
+use crate::numint::KsNumInt;
 use crate::veff::{get_jk, sub_scaled, trace_dm_v};
 use crate::xc::{err, is_hybrid_xc};
 
@@ -66,7 +66,7 @@ pub struct Krks {
     /// The integration grid. Upstream's default is the uniform FFT box.
     pub grids: PeriodicGrids,
     /// The numerical-integration driver.
-    pub ni: KNumInt,
+    pub ni: KsNumInt,
     /// Smearing, when enabled.
     pub smearing: Option<pyscf_pbc_scf::smearing::Smearing>,
     tags: std::cell::Cell<Option<KsEnergyTags>>,
@@ -91,7 +91,7 @@ impl Krks {
     /// Propagates the grid construction.
     pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
         let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
-        let ni = KNumInt::new(with_df.kpts());
+        let ni = KsNumInt::grid(with_df.kpts());
         Ok(Self {
             with_df,
             xc: xc.to_string(),
@@ -169,47 +169,50 @@ impl Krks {
         // krks.py:71-72 — the XC half.
         let nr = self
             .ni
-            .nr_rks(cell, &self.grids, &self.xc, dms, 1, kpts_band)?;
+            .nr_rks(cell, &self.grids, &self.xc, dms, 1, self.kpts(), kpts_band)?;
         let mut vxc = nr.vmat;
-        let mut exc = nr.excsum[0];
+        let mut exc = nr.exc;
 
-        // krks.py:89 — J (and K for a hybrid).
-        let jk = get_jk(
-            self.with_df.as_ref(),
-            &self.xc,
-            dms,
-            1,
-            self.kpts(),
-            kpts_band,
-            self.exxdiv,
-            true,
-        )?;
-        let vj = jk
-            .vj
-            .ok_or_else(|| err("KRKS: the density-fitting object returned no vj"))?;
-        crate::veff::add_assign(&mut vxc, &vj);
-        // krks.py:96 — ecoul = einsum('Kij,Kji', dm, vj) * .5 * weight
-        let ecoul = if ground_state {
-            0.5 * weight * trace_dm_v(dms, &vj, nao).0
+        let ecoul = if let Some(ecoul) = nr.ecoul {
+            ecoul
         } else {
-            0.0
-        };
+            // krks.py:89 — J (and K for a hybrid).
+            let jk = get_jk(
+                self.with_df.as_ref(),
+                &self.xc,
+                dms,
+                1,
+                self.kpts(),
+                kpts_band,
+                self.exxdiv,
+                true,
+            )?;
+            let vj = jk
+                .vj
+                .ok_or_else(|| err("KRKS: the density-fitting object returned no vj"))?;
+            crate::veff::add_assign(&mut vxc, &vj);
+            let ecoul = if ground_state {
+                0.5 * weight * trace_dm_v(dms, &vj, nao).0
+            } else {
+                0.0
+            };
 
-        if let Some(vk) = jk.vk.as_ref() {
-            // krks.py:98 — vxc -= .5 * vk
-            sub_scaled(&mut vxc, 0.5, vk);
-            if ground_state {
-                // krks.py:100 — exc -= einsum('Kij,Kji', dm, vk).real * .25 * weight
-                exc -= 0.25 * weight * trace_dm_v(dms, vk, nao).0;
+            if let Some(vk) = jk.vk.as_ref() {
+                // krks.py:98 — vxc -= .5 * vk
+                sub_scaled(&mut vxc, 0.5, vk);
+                if ground_state {
+                    exc -= 0.25 * weight * trace_dm_v(dms, vk, nao).0;
+                }
             }
-        }
+            ecoul
+        };
 
         Ok((
             vxc,
             KsEnergyTags {
                 ecoul,
                 exc,
-                nelec: nr.nelec[0],
+                nelec: nr.nelec,
             },
         ))
     }
@@ -225,8 +228,7 @@ impl Krks {
         dms: &KDms,
     ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
-        let mut fock =
-            pyscf_pbc_df::get_hcore(self.with_df.as_ref(), kpts_band).map_err(df_err)?;
+        let mut fock = pyscf_pbc_df::get_hcore(self.with_df.as_ref(), kpts_band).map_err(df_err)?;
         let (veff, _) = self
             .get_veff_tagged(dms, Some(kpts_band))
             .map_err(unwrap_err)?;
@@ -246,6 +248,7 @@ impl Krks {
 pub(crate) fn unwrap_err(e: PbcDftError) -> PyscfRsError {
     match e {
         PbcDftError::Core(c) => c,
+        other => PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(other.to_string())),
     }
 }
 
@@ -290,18 +293,11 @@ impl KOverrideHooks for Krks {
         Ok(v)
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         eig_channel(&fock[0], s1e, self.cell().mol.nao_nr)
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         if let Some(sm) = self.smearing.as_ref() {
             let (occ, fermi, entropy) = sm.occupations(mo_energy, self.nelectron() as f64, 2.0)?;
             self.entropy.set(Some(entropy));
@@ -311,20 +307,11 @@ impl KOverrideHooks for Krks {
         Ok((occ, vec![fermi]))
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         Ok(vec![make_rdm1(mo_coeff, mo_occ, self.cell().mol.nao_nr)])
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         // krks.py:115-128 — e1 + ecoul + exc, with the components taken from
         // the `get_veff` that produced `vhf`.
         let tags = match self.tags.get() {

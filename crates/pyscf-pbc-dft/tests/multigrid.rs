@@ -203,8 +203,9 @@ fn reference_get_j(cell: &Cell, dm: &[f64]) -> Vec<f64> {
     let nao = cell.mol.nao_nr;
     let dm_c = pyscf_algebra::CTensor::from_planes(dm.to_vec(), vec![0.0; nao * nao]);
     let df = pyscf_pbc_df::Fftdf::new(cell.clone(), &[[0.0, 0.0, 0.0]]).expect("Fftdf");
-    let vj = pyscf_pbc_df::fft_jk::get_j_kpts(&df, &[vec![dm_c]], 1, &[[0.0, 0.0, 0.0]], None, None)
-        .expect("get_j_kpts");
+    let vj =
+        pyscf_pbc_df::fft_jk::get_j_kpts(&df, &[vec![dm_c]], 1, &[[0.0, 0.0, 0.0]], None, None)
+            .expect("get_j_kpts");
     vj[0][0].re.clone()
 }
 
@@ -252,9 +253,7 @@ fn gate_e_nr_rks_lda_vs_reference() {
 
         let dnelec = (out.nelec - refout.nelec[0]).abs();
         let dexc = (out.exc - refout.excsum[0]).abs();
-        println!(
-            "{name}: nr_rks(lda,vwn) |d nelec| = {dnelec:.3e}  |d exc| = {dexc:.3e}"
-        );
+        println!("{name}: nr_rks(lda,vwn) |d nelec| = {dnelec:.3e}  |d exc| = {dexc:.3e}");
         // 7-decimal upstream tolerance for exc/vxc (test_multigrid.py:139-217).
         assert!(dnelec < 1e-6, "{name}: nelec diff {dnelec:.3e}");
         assert!(dexc < 1e-6, "{name}: exc diff {dexc:.3e}");
@@ -291,11 +290,6 @@ fn gate_e_speed_ratio_reported() {
         );
     }
 }
-
-
-
-
-
 
 // ---------------------------------------------------------------------------
 // D-PBC-17 — thread-count bit-identity

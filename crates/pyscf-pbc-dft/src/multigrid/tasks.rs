@@ -33,7 +33,7 @@
 //! loud" convention (D-PBC-21/23/27 precedent).
 
 use pyscf_core::raw_layout::{ANG_OF, ATOM_OF, BAS_SLOTS, NCTR_OF, NPRIM_OF, PTR_COEFF, PTR_EXP};
-use pyscf_kernels::{cart2sph_l_matrix, cart_powers, common_fac_sp};
+use pyscf_kernels::{cart_powers, cart2sph_l_matrix, common_fac_sp};
 use pyscf_pbc_gto::Cell;
 use pyscf_pbc_gto::cutoff::{estimate_ke_cutoff_pgto, omega};
 

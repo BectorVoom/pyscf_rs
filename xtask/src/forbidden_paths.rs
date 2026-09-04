@@ -26,7 +26,9 @@ pub const FORBIDDEN_IMPORT_NEEDLES: &[&str] = &[
 /// Returns true if the given path belongs to a periodic (`pyscf-pbc-*`) crate.
 pub fn is_pbc_exempt_path(path: &Path) -> bool {
     let s = path.to_string_lossy();
-    s.contains("crates/pyscf-pbc-") || s.contains("crates\\pyscf-pbc-") || s.starts_with("pyscf-pbc-")
+    s.contains("crates/pyscf-pbc-")
+        || s.contains("crates\\pyscf-pbc-")
+        || s.starts_with("pyscf-pbc-")
 }
 
 /// Check content of a single file against forbidden needles.

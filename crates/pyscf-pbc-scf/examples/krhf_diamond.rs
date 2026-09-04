@@ -16,29 +16,55 @@ use pyscf_pbc_scf::{KScfConfig, Krhf};
 use std::time::Instant;
 
 fn diamond() -> Cell {
-    let h = 3.37032; let q = 1.68516;
+    let h = 3.37032;
+    let q = 1.68516;
     Cell::build(CellBuildArgs {
         mole: MoleBuildArgs {
-            atom: AtomInput::Tuples(vec![("C".into(), [0.0,0.0,0.0]), ("C".into(), [q,q,q])]),
-            basis: BasisInput::Name("gth-szv".into()), unit: Unit::Bohr, ..Default::default() },
-        a: ALattice::Matrix([[0.0,h,h],[h,0.0,h],[h,h,0.0]]),
-        pseudo: Some("gth-pade".into()), ..Default::default()
-    }).unwrap()
+            atom: AtomInput::Tuples(vec![("C".into(), [0.0, 0.0, 0.0]), ("C".into(), [q, q, q])]),
+            basis: BasisInput::Name("gth-szv".into()),
+            unit: Unit::Bohr,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]),
+        pseudo: Some("gth-pade".into()),
+        ..Default::default()
+    })
+    .unwrap()
 }
 
 fn main() {
-    let m: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(11);
-    let nk: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(2);
+    let m: usize = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(11);
+    let nk: usize = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
     let cell = diamond();
-    let kpts = make_kpts_default(&cell, [nk,nk,nk]).unwrap();
-    let df = Fftdf::with_mesh(cell.clone(), &kpts, [m,m,m]).unwrap();
+    let kpts = make_kpts_default(&cell, [nk, nk, nk]).unwrap();
+    let df = Fftdf::with_mesh(cell.clone(), &kpts, [m, m, m]).unwrap();
     let mf = Krhf::from_df(Box::new(df));
-    let cfg = KScfConfig { conv_tol: 1e-12, conv_tol_grad: Some(1e-8), max_cycle: 60, verbose: false, ..KScfConfig::default() };
+    let cfg = KScfConfig {
+        conv_tol: 1e-12,
+        conv_tol_grad: Some(1e-8),
+        max_cycle: 60,
+        verbose: false,
+        ..KScfConfig::default()
+    };
     let t = Instant::now();
     let r = mf.kernel(&cfg).unwrap();
-    println!("mesh {m} nk {nk}: e_tot {:.15} e_nuc {:.15} e_elec {:.15} e_coul {:.15} conv {} cycles {} time {:?}",
-             r.e_tot, r.e_nuc, r.e_elec, r.e_coul, r.converged, r.cycles, t.elapsed());
+    println!(
+        "mesh {m} nk {nk}: e_tot {:.15} e_nuc {:.15} e_elec {:.15} e_coul {:.15} conv {} cycles {} time {:?}",
+        r.e_tot,
+        r.e_nuc,
+        r.e_elec,
+        r.e_coul,
+        r.converged,
+        r.cycles,
+        t.elapsed()
+    );
     let mut all: Vec<f64> = r.mo_energy.iter().flatten().copied().collect();
-    all.sort_by(|a,b| a.partial_cmp(b).unwrap());
+    all.sort_by(|a, b| a.partial_cmp(b).unwrap());
     println!("lowest mo energies: {:?}", &all[..8.min(all.len())]);
 }

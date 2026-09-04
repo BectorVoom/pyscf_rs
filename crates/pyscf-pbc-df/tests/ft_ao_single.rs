@@ -58,7 +58,10 @@ fn g0_is_the_plain_integral() {
                 );
             }
         } else {
-            assert!(re[off].abs() > 1e-6, "an s shell must have nonzero integral");
+            assert!(
+                re[off].abs() > 1e-6,
+                "an s shell must have nonzero integral"
+            );
         }
         off += n;
     }

@@ -21,7 +21,7 @@
 
 mod common;
 
-use common::{cell_args, diamond, he_all_electron, oracle_python, run_python, GATE};
+use common::{GATE, cell_args, diamond, he_all_electron, oracle_python, run_python};
 use pyscf_algebra::CTensor;
 use pyscf_pbc_df::Fftdf;
 use pyscf_pbc_gto::{Cell, make_kpts_default, super_cell};
@@ -93,7 +93,10 @@ fn krhf_diamond_222_converges_to_a_valid_state() {
     // Every occupied level is at or below the Fermi level, and the occupations
     // sum to the electron count.
     let occ_sum: f64 = r.mo_occ.iter().flatten().sum();
-    assert!((occ_sum - want).abs() < 1e-9, "occupations sum to {occ_sum}");
+    assert!(
+        (occ_sum - want).abs() < 1e-9,
+        "occupations sum to {occ_sum}"
+    );
 }
 
 /// **The supercell-equivalence identity.** `KRHF(cell, [2,1,1])` per primitive
@@ -178,12 +181,16 @@ fn kuhf_and_kghf_reproduce_krhf_on_a_closed_shell_cell() {
     let cell = diamond();
     let kpts = make_kpts_default(&cell, [2, 1, 1]).expect("k-mesh");
 
-    let r = Krhf::from_df(Box::new(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df")))
-        .kernel(&tight())
-        .expect("KRHF");
-    let u = Kuhf::from_df(Box::new(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df")))
-        .kernel(&tight())
-        .expect("KUHF");
+    let r = Krhf::from_df(Box::new(
+        Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df"),
+    ))
+    .kernel(&tight())
+    .expect("KRHF");
+    let u = Kuhf::from_df(Box::new(
+        Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df"),
+    ))
+    .kernel(&tight())
+    .expect("KUHF");
     let g = Kghf::from_df(Box::new(Fftdf::with_mesh(cell, &kpts, MESH).expect("df")))
         .kernel(&tight())
         .expect("KGHF");
@@ -217,16 +224,21 @@ fn kuhf_and_kghf_reproduce_krhf_on_a_closed_shell_cell() {
 fn krohf_reproduces_krhf_on_a_closed_shell_cell() {
     let cell = diamond();
     let kpts = make_kpts_default(&cell, [2, 1, 1]).expect("k-mesh");
-    let r = Krhf::from_df(Box::new(Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df")))
-        .kernel(&tight())
-        .expect("KRHF");
-    let ro = pyscf_pbc_scf::Krohf::from_df(Box::new(
-        Fftdf::with_mesh(cell, &kpts, MESH).expect("df"),
+    let r = Krhf::from_df(Box::new(
+        Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("df"),
     ))
     .kernel(&tight())
-    .expect("KROHF");
+    .expect("KRHF");
+    let ro =
+        pyscf_pbc_scf::Krohf::from_df(Box::new(Fftdf::with_mesh(cell, &kpts, MESH).expect("df")))
+            .kernel(&tight())
+            .expect("KROHF");
     println!("KRHF {:.14}  KROHF {:.14}", r.e_tot, ro.e_tot);
-    assert!(ro.converged, "KROHF did not converge in {} cycles", ro.cycles);
+    assert!(
+        ro.converged,
+        "KROHF did not converge in {} cycles",
+        ro.cycles
+    );
     assert_eq!(ro.nset, 2, "KROHF carries two density channels");
     assert!(
         (r.e_tot - ro.e_tot).abs() < 1e-9,
@@ -279,12 +291,13 @@ fn fermi_smearing_conserves_electrons_and_lowers_the_free_energy() {
     let cell = diamond();
     let (mut mf, _) = krhf(cell, [2, 2, 2], MESH);
     mf.smearing = Some(Smearing::fermi(0.01));
-    let r = mf.kernel(&KScfConfig {
-        conv_tol: 1e-10,
-        conv_tol_grad: Some(1e-6),
-        ..tight()
-    })
-    .expect("smeared KRHF");
+    let r = mf
+        .kernel(&KScfConfig {
+            conv_tol: 1e-10,
+            conv_tol_grad: Some(1e-6),
+            ..tight()
+        })
+        .expect("smeared KRHF");
 
     let occ: f64 = r.mo_occ.iter().flatten().sum();
     let want = mf.nelectron() as f64;
@@ -294,7 +307,10 @@ fn fermi_smearing_conserves_electrons_and_lowers_the_free_energy() {
     );
     let e_free = r.e_free.expect("smearing must report a free energy");
     let e_zero = r.e_zero.expect("smearing must report e_zero");
-    println!("smeared: e_tot {:.12} e_free {:.12} e_zero {:.12}", r.e_tot, e_free, e_zero);
+    println!(
+        "smeared: e_tot {:.12} e_free {:.12} e_zero {:.12}",
+        r.e_tot, e_free, e_zero
+    );
     assert!(
         e_free <= r.e_tot + 1e-12,
         "e_free {e_free} must not exceed e_tot {}",
@@ -401,7 +417,10 @@ fn upstream_energy(
         "2.12.1",
         "the oracle must be the VENDORED PySCF 2.12.1 — see tests/common/mod.rs"
     );
-    assert!(v["converged"].as_bool().unwrap_or(false), "upstream did not converge");
+    assert!(
+        v["converged"].as_bool().unwrap_or(false),
+        "upstream did not converge"
+    );
     Some(v)
 }
 
@@ -414,8 +433,15 @@ fn assert_matches(got: &KScfResult, want: &serde_json::Value, tol: f64, label: &
         got.e_nuc
     );
     let d = got.e_tot - e_ref;
-    println!("{label}: rust {:.15}  upstream {:.15}  delta {:e}", got.e_tot, e_ref, d);
-    assert!(d.abs() < tol, "{label}: |delta| = {:e} exceeds {tol:e}", d.abs());
+    println!(
+        "{label}: rust {:.15}  upstream {:.15}  delta {:e}",
+        got.e_tot, e_ref, d
+    );
+    assert!(
+        d.abs() < tol,
+        "{label}: |delta| = {:e} exceeds {tol:e}",
+        d.abs()
+    );
 }
 
 /// **THE PHASE-11 GATE.** `KRHF(diamond, 2x2x2)` against upstream.
@@ -427,8 +453,7 @@ fn assert_matches(got: &KScfResult, want: &serde_json::Value, tol: f64, label: &
 #[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF; ~4 min"]
 fn krhf_diamond_222_matches_upstream() {
     let cell = diamond();
-    let Some(want) =
-        upstream_energy(&cell, "gth-szv", "gth-pade", [2, 2, 2], MESH_GATE, "KRHF")
+    let Some(want) = upstream_energy(&cell, "gth-szv", "gth-pade", [2, 2, 2], MESH_GATE, "KRHF")
     else {
         eprintln!("SKIP: {GATE} is not set");
         return;
@@ -489,8 +514,7 @@ fn kuhf_he_all_electron_matches_upstream() {
 fn krhf_diamond_222_matches_upstream_at_the_default_mesh() {
     let cell = diamond();
     let mesh = cell.try_mesh().expect("cell mesh");
-    let Some(want) = upstream_energy(&cell, "gth-szv", "gth-pade", [2, 2, 2], mesh, "KRHF")
-    else {
+    let Some(want) = upstream_energy(&cell, "gth-szv", "gth-pade", [2, 2, 2], mesh, "KRHF") else {
         eprintln!("SKIP: {GATE} is not set");
         return;
     };

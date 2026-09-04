@@ -52,9 +52,7 @@ fn fft_thread_child_emits_bits() {
         back_re_acc ^= back.re[i].to_bits().rotate_left((i % 61) as u32);
         back_im_acc ^= back.im[i].to_bits().rotate_left((i % 61) as u32);
     }
-    println!(
-        "FFT_THREAD_BITS {re_acc:016x} {im_acc:016x} {back_re_acc:016x} {back_im_acc:016x}"
-    );
+    println!("FFT_THREAD_BITS {re_acc:016x} {im_acc:016x} {back_re_acc:016x} {back_im_acc:016x}");
 }
 
 fn run_child(threads: &str) -> String {
@@ -80,7 +78,9 @@ fn run_child(threads: &str) -> String {
         .lines()
         .find(|l| l.starts_with("FFT_THREAD_BITS "))
         .unwrap_or_else(|| {
-            panic!("child with RAYON_NUM_THREADS={threads} printed no FFT_THREAD_BITS line:\n{stdout}")
+            panic!(
+                "child with RAYON_NUM_THREADS={threads} printed no FFT_THREAD_BITS line:\n{stdout}"
+            )
         })
         .to_owned()
 }

@@ -135,11 +135,7 @@ impl Fftdf {
     ///
     /// # Errors
     /// As [`Fftdf::new`].
-    pub fn with_mesh(
-        cell: Cell,
-        kpts: &[[f64; 3]],
-        mesh: [usize; 3],
-    ) -> Result<Self, PbcDfError> {
+    pub fn with_mesh(cell: Cell, kpts: &[[f64; 3]], mesh: [usize; 3]) -> Result<Self, PbcDfError> {
         let grids = UniformGrids::build(&cell, Some(mesh))?;
         let kpts = if kpts.is_empty() {
             vec![[0.0; 3]]
@@ -298,12 +294,7 @@ impl Fftdf {
     /// There is NO quadrature weight: `ifft` already carries `1/ngrids` and the
     /// `1/vol` of the inverse Fourier transform cancels the `vol/ngrids` of the
     /// quadrature (see the module docs of `get_nuc`).
-    fn contract_local_potential(
-        &self,
-        ao: &AoKpts,
-        vr: &[f64],
-        nkpts: usize,
-    ) -> Vec<CTensor> {
+    fn contract_local_potential(&self, ao: &AoKpts, vr: &[f64], nkpts: usize) -> Vec<CTensor> {
         let (nao, ngrids) = (ao.nao, ao.ngrids);
         let mut out = Vec::with_capacity(nkpts);
         for k in 0..nkpts {

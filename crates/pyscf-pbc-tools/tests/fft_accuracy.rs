@@ -99,7 +99,9 @@ fn direct_forward(re: &[f64], im: &[f64]) -> (Vec<f64>, Vec<f64>) {
 
 #[test]
 fn round_trip_1e14_over_mixed_radix_and_rader_lengths() {
-    let dims = [2usize, 3, 4, 5, 7, 8, 9, 11, 13, 16, 17, 21, 25, 27, 31, 32, 35, 47, 64];
+    let dims = [
+        2usize, 3, 4, 5, 7, 8, 9, 11, 13, 16, 17, 21, 25, 27, 31, 32, 35, 47, 64,
+    ];
     for &n in &dims {
         let (re, im) = lcg_pair(n, 0x1234_5678_9abc_def0u64.wrapping_mul(n as u64 + 1));
         let x = CTensor::from_planes(re.clone(), im.clone());
@@ -121,13 +123,21 @@ fn delta_is_all_ones_and_constant_is_ngrids_at_g0_for_mixed_radix_and_rader() {
         delta.re[0] = 1.0;
         let g = fft_stockham(&delta, [n, 1, 1], false).expect("fft delta");
         for i in 0..n {
-            assert!((g.re[i] - 1.0).abs() < 1e-12, "n={n} delta re[{i}]={}", g.re[i]);
+            assert!(
+                (g.re[i] - 1.0).abs() < 1e-12,
+                "n={n} delta re[{i}]={}",
+                g.re[i]
+            );
             assert!(g.im[i].abs() < 1e-12, "n={n} delta im[{i}]={}", g.im[i]);
         }
 
         let ones = CTensor::from_planes(vec![1.0; n], vec![0.0; n]);
         let g = fft_stockham(&ones, [n, 1, 1], false).expect("fft const");
-        assert!((g.re[0] - n as f64).abs() < 1e-10, "n={n} G=0 got {}", g.re[0]);
+        assert!(
+            (g.re[0] - n as f64).abs() < 1e-10,
+            "n={n} G=0 got {}",
+            g.re[0]
+        );
         assert!(g.im[0].abs() < 1e-10);
         for i in 1..n {
             assert!(g.re[i].abs() < 1e-10, "n={n} re[{i}]={}", g.re[i]);
@@ -176,8 +186,14 @@ fn new_plan_within_gate_precision_floor_against_kahan_reference() {
 
         let direct_err = max_abs_diff_planes(&dr, &di, &kr, &ki);
         let new_err = max_abs_diff_planes(&got.re, &got.im, &kr, &ki);
-        assert!(direct_err < FLOOR, "n={n}: Direct error {direct_err:e} >= floor {FLOOR:e}");
-        assert!(new_err < FLOOR, "n={n}: new plan error {new_err:e} >= floor {FLOOR:e}");
+        assert!(
+            direct_err < FLOOR,
+            "n={n}: Direct error {direct_err:e} >= floor {FLOOR:e}"
+        );
+        assert!(
+            new_err < FLOOR,
+            "n={n}: new plan error {new_err:e} >= floor {FLOOR:e}"
+        );
         println!("n={n}: direct_err={direct_err:e} new_plan_err={new_err:e}");
     }
 }
@@ -196,7 +212,10 @@ fn rader_matches_kahan_reference_on_gate_and_default_prime_meshes() {
         let x = CTensor::from_planes(re, im);
         let got = fft_stockham(&x, [n, 1, 1], false).expect("fft");
         let err = max_abs_diff_planes(&got.re, &got.im, &kr, &ki);
-        let scale = kr.iter().chain(ki.iter()).fold(1.0_f64, |m, v| m.max(v.abs()));
+        let scale = kr
+            .iter()
+            .chain(ki.iter())
+            .fold(1.0_f64, |m, v| m.max(v.abs()));
         assert!(
             err / scale < 1e-10,
             "n={n}: Rader relative error {:e} against Kahan reference",

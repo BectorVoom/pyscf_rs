@@ -77,9 +77,7 @@ pub fn break_dm_spin_symm(
         // einsum('ij,ji->', dma, s1e); `s1e` is symmetric so the transpose is
         // free, but the index order is kept literal.
         let terms: Vec<f64> = (0..nao)
-            .flat_map(|i| {
-                (0..nao).map(move |j| (i, j))
-            })
+            .flat_map(|i| (0..nao).map(move |j| (i, j)))
             .map(|(i, j)| dma[i * nao + j] * s1e.data[j * nao + i])
             .collect();
         let nelec_half = pyscf_algebra::oracle_sum(&terms);

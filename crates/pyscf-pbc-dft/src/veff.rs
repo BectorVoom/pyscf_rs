@@ -82,20 +82,31 @@ pub fn get_jk(
     let (vj, mut vk) = if omega == 0.0 {
         // krks.py:230-232
         let r = build(with_j, true, None)?;
-        (r.vj, r.vk.ok_or_else(|| err("periodic KS: no vk returned"))?)
+        (
+            r.vj,
+            r.vk.ok_or_else(|| err("periodic KS: no vk returned"))?,
+        )
     } else if alpha == 0.0 {
         // krks.py:233-236 — LR = 0, only short-range exchange.
         let k = build(false, true, Some(-omega))?
             .vk
             .ok_or_else(|| err("periodic KS: no vk returned"))?;
-        let j = if with_j { build(true, false, None)?.vj } else { None };
+        let j = if with_j {
+            build(true, false, None)?.vj
+        } else {
+            None
+        };
         (j, k)
     } else if hyb == 0.0 {
         // krks.py:237-240 — SR = 0, only long-range exchange.
         let k = build(false, true, Some(omega))?
             .vk
             .ok_or_else(|| err("periodic KS: no vk returned"))?;
-        let j = if with_j { build(true, false, None)?.vj } else { None };
+        let j = if with_j {
+            build(true, false, None)?.vj
+        } else {
+            None
+        };
         (j, k)
     } else {
         // krks.py:241-247 — both, with different ratios.
@@ -266,12 +277,7 @@ pub fn weighted_trace_dm_v(dms: &KDms, v: &[KMats], weights: &[f64], nao: usize)
 /// **Bit-exact against the two-clone form**: the partials are pushed in the
 /// same `(channel, k)` order, each is the same ordered [`trace_ab`] against
 /// numerically identical operands, and the same [`oracle_sum`] reduces them.
-pub fn weighted_trace_dm_v_shared(
-    dms: &KDms,
-    v: &KMats,
-    weights: &[f64],
-    nao: usize,
-) -> f64 {
+pub fn weighted_trace_dm_v_shared(dms: &KDms, v: &KMats, weights: &[f64], nao: usize) -> f64 {
     let n: usize = dms.iter().map(Vec::len).sum();
     let mut parts = Vec::with_capacity(n);
     for set in dms.iter() {

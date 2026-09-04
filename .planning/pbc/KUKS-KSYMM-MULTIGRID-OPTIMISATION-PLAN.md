@@ -20,6 +20,12 @@ Two items were closed by MEASUREMENT rather than by implementation — U-09
 step 1 (16 KiB, not worth a public-signature refactor) and D-PBC-26 point 1
 (not an identity; §2.2.3's derivation, now with a test). Every number below is
 evidence-tagged per RULE V.
+**Successor:** [`KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN-2.md`](./KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN-2.md)
+(2026-09-03) re-schedules the open items (S-03, S-04, M-01, M-04 step 3,
+S-02 step 4) under their original numbers, adds the AO-evaluation track
+(A-00…A-03) this plan recorded as out of scope, and the kernel-level
+multigrid items M-06…M-10. This file is not superseded; its rules and gates
+are inherited there.
 **Audience:** an execution agent that follows instructions literally and does
 NOT infer.
 

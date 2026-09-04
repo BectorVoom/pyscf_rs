@@ -303,9 +303,8 @@ pub fn make_minao_lo(
                 rhs.re[i] = s12k.re[i * nlo + j];
                 rhs.im[i] = s12k.im[i * nlo + j];
             }
-            let x = zsolve_linear(&sk, &rhs, nao).map_err(|e| {
-                err(format!("DFT+U: the MINAO projection solve failed: {e}"))
-            })?;
+            let x = zsolve_linear(&sk, &rhs, nao)
+                .map_err(|e| err(format!("DFT+U: the MINAO projection solve failed: {e}")))?;
             for i in 0..nao {
                 c.re[i * nlo + j] = x.re[i];
                 c.im[i * nlo + j] = x.im[i];
@@ -327,12 +326,7 @@ pub fn make_minao_lo(
 ///
 /// # Errors
 /// [`PbcDftError`] when the metric is singular.
-fn vec_lowdin(
-    c: &CTensor,
-    s: &CTensor,
-    nao: usize,
-    nlo: usize,
-) -> Result<CTensor, PbcDftError> {
+fn vec_lowdin(c: &CTensor, s: &CTensor, nao: usize, nlo: usize) -> Result<CTensor, PbcDftError> {
     // m = c^H s c
     let mut m = CTensor::zeros(nlo * nlo);
     // sc[i, j] = Σ_t s[i, t] c[t, j]
@@ -377,8 +371,7 @@ fn vec_lowdin(
     for (n, wn) in w.iter().enumerate() {
         if *wn <= 1e-14 {
             return Err(err(
-                "DFT+U: the local-orbital metric is singular; check `minao_ref`"
-                    .to_string(),
+                "DFT+U: the local-orbital metric is singular; check `minao_ref`".to_string(),
             ));
         }
         // `w ** -0.5`, matching upstream's `numpy.dot(v * (w**-.5), v.conj().T)`
@@ -684,10 +677,7 @@ impl Krkspu {
     ///
     /// # Errors
     /// Propagates the KS `get_veff` and the Hubbard build.
-    pub fn get_veff_tagged(
-        &self,
-        dms: &KDms,
-    ) -> Result<(KDms, KsEnergyTags, f64), PbcDftError> {
+    pub fn get_veff_tagged(&self, dms: &KDms) -> Result<(KDms, KsEnergyTags, f64), PbcDftError> {
         let (mut v, tags) = self.ks.get_veff_tagged(dms, None)?;
         let e_u = add_vhubbard(&mut v, self.ks.cell(), self.ks.kpts(), dms, &self.u)?;
         self.e_u.set(e_u);
@@ -698,14 +688,8 @@ impl Krkspu {
     ///
     /// # Errors
     /// Propagates the `get_veff`.
-    pub fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-    ) -> Result<f64, PyscfRsError> {
-        let (_, tags, e_u) = self
-            .get_veff_tagged(dms)
-            .map_err(crate::krks::unwrap_err)?;
+    pub fn energy_elec(&self, dms: &KDms, h1e: &KMats) -> Result<f64, PyscfRsError> {
+        let (_, tags, e_u) = self.get_veff_tagged(dms).map_err(crate::krks::unwrap_err)?;
         let nao = self.ks.cell().mol.nao_nr;
         let weight = 1.0 / h1e.len() as f64;
         let mut e1 = 0.0_f64;
@@ -745,10 +729,7 @@ impl Kukspu {
     ///
     /// # Errors
     /// Propagates the KS `get_veff` and the Hubbard build.
-    pub fn get_veff_tagged(
-        &self,
-        dms: &KDms,
-    ) -> Result<(KDms, KsEnergyTags, f64), PbcDftError> {
+    pub fn get_veff_tagged(&self, dms: &KDms) -> Result<(KDms, KsEnergyTags, f64), PbcDftError> {
         let (mut v, tags) = self.ks.get_veff_tagged(dms, None)?;
         let e_u = add_vhubbard(&mut v, self.ks.cell(), self.ks.kpts(), dms, &self.u)?;
         self.e_u.set(e_u);

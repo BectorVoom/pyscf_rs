@@ -41,7 +41,9 @@ impl Kghf {
     /// # Errors
     /// Propagates the `FFTDF` construction.
     pub fn new(cell: Cell, kpts: &[[f64; 3]]) -> Result<Self, PyscfRsError> {
-        Ok(Self::from_df(Box::new(Fftdf::new(cell, kpts).map_err(df_err)?)))
+        Ok(Self::from_df(Box::new(
+            Fftdf::new(cell, kpts).map_err(df_err)?,
+        )))
     }
 
     /// `KGHF` over an explicit density-fitting object.
@@ -139,10 +141,7 @@ impl KOverrideHooks for Kghf {
 
     fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.nao_scalar();
-        let s = to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
-            nao,
-        );
+        let s = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?, nao);
         Ok(s.iter().map(|m| block_diag(m, nao)).collect())
     }
 
@@ -157,10 +156,7 @@ impl KOverrideHooks for Kghf {
         // evenly between the two diagonal spin blocks.
         let nao = self.nao_scalar();
         let nkpts = self.kpts().len();
-        let scalar_s = to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
-            nao,
-        );
+        let scalar_s = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?, nao);
         let scalar = crate::init_guess::get_init_guess(
             self.cell(),
             nkpts,
@@ -252,11 +248,7 @@ impl KOverrideHooks for Kghf {
         Ok(vec![out])
     }
 
-    fn eig(
-        &self,
-        fock: &KDms,
-        s1e: &KMats,
-    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+    fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         let nso = self.nao();
         let mut es = Vec::with_capacity(fock[0].len());
         let mut cs = Vec::with_capacity(fock[0].len());
@@ -272,10 +264,7 @@ impl KOverrideHooks for Kghf {
         Ok((es, cs))
     }
 
-    fn get_occ(
-        &self,
-        mo_energy: &[Vec<f64>],
-    ) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
+    fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
         // kghf.py:105-120 — nocc = cell.nelectron * nkpts, occupancy 1.
         let nocc = self.cell().tot_electrons(self.kpts().len());
         let (fermi, _) = fermi_level(mo_energy, nocc)?;
@@ -290,20 +279,11 @@ impl KOverrideHooks for Kghf {
         Ok((occ, vec![fermi]))
     }
 
-    fn make_rdm1(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-    ) -> Result<KDms, PyscfRsError> {
+    fn make_rdm1(&self, mo_coeff: &[CTensor], mo_occ: &[Vec<f64>]) -> Result<KDms, PyscfRsError> {
         Ok(vec![make_rdm1(mo_coeff, mo_occ, self.nao())])
     }
 
-    fn energy_elec(
-        &self,
-        dms: &KDms,
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Result<(f64, f64), PyscfRsError> {
+    fn energy_elec(&self, dms: &KDms, h1e: &KMats, vhf: &KDms) -> Result<(f64, f64), PyscfRsError> {
         Ok(energy_elec(dms, h1e, vhf, self.nao()))
     }
 }

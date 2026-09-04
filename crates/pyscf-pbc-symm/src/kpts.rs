@@ -25,7 +25,7 @@
 //! values all depend on the order [`crate::geom::search_point_group_ops`]
 //! appends survivors in. Nothing in this module re-sorts an op list.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use num_complex::Complex64;
 use rayon::prelude::*;
@@ -133,8 +133,14 @@ fn equivalent_pairs_width3(k_opk: &[[f64; 3]], nkpts: usize) -> Vec<(usize, usiz
     for w in order.windows(2) {
         let (a, b) = (w[0], w[1]);
         if k_opk[a] == k_opk[b] {
-            debug_assert!(a < nkpts, "map_k_points_fast: maps[0] must index the original block");
-            debug_assert!(b >= nkpts, "map_k_points_fast: maps[1] must index the rotated block");
+            debug_assert!(
+                a < nkpts,
+                "map_k_points_fast: maps[0] must index the original block"
+            );
+            debug_assert!(
+                b >= nkpts,
+                "map_k_points_fast: maps[1] must index the rotated block"
+            );
             out.push((b - nkpts, a));
         }
     }
@@ -381,6 +387,10 @@ pub struct KPoints {
     pub(crate) inverse_table: OnceLock<Vec<i32>>,
     #[allow(clippy::type_complexity)]
     pub(crate) copgs: OnceLock<(Vec<PointGroup>, Vec<Vec<usize>>)>,
+    /// S-06: source-grid permutations, keyed by `(IBZ index, mesh)`.  Clones
+    /// share the lazily populated cache; entries are immutable once inserted.
+    grid_permutations:
+        Arc<OnceLock<Mutex<std::collections::HashMap<(usize, [usize; 3]), Arc<Vec<u32>>>>>>,
 }
 
 impl KPoints {
@@ -410,6 +420,7 @@ impl KPoints {
             addition_table: OnceLock::new(),
             inverse_table: OnceLock::new(),
             copgs: OnceLock::new(),
+            grid_permutations: Arc::new(OnceLock::new()),
         }
     }
 
@@ -568,6 +579,63 @@ pub struct K4Ibz {
 }
 
 impl KPoints {
+    fn density_grid_permutation(
+        &self,
+        ibz_k_idx: usize,
+        mesh: [usize; 3],
+    ) -> Result<Arc<Vec<u32>>, PbcSymmError> {
+        let cache = self
+            .grid_permutations
+            .get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+        if let Some(found) = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(ibz_k_idx, mesh))
+            .cloned()
+        {
+            return Ok(found);
+        }
+        let ngrids = mesh[0] * mesh[1] * mesh[2];
+        assert!(
+            u32::try_from(ngrids).is_ok(),
+            "symmetry grid exceeds u32 index range"
+        );
+        let ops = star_grid_ops(self, ibz_k_idx, mesh)?;
+        let mut permutation = Vec::with_capacity(ops.len() * ngrids);
+        for entry in &ops {
+            for g in 0..ngrids {
+                let src = match entry {
+                    None => g,
+                    Some((rot, ft)) => rotated_grid_index(rot, *ft, mesh, grid_xyz(g, mesh)),
+                };
+                permutation.push(src as u32);
+            }
+        }
+        let permutation = Arc::new(permutation);
+        cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert((ibz_k_idx, mesh), permutation.clone());
+        Ok(permutation)
+    }
+
+    /// Number of lazily materialized `(IBZ point, mesh)` grid permutations.
+    ///
+    /// This is intentionally a narrow diagnostic surface for profilers and
+    /// integration tests; density consumers never need to inspect the cached
+    /// index arrays themselves.
+    pub fn density_grid_cache_len(&self) -> usize {
+        self.grid_permutations
+            .get()
+            .map(|cache| {
+                cache
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .len()
+            })
+            .unwrap_or(0)
+    }
+
     // -----------------------------------------------------------------
     // index <-> tuple (kpts.py:1035-1046)
     // -----------------------------------------------------------------
@@ -643,9 +711,8 @@ impl KPoints {
                     rows.push([ki[0] + kj[0], ki[1] + kj[1], ki[2] + kj[2]]);
                 }
                 let folded = round_to_fbz(&rows, false, KPT_DIFF_TOL);
-                let lookup: std::collections::HashMap<[u64; 3], usize> = (0..nk)
-                    .map(|m| (bits3(&folded[m]), m))
-                    .collect();
+                let lookup: std::collections::HashMap<[u64; 3], usize> =
+                    (0..nk).map(|m| (bits3(&folded[m]), m)).collect();
                 for j in 0..nk {
                     let m = lookup.get(&bits3(&folded[nk + j])).copied();
                     table[i * nk + j] =
@@ -707,8 +774,9 @@ impl KPoints {
     /// list for `get_jk`. All `(k, k)` diagonal pairs, then every
     /// `(k_ibz, k_bz)` pair whose `k_bz` is not already the `k_ibz` itself.
     pub fn make_gdf_kptij_lst_jk(&self) -> Vec<([f64; 3], [f64; 3])> {
-        let mut kptij_lst: Vec<([f64; 3], [f64; 3])> =
-            (0..self.nkpts()).map(|i| (self.kpts[i], self.kpts[i])).collect();
+        let mut kptij_lst: Vec<([f64; 3], [f64; 3])> = (0..self.nkpts())
+            .map(|i| (self.kpts[i], self.kpts[i]))
+            .collect();
         for i in 0..self.nkpts_ibz() {
             let ki = self.kpts_ibz[i];
             let where_ = pyscf_pbc_lib::kpts_helper::member(&ki, &self.kpts);
@@ -766,8 +834,10 @@ impl KPoints {
                 }
             }
             // elements = np.sort([PGElement(self.ops[i].rot) for i in ops_ibz])
-            let mut elements: Vec<PgElement> =
-                ops_ibz.iter().map(|&i| pg_element(&self.ops()[i])).collect();
+            let mut elements: Vec<PgElement> = ops_ibz
+                .iter()
+                .map(|&i| pg_element(&self.ops()[i]))
+                .collect();
             elements.sort();
             // op_i = PGElement(self.ops[stars_ops_bz[ki]].rot)
             let op_i = pg_element(&self.ops()[self.stars_ops_bz[ki]]);
@@ -801,8 +871,7 @@ impl KPoints {
         let ki_ibz = self.bz2ibz[ki];
         let pg_ibz = &copgs[self.ibz2bz[ki_ibz]];
         let chi = pg_ibz.get_irrep_chi(ir);
-        let chi_ki: Vec<crate::group::Complex64> =
-            indices[ki].iter().map(|&m| chi[m]).collect();
+        let chi_ki: Vec<crate::group::Complex64> = indices[ki].iter().map(|&m| chi[m]).collect();
         Representation::from_chi(copgs[ki].clone(), chi_ki)
     }
 
@@ -824,7 +893,9 @@ impl KPoints {
     pub fn make_ktuples_ibz(&self, ntuple: usize) -> KtuplesIbz {
         let nkpts = self.nkpts();
         let nop = self.k2opk.first().map_or(0, |r| r.len());
-        let nktuple = nkpts.checked_pow(ntuple as u32).expect("nkpts^ntuple overflows usize");
+        let nktuple = nkpts
+            .checked_pow(ntuple as u32)
+            .expect("nkpts^ntuple overflows usize");
 
         // kt2opkt[t][iop] — the flat index of op(t), or NO_MAP.
         let mut kt2opkt = vec![vec![NO_MAP; nop]; nktuple];
@@ -863,7 +934,8 @@ impl KPoints {
             // np.unique(kt2opkt[k], return_index=True) — sorted unique values
             // with the index of each one's FIRST occurrence (numpy uses a
             // stable sort whenever return_index is set).
-            let mut seen: std::collections::BTreeMap<i64, usize> = std::collections::BTreeMap::new();
+            let mut seen: std::collections::BTreeMap<i64, usize> =
+                std::collections::BTreeMap::new();
             for (iop, &t) in kt2opkt[k].iter().enumerate() {
                 seen.entry(t).or_insert(iop);
             }
@@ -899,7 +971,14 @@ impl KPoints {
         }
         let weight_ibz = counts.iter().map(|&c| c as f64 / nktuple as f64).collect();
 
-        KtuplesIbz { ibz2bz, weight_ibz, bz2ibz, stars, stars_ops, stars_ops_bz }
+        KtuplesIbz {
+            ibz2bz,
+            weight_ibz,
+            bz2ibz,
+            stars,
+            stars_ops,
+            stars_ops_bz,
+        }
     }
 
     /// `kpts.py:205-217` — `make_k4_ibz`, `sym = "s1"` (physicist's
@@ -1010,9 +1089,7 @@ impl KQuartets {
             // klcd = kpts.k2opk[kq[:,None], op_group_small].T
             let klcd: Vec<[usize; 4]> = op_group_small
                 .iter()
-                .map(|&iop| {
-                    std::array::from_fn(|d| kpts.k2opk[kq[d]][iop] as usize)
-                })
+                .map(|&iop| std::array::from_fn(|d| kpts.k2opk[kq[d]][iop] as usize))
                 .collect();
             kqrts_stab.push(klcd);
             ops_stab.push(op_group_small);
@@ -1028,7 +1105,10 @@ impl KQuartets {
     /// calls it lazily; this port cannot, because it would need `&mut self`
     /// behind an iterator).
     pub fn loop_stabilizer(&self, index: usize) -> impl Iterator<Item = ([usize; 4], usize)> + '_ {
-        let k = self.kqrts_stab.as_ref().expect("call cache_stabilizer first");
+        let k = self
+            .kqrts_stab
+            .as_ref()
+            .expect("call cache_stabilizer first");
         let o = self.ops_stab.as_ref().expect("call cache_stabilizer first");
         k[index].iter().copied().zip(o[index].iter().copied())
     }
@@ -1462,7 +1542,12 @@ impl MORotationMatrix {
     /// If `nmo < nocc` (upstream's `assert`).
     pub fn new(nocc: usize, nmo: usize) -> Self {
         assert!(nmo >= nocc, "MORotationMatrix: nmo ({nmo}) < nocc ({nocc})");
-        Self { nocc, nmo, oo: None, vv: None }
+        Self {
+            nocc,
+            nmo,
+            oo: None,
+            vv: None,
+        }
     }
 
     /// `kpts.py:1142-1173` — `build`. `mo_coeff[k]` / `ovlp[k]` are
@@ -1481,10 +1566,14 @@ impl MORotationMatrix {
         let (nocc, nmo) = (self.nocc, self.nmo);
         let nvir = nmo - nocc;
         // orb_occ = [mo[:, :nocc] for mo in mo_coeff]; orb_vir = [mo[:, nocc:]]
-        let orb_occ: Vec<Vec<Complex64>> =
-            mo_coeff.iter().map(|m| column_slice(m, nao, nmo, 0, nocc)).collect();
-        let orb_vir: Vec<Vec<Complex64>> =
-            mo_coeff.iter().map(|m| column_slice(m, nao, nmo, nocc, nmo)).collect();
+        let orb_occ: Vec<Vec<Complex64>> = mo_coeff
+            .iter()
+            .map(|m| column_slice(m, nao, nmo, 0, nocc))
+            .collect();
+        let orb_vir: Vec<Vec<Complex64>> = mo_coeff
+            .iter()
+            .map(|m| column_slice(m, nao, nmo, nocc, nmo))
+            .collect();
 
         let nkpts = kpts.nkpts();
         let nop = kpts.nop();
@@ -1501,10 +1590,26 @@ impl MORotationMatrix {
             // `(nop, n, n)`. Passing `None` here would compute `nop x nop`
             // matrices and throw all but the diagonal away.
             let ops: Vec<Vec<usize>> = all_ops.iter().map(|&iop| vec![iop]).collect();
-            let rot_oo = kpts
-                .get_rotation_mat_for_mos(cell, &orb_occ, ovlp, nao, nocc, &k1, &k2, Some(&ops))?;
-            let rot_vv = kpts
-                .get_rotation_mat_for_mos(cell, &orb_vir, ovlp, nao, nvir, &k1, &k2, Some(&ops))?;
+            let rot_oo = kpts.get_rotation_mat_for_mos(
+                cell,
+                &orb_occ,
+                ovlp,
+                nao,
+                nocc,
+                &k1,
+                &k2,
+                Some(&ops),
+            )?;
+            let rot_vv = kpts.get_rotation_mat_for_mos(
+                cell,
+                &orb_vir,
+                ovlp,
+                nao,
+                nvir,
+                &k1,
+                &k2,
+                Some(&ops),
+            )?;
             oo.push(rot_oo.into_iter().map(|mut v| v.remove(0)).collect());
             vv.push(rot_vv.into_iter().map(|mut v| v.remove(0)).collect());
         }
@@ -1561,19 +1666,12 @@ fn column_slice(
 /// integer rotation `op` and integer translation offset `ft` — upstream's
 /// `symmetry.c:16-20`, with C's `((v % n) + n) % n` non-negative modulo.
 #[inline]
-fn rotated_grid_index(
-    op: &[[i32; 3]; 3],
-    ft: [i64; 3],
-    mesh: [usize; 3],
-    xyz: [i64; 3],
-) -> usize {
+fn rotated_grid_index(op: &[[i32; 3]; 3], ft: [i64; 3], mesh: [usize; 3], xyz: [i64; 3]) -> usize {
     let mut p = [0usize; 3];
     for (i, pi) in p.iter_mut().enumerate() {
         let n = mesh[i] as i64;
-        let v = op[i][0] as i64 * xyz[0]
-            + op[i][1] as i64 * xyz[1]
-            + op[i][2] as i64 * xyz[2]
-            + ft[i];
+        let v =
+            op[i][0] as i64 * xyz[0] + op[i][1] as i64 * xyz[1] + op[i][2] as i64 * xyz[2] + ft[i];
         *pi = (((v % n) + n) % n) as usize;
     }
     (p[0] * mesh[1] + p[1]) * mesh[2] + p[2]
@@ -1661,23 +1759,29 @@ impl KPoints {
         mesh: [usize; 3],
     ) -> Result<Vec<f64>, PbcSymmError> {
         let ngrids = mesh[0] * mesh[1] * mesh[2];
-        assert_eq!(rho_k.len(), ngrids, "symmetrize_density: rho_k does not match the mesh");
-        let grid_ops = star_grid_ops(self, ibz_k_idx, mesh)?;
-
-        Ok((0..ngrids)
-            .into_par_iter()
-            .map(|g| {
-                let xyz = grid_xyz(g, mesh);
-                let terms: Vec<f64> = grid_ops
-                    .iter()
-                    .map(|entry| match entry {
-                        None => rho_k[g],
-                        Some((rot, ft)) => rho_k[rotated_grid_index(rot, *ft, mesh, xyz)],
-                    })
-                    .collect();
-                pyscf_algebra::oracle_sum(&terms)
-            })
-            .collect())
+        assert_eq!(
+            rho_k.len(),
+            ngrids,
+            "symmetrize_density: rho_k does not match the mesh"
+        );
+        let permutation = self.density_grid_permutation(ibz_k_idx, mesh)?;
+        let nops = permutation.len() / ngrids;
+        const CHUNK: usize = 4096;
+        let mut out = vec![0.0; ngrids];
+        out.par_chunks_mut(CHUNK)
+            .enumerate()
+            .for_each(|(chunk, dst)| {
+                let mut terms = vec![0.0; nops];
+                let g0 = chunk * CHUNK;
+                for (local, value) in dst.iter_mut().enumerate() {
+                    let g = g0 + local;
+                    for op in 0..nops {
+                        terms[op] = rho_k[permutation[op * ngrids + g] as usize];
+                    }
+                    *value = pyscf_algebra::oracle_sum(&terms);
+                }
+            });
+        Ok(out)
     }
 
     /// [`KPoints::symmetrize_density`] for a COMPLEX density, in the planar
@@ -1700,24 +1804,86 @@ impl KPoints {
         let ngrids = mesh[0] * mesh[1] * mesh[2];
         assert_eq!(re.len(), ngrids);
         assert_eq!(im.len(), ngrids);
-        let grid_ops = star_grid_ops(self, ibz_k_idx, mesh)?;
+        let permutation = self.density_grid_permutation(ibz_k_idx, mesh)?;
+        let nops = permutation.len() / ngrids;
+        const CHUNK: usize = 4096;
+        let mut out_re = vec![0.0; ngrids];
+        let mut out_im = vec![0.0; ngrids];
+        out_re
+            .par_chunks_mut(CHUNK)
+            .zip(out_im.par_chunks_mut(CHUNK))
+            .enumerate()
+            .for_each(|(chunk, (dst_re, dst_im))| {
+                let mut tr = vec![0.0; nops];
+                let mut ti = vec![0.0; nops];
+                let g0 = chunk * CHUNK;
+                for local in 0..dst_re.len() {
+                    let g = g0 + local;
+                    for op in 0..nops {
+                        let src = permutation[op * ngrids + g] as usize;
+                        tr[op] = re[src];
+                        ti[op] = im[src];
+                    }
+                    dst_re[local] = pyscf_algebra::oracle_sum(&tr);
+                    dst_im[local] = pyscf_algebra::oracle_sum(&ti);
+                }
+            });
+        Ok((out_re, out_im))
+    }
 
-        Ok((0..ngrids)
-            .into_par_iter()
-            .map(|g| {
-                let xyz = grid_xyz(g, mesh);
-                let src: Vec<usize> = grid_ops
-                    .iter()
-                    .map(|entry| match entry {
-                        None => g,
-                        Some((rot, ft)) => rotated_grid_index(rot, *ft, mesh, xyz),
-                    })
-                    .collect();
-                let tr: Vec<f64> = src.iter().map(|&s| re[s]).collect();
-                let ti: Vec<f64> = src.iter().map(|&s| im[s]).collect();
-                (pyscf_algebra::oracle_sum(&tr), pyscf_algebra::oracle_sum(&ti))
-            })
-            .unzip())
+    /// Symmetrize the Cartesian vector part of an LDA/GGA density.
+    ///
+    /// Grid points use the same cached inverse-operation permutation as
+    /// [`Self::symmetrize_density`].  Vector values are then rotated by the
+    /// operation's `l = 1` Wigner-D matrix, whose rows and columns are in
+    /// `(x, y, z)` order.  Each output component keeps the star-operation
+    /// order and [`pyscf_algebra::oracle_sum`] reduction used by the scalar
+    /// path, making the result independent of the Rayon worker count.
+    ///
+    /// # Panics
+    /// If any component does not match the mesh.
+    pub fn symmetrize_density_vec(
+        &self,
+        rho: [&[f64]; 3],
+        ibz_k_idx: usize,
+        mesh: [usize; 3],
+    ) -> Result<[Vec<f64>; 3], PbcSymmError> {
+        let ngrids = mesh[0] * mesh[1] * mesh[2];
+        for component in rho {
+            assert_eq!(component.len(), ngrids);
+        }
+        let permutation = self.density_grid_permutation(ibz_k_idx, mesh)?;
+        let star = &self.stars_ops[ibz_k_idx];
+        debug_assert_eq!(permutation.len(), star.len() * ngrids);
+
+        const CHUNK: usize = 4096;
+        let mut out: [Vec<f64>; 3] = std::array::from_fn(|_| vec![0.0; ngrids]);
+        let (x, tail) = out.split_at_mut(1);
+        let (y, z) = tail.split_at_mut(1);
+        x[0].par_chunks_mut(CHUNK)
+            .zip(y[0].par_chunks_mut(CHUNK))
+            .zip(z[0].par_chunks_mut(CHUNK))
+            .enumerate()
+            .for_each(|(chunk, ((dst_x, dst_y), dst_z))| {
+                let mut terms: [Vec<f64>; 3] = std::array::from_fn(|_| vec![0.0; star.len()]);
+                let g0 = chunk * CHUNK;
+                for local in 0..dst_x.len() {
+                    let g = g0 + local;
+                    for (op_pos, &iop) in star.iter().enumerate() {
+                        let src = permutation[op_pos * ngrids + g] as usize;
+                        let d = &self.dmats()[iop][1];
+                        for row in 0..3 {
+                            terms[row][op_pos] = d[row][0] * rho[0][src]
+                                + d[row][1] * rho[1][src]
+                                + d[row][2] * rho[2][src];
+                        }
+                    }
+                    dst_x[local] = pyscf_algebra::oracle_sum(&terms[0]);
+                    dst_y[local] = pyscf_algebra::oracle_sum(&terms[1]);
+                    dst_z[local] = pyscf_algebra::oracle_sum(&terms[2]);
+                }
+            });
+        Ok(out)
     }
 
     /// `kpts.py:416-448` — `symmetrize_wavefunction`.

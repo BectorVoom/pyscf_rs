@@ -43,7 +43,10 @@ fn gamma_reproduces_the_phase_10_route() {
         "gamma: k-resolved route differs from Phase 10's by {worst:e}"
     );
     let max_im = got[0].im.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
-    assert!(max_im < 1e-14, "gamma block should be real, |Im| = {max_im:e}");
+    assert!(
+        max_im < 1e-14,
+        "gamma block should be real, |Im| = {max_im:e}"
+    );
 }
 
 /// Away from gamma the matrix must be HERMITIAN — the property the gamma test
@@ -95,8 +98,7 @@ fn obeys_time_reversal_symmetry() {
     let cell = common::diamond();
     let nao = cell.mol.nao_nr;
     let k = [0.11_f64, -0.07, 0.19];
-    let mats =
-        get_pp_loc_part2_kpts(&cell, &[k, [-k[0], -k[1], -k[2]]]).expect("k-resolved route");
+    let mats = get_pp_loc_part2_kpts(&cell, &[k, [-k[0], -k[1], -k[2]]]).expect("k-resolved route");
     let mut worst = 0.0_f64;
     for p in 0..nao * nao {
         worst = worst.max((mats[0].re[p] - mats[1].re[p]).abs());

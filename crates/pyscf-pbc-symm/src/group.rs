@@ -117,10 +117,7 @@ fn flatten_matrix(w: &RotMatrix) -> [i32; 9] {
 /// (row-major) rotation matrix entries, values in `{-1, 0, 1}`.
 pub fn decrypt_hash(h: i64, dimension: usize) -> Result<Vec<i32>, PbcSymmError> {
     let (id_eye, id_max) = match dimension {
-        3 => (
-            base3_id(&[2, 1, 1, 1, 2, 1, 1, 1, 2]),
-            base3_id(&[2; 9]),
-        ),
+        3 => (base3_id(&[2, 1, 1, 1, 2, 1, 1, 1, 2]), base3_id(&[2; 9])),
         2 => (base3_id(&[2, 1, 1, 2]), base3_id(&[2; 4])),
         _ => return Err(PbcSymmError::UnsupportedDimension(dimension)),
     };
@@ -515,7 +512,8 @@ impl<E: GroupElement> FiniteGroup<E> {
             }
             std::cmp::Ordering::Equal
         });
-        let mut chi_sorted: Vec<Vec<Complex64>> = order_idx.iter().map(|&i| chi[i].clone()).collect();
+        let mut chi_sorted: Vec<Vec<Complex64>> =
+            order_idx.iter().map(|&i| chi[i].clone()).collect();
         round_zero(&mut chi_sorted, 1e-9);
 
         if return_full {

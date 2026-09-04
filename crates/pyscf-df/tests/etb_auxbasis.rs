@@ -21,12 +21,22 @@ fn gth_szv_carbon() -> ParsedBasis {
             ShellSpec {
                 l: 0,
                 exponents: exps.clone(),
-                coeffs: vec![vec![0.1490797872, -0.0292640031, -0.688204051, -0.3964426906]],
+                coeffs: vec![vec![
+                    0.1490797872,
+                    -0.0292640031,
+                    -0.688204051,
+                    -0.3964426906,
+                ]],
             },
             ShellSpec {
                 l: 1,
                 exponents: exps,
-                coeffs: vec![vec![-0.0878123619, -0.27755603, -0.4712295093, -0.4058039291]],
+                coeffs: vec![vec![
+                    -0.0878123619,
+                    -0.27755603,
+                    -0.4712295093,
+                    -0.4058039291,
+                ]],
             },
         ],
     }
@@ -69,11 +79,7 @@ fn carbon_etb_expands_to_18_shells_descending() {
     assert_eq!(basis.shells.len(), 18);
     // 6*1 + 6*3 + 6*5 = 54 spherical AOs per carbon; the two-atom diamond cell
     // therefore has auxcell.nao = 108 (measured upstream).
-    let nao: usize = basis
-        .shells
-        .iter()
-        .map(|s| 2 * s.l as usize + 1)
-        .sum();
+    let nao: usize = basis.shells.iter().map(|s| 2 * s.l as usize + 1).sum();
     assert_eq!(nao, 54);
 
     // `gto.expand_etbs` emits DESCENDING exponents; the AO ordering of every
@@ -128,6 +134,14 @@ fn configuration_table_is_not_the_nrsrhf_one() {
     use pyscf_df::CONFIGURATION;
     assert_eq!(CONFIGURATION.len(), 119);
     assert_eq!(CONFIGURATION[6], [4, 2, 0, 0], "C");
-    assert_eq!(CONFIGURATION[21], [8, 12, 1, 0], "Sc — NRSRHF has [8, 13, 0, 0]");
-    assert_eq!(CONFIGURATION[24], [7, 12, 5, 0], "Cr — NRSRHF has [8, 12, 4, 0]");
+    assert_eq!(
+        CONFIGURATION[21],
+        [8, 12, 1, 0],
+        "Sc — NRSRHF has [8, 13, 0, 0]"
+    );
+    assert_eq!(
+        CONFIGURATION[24],
+        [7, 12, 5, 0],
+        "Cr — NRSRHF has [8, 12, 4, 0]"
+    );
 }

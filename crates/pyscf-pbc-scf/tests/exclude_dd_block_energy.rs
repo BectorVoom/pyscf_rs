@@ -39,8 +39,7 @@ fn cfg(cell: &pyscf_pbc_gto::Cell) -> KScfConfig {
 /// `(E(exclude_dd_block=true), E(exclude_dd_block=false))` on `_CCGDFBuilder`
 /// (`prefer_ccdf = true`, matching D-PBC-23's own `measurements/ddblock.py`).
 fn dd_block_energies(cell: pyscf_pbc_gto::Cell, kmesh: [usize; 3]) -> (f64, f64, bool, bool) {
-    let kpts = pyscf_pbc_gto::kpts_mesh::make_kpts(&cell, kmesh, false, true, None)
-        .expect("kpts");
+    let kpts = pyscf_pbc_gto::kpts_mesh::make_kpts(&cell, kmesh, false, true, None).expect("kpts");
 
     let mut d_true = Gdf::new(cell.clone(), &kpts);
     d_true.prefer_ccdf = true;

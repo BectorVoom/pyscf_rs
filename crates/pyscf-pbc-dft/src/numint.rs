@@ -121,6 +121,212 @@ pub struct NrKUksResult {
     pub vmat: [Vec<KMats>; 2],
 }
 
+/// Numerical-integration implementation selected by a periodic KS driver.
+/// The ordinary grid path remains the default; both multigrid implementations
+/// are explicit, gamma-only alternatives.
+#[derive(Debug)]
+pub enum KsNumInt {
+    Grid(KNumInt),
+    MultiGrid(crate::multigrid::MultiGridNumInt),
+    MultiGrid2(crate::multigrid::MultiGridNumInt2),
+}
+
+/// Spin-restricted result at the common KS numerical-integration seam.
+#[derive(Debug, Clone)]
+pub struct KsNrRksResult {
+    pub nelec: f64,
+    pub exc: f64,
+    pub vmat: KDms,
+    /// Present when multigrid fused Coulomb into `vmat`.
+    pub ecoul: Option<f64>,
+}
+
+/// Spin-unrestricted result at the common KS numerical-integration seam.
+#[derive(Debug, Clone)]
+pub struct KsNrUksResult {
+    pub nelec: (f64, f64),
+    pub exc: f64,
+    pub vmat: [KMats; 2],
+    /// Present when multigrid fused Coulomb into both spin potentials.
+    pub ecoul: Option<f64>,
+}
+
+impl KsNumInt {
+    pub fn grid(kpts: &[[f64; 3]]) -> Self {
+        Self::Grid(KNumInt::new(kpts))
+    }
+
+    pub fn multigrid() -> Self {
+        Self::MultiGrid(crate::multigrid::MultiGridNumInt::new())
+    }
+
+    pub fn multigrid2() -> Self {
+        Self::MultiGrid2(crate::multigrid::MultiGridNumInt2::new())
+    }
+
+    pub fn is_multigrid(&self) -> bool {
+        !matches!(self, Self::Grid(_))
+    }
+
+    pub fn reset(&self) {
+        match self {
+            Self::Grid(ni) => ni.reset(),
+            Self::MultiGrid(ni) => ni.reset(),
+            Self::MultiGrid2(ni) => ni.reset(),
+        }
+    }
+
+    fn require_multigrid_inputs(
+        grids: &PeriodicGrids,
+        xc_code: &str,
+        kpts: &[[f64; 3]],
+        kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<(), PbcDftError> {
+        if kpts.len() != 1 || kpts[0].iter().any(|&x| x != 0.0) {
+            return Err(PbcDftError::MultiGridRequiresGamma { nkpts: kpts.len() });
+        }
+        if kpts_band.is_some() {
+            return Err(PbcDftError::MultiGridBandUnsupported);
+        }
+        if !matches!(grids, PeriodicGrids::Uniform(_)) {
+            return Err(PbcDftError::MultiGridRequiresUniformGrid);
+        }
+        if crate::xc::is_hybrid_xc(xc_code)? {
+            return Err(PbcDftError::MultiGridHybridUnsupported(xc_code.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn nr_rks(
+        &self,
+        cell: &Cell,
+        grids: &PeriodicGrids,
+        xc_code: &str,
+        dms: &KDms,
+        hermi: i32,
+        kpts: &[[f64; 3]],
+        kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<KsNrRksResult, PbcDftError> {
+        match self {
+            Self::Grid(ni) => {
+                let out = ni.nr_rks(cell, grids, xc_code, dms, hermi, kpts_band)?;
+                Ok(KsNrRksResult {
+                    nelec: out.nelec[0],
+                    exc: out.excsum[0],
+                    vmat: out.vmat,
+                    ecoul: None,
+                })
+            }
+            Self::MultiGrid(ni) => {
+                Self::require_multigrid_inputs(grids, xc_code, kpts, kpts_band)?;
+                let out = ni.nr_rks(cell, xc_code, &dms[0][0].re)?;
+                Ok(Self::wrap_mg_rks(
+                    cell, out.nelec, out.exc, out.ecoul, out.veff,
+                ))
+            }
+            Self::MultiGrid2(ni) => {
+                Self::require_multigrid_inputs(grids, xc_code, kpts, kpts_band)?;
+                let out = ni.nr_rks(cell, xc_code, &dms[0][0].re)?;
+                Ok(Self::wrap_mg_rks(
+                    cell, out.nelec, out.exc, out.ecoul, out.veff,
+                ))
+            }
+        }
+    }
+
+    /// The multigrid `nr_rks` return, in `KsNrRksResult` shape — the gamma
+    /// point's single real `veff` promoted to the k-resolved `vmat` the KS
+    /// seam expects. Shared by the v1 and v2 arms, whose results differ only
+    /// in the type that carries them.
+    fn wrap_mg_rks(
+        cell: &Cell,
+        nelec: f64,
+        exc: f64,
+        ecoul: f64,
+        veff: Vec<f64>,
+    ) -> KsNrRksResult {
+        let n = cell.mol.nao_nr * cell.mol.nao_nr;
+        KsNrRksResult {
+            nelec,
+            exc,
+            vmat: vec![vec![CTensor::from_planes(veff, vec![0.0; n])]],
+            ecoul: Some(ecoul),
+        }
+    }
+
+    /// [`Self::wrap_mg_rks`]'s open-shell twin.
+    fn wrap_mg_uks(
+        cell: &Cell,
+        nelec: (f64, f64),
+        exc: f64,
+        ecoul: f64,
+        veff: [Vec<f64>; 2],
+    ) -> KsNrUksResult {
+        let n = cell.mol.nao_nr * cell.mol.nao_nr;
+        let [va, vb] = veff;
+        KsNrUksResult {
+            nelec,
+            exc,
+            vmat: [
+                vec![CTensor::from_planes(va, vec![0.0; n])],
+                vec![CTensor::from_planes(vb, vec![0.0; n])],
+            ],
+            ecoul: Some(ecoul),
+        }
+    }
+
+    pub fn nr_uks(
+        &self,
+        cell: &Cell,
+        grids: &PeriodicGrids,
+        xc_code: &str,
+        dms: &[KDms; 2],
+        hermi: i32,
+        kpts: &[[f64; 3]],
+        kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<KsNrUksResult, PbcDftError> {
+        match self {
+            Self::Grid(ni) => {
+                let mut out = ni.nr_uks(cell, grids, xc_code, dms, hermi, kpts_band)?;
+                Ok(KsNrUksResult {
+                    nelec: out.nelec[0],
+                    exc: out.excsum[0],
+                    vmat: [out.vmat[0].swap_remove(0), out.vmat[1].swap_remove(0)],
+                    ecoul: None,
+                })
+            }
+            Self::MultiGrid(ni) => {
+                Self::require_multigrid_inputs(grids, xc_code, kpts, kpts_band)?;
+                let out = ni.nr_uks(cell, xc_code, &[&dms[0][0][0].re, &dms[1][0][0].re])?;
+                Ok(Self::wrap_mg_uks(
+                    cell, out.nelec, out.exc, out.ecoul, out.veff,
+                ))
+            }
+            Self::MultiGrid2(ni) => {
+                Self::require_multigrid_inputs(grids, xc_code, kpts, kpts_band)?;
+                let out = ni.nr_uks(cell, xc_code, &[&dms[0][0][0].re, &dms[1][0][0].re])?;
+                Ok(Self::wrap_mg_uks(
+                    cell, out.nelec, out.exc, out.ecoul, out.veff,
+                ))
+            }
+        }
+    }
+
+    pub fn get_rho(
+        &self,
+        cell: &Cell,
+        dms: &KMats,
+        grids: &PeriodicGrids,
+    ) -> Result<Vec<f64>, PbcDftError> {
+        match self {
+            Self::Grid(ni) => ni.get_rho(cell, dms, grids),
+            Self::MultiGrid(_) | Self::MultiGrid2(_) => {
+                Err(err("get_rho is not exposed by the multigrid KS seam"))
+            }
+        }
+    }
+}
+
 /// The 0th-order density plus the XC kernel — `cache_xc_kernel`'s return.
 #[derive(Debug, Clone)]
 pub struct XcKernelCache {
@@ -134,7 +340,11 @@ pub struct XcKernelCache {
 
 /// Cache key for an AO table: the k-points, the derivative order, the grid
 /// size and a content hash of the coordinates.
-type AoKey = (Vec<[u64; 3]>, u32, usize, u64);
+type AoKey = (u8, Vec<[u64; 3]>, u32, usize, u64);
+
+fn symmetry_rho_enabled() -> bool {
+    std::env::var("PYSCF_PBC_KSYMM_RHO").is_ok_and(|v| v.eq_ignore_ascii_case("symmetrize"))
+}
 
 /// Which k-set [`KNumInt`] integrates over — plan 17-08 Task 1.
 ///
@@ -368,12 +578,7 @@ impl KNumInt {
     ///
     /// # Errors
     /// Propagates [`KPoints::transform_dm`] (17-05 Task 3, gated at 1e-12).
-    pub fn unfold_dms(
-        &self,
-        cell: &Cell,
-        dms: &KMats,
-        nao: usize,
-    ) -> Result<KMats, PbcDftError> {
+    pub fn unfold_dms(&self, cell: &Cell, dms: &KMats, nao: usize) -> Result<KMats, PbcDftError> {
         let Some(kpts) = self.ksymm() else {
             return Ok(dms.clone());
         };
@@ -433,7 +638,19 @@ impl KNumInt {
         kpts: &[[f64; 3]],
         ty: XcType,
     ) -> Result<Arc<EvalAoKptsOutput>, PbcDftError> {
+        self.eval_ao_route(cell, coords, kpts, ty, 0)
+    }
+
+    fn eval_ao_route(
+        &self,
+        cell: &Cell,
+        coords: &[[f64; 3]],
+        kpts: &[[f64; 3]],
+        ty: XcType,
+        route: u8,
+    ) -> Result<Arc<EvalAoKptsOutput>, PbcDftError> {
         let key: AoKey = (
+            route,
             kpts.iter()
                 .map(|k| [k[0].to_bits(), k[1].to_bits(), k[2].to_bits()])
                 .collect(),
@@ -585,6 +802,9 @@ impl KNumInt {
     ) -> Result<NrKResult, PbcDftError> {
         require_hermitian(hermi, "nr_rks")?;
         let ty = XcType::of(xc_code)?;
+        if symmetry_rho_enabled() && self.ksymm().is_some() {
+            return self.nr_rks_symmetrized(cell, grids, xc_code, dms, ty, kpts_band);
+        }
         // Group A (`numint.py:328-331`): a symmetric k-set unfolds the density
         // to the full BZ and then runs this path unchanged. No-op under
         // `KSet::Full`. See `KSet`'s doc / `17-08-FINDING-numint.md`.
@@ -607,8 +827,7 @@ impl KNumInt {
         // sequential fold with the ordered tree.
         let mut nelec_parts: Vec<Vec<f64>> = vec![Vec::new(); nset];
         let mut excsum_parts: Vec<Vec<f64>> = vec![Vec::new(); nset];
-        let mut vmat: Vec<KMats> =
-            vec![vec![CTensor::zeros(nao * nao); band.len()]; nset];
+        let mut vmat: Vec<KMats> = vec![vec![CTensor::zeros(nao * nao); band.len()]; nset];
 
         // U-10: ONE scratch for the whole grid-block loop instead of a fresh
         // `vec![0.0; ..]` inside `eval_rho_one` / `vxc_mat_one` per k-point per
@@ -677,12 +896,15 @@ impl KNumInt {
         kpts_band: Option<&[[f64; 3]]>,
     ) -> Result<NrKUksResult, PbcDftError> {
         require_hermitian(hermi, "nr_uks")?;
+        let ty = XcType::of(xc_code)?;
+        if symmetry_rho_enabled() && self.ksymm().is_some() {
+            return self.nr_uks_symmetrized(cell, grids, xc_code, dms, ty, kpts_band);
+        }
         // Group A (`numint.py:431-435`), per spin channel.
         let dms = &[
             self.unfold_kdms(cell, &dms[0], cell.mol.nao_nr)?,
             self.unfold_kdms(cell, &dms[1], cell.mol.nao_nr)?,
         ];
-        let ty = XcType::of(xc_code)?;
         let nset = dms[0].len();
         if dms[1].len() != nset {
             return Err(err("pbc nr_uks: alpha and beta carry different set counts"));
@@ -785,18 +1007,221 @@ impl KNumInt {
         })
     }
 
+    fn symmetrized_rhos(
+        &self,
+        cell: &Cell,
+        grids: &PeriodicGrids,
+        dms: &[&KMats],
+        ty: XcType,
+    ) -> Result<Vec<RhoEff>, PbcDftError> {
+        let mesh = match grids {
+            PeriodicGrids::Uniform(g) => g.mesh,
+            PeriodicGrids::Becke(_) => {
+                return Err(err(
+                    "PYSCF_PBC_KSYMM_RHO=symmetrize requires a uniform FFT grid",
+                ));
+            }
+        };
+        let kp = self.ksymm().expect("checked by caller");
+        let coords = grids.coords()?;
+        let ngrids = coords.len();
+        let nibz = kp.kpts_ibz.len();
+        let mut per_k: Vec<Vec<RhoEff>> = (0..dms.len())
+            .map(|_| (0..nibz).map(|_| RhoEff::zeros(ty, ngrids)).collect())
+            .collect();
+        let mut sc = Scratch::default();
+        let mut imag = 0.0_f64;
+        for (p0, p1) in self.block_ranges(ngrids, ty, nibz) {
+            let ao = self.eval_ao_route(cell, &coords[p0..p1], &kp.kpts_ibz, ty, 1)?;
+            for (set, matrices) in dms.iter().enumerate() {
+                for ik in 0..nibz {
+                    let bz = kp.ibz2bz[ik];
+                    let dm = if matrices.len() == nibz {
+                        &matrices[ik]
+                    } else {
+                        matrices.get(bz).ok_or_else(|| {
+                            err(format!(
+                                "symmetrized density: {} matrices do not cover IBZ point {ik}",
+                                matrices.len()
+                            ))
+                        })?
+                    };
+                    let (block, im) =
+                        eval_rho_one(ao.at(ik), dm, p1 - p0, cell.mol.nao_nr, ty, &mut sc)?;
+                    imag = imag.max(im);
+                    for v in 0..ty.nvar() {
+                        per_k[set][ik].row_mut(v)[p0..p1].copy_from_slice(block.row(v));
+                    }
+                }
+            }
+        }
+
+        let mut out: Vec<RhoEff> = dms.iter().map(|_| RhoEff::zeros(ty, ngrids)).collect();
+        for set in 0..dms.len() {
+            for ik in 0..nibz {
+                let scalar = kp
+                    .symmetrize_density(per_k[set][ik].row(0), ik, mesh)
+                    .map_err(|e| err(format!("symmetrize_density: {e}")))?;
+                for (dst, value) in out[set].row_mut(0).iter_mut().zip(scalar) {
+                    *dst += value;
+                }
+                if ty == XcType::Gga {
+                    let grad = kp
+                        .symmetrize_density_vec(
+                            [
+                                per_k[set][ik].row(1),
+                                per_k[set][ik].row(2),
+                                per_k[set][ik].row(3),
+                            ],
+                            ik,
+                            mesh,
+                        )
+                        .map_err(|e| err(format!("symmetrize_density_vec: {e}")))?;
+                    for v in 0..3 {
+                        for (dst, &value) in out[set].row_mut(v + 1).iter_mut().zip(&grad[v]) {
+                            *dst += value;
+                        }
+                    }
+                }
+            }
+            out[set].scale(1.0 / kp.nkpts() as f64);
+        }
+        self.last_imag.set(imag / kp.nkpts() as f64);
+        Ok(out)
+    }
+
+    fn nr_rks_symmetrized(
+        &self,
+        cell: &Cell,
+        grids: &PeriodicGrids,
+        xc_code: &str,
+        dms: &KDms,
+        ty: XcType,
+        kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<NrKResult, PbcDftError> {
+        let unfolded = self.unfold_kdms(cell, dms, cell.mol.nao_nr)?;
+        let refs: Vec<&KMats> = unfolded.iter().collect();
+        let rho = self.symmetrized_rhos(cell, grids, &refs, ty)?;
+        let coords = grids.coords()?;
+        let weights = grids.weights()?;
+        let nao = cell.mol.nao_nr;
+        let band = kpts_band.unwrap_or(self.kpts_ibz());
+        let mut nelec_parts = vec![Vec::new(); rho.len()];
+        let mut excsum_parts = vec![Vec::new(); rho.len()];
+        let mut vmat = vec![vec![CTensor::zeros(nao * nao); band.len()]; rho.len()];
+        let mut sc = Scratch::default();
+        for (p0, p1) in self.block_ranges(coords.len(), ty, band.len()) {
+            let w = &weights[p0..p1];
+            let ao = self.eval_ao_route(cell, &coords[p0..p1], band, ty, 1)?;
+            for set in 0..rho.len() {
+                let rb = rho[set].slice(p0, p1);
+                let xc = eval_xc_eff_rks(xc_code, &rb)?;
+                let den: Vec<f64> = rb.row(0).iter().zip(w).map(|(r, x)| r * x).collect();
+                nelec_parts[set].push(oracle_sum(&den));
+                let terms: Vec<f64> = den.iter().zip(&xc.exc).map(|(d, e)| d * e).collect();
+                excsum_parts[set].push(oracle_sum(&terms));
+                let wv = weighted(&xc, 0, w);
+                self.accumulate_vxc_into(&mut vmat[set], &ao, &wv, ty, &mut sc);
+            }
+        }
+        for set in &mut vmat {
+            for m in set {
+                add_conj_transpose(m, nao);
+            }
+        }
+        Ok(NrKResult {
+            nelec: nelec_parts.iter().map(|x| oracle_sum(x)).collect(),
+            excsum: excsum_parts.iter().map(|x| oracle_sum(x)).collect(),
+            vmat,
+        })
+    }
+
+    fn nr_uks_symmetrized(
+        &self,
+        cell: &Cell,
+        grids: &PeriodicGrids,
+        xc_code: &str,
+        dms: &[KDms; 2],
+        ty: XcType,
+        kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<NrKUksResult, PbcDftError> {
+        let unfolded = [
+            self.unfold_kdms(cell, &dms[0], cell.mol.nao_nr)?,
+            self.unfold_kdms(cell, &dms[1], cell.mol.nao_nr)?,
+        ];
+        let nset = unfolded[0].len();
+        if unfolded[1].len() != nset {
+            return Err(err("pbc nr_uks: alpha and beta carry different set counts"));
+        }
+        let mut refs = Vec::with_capacity(2 * nset);
+        refs.extend(unfolded[0].iter());
+        refs.extend(unfolded[1].iter());
+        let rho = self.symmetrized_rhos(cell, grids, &refs, ty)?;
+        let coords = grids.coords()?;
+        let weights = grids.weights()?;
+        let nao = cell.mol.nao_nr;
+        let band = kpts_band.unwrap_or(self.kpts_ibz());
+        let mut nelec_a = vec![Vec::new(); nset];
+        let mut nelec_b = vec![Vec::new(); nset];
+        let mut excsum = vec![Vec::new(); nset];
+        let mut vmat: [Vec<KMats>; 2] = [
+            vec![vec![CTensor::zeros(nao * nao); band.len()]; nset],
+            vec![vec![CTensor::zeros(nao * nao); band.len()]; nset],
+        ];
+        let mut sc = Scratch::default();
+        for (p0, p1) in self.block_ranges(coords.len(), ty, band.len()) {
+            let w = &weights[p0..p1];
+            let ao = self.eval_ao_route(cell, &coords[p0..p1], band, ty, 1)?;
+            for set in 0..nset {
+                let ra = rho[set].slice(p0, p1);
+                let rb = rho[nset + set].slice(p0, p1);
+                let xc = eval_xc_eff_uks(xc_code, &ra, &rb)?;
+                let da: Vec<f64> = ra.row(0).iter().zip(w).map(|(r, x)| r * x).collect();
+                let db: Vec<f64> = rb.row(0).iter().zip(w).map(|(r, x)| r * x).collect();
+                nelec_a[set].push(oracle_sum(&da));
+                nelec_b[set].push(oracle_sum(&db));
+                excsum[set].push(oracle_sum(
+                    &da.iter()
+                        .zip(&xc.exc)
+                        .map(|(d, e)| d * e)
+                        .collect::<Vec<_>>(),
+                ));
+                excsum[set].push(oracle_sum(
+                    &db.iter()
+                        .zip(&xc.exc)
+                        .map(|(d, e)| d * e)
+                        .collect::<Vec<_>>(),
+                ));
+                for spin in 0..2 {
+                    let wv = weighted(&xc, spin, w);
+                    self.accumulate_vxc_into(&mut vmat[spin][set], &ao, &wv, ty, &mut sc);
+                }
+            }
+        }
+        for spin in &mut vmat {
+            for set in spin {
+                for m in set {
+                    add_conj_transpose(m, nao);
+                }
+            }
+        }
+        Ok(NrKUksResult {
+            nelec: nelec_a
+                .iter()
+                .zip(&nelec_b)
+                .map(|(a, b)| (oracle_sum(a), oracle_sum(b)))
+                .collect(),
+            excsum: excsum.iter().map(|x| oracle_sum(x)).collect(),
+            vmat,
+        })
+    }
+
     /// `KNumInt._vxc_mat` — `numint.py:1223-1240`, accumulated into `out`.
     ///
     /// `wv` is `[var][grid]` and ALREADY weight-scaled. With `hermi = 1` — the
     /// only mode the SCF drivers use — `wv[0]` carries the `*0.5` that pairs
     /// with the `V + V†` symmetrisation the caller applies.
-    fn accumulate_vxc(
-        &self,
-        out: &mut KMats,
-        ao: &EvalAoKptsOutput,
-        wv: &[Vec<f64>],
-        ty: XcType,
-    ) {
+    fn accumulate_vxc(&self, out: &mut KMats, ao: &EvalAoKptsOutput, wv: &[Vec<f64>], ty: XcType) {
         self.accumulate_vxc_into(out, ao, wv, ty, &mut Scratch::default());
     }
 
@@ -1008,8 +1433,7 @@ impl KNumInt {
         let nao = cell.mol.nao_nr;
         let nset = dms.len();
         let nvar = ty.nvar();
-        let mut vmat: Vec<KMats> =
-            vec![vec![CTensor::zeros(nao * nao); nk]; nset];
+        let mut vmat: Vec<KMats> = vec![vec![CTensor::zeros(nao * nao); nk]; nset];
 
         for (p0, p1) in self.block_ranges(ngrids, ty, nk) {
             let ao = self.eval_ao(cell, &coords[p0..p1], kset, ty)?;
@@ -1246,7 +1670,6 @@ impl Scratch {
     }
 }
 
-
 /// `wv = weight * vxc[spin]`, with the `hermi = 1` half-factor on row 0
 /// (`numint.py:1234-1237`).
 fn weighted(out: &VxcEff, spin: usize, w: &[f64]) -> Vec<Vec<f64>> {
@@ -1294,8 +1717,7 @@ fn vxc_mat_one(
     // U-10: `aow` (zeroed, accumulated into) and the per-row `terms` planes
     // (fully assigned before read) come from reused scratch instead of a
     // `vec![0.0; ..]` per call and a `vec![0.0; ngrids]` per output row.
-    let (aow_re, aow_im, terms_re_all, terms_im_all) =
-        sc.split_vxc(ngrids * nao, nao * ngrids);
+    let (aow_re, aow_im, terms_re_all, terms_im_all) = sc.split_vxc(ngrids * nao, nao * ngrids);
     // aow, in the same F-order-per-component layout as `ao`'s component 0.
     //
     // W-06: `nu` indexes DISJOINT output rows of `aow`, so it is the axis split

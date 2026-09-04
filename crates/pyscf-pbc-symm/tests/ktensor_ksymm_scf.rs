@@ -45,8 +45,8 @@ use num_complex::Complex64;
 
 use pyscf_algebra::CTensor;
 use pyscf_pbc_df::{Fftdf, JkOpts, PeriodicDf};
-use pyscf_pbc_gto::test_systems::si_precision;
 use pyscf_pbc_gto::make_kpts_default;
+use pyscf_pbc_gto::test_systems::si_precision;
 use pyscf_pbc_scf::khooks::KOverrideHooks;
 use pyscf_pbc_scf::krhf::to_row_major;
 use pyscf_pbc_scf::{KInitGuess, KScfConfig, KsymAdaptedKrhf};
@@ -152,9 +152,7 @@ fn ksymm_scf_fock_store_unfolds_through_ksymmarray() {
         "the ksymm SCF must produce IBZ-length orbitals — that is the whole \
          point of the adapter"
     );
-    println!(
-        "  ksymm SCF: nkpts = {nkpts}, nkpts_ibz = {nibz}, nocc = {nocc}, nvir = {nvir}"
-    );
+    println!("  ksymm SCF: nkpts = {nkpts}, nkpts_ibz = {nibz}, nocc = {nocc}, nvir = {nvir}");
 
     // The one-electron operator the blocks are built from. `hcore` rather than
     // the Fock: in the MO basis the Fock is DIAGONAL by construction, so
@@ -190,25 +188,30 @@ fn ksymm_scf_fock_store_unfolds_through_ksymmarray() {
 
     // ---- route B: store the IBZ blocks in a KsymmArray, read back the BZ --
     let mut rmat = MORotationMatrix::new(nocc, nmo);
-    let ovlp_bz: Vec<Vec<Complex64>> =
-        pyscf_pbc_gto::get_ovlp(&cell, &kpts.kpts)
-            .expect("get_ovlp")
-            .iter()
-            .map(|m| {
-                // `get_ovlp` is F-order; `build` wants row-major nao x nao.
-                let mut out = vec![Complex64::new(0.0, 0.0); nao * nao];
-                for i in 0..nao {
-                    for j in 0..nao {
-                        out[i * nao + j] = Complex64::new(m.re[i + j * nao], m.im[i + j * nao]);
-                    }
+    let ovlp_bz: Vec<Vec<Complex64>> = pyscf_pbc_gto::get_ovlp(&cell, &kpts.kpts)
+        .expect("get_ovlp")
+        .iter()
+        .map(|m| {
+            // `get_ovlp` is F-order; `build` wants row-major nao x nao.
+            let mut out = vec![Complex64::new(0.0, 0.0); nao * nao];
+            for i in 0..nao {
+                for j in 0..nao {
+                    out[i * nao + j] = Complex64::new(m.re[i + j * nao], m.im[i + j * nao]);
                 }
-                out
-            })
-            .collect();
+            }
+            out
+        })
+        .collect();
     rmat.build(&kpts, &cell, &mo_bz_rm, &ovlp_bz, nao)
         .expect("MORotationMatrix::build");
 
-    let cases: [(&str, usize, usize, std::ops::Range<usize>, std::ops::Range<usize>); 3] = [
+    let cases: [(
+        &str,
+        usize,
+        usize,
+        std::ops::Range<usize>,
+        std::ops::Range<usize>,
+    ); 3] = [
         ("oo", nocc, nocc, 0..nocc, 0..nocc),
         ("ov", nocc, nvir, 0..nocc, nocc..nmo),
         ("vv", nvir, nvir, nocc..nmo, nocc..nmo),

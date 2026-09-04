@@ -78,7 +78,10 @@ fn mo_route_matches_dm_route_diamond() {
     df.build().expect("Gdf::build");
     let nao = df.cell.mol.nao_nr;
     let nocc = nao / 2;
-    assert!(nocc > 0 && nocc < nao, "fixture must give a genuine nocc < nao gap");
+    assert!(
+        nocc > 0 && nocc < nao,
+        "fixture must give a genuine nocc < nao gap"
+    );
 
     let mut mo_coeff = Vec::with_capacity(k.len());
     let mut mo_occ = Vec::with_capacity(k.len());
@@ -95,8 +98,7 @@ fn mo_route_matches_dm_route_diamond() {
 
     for exxdiv in [None, Some(ExxDiv::Ewald)] {
         let vk_dm = get_k_kpts(&df, &dms, &k, exxdiv).expect("dm route");
-        let vk_mo =
-            get_k_kpts_mo(&df, &mo_coeff_sets, &mo_occ_sets, &k, exxdiv).expect("mo route");
+        let vk_mo = get_k_kpts_mo(&df, &mo_coeff_sets, &mo_occ_sets, &k, exxdiv).expect("mo route");
 
         let w = worst(&vk_dm[0], &vk_mo[0]);
         assert!(
@@ -140,9 +142,7 @@ fn mo_route_wall_clock_vs_dm_route_diamond() {
     const REPS: usize = 200;
     let t0 = std::time::Instant::now();
     for _ in 0..REPS {
-        std::hint::black_box(
-            get_k_kpts(&df, &dms, &k, Some(ExxDiv::Ewald)).expect("dm route"),
-        );
+        std::hint::black_box(get_k_kpts(&df, &dms, &k, Some(ExxDiv::Ewald)).expect("dm route"));
     }
     let dm_elapsed = t0.elapsed();
 

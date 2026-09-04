@@ -285,12 +285,13 @@ impl XcBackend {
             XcBackend::Libxc => {
                 let mut fam = Family::Lda;
                 for &(id, _) in spec.components() {
-                    let fid = libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
-                        DftError::BackendEval(format!("libxc: functional id {id} out of range"))
-                    })?)
-                    .map_err(|e| {
-                        DftError::BackendEval(format!("libxc lookup id {id}: {e:?}"))
-                    })?;
+                    let fid =
+                        libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
+                            DftError::BackendEval(format!("libxc: functional id {id} out of range"))
+                        })?)
+                        .map_err(|e| {
+                            DftError::BackendEval(format!("libxc lookup id {id}: {e:?}"))
+                        })?;
                     let f = match fid.family() {
                         libxc_rs::Family::Lda => Family::Lda,
                         libxc_rs::Family::Gga => Family::Gga,
@@ -344,10 +345,13 @@ impl XcBackend {
                 let mut pars = [omega, alpha, if omega == 0.0 { 0.0 } else { hyb - alpha }];
                 // libxc.py:469-482 — accumulate each component's own CAM triple.
                 for &(id, fac) in spec.components() {
-                    let fid = libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
-                        DftError::BackendEval(format!("libxc: functional id {id} out of range"))
-                    })?)
-                    .map_err(|e| DftError::BackendEval(format!("libxc lookup id {id}: {e:?}")))?;
+                    let fid =
+                        libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
+                            DftError::BackendEval(format!("libxc: functional id {id} out of range"))
+                        })?)
+                        .map_err(|e| {
+                            DftError::BackendEval(format!("libxc lookup id {id}: {e:?}"))
+                        })?;
                     let func = libxc_rs::Functional::new(fid, libxc_rs::Spin::Unpolarized)
                         .map_err(|e| {
                             DftError::BackendEval(format!("libxc Functional::new: {e:?}"))
@@ -387,10 +391,13 @@ impl XcBackend {
             XcBackend::Libxc => {
                 let mut total = hyb;
                 for &(id, fac) in spec.components() {
-                    let fid = libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
-                        DftError::BackendEval(format!("libxc: functional id {id} out of range"))
-                    })?)
-                    .map_err(|e| DftError::BackendEval(format!("libxc lookup id {id}: {e:?}")))?;
+                    let fid =
+                        libxc_rs::FunctionalId::from_raw(u16::try_from(id).map_err(|_| {
+                            DftError::BackendEval(format!("libxc: functional id {id} out of range"))
+                        })?)
+                        .map_err(|e| {
+                            DftError::BackendEval(format!("libxc lookup id {id}: {e:?}"))
+                        })?;
                     let func = libxc_rs::Functional::new(fid, libxc_rs::Spin::Unpolarized)
                         .map_err(|e| {
                             DftError::BackendEval(format!("libxc Functional::new: {e:?}"))
@@ -505,9 +512,9 @@ impl XcBackend {
                 xcfun_eval_uks(spec, rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb, order)
             }
             #[cfg(feature = "libxc")]
-            XcBackend::Libxc => libxc_impl::libxc_eval_uks(
-                spec, rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb, order,
-            ),
+            XcBackend::Libxc => {
+                libxc_impl::libxc_eval_uks(spec, rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb, order)
+            }
         }
     }
 
@@ -783,8 +790,7 @@ fn xcfun_eval(spec: &XcSpec, rho: &RhoBlock<'_>, order: DerivOrder) -> Result<Xc
                 // -5.34e-03 (correct) and -2.50e-02 (∂f/∂γaa alone), a factor
                 // of 4.7. `tests/vxc_is_exc_derivative.rs` pins this against a
                 // finite difference of the returned `exc`.
-                out.vsigma[ip] =
-                    (out_buf[base + 3] + out_buf[base + 4] + out_buf[base + 5]) * 0.25;
+                out.vsigma[ip] = (out_buf[base + 3] + out_buf[base + 4] + out_buf[base + 5]) * 0.25;
             }
         }
     }
@@ -1104,7 +1110,6 @@ mod libxc_impl {
         Ok(out)
     }
 
-
     /// The spin-polarized (UKS) libxc path — the counterpart of
     /// [`super::xcfun_eval_uks`].
     ///
@@ -1227,8 +1232,18 @@ mod libxc_impl {
                         Some(&mut zk),
                         if want { Some(&mut vrho) } else { None },
                         if want { Some(&mut vsigma) } else { None },
-                        None, None, None, None, None, None, None,
-                        None, None, None, None, None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
                         np,
                         spin,
                     )
@@ -1258,7 +1273,6 @@ mod libxc_impl {
         Ok(out)
     }
 
-
     /// One `sigma_*` channel, present and the right length.
     ///
     /// A free fn rather than a closure: the returned slice borrows from `o`, not
@@ -1268,9 +1282,8 @@ mod libxc_impl {
         name: &'static str,
         np: usize,
     ) -> Result<&'a [f64], DftError> {
-        let v = o.ok_or_else(|| {
-            DftError::BackendEval(format!("libxc_eval_uks: GGA requires {name}"))
-        })?;
+        let v =
+            o.ok_or_else(|| DftError::BackendEval(format!("libxc_eval_uks: GGA requires {name}")))?;
         if v.len() != np {
             return Err(DftError::BackendEval(format!(
                 "libxc_eval_uks: {name} len {} != rho len {np}",

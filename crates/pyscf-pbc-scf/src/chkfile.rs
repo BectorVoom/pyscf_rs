@@ -119,9 +119,7 @@ pub struct KScfCheckpoint {
 ///
 /// # Errors
 /// Propagates every HDF5 operation.
-pub fn load_kscf_from_file(
-    path: &std::path::Path,
-) -> Result<KScfCheckpoint, ChkfileError> {
+pub fn load_kscf_from_file(path: &std::path::Path) -> Result<KScfCheckpoint, ChkfileError> {
     let file = primitives::open_for_read(path)?;
     let scf = primitives::read_group(&file, "scf")?;
     let e_tot = primitives::read_scalar_f64(&scf, "e_tot")?;

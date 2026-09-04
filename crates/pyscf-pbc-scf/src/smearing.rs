@@ -183,9 +183,8 @@ impl Smearing {
     fn optimize_mu(&self, energies: &[f64], nocc: f64) -> Result<f64, PyscfRsError> {
         let lo0 = energies.iter().copied().fold(f64::INFINITY, f64::min) - 10.0;
         let hi0 = energies.iter().copied().fold(f64::NEG_INFINITY, f64::max) + 10.0;
-        let root = |m: f64| -> f64 {
-            energies.iter().map(|e| self.occ_of(*e, m)).sum::<f64>() - nocc
-        };
+        let root =
+            |m: f64| -> f64 { energies.iter().map(|e| self.occ_of(*e, m)).sum::<f64>() - nocc };
         let (mut lo, mut hi) = (lo0, hi0);
         let (flo, fhi) = (root(lo), root(hi));
         if flo.signum() == fhi.signum() {
@@ -210,7 +209,11 @@ impl Smearing {
                 hi = mid;
             }
         }
-        Ok(if root(lo).abs() <= root(hi).abs() { lo } else { hi })
+        Ok(if root(lo).abs() <= root(hi).abs() {
+            lo
+        } else {
+            hi
+        })
     }
 }
 

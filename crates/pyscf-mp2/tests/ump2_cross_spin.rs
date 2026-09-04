@@ -115,8 +115,8 @@ fn test_a_f_to_c_repack_pins_layout() {
     let nvir_b = 1usize;
 
     // The wrapper's C-order αβ block.
-    let eris_ab =
-        cross_spin_ao2mo(&alpha, &beta, &Frozen::None).expect("cross_spin_ao2mo must run end-to-end");
+    let eris_ab = cross_spin_ao2mo(&alpha, &beta, &Frozen::None)
+        .expect("cross_spin_ao2mo must run end-to-end");
     assert_eq!(eris_ab.nocc, nocc_a, "ChemistsEris.nocc is the α side");
     assert_eq!(eris_ab.nvir, nvir_a, "ChemistsEris.nvir is the α side");
     assert_eq!(
@@ -218,20 +218,12 @@ fn test_b_closed_shell_ump2_equals_rmp2() {
     };
     let eris_aa =
         pyscf_mp2::default_ao2mo(&ump_ref.alpha, &Frozen::None).expect("aa default_ao2mo");
-    let eris_bb =
-        pyscf_mp2::default_ao2mo(&ump_ref.beta, &Frozen::None).expect("bb default_ao2mo");
+    let eris_bb = pyscf_mp2::default_ao2mo(&ump_ref.beta, &Frozen::None).expect("bb default_ao2mo");
     let eris_ab: ChemistsEris =
         cross_spin_ao2mo(&ump_ref.alpha, &ump_ref.beta, &Frozen::None).expect("ab cross_spin");
 
-    let ump2 = ump2_kernel(
-        &ump_ref,
-        &Frozen::None,
-        &eris_aa,
-        &eris_ab,
-        &eris_bb,
-        false,
-    )
-    .expect("ump2");
+    let ump2 =
+        ump2_kernel(&ump_ref, &Frozen::None, &eris_aa, &eris_ab, &eris_bb, false).expect("ump2");
 
     // For a closed-shell reference treated as α==β UHF, the UMP2 correlation
     // energy equals the RMP2 correlation energy (the αα+ββ same-spin pieces sum
@@ -267,7 +259,11 @@ fn test_b_closed_shell_ump2_equals_rmp2() {
 #[test]
 fn test_c_default_ao2mo_obeys_bra_ket_symmetry_nvir_gt_1() {
     // H₄ linear / STO-3G → nao=4; 2 occupied columns → nocc=2, nvir=2 (nvir>1).
-    let refr = real_reference("H 0 0 0; H 0 0 1.0; H 0 0 2.0; H 0 0 3.0", "sto-3g", &[0, 1]);
+    let refr = real_reference(
+        "H 0 0 0; H 0 0 1.0; H 0 0 2.0; H 0 0 3.0",
+        "sto-3g",
+        &[0, 1],
+    );
     let nao = refr.mol.nao_nr;
     assert_eq!(nao, 4, "H₄/STO-3G must give nao=4");
 

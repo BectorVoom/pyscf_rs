@@ -181,8 +181,7 @@ pub fn search_point_group_ops(cell: &Cell, tol: f64) -> Result<Vec<RotMatrix>, P
         let mut a_tilde_angle = [[0.0_f64; 3]; 3];
         for i in 0..3 {
             for j in 0..3 {
-                let ratio =
-                    (g_tilde[i][j] / (a_tilde_norm[i] * a_tilde_norm[j])).clamp(-1.0, 1.0);
+                let ratio = (g_tilde[i][j] / (a_tilde_norm[i] * a_tilde_norm[j])).clamp(-1.0, 1.0);
                 a_tilde_angle[i][j] = ratio.acos();
             }
         }
@@ -336,7 +335,11 @@ fn test_trans(
         });
 
         for pair in x_xt.as_chunks::<2>().0 {
-            let d_frac = [pair[0][0] - pair[1][0], pair[0][1] - pair[1][1], pair[0][2] - pair[1][2]];
+            let d_frac = [
+                pair[0][0] - pair[1][0],
+                pair[0][1] - pair[1][1],
+                pair[0][2] - pair[1][2],
+            ];
             // `np.dot(diff, a)`: fractional -> Cartesian via row-vector @ lattice.
             let d_cart: [f64; 3] = std::array::from_fn(|j| {
                 d_frac[0] * a[0][j] + d_frac[1] * a[1][j] + d_frac[2] * a[2][j]

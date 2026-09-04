@@ -168,7 +168,10 @@ fn gate4_he_fcc_for_the_record() {
         ratio * 100.0
     );
     // 8^2 * 23 * 1 * 16 B, exactly.
-    assert_eq!(cderi as u64, 23_552, "the He-fcc payload is arithmetic, not a measurement");
+    assert_eq!(
+        cderi as u64, 23_552,
+        "the He-fcc payload is arithmetic, not a measurement"
+    );
     assert!(
         ratio < 0.0148,
         "the payload ratio must sit BELOW upstream's file-size figure: {:.2} %",
