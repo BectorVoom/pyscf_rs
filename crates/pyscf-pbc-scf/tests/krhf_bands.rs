@@ -36,9 +36,9 @@ fn he_atom() -> Cell {
 /// Identical to `kuhf_bands.rs`'s `tight`, deliberately.
 fn tight(cell: &Cell) -> KScfConfig {
     KScfConfig {
-        conv_tol: 1e-10,
-        conv_tol_grad: Some(1e-7),
-        max_cycle: 200,
+        conv_tol: 1e-12,
+        conv_tol_grad: Some(1e-8),
+        max_cycle: 300,
         ..KScfConfig::for_cell(cell)
     }
 }
@@ -56,7 +56,11 @@ fn bands_on_the_scf_mesh_reproduce_the_scf_eigenvalues() {
         .get_bands(&kpts, &scf.dm)
         .expect("get_bands on the SCF mesh must succeed");
 
-    assert_eq!(e_band.len(), kpts.len(), "one block per k-point, one channel");
+    assert_eq!(
+        e_band.len(),
+        kpts.len(),
+        "one block per k-point, one channel"
+    );
     let mut worst = 0.0_f64;
     for (got, want) in e_band.iter().zip(scf.mo_energy.iter()) {
         for (g, w) in got.iter().zip(want.iter()) {
