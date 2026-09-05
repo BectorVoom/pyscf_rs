@@ -2081,6 +2081,18 @@ wrong about the starting state in seven ways; see `16-CONTEXT.md §1`, corrected
 of Rust** — its measured gates replace the placeholder numbers this section and
 `§7` carried before it.
 
+**PARTIALLY IMPLEMENTED 2026-09-06** — `16-VERIFICATION.md` is the authority.
+Complete and measured: **16-01** (measure), **16-02** (`ZWorkspacePool` +
+`KTensor`), **16-03** (`davidson_nosym1`), **16-04** (`kintermediates_rhf`),
+**16-05** (`KRCCSD`, `e_corr` `6.560e-9` from upstream). Partial: **16-08** —
+the RHF `(T)`, fast and slow, agreeing to `8.363e-13` relative against
+upstream's own `2.946e-13`; the spin-orbital half needs 16-07. Not started:
+**16-06**, **16-07**, **16-09/10/11**, **16-12**, **16-13**, each with its
+reason and unblocking work in `16-VERIFICATION §6`. `§8.9`'s "17-09 is
+unblocked if Phase 16 ships `KRCCSD`" is HALF satisfied: `KRCCSD` ships and is
+oracle-green, but 17-09's target is the k-symmetry adapters, which also need
+Phase 17's `KPoints` IBZ machinery.
+
 **BLOCK CLEARED 2026-09-06.** Phase 15 CLOSED on 2026-09-05 and
 `crates/pyscf-pbc-mp` now exports `padding_k_idx`, `padded_mo_coeff`,
 `padded_mo_energy`, `get_nocc`, `get_nmo` and `get_frozen_mask`

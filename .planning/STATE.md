@@ -20,87 +20,66 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 16 (periodic CC/CI) — Phase 15, its hard blocker, is
-**CLOSED as of 2026-09-05**. Restricted KMP2, periodic AO2MO dispatch, K-point
-padding/frozen-core bookkeeping, KUMP2's upstream surface/refusal and staggered
-KMP2 all ship with a green nine-part opt-in oracle matrix. FFTDF clears its
-`2e-6 Ha` gate by five orders. One row is `NOT MET` and belongs to Phase 14: the
-GDF route's `1.289e-1 Ha` upstream residual, which is the inherited `j3c`
-baseline, not KMP2 — `Lov` and forced AO2MO agree to `2e-15 Ha` on the same
-mean field. See `15-VERIFICATION.md`.
+**Current focus:** Phase 16 (periodic CC/CI) — **IN PROGRESS, six of
+fourteen plans complete and measured as of 2026-09-06.** `KRCCSD` ships and
+matches upstream PySCF 2.12.1 to `6.560e-9`; `KCCSD(T)`'s RHF half ships with a
+`8.363e-13` fast-vs-slow agreement. Phase 15, its hard blocker, is **CLOSED as
+of 2026-09-05**.
 
 ## Current Position
 
-**Phase 15 CLOSED, 2026-09-05.** Eight plan summaries and a rewritten
-`15-VERIFICATION.md` record the result. All eight surfaces ship; the nine-part
-opt-in oracle matrix (`crates/pyscf-pbc-mp/tests/oracle_phase15.rs`) is green
-and never runs under a plain `cargo test`.
+**Phase 16 IN PROGRESS, 2026-09-06.** `.planning/phases/16-periodic-cc-ci/16-VERIFICATION.md`
+is the authority. Six plans complete and measured (16-01, 16-02, 16-03, 16-04,
+16-05), one partial (16-08's RHF half), seven not started (16-06, 16-07,
+16-09/10/11, 16-12, 16-13), each recorded with its reason and its unblocking
+work rather than silently dropped.
 
-* **FFTDF KMP2 clears its measured `2e-6 Ha` gate by five orders**: diamond
-  `[1,1,2]` residual `5.418e-11` (SS `1.677e-11`, OS `3.741e-11`), He/6-31g
-  `2.719e-11`. `symm_map` + `_operation` and the whole padding/frozen surface
-  match upstream **exactly**; `t2`/`rdm1`/`gamma1` land at `1.6e-11`…`3.7e-11`.
-* **The staggered-energy oracle — the row the implementation pass left `NOT
-  MET` — was run, and CAUGHT THREE DEFECTS.** (1) `Krhf::get_occ` took its
-  k-point count from `mf.kpts` instead of from its `mo_energy` argument
-  (`khf.py:191-192`); a no-op during SCF, but on `kmp2_stagger`'s full-mesh
-  path it left 8 of 16 k-points unoccupied and returned **`-0.3737 Ha` where
-  upstream gives `-0.014029 Ha`, a factor of 26.6**. `Kghf::get_occ` carried
-  the identical divergence and is fixed with it. (2) `Kmp2Stagger::kernel` used
-  the mean field's own DF for the four-index path; upstream always builds a
-  fresh `FFTDF(mp.cell, mp.kpts)` there (`kmp2_stagger.py:74`) **even on a GDF
-  mean field**, unlike plain `KMP2` (`kmp2.py:92`) — worth `5.01e-5 Ha`.
-  (3) `new_full_mesh` hardcoded `with_df_ints = false`; upstream sets it from
-  the mean field (`:279-282`). After the fixes the three staggered numbers land
-  at `1.408e-12` / `8.28e-13` / inside `2e-6`.
-* **Two upstream constants no longer reproduce in 2.12.1.**
-  `kmp2_stagger.py:385/390/395` sit `2.8e-7`…`3.5e-7` from what the code
-  produces (the same shape as the diamond anchor's `2.1e-10` from
-  `kmp2.py:820`). The tests gate on live-measured values;
-  `15-VERIFICATION.md §2` records both, and §7 makes "never gate against a
-  constant embedded in upstream's source" a standing caveat.
-* **D-PBC-28 measured** (`15-VERIFICATION.md §8`): MO-first FFT AO2MO is
-  **9.784×** the AO-ERI route on diamond `gth-szv` `[1,1,2]` (78.289 s →
-  8.002 s, residual `1.735e-17`) — against §7.0's `16×` prediction, which
-  **over-states it** because both routes pay the same grid-side cost.
-  `build_symm_map` costs `0.143 ms / 5.59 ms / 245 ms / 3.040 s` at
-  `nkpts = 8/27/64/125` and grows **faster** than `n³` at the two larger steps.
-  The `[2,2,2]` and `gth-dzvp` legs (~26 s/quadruple × 512) were **not
-  reached** and are reported unreached, not extrapolated.
-* **The one NOT-MET row is Phase 14's, and it is worse than Phase 14 knew.**
-  **[RESOLVED 2026-09-05 — see `14-VERIFICATION.md §11`.]** Two independent GDF
-  defects, both invisible to every Phase-14 gate because those gate on ONE AO
-  (`he_all_electron`/`sto-3g`, where `nao_pair == nao * nao`) or at GAMMA (where
-  every k-pair is diagonal): (1) `sr_loop` filled the upper triangle of an
-  off-diagonal k-pair from the WRONG block — `lib.ANTIHERMI` on the same block
-  rather than `PBCunpack_tril_triu`'s conjugate pair — with commit `ff01948`
-  adding a second, opposite half-error on top; (2) `gdf::nuc::get_nuc`/`get_pp`
-  ran AFTDF on `cell.mesh`, where upstream's `_CCNucBuilder` is mesh-INDEPENDENT,
-  so a pinned coarse mesh silently moved the nuclear attraction by 0.2 Ha per
-  element. He/6-31g `[1,1,2]` went **1.461e-1 -> 3.017e-9**;
-  `measurements/offgamma_multiao.out` records the fixture and
-  `df_swap::krhf_on_gdf_matches_upstream_he_631g_off_gamma` is the new gate.
-  Diamond `[1,1,2]` went **1.523e+1 -> 2.173e-8** (`-8.65527636655032` against
-  upstream `-8.65527634481768`), which is diamond's ordinary GDF fitting
-  residual — `14-VERIFICATION §5` records `2.074e-8` for the same builder on the
-  same cell at 2x2x2.
-  `oracle_phase15::kmp2_energies` now prints the **mean-field** residual beside
-  the KMP2 one, and that is where the whole thing goes wrong: this port's
-  **diamond GDF KRHF at `[1,1,2]` is `-23.8828` against upstream's `-8.6553`,
-  `1.523e+1 Ha` out**; He/6-31g GDF is `1.461e-1` out. The FFTDF mean fields on
-  the same cells are `4.772e-11` and `5.849e-12`. A correlation energy on a
-  reference 15 Hartree wrong is not an MP2 result at all. It is not KMP2's:
-  `Lov` and forced AO2MO agree to `2e-15 Ha` on the same mean field, upstream's
-  own two routes agree to `6.9e-13` on its, and the `Lov` blocks differ from
-  `_init_mp_df_eris` by `7.518e-1` when driven from **upstream's own** padded
-  MOs. **This is a NEW finding**: `14-VERIFICATION` gates GDF on
-  `he_all_electron` (`sto-3g`, one AO) and on **diamond at gamma only**, where
-  it is already `PARTIAL` — diamond GDF at a non-gamma k-mesh with a
-  pseudopotential had never been run against upstream. Phase 14 owns it, and
-  Phase 16's `16-01` must treat any GDF row as blocked rather than loose.
-* **`he_fcc` `gth-szv` cannot host the `Lov`/MO-first oracles** that
-  `15-07-PLAN.md` specified — it is one He atom with **one** AO, so `nvir = 0`
-  and the block is empty. Those parts use diamond `gth-szv` `[1,1,2]` instead.
+* **`KRCCSD e_corr` matches upstream to `6.560e-9`** — diamond `gth-szv`
+  `[1,1,2]`, FFTDF, `cell.mesh = [15,15,15]`, `conv_tol = 1e-9`, an order and a
+  half inside 16-01's measured `1e-7` gate. `init_amps emp2` `3.494e-9`; the
+  seven `_ERIS` blocks `1.21e-8 … 2.34e-7`; all nine `cc_*` intermediates
+  `3.5e-9 … 2.28e-7`; `update_amps`' `t1new`/`t2new` `1.84e-8`/`7.01e-8`. The
+  block-level residuals ARE the FFT integral-transform floor at that mesh —
+  upstream's own symmetry-loop and all-triples paths differ by `1.32e-7` on the
+  same fixture.
+* **`KCCSD(T)` fast vs slow: `8.363e-13` relative** (upstream's own two
+  implementations: `2.946e-13`), blocking-invariant to `2.17e-19`, and
+  `3.286e-10` from upstream. `kccsd_t_rhf_slow.py` — the file
+  `PBC-MASTER-PLAN §8.8`'s table omits entirely — was ported FIRST, as the only
+  oracle-free reference the blocked path has.
+* **The oracle-free gates**: incore vs spilled `_ERIS` BIT-IDENTICAL with the
+  tier asserted on each side (D-PBC-29 clause 4, and the test fails if a
+  fixture silently stays incore); `symm_map` vs all-triples `7.93e-7` with
+  `vvvv` exactly `0e0`; `t1`/`t2`/`e_corr` bit-reproducible; `init_amps`' MP2
+  vs Phase 15's `KMP2` `2.166e-10`; the arena charges exactly its derived byte
+  count.
+* **THE GATE WAS MEASURED FIRST, and five gates were found tighter than the
+  thing they gate** — `ROADMAP`'s `1e-14`, `§7`'s `1e-8`, 16-05 test 5's
+  bit-identity, 16-05 test 3's `1e-12`, and G4's own `1e-13` (below upstream's
+  `2.95e-13`). None was loosened to pass a test; each was corrected by the
+  measurement that proves it, and the old numbers are struck through, not
+  deleted. `16-VERIFICATION §5`.
+* **D-PBC-29 clause 3 is AMENDED**: `symm_map` is a measured **2.10×**, not the
+  derived `~4×` — 176 orbit representatives for 512 triples at 2×2×2, and
+  `vvvv` is built by `ao2mo_7d` in BOTH paths so it saves nothing. The clause
+  stands at `~2×`. Clause 4's `_mem_usage` over-estimate is CONFIRMED at a
+  measured `9.143×`/`6.058×`.
+* **Three upstream anchor sets are excluded from every gate, for cause**:
+  `test_krccsd.py::test_frozen_n3` FAILS on the vendored 2.12.1 tree, and every
+  `cu_metallic` anchor sits in a test upstream itself disabled with
+  `@unittest.skip('Results not match')`.
+* **A finding that belongs to another phase**: this port's `KRHF` and
+  upstream's differ by `1.348e-5 Ha` on diamond `[1,1,2]` with `cell.mesh`
+  PINNED at `[15,15,15]`, while Phase 15 measured `4.772e-11` on the same cell
+  at the DEFAULT mesh. Not the lattice sums (`rcut` and `nimgs` agree) — the
+  FFT-grid-evaluated part of the mean field at a coarse grid. Every Phase-16 CC
+  gate therefore runs on upstream's own mean field and prints the residual
+  beside the result.
+* **17-09's Phase-16 dependency is satisfied** (`KRCCSD` ships, oracle-green)
+  but 17-09 is not thereby unblocked: its target is the k-SYMMETRY adapters,
+  which also need Phase 17's `KPoints` IBZ machinery.
+
+### The plan set as written, for reference
 
 **Phase 16 PLANNED + REVIEWED, 2026-09-02 (no Rust written).**
 `.planning/phases/16-periodic-cc-ci/` — `16-CONTEXT.md`, fourteen plan files
