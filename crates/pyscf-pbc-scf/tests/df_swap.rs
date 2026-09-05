@@ -191,6 +191,75 @@ fn krhf_on_gdf_matches_upstream_he_fcc() {
     }
 }
 
+/// **GATE 1b — the same gate on a cell that can actually FAIL it.**
+///
+/// [`krhf_on_gdf_matches_upstream_he_fcc`] is the phase's headline number and it
+/// has two blind spots, both structural rather than a matter of tolerance:
+///
+/// * `he_all_electron` is `sto-3g` on He — **one AO**. `nao_pair == nao * nao`,
+///   so the `s2` `cderi` store and the `s1` square are the same array, and no
+///   `(mu, nu)` packing can be wrong on it.
+/// * its `cell.mesh` is unset, so `Cell::build` picks `[43,43,43]`, at which the
+///   plane-wave nuclear attraction is already converged — and upstream's
+///   `_CCNucBuilder` is converged at EVERY mesh, so a port that evaluates the
+///   whole integral on `cell.mesh` agrees with it there by luck.
+///
+/// `helium_631g` closes both: **two** AOs, a `[1,1,2]` k-mesh whose off-diagonal
+/// pair is not Hermitian in `(mu, nu)`, and `cell.mesh` PINNED to `[9,9,9]`,
+/// which is nowhere near converged for an all-electron 6-31g He.
+///
+/// Both defects it caught were worth **0.1 Ha**, and both were invisible on the
+/// gate above — see
+/// `.planning/phases/14-gdf-mdf-rsdf-rsjk/measurements/offgamma_multiao.out`:
+///
+/// | | this port, before | upstream |
+/// |---|---|---|
+/// | `sr_loop` served `(0,1)` from a conjugated `(1,0)` | −2.342761068550 | |
+/// | `get_nuc` ran AFTDF at the PINNED `[9,9,9]` | −2.360735545610 | |
+/// | both fixed | see the assertion | **−2.488832161377** |
+///
+/// FFTDF is asserted alongside as the control: it uses `cell.mesh` for
+/// everything, upstream and port alike, so it is unmoved by either defect and
+/// pins the cell itself.
+#[test]
+fn krhf_on_gdf_matches_upstream_he_631g_off_gamma() {
+    use common::helium_631g;
+    use pyscf_pbc_df::gdf::Gdf;
+
+    let cell = helium_631g();
+    let kpts =
+        pyscf_pbc_gto::kpts_mesh::make_kpts(&cell, [1, 1, 2], false, true, None).expect("kpts");
+    assert_eq!(cell.mol.nao_nr, 2, "the point of the fixture is nao > 1");
+    assert_eq!(kpts.len(), 2, "and a k-pair off the diagonal");
+
+    // `measurements/offgamma_multiao.out` section 4, PySCF 2.12.1.
+    const UPSTREAM_FFTDF: f64 = -2.950_373_549_332_133_5;
+    const UPSTREAM_GDF: f64 = -2.488_832_161_377_475_8;
+
+    for (route, want) in [("FFTDF", UPSTREAM_FFTDF), ("GDF", UPSTREAM_GDF)] {
+        let df: Box<dyn PeriodicDf> = if route == "FFTDF" {
+            Box::new(Fftdf::new(cell.clone(), &kpts).expect("fftdf"))
+        } else {
+            Box::new(Gdf::new(cell.clone(), &kpts))
+        };
+        let mut mf = Krhf::from_df(df);
+        mf.exxdiv = None;
+        let mut c = KScfConfig::for_cell(&cell);
+        c.conv_tol = 1e-11;
+        c.max_cycle = 60;
+        let out = mf.kernel(&c).expect("KRHF");
+        assert!(out.converged, "KRHF on {route} did not converge");
+        let d = (out.e_tot - want).abs();
+        eprintln!("KRHF/{route} He/6-31g [1,1,2]: E = {:.14}, upstream {want:.14}, |dE| = {d:e}",
+                  out.e_tot);
+        assert!(
+            d < 1e-8,
+            "KRHF on {route}: E = {:.14}, upstream {want:.14}, |dE| = {d:e}",
+            out.e_tot
+        );
+    }
+}
+
 /// GDF is an APPROXIMATION and FFTDF is not, so their energies differ by the DF
 /// fitting error — **6.006e-05 Ha** on He-fcc 2×2×2, measured upstream
 /// (`measurements/builders.py`). This is the assertion that stops anyone

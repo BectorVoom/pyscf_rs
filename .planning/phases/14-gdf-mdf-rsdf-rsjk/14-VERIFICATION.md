@@ -8,10 +8,16 @@ Gate 3 was UNREACHABLE and is now MET.** The `cintx` capability it was blocked
 on landed as D-PBC-24, and plan 14-07 sub-tasks 7b/7c ported `_RSGDFBuilder` on
 top of it. See §5, rewritten.
 
+**REOPENED AGAIN 2026-09-05.** Phase 15 measured this port's GDF `KRHF` **15.23
+Ha** off upstream on diamond `[1,1,2]` and **0.146** on He/`6-31g` — systems
+with `nao > 1` at a k-mesh, which no gate below covers. Two defects, both fixed;
+**§11** is the record, and Gate 1c is the gate that would have caught them.
+
 | gate | what it measures | result |
 |---|---|---|
 | **1** | GDF vs upstream on the all-electron control | **MET** — 2.750e-10 on the converged `KRHF`; 1.667e-12 / 1.984e-12 on the ERIs |
 | **1b** | the same on diamond | **PARTIAL** — see §3; the flagship `make_j3c` is an unmeasured multi-hour run |
+| **1c** | the same with `nao > 1` AND `ki != kj` — the two blind spots gates 1/1b share | **MET (2026-09-05, REOPENED)** — **3.017e-9** on He/`6-31g` `[1,1,2]` after fixing two defects neither of the gates above could see; §11 |
 | **2** | MDF converges to FFTDF | **MET** — 1.695e-06 → 3.433e-09 → 3.245e-08, on upstream's ladder to within 1 % |
 | **3** | GDF vs RSDF | **MET (2026-08-30)** — RSDF **2.325e-10** and GDF **2.750e-10** against upstream's own two routes on He-fcc 2×2×2 (§5) |
 | **4** | `_cderi` under 20 % of the FFTDF AO table at 2×2×2 | **MET** — see §4 |
@@ -566,3 +572,150 @@ Both prerequisites are met:
 2. **A GDF that KMP2 can read** — `sr_loop`, `get_naoaux`, and an HDF5 `_cderi`
    in upstream's layout (14-03), now also constructible from an existing store
    through `Gdf::with_cderi` / `Gdf::load_cderi`.
+
+---
+
+## §11 — REOPENED 2026-09-05: two GDF defects the phase's own gates could not see
+
+Phase 15's `oracle_phase15::kmp2_energies` printed the MEAN-FIELD residual
+beside the KMP2 one and found this port's GDF `KRHF` **1.523e+1 Ha** off
+upstream on diamond `[1,1,2]` and **1.461e-1** on He/`6-31g` `[1,1,2]`, against
+`4.772e-11` / `5.849e-12` for FFTDF on the identical cells. `15-VERIFICATION`
+row 4 assigned it here. Two independent defects, both now fixed.
+
+**Neither is a tolerance question, and neither could have failed a gate above.**
+§3's control is `he_all_electron` — `sto-3g` on He, **one AO** — and §5's
+diamond leg is at **gamma**. A defect that needs `nao > 1` AND `ki != kj` has no
+gate to fail: `nao == 1` makes `nao_pair == nao * nao`, so the `s2` store and
+the `s1` square are the same array, and at gamma every k-pair is diagonal.
+`measurements/offgamma_multiao.py` is the fixture that closes both, and
+`crates/pyscf-pbc-scf/tests/df_swap.rs::krhf_on_gdf_matches_upstream_he_631g_off_gamma`
+is the gate (**GATE 1c**).
+
+### Defect 1 — `sr_loop` served the wrong half of every off-diagonal k-pair
+
+`(L | mu^{ki} nu^{kj})` is Hermitian in `(mu, nu)` **only** at `ki == kj`. An
+`s2` store therefore keeps the lower triangle of `(ki, kj)` AND the lower
+triangle of `(kj, ki)`, and upstream joins them in `PBCunpack_tril_triu`
+(`pyscf/lib/pbc/fill_ints.c:1460-1483`), reached through
+`_KPair3CLoader.__getitem__` (`df.py:990-1009`):
+
+```text
+out[mu, nu] = tril[mu, nu]          mu >= nu   (from the (ki, kj) block)
+out[nu, mu] = conj(triu[mu, nu])    mu >  nu   (from the (kj, ki) block)
+```
+
+`crates/pyscf-pbc-df/src/gdf/cderi_store.rs` did two different wrong things,
+and **each got exactly half the square right**:
+
+* `reshape_block`'s `s2 -> s1` unpack filled the upper triangle by
+  `lib.ANTIHERMI` on the SAME block — correct at gamma and nowhere else. This
+  is Phase 14's own, present since 14-03.
+* Commit `ff01948` (Phase 15) then added a `reverse` branch that, for `ki < kj`,
+  DISCARDED the correctly built `(ki, kj)` block and substituted a conjugated
+  `(kj, ki)` — in packed storage that is a different integral, not a transpose,
+  because the packed store has no `mu < nu` entry to transpose into place. Its
+  stated motive was to make the KMP2 `Lov` route agree with `df_ao2mo`; both
+  now read the same correct square, so the agreement holds without it.
+
+The store itself was never wrong: the port's four `cderi` blocks match
+upstream's four `j3c` datasets elementwise to `~1e-9`
+(`offgamma_multiao.out` §1, against the RAW blocks).
+
+### Defect 2 — `get_nuc` / `get_pp` evaluated on `cell.mesh`
+
+`_CCNucBuilder`'s answer does **not** depend on `cell.mesh`: it splits the
+compact part into a real-space `_int_nuc_vloc` and leaves a smooth remainder its
+own `[9,9,9]` grid resolves exactly. `gdf/nuc.rs` does not port that split (a
+standing carry-over) and substitutes AFTDF — but ran it on `cell.mesh`, which is
+converged only if the caller happened to pin a converged one.
+`offgamma_multiao.out` §3, He/`6-31g` `[1,1,2]`, `v_nuc[0][0,0]`:
+
+| `cell.mesh` | upstream GDF | upstream AFTDF | upstream FFTDF |
+|---|---|---|---|
+| `[9,9,9]` (pinned) | **−3.229030131116** | −3.027263280742 | −3.795643296556 |
+| `[99,99,99]` (the cell's own estimate) | **−3.229030131116** | −3.229030132539 | −3.229030132539 |
+
+So the mesh is now the cell's own `estimate_mesh` — the grid `cell.precision`
+demands for exactly this integral — never coarsened, and never made coarser than
+a finer mesh the caller pinned. A cell that does not pin a mesh is UNCHANGED
+(`Cell::build` already set `mesh = estimate_mesh`), which is why §3's He-fcc
+number and diamond's `[47,47,47]` are unmoved. The carry-over is now honestly a
+SPEED carry-over, which is what §3 always claimed it was.
+
+### Measured, after both fixes
+
+He/`6-31g` `[1,1,2]`, `KRHF`, `exxdiv = None`, `conv_tol = 1e-11`:
+
+| stage | port | upstream | \|d\| |
+|---|---|---|---|
+| before | −2.34276106854970 | −2.48883216137748 | 1.461e-1 |
+| defect 1 fixed | −2.36073554561004 | " | 1.281e-1 |
+| **both fixed** | **−2.48883215836059** | " | **3.017e-9** |
+| FFTDF control (unmoved by either) | −2.95037354933798 | −2.95037354933213 | 5.849e-12 |
+
+Attribution, on the same cell:
+
+| quantity | \|d\| vs upstream |
+|---|---|
+| `vj` / `vk` on a fixed model density, all 16 elements | **6.142e-10** |
+| GDF `v_nuc[0][0,0]` | **4.98e-9** |
+| the four raw `cderi` blocks, elementwise | **~1e-9** |
+
+Diamond `[1,1,2]`, `gth-szv`/`gth-pade`:
+
+| quantity | port | upstream | \|d\| |
+|---|---|---|---|
+| GDF `get_pp[0][0,0]` | +1.54584046364934e-1 | +1.54584050839746e-1 | 4.47e-9 |
+| FFTDF `get_pp[0][0,0]` | +1.54584046391967e-1 | +1.54584046392055e-1 | 8.8e-13 |
+| FFTDF `KRHF` | −8.65192328388683 | −8.65192328393455 | 4.77e-11 |
+| **GDF `KRHF`** | **−8.65527636655032** | −8.65527634481768 | **2.173e-8** |
+
+**The headline defect is closed: diamond went `1.523e+1 Ha` -> `2.173e-8`.**
+Diamond's `get_pp` is unmoved by defect 2 (its mesh already IS the estimate), so
+this leg measures defect 1 alone — and `2.173e-8` is diamond's ORDINARY GDF
+residual, not a remainder: §5 records `2.074e-8` for the same builder on the
+same cell at 2x2x2, and §1 records that GDF *fits* where FFTDF evaluates
+(`|E_FFTDF - E_GDF|` = `3.353e-3` here, upstream's own `3.353e-3`). He/`6-31g`
+lands two orders tighter (`3.017e-9`) because it is all-electron with `naux = 8`
+for `nao = 2`.
+
+### What it unblocks downstream
+
+`15-VERIFICATION` row 4's GDF leg was NOT MET because the mean field under it
+was wrong. With that fixed, `pyscf-pbc-mp`'s two GDF assertions became real
+oracle gates (`.planning/phases/15-periodic-ao2mo-kmp2/measurements/kmp2_gdf_and_rdm1.out`):
+
+| quantity | port | upstream | \|d\| |
+|---|---|---|---|
+| KMP2 `e_corr` on GDF, He/`6-31g` `[1,1,2]` | −0.01698936866861078 | −0.01698936907756816 | **4.090e-10** |
+
+`tests/kmp2.rs` had pinned that to **−0.015572369890603862**, `1.417e-3` from
+upstream — by its own comment, "what THIS port currently produces", precisely
+because there was no usable reference under it. It is now gated against
+upstream, and the `Lov` vs four-index AO2MO route agreement it also asserts
+(2e-15) survives the removal of `ff01948`'s `reverse` branch, which existed to
+force exactly that agreement.
+
+### Tests added
+
+| test | what it pins |
+|---|---|
+| `pyscf-pbc-df --test gdf -- sr_loop_takes_the_upper_triangle_from_the_conjugate_pair` | the `PBCunpack_tril_triu` assembly on a synthetic, deliberately non-Hermitian `L`; that a compact request is the stored block verbatim; and that an `s1` request with no conjugate pair is REFUSED rather than filled from the wrong block |
+| `pyscf-pbc-scf --test df_swap -- krhf_on_gdf_matches_upstream_he_631g_off_gamma` | GATE 1c — the energy, both routes, on the `nao > 1` + off-gamma + pinned-coarse-mesh fixture |
+
+### Two `tests/kmp2.rs` assertions corrected in passing
+
+Both were measured against upstream rather than guessed
+(`15-.../measurements/kmp2_gdf_and_rdm1.py`):
+
+1. the GDF `e_corr` pin above, now an oracle gate;
+2. `diamond_anchor_and_without_t2` asserted `Tr(gamma_k) == nelec` at EVERY
+   k-point, to 2e-10. **That identity does not hold per k-point and upstream
+   misses it by 2.8e-2**: the occupied- and virtual-block MP2 corrections cancel
+   only after the k-average. Upstream's traces on this anchor are
+   `[8.028298787714228, 7.971701212285773]`, mean exactly `8.0`. The test now
+   pins each trace against upstream (this port matches to **4.368e-9**) and
+   gates the k-AVERAGE at 2e-10. This failure is INDEPENDENT of the two defects
+   above — it reproduces bit-identically with the fixes stashed, and its cell
+   runs on FFTDF.

@@ -365,10 +365,16 @@ fn ao2mo_and_ao2mo_7d() {
             assert!(dev < AFT_AO2MO_TOL, "[ao2mo {name}] {dev:.3e}");
             assert!(dev7 < AFT_AO2MO_TOL, "[ao2mo_7d {name}] {dev7:.3e}");
         } else {
-            assert!(
-                dev.is_finite() && dev7.is_finite(),
-                "[{name}] produced a non-finite element"
-            );
+            // **GATED since 2026-09-05, where these two were only checked for
+            // non-finiteness.** The reason they were not gated was real: GDF's
+            // AO-level residual here was `1.221e-1`, the `j3c` defect
+            // `14-VERIFICATION.md §11` fixed, and gating it would have meant
+            // either hiding that finding behind a loosened number or failing
+            // for a reason Phase 15 does not own. With the `j3c` correct the
+            // residual is the ordinary DF fitting difference, so it gates.
+            let tol = if *name == "gdf" { GDF_AO2MO_TOL } else { MDF_AO2MO_TOL };
+            assert!(dev < tol, "[ao2mo {name}] {dev:.3e}");
+            assert!(dev7 < tol, "[ao2mo_7d {name}] {dev7:.3e}");
         }
     }
 }
@@ -382,6 +388,17 @@ const FFT_AO2MO_TOL: f64 = 6e-11;
 /// this deliberately coarse mesh, identical at the AO and MO levels. See
 /// `15-VERIFICATION.md §3.4`.
 const AFT_AO2MO_TOL: f64 = 6e-4;
+
+/// MEASURED the same way, after `14-VERIFICATION.md §11`: GDF `ao_eri`
+/// `1.988e-10`, `ao2mo` / `ao2mo_7d` `1.774e-9`. It was **`1.221e-1`** before
+/// that fix -- the `s2` off-diagonal k-pair packing defect, straight out of the
+/// `cderi` store and into every transform that reads it. One order of headroom.
+const GDF_AO2MO_TOL: f64 = 2e-8;
+
+/// MEASURED the same way: MDF `ao_eri` `1.243e-9`, `ao2mo` / `ao2mo_7d`
+/// `2.611e-8` -- MDF is GDF plus a plane-wave residual carried on a coarse
+/// mesh, so it sits an order above GDF here. One order of headroom.
+const MDF_AO2MO_TOL: f64 = 3e-7;
 
 // ---------------------------------------------------------------- 4. Lov
 
@@ -432,12 +449,23 @@ fn lov_blocks() {
             worst = worst.max(max_dev(&reordered, &want));
         }
     }
-    // MEASURED, not asserted cold: the residual here is the inherited GDF
-    // `j3c` baseline (15-VERIFICATION row 4, owned by Phase 14), not the Lov
-    // transform — which `tests/kmp2.rs` pins against the four-index route at
-    // 2e-15 on the same mean field.
+    // **GATED since 2026-09-05.** This was `assert!(worst.is_finite())` and a
+    // print, because the residual was **`7.518e-1`** — the inherited GDF `j3c`
+    // defect (15-VERIFICATION row 4), reached here even though the MOs come
+    // from upstream, which is exactly what identified the `cderi` store rather
+    // than the transform as the culprit. `14-VERIFICATION.md §11` fixed it and
+    // the residual is now **`1.569867e-5`** on diamond `gth-szv` `[1,1,2]`.
+    //
+    // The bar is an order above that, and it is deliberately NOT tightened to
+    // the He/`6-31g` scale: this is diamond with a pseudopotential, whose GDF
+    // `KRHF` sits at `2.173e-8` against upstream where He sits at `3.017e-9`,
+    // and `Lov` elements are `naux x nocc x nvir` MO quantities that amplify a
+    // `j3c` difference rather than averaging it away.
     println!("[lov diamond/gth-szv [1,1,2]] max_dev={worst:.6e}");
-    assert!(worst.is_finite(), "Lov produced a non-finite element");
+    assert!(
+        worst < 2e-4,
+        "Lov diamond max_dev = {worst:.6e}; upstream-matched j3c gives 1.569867e-5"
+    );
 }
 
 // ---------------------------------------------------------------- 5. KMP2
@@ -491,18 +519,35 @@ fn kmp2_energies() {
             );
             // `e_corr_ss + e_corr_os == e_corr` exactly, on every route.
             assert_eq!(got.e_corr_ss + got.e_corr_os, got.e_corr);
-            if route == "fftdf" {
-                // The measured phase gate (`measurements/README.md`). GDF is
-                // reported, not gated: 15-VERIFICATION row 4 records the
-                // inherited baseline gap and assigns it to Phase 14.
-                assert!(
-                    (got.e_corr - want).abs() < 2e-6,
-                    "[{key}] residual {:.3e}",
-                    (got.e_corr - want).abs()
-                );
-                assert!((got.e_corr_ss - want_ss).abs() < 2e-6);
-                assert!((got.e_corr_os - want_os).abs() < 2e-6);
-            }
+            // The measured phase gate (`measurements/README.md`), now applied
+            // to **both** routes. GDF used to be reported rather than gated
+            // because 15-VERIFICATION row 4 recorded a `1.289e-1` diamond
+            // residual on a mean field `1.523e+1 Ha` out, assigned to Phase 14.
+            // `14-VERIFICATION.md §11` fixed the two defects behind it; the
+            // four rows now measure (`e_hf` / `e_corr`):
+            //
+            // | row | `e_hf` residual | `e_corr` residual |
+            // |---|---|---|
+            // | diamond FFTDF | 4.772e-11 | 5.418e-11 |
+            // | diamond GDF   | 2.173e-8  | **3.420e-8** |
+            // | He/6-31g FFTDF| 5.849e-12 | 2.719e-11 |
+            // | He/6-31g GDF  | 3.017e-9  | **4.090e-10** |
+            //
+            // — every one inside `2e-6` with at least a factor of 58 to spare.
+            assert!(
+                (got.e_corr - want).abs() < 2e-6,
+                "[{key}] residual {:.3e}",
+                (got.e_corr - want).abs()
+            );
+            assert!((got.e_corr_ss - want_ss).abs() < 2e-6);
+            assert!((got.e_corr_os - want_os).abs() < 2e-6);
+            // The mean field the correlation energy sits on is gated too: a
+            // KMP2 residual means nothing if the reference under it drifted.
+            assert!(
+                (result.e_tot - want_hf).abs() < 2e-6,
+                "[{key}] mean-field residual {:.3e}",
+                (result.e_tot - want_hf).abs()
+            );
         }
     }
 }

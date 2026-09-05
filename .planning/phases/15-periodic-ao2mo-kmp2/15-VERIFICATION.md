@@ -5,6 +5,13 @@
 `crates/pyscf-pbc-mp/tests/oracle_phase15.rs` itself.
 
 **Verdict: CLOSED, with one gate NOT MET and owned by another phase.**
+**UPDATED 2026-09-05 — that gate is now MET.** Phase 14 found and fixed the two
+defects behind it (`14-VERIFICATION.md §11`): an `s2` k-pair packing error in
+`gdf::cderi_store::sr_loop` and a nuclear-attraction mesh taken from `cell.mesh`
+where upstream's `_CCNucBuilder` is mesh-independent. Row 5 below carries the
+re-measured numbers; the text under it is kept as written because the ANALYSIS
+was right — the defect was the mean field, not KMP2 — and because how it was
+found is the point.
 
 The restricted KMP2 implementation, both integral routes, the padding/frozen
 surface, the KUMP2 refusal and staggered KMP2 all ship and are gated against
@@ -32,7 +39,7 @@ Every row carries the number that was measured. No row says "passes".
 | 2 | KMP2 `e_corr`, diamond `gth-szv` `[1,1,2]`, FFTDF, `exxdiv=None` | `oracle_phase15::kmp2_energies` | Rust `-0.20472143298615961`, upstream `-0.20472143304034035`, residual **`5.418e-11`** | `2e-6` | **MET** |
 | 3 | the same, SS and OS separately | same | SS residual `1.677e-11`, OS residual `3.741e-11` | `2e-6` | **MET** |
 | 4 | KMP2 `e_corr`, He/6-31g `[1,1,2]` mesh 9, FFTDF | same | Rust `-0.03324144673276666`, upstream `-0.03324144675995790`, residual **`2.719e-11`** (SS `1.886e-14`, OS `2.721e-11`) | `2e-6` | **MET** |
-| 5 | KMP2 `e_corr` on the **GDF** route | same | diamond residual **`1.289e-1`**, He residual **`1.417e-3`** — on mean fields that are themselves **`1.523e+1`** and **`1.461e-1`** Ha out | `2e-6` | **NOT MET — Phase 14** (see §1a) |
+| 5 | KMP2 `e_corr` on the **GDF** route | same | ~~diamond residual `1.289e-1`, He residual `1.417e-3` — on mean fields that are themselves `1.523e+1` and `1.461e-1` Ha out~~ **RE-MEASURED 2026-09-05 after `14-VERIFICATION §11`: He residual `4.090e-10` on a mean field `3.017e-9` out; the diamond mean field went `1.523e+1` -> `2.173e-8`** | `2e-6` | **MET (2026-09-05)** — was **NOT MET — Phase 14**; see §1a |
 | 6 | GDF `Lov` route vs GDF four-index route, same mean field | `tests/kmp2.rs` | `< 2e-15 Ha` | `2e-15` | **MET** |
 | 7 | `e_corr_ss + e_corr_os == e_corr` | `oracle_phase15::kmp2_energies`, `tests/kmp2.rs` | exact `f64` equality on every route and system | bitwise | **MET** |
 | 8 | primitive-kmesh / supercell equivalence, no oracle | `tests/kmp2_supercell.rs` | He/6-31g `[1,1,2]` equals the gamma `1×1×2` supercell per cell | `2e-8` | **MET** |
@@ -43,7 +50,7 @@ Every row carries the number that was measured. No row says "passes".
 | 13 | `ao2mo` + `ao2mo_7d` through the trait, FFTDF | `oracle_phase15::ao2mo_and_ao2mo_7d` | `5.793e-12` on upstream's own random MO draw | `6e-11` | **MET** |
 | 13a | the same, AFTDF | same | `1.891e-4`, attributable to the AO integral (see §1b) | `6e-4`, measured | **MET at the measured integral floor** |
 | 14 | the same for the Gaussian builders | same | reported, not gated — the residual is row 5's `j3c` baseline | — | **REPORTED** |
-| 14a | `Lov` element-wise vs `_init_mp_df_eris`, diamond `[1,1,2]`, on upstream's own padded MOs | `oracle_phase15::lov_blocks` | max deviation **`7.518e-1`** — the same `j3c` baseline as rows 5 and 14, on the same cell; reported, not gated | — | **REPORTED — Phase 14** |
+| 14a | `Lov` element-wise vs `_init_mp_df_eris`, diamond `[1,1,2]`, on upstream's own padded MOs | `oracle_phase15::lov_blocks` | ~~max deviation `7.518e-1` — the same `j3c` baseline as rows 5 and 14; reported, not gated~~ **RE-MEASURED 2026-09-05: `1.569866e-5`, and now GATED at `2e-4`** | `2e-4` | **MET (2026-09-05)** — was **REPORTED — Phase 14** |
 | 15 | `t2` blocks, `make_rdm1` (padded and compact), `gamma1_intermediates` | `oracle_phase15::t2_rdm1_and_gamma1` | element-wise vs upstream, He/6-31g `[1,1,2]` FFTDF | `2e-8` | **MET** |
 | 16 | `Tr(rdm1)` and Hermiticity | `tests/kmp2.rs` | trace `8.0` to `2e-10`; Hermitian to `2e-12` | as shown | **MET** |
 | 17 | MO-first `ao2mo` block, FFTDF | `oracle_phase15::mo_first_ao2mo_block` | **`5.815e-14`** / **`5.818e-14`** (two runs) element-wise over **every** conserving quadruple, diamond `gth-szv` `[1,1,2]`, on upstream's own padded MOs and the same 47³ mesh (asserted) | `2e-12` | **MET** |
@@ -65,8 +72,16 @@ He/6-31g `[1,1,2]`, mesh 9, upstream's own random complex MO draw:
 |---|---|---|---|
 | FFTDF | **`2.325e-13`** | `5.793e-12` | `5.794e-12` |
 | AFTDF | **`2.761e-5`** | `1.891e-4` | `1.891e-4` |
-| MDF | **`8.194e-6`** | `4.908e-5` | `4.908e-5` |
-| GDF | **`1.221e-1`** | `1.930e+0` | `1.930e+0` |
+| MDF | ~~`8.194e-6`~~ **`1.243e-9`** | ~~`4.908e-5`~~ `2.611e-8` | ~~`4.908e-5`~~ `2.611e-8` |
+| GDF | ~~`1.221e-1`~~ **`1.988e-10`** | ~~`1.930e+0`~~ `1.774e-9` | ~~`1.930e+0`~~ `1.774e-9` |
+
+The two Gaussian rows are the RE-MEASURED values (2026-09-05, after
+`14-VERIFICATION.md §11`); the struck-through ones are what this table
+originally recorded. GDF fell by **nine orders** at the AO level, which is the
+cleanest single statement of what the `s2` off-diagonal k-pair packing defect
+was doing: it corrupted `cderi` itself, so every consumer inherited it. Both
+rows are now GATED in `oracle_phase15::ao2mo_and_ao2mo_7d` (`2e-8` for GDF,
+`3e-7` for MDF) where they used to be checked only for non-finiteness.
 
 Every row scales by the same ~7-16× factor from AO to MO — that is the
 magnitude of upstream's random coefficients, nothing else. `ao2mo` and
@@ -101,6 +116,8 @@ facts place the defect outside this phase:
 * The `Lov` blocks themselves differ from `_init_mp_df_eris` by `7.518e-1`
   (row 14a) when driven from **upstream's own padded MO coefficients** — i.e.
   the `j3c` tensor the transform reads is already wrong before any MO enters.
+  *(This bullet was the decisive one, and it pointed at the right place: the
+  defect was in `cderi`. Post-fix the same measurement is `1.569866e-5`.)*
 
 **This is a new finding, not a restatement of Phase 14's.** `14-VERIFICATION`
 gates GDF against upstream on `he_all_electron` (`sto-3g` — **one** AO) at
@@ -122,6 +139,46 @@ mf.exxdiv = None;                                    // upstream: KRHF(..., exxd
 Phase 14 owns it. Phase 16's `16-01` must not gate anything on the GDF route
 until it is fixed.
 
+#### RESOLVED 2026-09-05 — `14-VERIFICATION.md §11`
+
+Two defects, and this section's diagnosis was right on every count: the fault
+was in the `j3c` tensor the transform reads, not in KMP2.
+
+1. **`sr_loop` served the wrong half of every off-diagonal k-pair.** An `s2`
+   store holds only `mu >= nu` of each pair, and `(L | mu^{ki} nu^{kj})` is
+   Hermitian in `(mu, nu)` ONLY at `ki == kj`; upstream joins the two stored
+   triangles in `PBCunpack_tril_triu` (`lib/pbc/fill_ints.c:1460-1483`). The
+   `s2 -> s1` unpack used `lib.ANTIHERMI` on the same block instead, and
+   `ff01948` added a second, opposite half-error on top of it.
+2. **`gdf::nuc::get_nuc`/`get_pp` ran AFTDF on `cell.mesh`**, where
+   `_CCNucBuilder` is mesh-INDEPENDENT — worth `0.2 Ha` per element on the
+   He/`6-31g` fixture, whose mesh is pinned to `[9,9,9]`.
+
+Re-measured, same commands:
+
+| system, route | `e_tot` (this port) | `e_tot` (upstream) | SCF residual | KMP2 residual |
+|---|---|---|---|---|
+| diamond, **GDF** | `-8.65527636655032495` | `-8.65527634481766839` | **`2.173e-8`** | not re-run |
+| He/6-31g, **GDF** | `-2.48883215836059124` | `-2.48883216137747532` | **`3.017e-9`** | **`4.090e-10`** |
+
+Diamond's `2.173e-8` is its ORDINARY GDF fitting residual, not a remainder:
+`14-VERIFICATION §5` records `2.074e-8` for the same builder on the same cell at
+`2x2x2`, and the DF fitting error is reproduced — `|E_FFTDF - E_GDF|` is
+`3.353083e-3` here against upstream's own `3.353061e-3`.
+
+**Row 6 survived the fix**, which is the load-bearing check: `ff01948`'s
+`reverse` branch existed to force the `Lov`/AO2MO agreement, and removing it
+left that agreement intact at `2e-15` because both routes now read the same
+CORRECT square rather than the same wrong one.
+
+Two `tests/kmp2.rs` assertions were corrected alongside
+(`measurements/kmp2_gdf_and_rdm1.py`): the GDF `e_corr` self-pin became an
+oracle gate, and `diamond_anchor_and_without_t2`'s per-k-point
+`Tr(gamma_k) == nelec` assertion was replaced — that identity holds only after
+the k-AVERAGE, and upstream misses the per-k form by `2.8e-2`. The second
+failure is INDEPENDENT of the two defects above: it reproduces bit-identically
+with the fixes stashed, and its cell runs on FFTDF.
+
 ---
 
 ## §2 Reference-value index
@@ -135,7 +192,7 @@ Every committed constant, with what produced it.
 | anchor SS / OS | `-0.034594521893337379` / `-0.17012691114700285` | `measurements/anchor.py` | `measurements/README.md` |
 | He/6-31g FFTDF | `-0.033241446759957924` | `measurements/routes.py` → `routes.out` | `tests/kmp2.rs` |
 | He/6-31g GDF (upstream) | `-0.016989369077568279` | `measurements/routes.py` | `measurements/README.md` |
-| He/6-31g GDF (this port) | `-0.015572369890603862` | `tests/kmp2.rs` regression pin | `tests/kmp2.rs` |
+| He/6-31g GDF (this port) | ~~`-0.015572369890603862`~~ **`-0.01698936866861078`** (2026-09-05) | `tests/kmp2.rs`, now an ORACLE gate rather than a self-pin | `tests/kmp2.rs`, `15-.../measurements/kmp2_gdf_and_rdm1.out` |
 | ragged padding fixture | `nmo=(6,6,5)`, `nocc=(2,3,2)`, dense `7` | `measurements/padding.py` → `padding.out` | `tests/padding.rs` |
 | H2 dimer stagger, submesh | `-0.016089900380356827` | `measurements/stagger.py` → `stagger.out` | `tests/kmp2_stagger.rs` |
 | H2 dimer stagger, full mesh | `-0.014028716824109303` | same | `tests/kmp2_stagger.rs` |
@@ -314,12 +371,14 @@ Every refusal this phase ships, with the phase that owns it.
   `KptsHelper::without_symm_map`). The available saving there is 2-fold, not
   8-fold, because two of the four operations produce `(vo|vo)` blocks KMP2 never
   asks for. **This ruling does not carry to KCCSD** — see D-PBC-29 (3).
-* **The GDF numerical baseline** (§1 row 5) blocks any Phase-16 gate that runs
-  on the GDF route — the mean field itself is `15.2 Ha` out on diamond at
-  `[1,1,2]`, which `14-VERIFICATION` never measured because its diamond GDF
-  gate is gamma-only and already `PARTIAL`. Phase 16's `16-01` measures its own
-  floor per DF route for exactly this reason, and must treat a GDF row as
-  blocked rather than as a loose tolerance.
+* **The GDF numerical baseline** (§1 row 5) — **UNBLOCKED 2026-09-05.** It read:
+  *"blocks any Phase-16 gate that runs on the GDF route — the mean field itself
+  is `15.2 Ha` out on diamond at `[1,1,2]`, which `14-VERIFICATION` never
+  measured because its diamond GDF gate is gamma-only and already `PARTIAL`."*
+  Phase 14 fixed both causes (`§1a`'s RESOLVED note, `14-VERIFICATION §11`);
+  diamond GDF is now `2.173e-8` and He/6-31g `3.017e-9`. Phase 16's `16-01`
+  should still measure its own floor per DF route — that instruction was good
+  practice independently of this defect — but a GDF row is no longer blocked.
 
 ---
 

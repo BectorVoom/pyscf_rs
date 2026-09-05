@@ -68,6 +68,22 @@ and never runs under a plain `cargo test`.
   The `[2,2,2]` and `gth-dzvp` legs (~26 s/quadruple × 512) were **not
   reached** and are reported unreached, not extrapolated.
 * **The one NOT-MET row is Phase 14's, and it is worse than Phase 14 knew.**
+  **[RESOLVED 2026-09-05 — see `14-VERIFICATION.md §11`.]** Two independent GDF
+  defects, both invisible to every Phase-14 gate because those gate on ONE AO
+  (`he_all_electron`/`sto-3g`, where `nao_pair == nao * nao`) or at GAMMA (where
+  every k-pair is diagonal): (1) `sr_loop` filled the upper triangle of an
+  off-diagonal k-pair from the WRONG block — `lib.ANTIHERMI` on the same block
+  rather than `PBCunpack_tril_triu`'s conjugate pair — with commit `ff01948`
+  adding a second, opposite half-error on top; (2) `gdf::nuc::get_nuc`/`get_pp`
+  ran AFTDF on `cell.mesh`, where upstream's `_CCNucBuilder` is mesh-INDEPENDENT,
+  so a pinned coarse mesh silently moved the nuclear attraction by 0.2 Ha per
+  element. He/6-31g `[1,1,2]` went **1.461e-1 -> 3.017e-9**;
+  `measurements/offgamma_multiao.out` records the fixture and
+  `df_swap::krhf_on_gdf_matches_upstream_he_631g_off_gamma` is the new gate.
+  Diamond `[1,1,2]` went **1.523e+1 -> 2.173e-8** (`-8.65527636655032` against
+  upstream `-8.65527634481768`), which is diamond's ordinary GDF fitting
+  residual — `14-VERIFICATION §5` records `2.074e-8` for the same builder on the
+  same cell at 2x2x2.
   `oracle_phase15::kmp2_energies` now prints the **mean-field** residual beside
   the KMP2 one, and that is where the whole thing goes wrong: this port's
   **diamond GDF KRHF at `[1,1,2]` is `-23.8828` against upstream's `-8.6553`,

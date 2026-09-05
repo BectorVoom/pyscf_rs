@@ -66,6 +66,39 @@ pub fn he_all_electron() -> Cell {
     .expect("He cell must build")
 }
 
+/// He in the same fcc cell as [`he_all_electron`], but on `6-31g` — TWO AOs —
+/// with the mesh PINNED to `[9,9,9]`.
+///
+/// Both departures from `he_all_electron` are load-bearing, and they are the
+/// two blind spots that let a wrong GDF ship:
+///
+/// * `sto-3g` on He is ONE AO, so `nao_pair == nao * nao == 1` and the `s2`
+///   store and the `s1` square are the same array. No `(mu, nu)` packing bug
+///   can show up on it.
+/// * `cell.mesh` unset makes `Cell::build` choose `[43,43,43]`, at which the
+///   plane-wave nuclear attraction is already converged. Upstream's
+///   `_CCNucBuilder` is converged at ANY mesh, so a port that simply evaluates
+///   the whole integral on `cell.mesh` agrees with it there by luck.
+///
+/// The fixture is `crates/pyscf-pbc-mp/tests/common/mod.rs`'s `helium_631g`,
+/// duplicated rather than shared: the two crates' `tests/common` are separate
+/// modules by construction.
+pub fn helium_631g() -> Cell {
+    let h = 2.834589;
+    Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![("He".into(), [0.0, 0.0, 0.0])]),
+            basis: BasisInput::Name("6-31g".into()),
+            unit: Unit::Bohr,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]),
+        mesh: Some([9, 9, 9]),
+        ..Default::default()
+    })
+    .expect("He/6-31g cell must build")
+}
+
 pub fn bohr_cell(a: [[f64; 3]; 3], atoms: Vec<(String, [f64; 3])>, pseudo: Option<&str>) -> Cell {
     Cell::build(CellBuildArgs {
         mole: MoleBuildArgs {

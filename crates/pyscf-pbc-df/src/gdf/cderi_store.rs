@@ -65,17 +65,37 @@ pub struct SrBlock {
 }
 
 /// `sr_loop(kpti_kptj, max_memory, compact, blksize, aux_slice)` —
-/// `df.py:338-400`.
+/// `df.py:338-400`, through `_load3c.getitem` (`:807-836`) and
+/// `_KPair3CLoader.__getitem__` (`:990-1009`).
 ///
 /// `compact = true` returns the `s2`-packed columns, `false` the full `nao²`
-/// square. The conversion is where upstream's one genuinely subtle line lives:
-/// unpacking the IMAGINARY part uses `lib.ANTIHERMI`, i.e. the upper triangle is
-/// the NEGATED lower one. It is invisible at gamma, where the imaginary part is
-/// zero, and wrong everywhere else — hence the `k != 0` test in
-/// `tests/gdf.rs`.
+/// square.
+///
+/// # An `s2` store holds HALF of each off-diagonal k-pair
+///
+/// `(L | mu^{ki} nu^{kj})` is Hermitian in `(mu, nu)` only when `ki == kj`.
+/// Away from the diagonal the packed store keeps the lower triangle `mu >= nu`
+/// of the pair `(ki, kj)` and the lower triangle of `(kj, ki)`, and the two
+/// halves are joined by
+///
+/// ```text
+/// L(ki,kj)[nu, mu] = conj(L(kj,ki)[mu, nu])          mu > nu
+/// ```
+///
+/// — `PBCunpack_tril_triu` (`pyscf/lib/pbc/fill_ints.c:1460-1483`), which
+/// upstream calls with `tril` from the `(ki, kj)` block and `triu` from the
+/// `(kj, ki)` one. So unpacking to `s1` needs BOTH blocks; `lib.ANTIHERMI` on
+/// one block is the `ki == kj` special case of the same formula, not the
+/// general rule.
+///
+/// A `compact` request is the stored `(ki, kj)` block verbatim, whatever the
+/// k-pair: upstream reaches the same place by unpacking and then re-packing
+/// the lower triangle (`df.py:359-375`).
 ///
 /// # Errors
-/// [`PbcDfError::Core`] when the pair was never computed.
+/// [`PbcDfError::Core`] when the pair was never computed, and — for an `s1`
+/// request off the k-diagonal — when its conjugate pair was not computed
+/// either, since the upper triangle is unreachable without it.
 pub fn sr_loop(
     cderi: &Cderi,
     ki: usize,
@@ -83,74 +103,57 @@ pub fn sr_loop(
     nao: usize,
     compact: bool,
 ) -> Result<Vec<SrBlock>, PbcDfError> {
-    // PySCF's v1 cderi store contains the lower-triangular k-pairs.  `_load3c`
-    // serves an upper-triangular request from the reverse pair by applying
-    // L(ki,kj)[mu,nu] = conj(L(kj,ki)[nu,mu]).  Builders in this port retain
-    // both directions for convenience, but using the independently evaluated
-    // upper block loses that exact identity and makes the KMP2 Lov route differ
-    // from `df_ao2mo` at self-inverse momentum transfers.
-    let reverse = ki < kj;
-    let (bi, bj) = if reverse { (kj, ki) } else { (ki, kj) };
-    let b = cderi.get(bi, bj).ok_or_else(|| {
-        PbcDfError::Core(pyscf_core::PyscfRsError::Core(
-            pyscf_core::CoreError::InvalidMolecule(format!(
-                "sr_loop: no cderi block for the k-pair ({ki}, {kj}); build() with \
-                 j_only = false to get every pair"
-            )),
-        ))
-    })?;
-    let mut first = reshape_block(b, cderi.aosym, nao, compact)?;
-    if reverse {
-        reverse_pair_in_place(&mut first, nao, compact);
-    }
-    let mut out = vec![first];
+    let b = cderi.get(ki, kj).ok_or_else(|| missing_pair(ki, kj))?;
+    // `(k, k)` is Hermitian in `(mu, nu)`, so it is its own conjugate pair.
+    let conj_pair = if ki == kj { Some(b) } else { cderi.get(kj, ki) };
+    let mut out = vec![reshape_block(b, conj_pair, cderi.aosym, nao, compact, ki, kj)?];
     if let Some(neg) = &b.negative {
-        let nb = CderiBlock {
-            data: neg.clone(),
-            rank: neg.re.len() / b.nao_pair,
-            nao_pair: b.nao_pair,
-            negative: None,
+        let nb = negative_block(neg, b.nao_pair);
+        let nc = if ki == kj {
+            Some(nb.clone())
+        } else {
+            conj_pair
+                .and_then(|u| u.negative.as_ref().map(|n| negative_block(n, u.nao_pair)))
         };
-        let mut m = reshape_block(&nb, cderi.aosym, nao, compact)?;
-        if reverse {
-            reverse_pair_in_place(&mut m, nao, compact);
-        }
+        let mut m = reshape_block(&nb, nc.as_ref(), cderi.aosym, nao, compact, ki, kj)?;
         m.sign = -1;
         out.push(m);
     }
     Ok(out)
 }
 
-fn reverse_pair_in_place(block: &mut SrBlock, nao: usize, compact: bool) {
-    if compact {
-        // A packed Hermitian AO pair is unchanged by transpose; conjugation
-        // remains load-bearing away from gamma.
-        block.im.iter_mut().for_each(|v| *v = -*v);
-        return;
-    }
-    let mut re = vec![0.0; block.re.len()];
-    let mut im = vec![0.0; block.im.len()];
-    for l in 0..block.naux {
-        let base = l * nao * nao;
-        for mu in 0..nao {
-            for nu in 0..nao {
-                let dst = base + mu * nao + nu;
-                let src = base + nu * nao + mu;
-                re[dst] = block.re[src];
-                im[dst] = -block.im[src];
-            }
-        }
-    }
-    block.re = re;
-    block.im = im;
+fn missing_pair(ki: usize, kj: usize) -> PbcDfError {
+    PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+        pyscf_core::CoreError::InvalidMolecule(format!(
+            "sr_loop: no cderi block for the k-pair ({ki}, {kj}); build() with \
+             j_only = false to get every pair"
+        )),
+    ))
 }
 
-/// `pack_tril` / `unpack_tril(..., ANTIHERMI)` on one block.
+/// The `2-D` negative branch as a standalone block, so it reshapes by the same
+/// code path as the positive one.
+fn negative_block(neg: &CTensor, nao_pair: usize) -> CderiBlock {
+    CderiBlock {
+        data: neg.clone(),
+        rank: neg.re.len() / nao_pair,
+        nao_pair,
+        negative: None,
+    }
+}
+
+/// `pack_tril` / `PBCunpack_tril_triu` on one block.
+///
+/// `conj_pair` is the `(kj, ki)` block, and it is consulted only by the
+/// `s2 -> s1` unpack, where it supplies the upper triangle. See [`sr_loop`].
 fn reshape_block(
     b: &CderiBlock,
+    conj_pair: Option<&CderiBlock>,
     stored: Aosym,
     nao: usize,
     compact: bool,
+    ki: usize,
+    kj: usize,
 ) -> Result<SrBlock, PbcDfError> {
     let want = if compact { Aosym::S2 } else { Aosym::S1 };
     let ncol = want.nao_pair(nao);
@@ -165,33 +168,61 @@ fn reshape_block(
     }
     let mut re = vec![0.0_f64; b.rank * ncol];
     let mut im = vec![0.0_f64; b.rank * ncol];
-    for l in 0..b.rank {
-        for mu in 0..nao {
-            for nu in 0..nao {
-                let (lo, hi) = if mu >= nu { (nu, mu) } else { (mu, nu) };
-                let tri = hi * (hi + 1) / 2 + lo;
-                let sq = mu * nao + nu;
-                match (stored, want) {
-                    (Aosym::S1, Aosym::S2) => {
-                        if mu >= nu {
-                            re[l * ncol + tri] = b.data.re[l * b.nao_pair + sq];
-                            im[l * ncol + tri] = b.data.im[l * b.nao_pair + sq];
-                        }
+    match (stored, want) {
+        (Aosym::S1, Aosym::S2) => {
+            for l in 0..b.rank {
+                for mu in 0..nao {
+                    for nu in 0..=mu {
+                        let tri = mu * (mu + 1) / 2 + nu;
+                        let sq = mu * nao + nu;
+                        re[l * ncol + tri] = b.data.re[l * b.nao_pair + sq];
+                        im[l * ncol + tri] = b.data.im[l * b.nao_pair + sq];
                     }
-                    (Aosym::S2, Aosym::S1) => {
-                        re[l * ncol + sq] = b.data.re[l * b.nao_pair + tri];
-                        // `lib.ANTIHERMI`: the upper triangle is the NEGATED
-                        // lower one. Zero at gamma, load-bearing elsewhere.
-                        im[l * ncol + sq] = if mu >= nu {
-                            b.data.im[l * b.nao_pair + tri]
-                        } else {
-                            -b.data.im[l * b.nao_pair + tri]
-                        };
-                    }
-                    _ => {}
                 }
             }
         }
+        (Aosym::S2, Aosym::S1) => {
+            let u = conj_pair.ok_or_else(|| {
+                PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                    pyscf_core::CoreError::InvalidMolecule(format!(
+                        "sr_loop: the s2 block for ({ki}, {kj}) carries only mu >= nu; \
+                         unpacking it to the full square needs the conjugate pair \
+                         ({kj}, {ki}), which was never computed"
+                    )),
+                ))
+            })?;
+            if u.rank != b.rank || u.nao_pair != b.nao_pair {
+                return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                    pyscf_core::CoreError::InvalidMolecule(format!(
+                        "sr_loop: the k-pair ({ki}, {kj}) has rank {}/{} columns and its \
+                         conjugate ({kj}, {ki}) has {}/{}; the two halves of one square \
+                         cannot come from different decompositions",
+                        b.rank, b.nao_pair, u.rank, u.nao_pair
+                    )),
+                )));
+            }
+            for l in 0..b.rank {
+                for mu in 0..nao {
+                    for nu in 0..nao {
+                        let sq = l * ncol + mu * nao + nu;
+                        if mu >= nu {
+                            // `pout[i*nao+j] = ptril[ij]`.
+                            let tri = l * b.nao_pair + mu * (mu + 1) / 2 + nu;
+                            re[sq] = b.data.re[tri];
+                            im[sq] = b.data.im[tri];
+                        } else {
+                            // `pout[j*nao+i] = conj(ptriu[ij])`, `ptriu` being
+                            // the CONJUGATE pair's lower triangle. Reduces to
+                            // `lib.ANTIHERMI` when `u` is `b`, i.e. at `ki == kj`.
+                            let tri = l * u.nao_pair + nu * (nu + 1) / 2 + mu;
+                            re[sq] = u.data.re[tri];
+                            im[sq] = -u.data.im[tri];
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
     }
     Ok(SrBlock {
         re,

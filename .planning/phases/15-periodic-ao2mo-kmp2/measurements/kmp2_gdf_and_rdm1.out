@@ -1,0 +1,19 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+--- 1. KMP2 e_corr on He/6-31g [1,1,2], exxdiv=None, conv_tol=1e-11 ---
+fftdf: e_hf   = -2.9503735493321335
+fftdf: e_corr = -0.03324144675995794   (with_df_ints=False)
+gdf: e_hf   = -2.4888321613774753
+gdf: e_corr = -0.016989369077568164   (with_df_ints=True)
+gdf: e_corr = -0.01698936907756816   (with_df_ints=False)
+
+--- 2. per-k RDM1 traces on the diamond anchor [1,1,2] ---
+    Tr(gamma_k) is NOT nelec per k-point; only the k-AVERAGE is.
+e_corr = -0.20472143304034035
+  Tr(gamma_0) = 8.028298787714228
+  Tr(gamma_1) = 7.971701212285773
+  mean          = 8.0
+  cell.nelectron = 8
+  |mean - nelec| = 0.000e+00

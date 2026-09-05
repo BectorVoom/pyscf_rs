@@ -191,6 +191,152 @@ fn sr_loop_unpacks_the_triangle() {
     assert_eq!(back[0].im, packed[0].im);
 }
 
+/// **An `s2` block holds HALF of an off-diagonal k-pair, and the other half
+/// lives in the CONJUGATE pair's block.**
+///
+/// `(L | mu^{ki} nu^{kj})` is Hermitian in `(mu, nu)` only at `ki == kj`. Away
+/// from the diagonal, upstream assembles the square from TWO stored triangles —
+/// `_KPair3CLoader.__getitem__` (`df.py:990-1009`) hands `PBCunpack_tril_triu`
+/// (`pyscf/lib/pbc/fill_ints.c:1460-1483`) `tril` from `(ki, kj)` and `triu`
+/// from `(kj, ki)`:
+///
+/// ```text
+/// out[mu, nu] = tril[mu, nu]           mu >= nu
+/// out[nu, mu] = conj(triu[mu, nu])     mu >  nu
+/// ```
+///
+/// Reconstructing the upper triangle from `lib.ANTIHERMI` on the SAME block
+/// instead — correct at gamma, where the block is Hermitian — silently
+/// substitutes the wrong pair's integrals off the diagonal, and no test on a
+/// one-AO cell can see it: `nao = 1` makes `s2` and `s1` the same array.
+///
+/// Synthetic, for `sr_loop_unpacks_the_triangle`'s reason: the assembly is pure
+/// index arithmetic, and the two blocks are given DELIBERATELY UNRELATED values
+/// so that taking either from the wrong one is a visible failure.
+#[test]
+fn sr_loop_takes_the_upper_triangle_from_the_conjugate_pair() {
+    use pyscf_algebra::CTensor;
+    use pyscf_pbc_df::gdf::sr_loop;
+    use pyscf_pbc_df::gdf_builder::j3c::{Cderi, CderiBlock};
+
+    let nao = 3usize;
+    let npair = nao * (nao + 1) / 2;
+    let rank = 2usize;
+    let tri = |mu: usize, nu: usize| {
+        let (hi, lo) = if mu >= nu { (mu, nu) } else { (nu, mu) };
+        hi * (hi + 1) / 2 + lo
+    };
+
+    // The tensor the store is HALVES OF: `L(0,1)[L, mu, nu]`, deliberately
+    // NEITHER symmetric nor Hermitian in `(mu, nu)`, so every wrong way of
+    // filling the upper triangle produces a different array.
+    let m = |l: usize, mu: usize, nu: usize| {
+        let i = (l * nao + mu) * nao + nu;
+        (1.0 + i as f64, 0.25 - 0.5 * i as f64 + 3.0 * mu as f64)
+    };
+    // What a `s2` store actually holds: the lower triangle of each pair, with
+    // `L(1,0)[mu, nu] = conj(L(0,1)[nu, mu])` (`fill_ints.c:1460-1483`).
+    let mut b01 = CderiBlock {
+        data: CTensor {
+            re: vec![0.0; rank * npair],
+            im: vec![0.0; rank * npair],
+        },
+        rank,
+        nao_pair: npair,
+        negative: None,
+    };
+    let mut b10 = CderiBlock { ..b01.clone() };
+    for l in 0..rank {
+        for mu in 0..nao {
+            for nu in 0..=mu {
+                let t = l * npair + tri(mu, nu);
+                let (re, im) = m(l, mu, nu);
+                b01.data.re[t] = re;
+                b01.data.im[t] = im;
+                // conj(L(0,1)[nu, mu]) -- the TRANSPOSED element.
+                let (re, im) = m(l, nu, mu);
+                b10.data.re[t] = re;
+                b10.data.im[t] = -im;
+            }
+        }
+    }
+
+    let mut blocks = std::collections::HashMap::new();
+    blocks.insert(1, b01.clone()); // ki*nkpts + kj = 0*2 + 1
+    blocks.insert(2, b10.clone()); // 1*2 + 0
+    let c = Cderi {
+        blocks,
+        kpts: vec![[0.0; 3], [0.1, 0.2, 0.3]],
+        aosym: Aosym::S2,
+    };
+
+    // 1. A COMPACT request is the stored `(ki, kj)` block, verbatim. Serving it
+    //    from the conjugate pair is not a re-packing -- the packed store has no
+    //    `mu < nu` entry to transpose into place -- it is a different integral,
+    //    and `b01 != b10` here precisely because `L` is not symmetric.
+    let packed = sr_loop(&c, 0, 1, nao, true).expect("compact (0,1)");
+    assert_eq!(packed[0].re, b01.data.re, "compact (0,1) real");
+    assert_eq!(packed[0].im, b01.data.im, "compact (0,1) imaginary");
+    let packed10 = sr_loop(&c, 1, 0, nao, true).expect("compact (1,0)");
+    assert_eq!(packed10[0].re, b10.data.re, "compact (1,0) real");
+    assert_eq!(packed10[0].im, b10.data.im, "compact (1,0) imaginary");
+    assert_ne!(
+        b01.data.re, b10.data.re,
+        "the fixture is pointless unless the two blocks differ"
+    );
+
+    // 2. The SQUARE reassembles `L(0,1)` EXACTLY -- both triangles, from the
+    //    two halves the store keeps.
+    let sq = sr_loop(&c, 0, 1, nao, false).expect("square (0,1)");
+    assert_eq!(sq[0].ncol, nao * nao);
+    for l in 0..rank {
+        for mu in 0..nao {
+            for nu in 0..nao {
+                let at = l * nao * nao + mu * nao + nu;
+                assert_eq!(
+                    (sq[0].re[at], sq[0].im[at]),
+                    m(l, mu, nu),
+                    "square (0,1) L={l} ({mu},{nu})"
+                );
+            }
+        }
+    }
+
+    // 3. And the identity that assembly exists to preserve, stated on the
+    //    OUTPUT: `L(ki,kj)[mu,nu] == conj(L(kj,ki)[nu,mu])` over the WHOLE
+    //    square, not just the half either block stores.
+    let sq10 = sr_loop(&c, 1, 0, nao, false).expect("square (1,0)");
+    for l in 0..rank {
+        for mu in 0..nao {
+            for nu in 0..nao {
+                let a = l * nao * nao + mu * nao + nu;
+                let b = l * nao * nao + nu * nao + mu;
+                assert_eq!(sq[0].re[a], sq10[0].re[b], "hermiticity re L={l} ({mu},{nu})");
+                assert_eq!(
+                    sq[0].im[a], -sq10[0].im[b],
+                    "hermiticity im L={l} ({mu},{nu})"
+                );
+            }
+        }
+    }
+
+    // 4. A square that needs a conjugate pair the store never computed is
+    //    REFUSED, not silently filled from the wrong block.
+    let half = Cderi {
+        blocks: std::iter::once((1, b01.clone())).collect(),
+        kpts: c.kpts.clone(),
+        aosym: Aosym::S2,
+    };
+    assert!(
+        sr_loop(&half, 0, 1, nao, true).is_ok(),
+        "a compact request never needs the conjugate pair"
+    );
+    assert!(
+        sr_loop(&half, 0, 1, nao, false).is_err(),
+        "the upper triangle is unreachable without the conjugate pair"
+    );
+}
+
 /// A pair that was never built must be REFUSED, not silently zero — `j_only`
 /// keeps only the diagonal.
 #[test]
