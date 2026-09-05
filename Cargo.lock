@@ -5816,6 +5816,8 @@ dependencies = [
  "pyscf-algebra",
  "pyscf-ccsd",
  "pyscf-core",
+ "pyscf-diis",
+ "pyscf-gto",
  "pyscf-pbc-ao2mo",
  "pyscf-pbc-df",
  "pyscf-pbc-gto",

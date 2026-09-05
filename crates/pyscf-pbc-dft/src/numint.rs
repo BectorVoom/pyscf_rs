@@ -836,11 +836,14 @@ impl KNumInt {
         let mut den: Vec<f64> = Vec::new();
         let mut terms: Vec<f64> = Vec::new();
 
+        // S-07: a band list that is a subset of the sampling list is served
+        // from the sampling table (see `band_subset_map`).
+        let band_map = kpts_band.and_then(|b| self.band_subset_map(b));
         for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
             let chunk = &coords[p0..p1];
             let w = &weights[p0..p1];
             let ao2 = self.eval_ao(cell, chunk, &self.kpts, ty)?;
-            let ao1 = if kpts_band.is_none() {
+            let ao1 = if kpts_band.is_none() || band_map.is_some() {
                 Arc::clone(&ao2)
             } else {
                 self.eval_ao(cell, chunk, band, ty)?
@@ -860,7 +863,7 @@ impl KNumInt {
                 excsum_parts[i].push(oracle_sum(&terms));
                 // numint.py:369 — wv = weight * vxc.
                 let wv = weighted(&out, 0, w);
-                self.accumulate_vxc_into(&mut vmat[i], &ao1, &wv, ty, &mut sc);
+                self.accumulate_vxc_into(&mut vmat[i], &ao1, &wv, ty, &mut sc, band_map.as_deref());
             }
         }
 
@@ -946,11 +949,13 @@ impl KNumInt {
         let mut ta: Vec<f64> = Vec::new();
         let mut tb: Vec<f64> = Vec::new();
 
+        // S-07, as in `nr_rks`.
+        let band_map = kpts_band.and_then(|b| self.band_subset_map(b));
         for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
             let chunk = &coords[p0..p1];
             let w = &weights[p0..p1];
             let ao2 = self.eval_ao(cell, chunk, &self.kpts, ty)?;
-            let ao1 = if kpts_band.is_none() {
+            let ao1 = if kpts_band.is_none() || band_map.is_some() {
                 Arc::clone(&ao2)
             } else {
                 self.eval_ao(cell, chunk, band, ty)?
@@ -982,7 +987,14 @@ impl KNumInt {
                 excsum_parts[i].push(oracle_sum(&tb));
                 for (s, vm) in vmat.iter_mut().enumerate() {
                     let wv = weighted(&out, s, w);
-                    self.accumulate_vxc_into(&mut vm[i], &ao1, &wv, ty, &mut sc);
+                    self.accumulate_vxc_into(
+                        &mut vm[i],
+                        &ao1,
+                        &wv,
+                        ty,
+                        &mut sc,
+                        band_map.as_deref(),
+                    );
                 }
             }
         }
@@ -1121,7 +1133,7 @@ impl KNumInt {
                 let terms: Vec<f64> = den.iter().zip(&xc.exc).map(|(d, e)| d * e).collect();
                 excsum_parts[set].push(oracle_sum(&terms));
                 let wv = weighted(&xc, 0, w);
-                self.accumulate_vxc_into(&mut vmat[set], &ao, &wv, ty, &mut sc);
+                self.accumulate_vxc_into(&mut vmat[set], &ao, &wv, ty, &mut sc, None);
             }
         }
         for set in &mut vmat {
@@ -1194,7 +1206,7 @@ impl KNumInt {
                 ));
                 for spin in 0..2 {
                     let wv = weighted(&xc, spin, w);
-                    self.accumulate_vxc_into(&mut vmat[spin][set], &ao, &wv, ty, &mut sc);
+                    self.accumulate_vxc_into(&mut vmat[spin][set], &ao, &wv, ty, &mut sc, None);
                 }
             }
         }
@@ -1222,11 +1234,16 @@ impl KNumInt {
     /// only mode the SCF drivers use — `wv[0]` carries the `*0.5` that pairs
     /// with the `V + V†` symmetrisation the caller applies.
     fn accumulate_vxc(&self, out: &mut KMats, ao: &EvalAoKptsOutput, wv: &[Vec<f64>], ty: XcType) {
-        self.accumulate_vxc_into(out, ao, wv, ty, &mut Scratch::default());
+        self.accumulate_vxc_into(out, ao, wv, ty, &mut Scratch::default(), None);
     }
 
     /// [`KNumInt::accumulate_vxc`] against a caller-owned scratch — U-10, and
     /// the same reasoning as [`KNumInt::eval_rho_into`].
+    ///
+    /// `kmap` — S-07: when `Some`, output matrix `k` reads AO block
+    /// `ao.at(kmap[k])` instead of `ao.at(k)`, so a band k-list that is a
+    /// subset of the table's k-list is served from that table without a
+    /// second evaluation. `None` is the identity map.
     fn accumulate_vxc_into(
         &self,
         out: &mut KMats,
@@ -1234,13 +1251,45 @@ impl KNumInt {
         wv: &[Vec<f64>],
         ty: XcType,
         sc: &mut Scratch,
+        kmap: Option<&[usize]>,
     ) {
         let nao = ao.nao;
         let ngrids = ao.ngrids;
         let nvar = ty.nvar();
         for (k, m) in out.iter_mut().enumerate() {
-            vxc_mat_one(m, ao.at(k), wv, nao, ngrids, nvar, sc);
+            let src = kmap.map_or(k, |map| map[k]);
+            vxc_mat_one(m, ao.at(src), wv, nao, ngrids, nvar, sc);
         }
+    }
+
+    /// S-07 — where each band k-point sits in the sampling k-list, or `None`
+    /// if any band point is not (bitwise) one of them.
+    ///
+    /// Under k-symmetry the drivers ask for the potential at `kpts_ibz`, which
+    /// is by construction a subset of the full BZ list the density was just
+    /// evaluated over (`ibz2bz`). The AO table at those points is therefore
+    /// already in hand: K-08 accumulates every k independently
+    /// (`out[k·n + p] += phase_k · ao[p]`, the same AO block and the same
+    /// phase whichever k-list it is launched with), so the entry for a k-point
+    /// is bit-identical whether it was evaluated alone, with the IBZ list or
+    /// with the full list. Re-evaluating it cost a second cold `eval_ao_kpts`
+    /// (the eval_gto stage does not shrink with the k-count) and a second
+    /// `comp·ngrids·nao·16·N_ibz`-byte cache entry per grid block.
+    ///
+    /// `PYSCF_PBC_BAND_AO_REUSE=0` restores the second evaluation, so the
+    /// profiler can measure both with one binary.
+    fn band_subset_map(&self, band: &[[f64; 3]]) -> Option<Vec<usize>> {
+        if std::env::var("PYSCF_PBC_BAND_AO_REUSE").is_ok_and(|v| v == "0") {
+            return None;
+        }
+        let same = |a: &[f64; 3], b: &[f64; 3]| {
+            a.iter()
+                .zip(b)
+                .all(|(x, y)| x.to_bits() == y.to_bits())
+        };
+        band.iter()
+            .map(|b| self.kpts.iter().position(|k| same(k, b)))
+            .collect()
     }
 
     // -----------------------------------------------------------------

@@ -22,8 +22,14 @@ pyscf-pbc-df     = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
 pyscf-pbc-ao2mo  = { path = "../pyscf-pbc-ao2mo" }
 pyscf-pbc-mp     = { path = "../pyscf-pbc-mp" }
+# The Phase-3 CDIIS ring buffer, reused for the amplitude iteration exactly as
+# pyscf-ccsd reuses it for the molecular one (no new DIIS body).
+pyscf-diis       = { path = "../pyscf-diis" }
 thiserror        = { workspace = true }
 tracing          = { workspace = true }
 # D-PBC-29 clause 2: every Phase-16 contraction is a host rayon loop over
 # k-point triples with `oracle_*` accumulators, not `zgemm_dense`.
 rayon            = { workspace = true }
+
+[dev-dependencies]
+pyscf-gto = { path = "../pyscf-gto" }

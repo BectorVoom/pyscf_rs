@@ -58,7 +58,71 @@ const GAMMA: [f64; 3] = [0.0, 0.0, 0.0];
 ///
 /// M-02. Both are pure functions of the cell, and both were rebuilt on every
 /// call — i.e. on every SCF cycle — before this cache existed.
-type V1Tasks = (Decontracted, Vec<GridLevel>);
+/// The cell-only geometry one v1 density evaluation needs — M-02 — plus,
+/// since session 3 (M-11), the collocated level values themselves.
+///
+/// `collocate_all_levels` is a pure function of `(cell, decon, levels)`: the
+/// density matrix enters only through `level_rho` / `level_pass2`, which read
+/// the values. M-02 shared one collocation between the two directions of one
+/// call; every SCF cycle still re-ran the collocation kernel, and the
+/// session-3 instrument measured that at ~95 % of a warm v1 `get_veff`
+/// (mesh 25³ Si: 181 of 191 ms). Keeping the values alive with the task list
+/// — same fingerprint, same lifetime, same `reset` — removes it.
+///
+/// Memory is bounded by the same rule that already decides whether the values
+/// are materialised at all (`keep_level_values`, `0.25 · max_memory`): a cell
+/// over the rule streams level by level and caches nothing.
+/// `PYSCF_PBC_MULTIGRID_LEVEL_CACHE=0` keeps the per-call collocation so the
+/// profiler can measure both with one binary.
+///
+/// Bit-exact: the same table, read on later cycles instead of rebuilt.
+struct V1Tasks {
+    decon: Decontracted,
+    levels: Vec<GridLevel>,
+    level_values: std::sync::OnceLock<Vec<colloc::LevelValues>>,
+}
+
+/// M-11: collocated level values, either borrowed from the task cache or
+/// owned by this call.
+enum Lvs<'a> {
+    Cached(&'a [colloc::LevelValues]),
+    Owned(Vec<colloc::LevelValues>),
+}
+
+impl Lvs<'_> {
+    fn as_slice(&self) -> &[colloc::LevelValues] {
+        match self {
+            Lvs::Cached(v) => v,
+            Lvs::Owned(v) => v,
+        }
+    }
+}
+
+fn level_cache_enabled() -> bool {
+    !std::env::var("PYSCF_PBC_MULTIGRID_LEVEL_CACHE").is_ok_and(|v| v == "0")
+}
+
+impl V1Tasks {
+    /// The level values, from the cache when the memory rule allows keeping
+    /// them and the cache is on; `None` when the caller must stream.
+    fn level_values(&self, cell: &Cell) -> Result<Option<Lvs<'_>>, PbcDftError> {
+        if !keep_level_values(&self.decon, &self.levels) {
+            return Ok(None);
+        }
+        if !level_cache_enabled() {
+            return Ok(Some(Lvs::Owned(collocate_all_levels(
+                cell,
+                &self.decon,
+                &self.levels,
+            )?)));
+        }
+        if let Some(v) = self.level_values.get() {
+            return Ok(Some(Lvs::Cached(v)));
+        }
+        let fresh = collocate_all_levels(cell, &self.decon, &self.levels)?;
+        Ok(Some(Lvs::Cached(self.level_values.get_or_init(|| fresh))))
+    }
+}
 
 /// `pbc.dft.multigrid.MultiGridNumInt` — the v1 multigrid driver (gamma
 /// point; see the module doc).
@@ -136,7 +200,11 @@ impl MultiGridNumInt {
         let _span = tracing::info_span!("pbc_mg_build_tasks_miss").entered();
         let decon = tasks::build_pshells(cell)?;
         let levels = tasks::multi_grids_tasks_for_ke_cut(cell, &decon, cell.mesh)?;
-        let out = Arc::new((decon, levels));
+        let out = Arc::new(V1Tasks {
+            decon,
+            levels,
+            level_values: std::sync::OnceLock::new(),
+        });
         if let Ok(mut g) = self.prepared.lock() {
             *g = Some((key, Arc::clone(&out)));
         }
@@ -172,10 +240,15 @@ impl MultiGridNumInt {
     /// Propagates task-list / collocation / FFT construction.
     pub fn eval_rho_g(&self, cell: &Cell, dm: &[f64]) -> Result<CTensor, PbcDftError> {
         let prep = self.build_tasks(cell)?;
-        let (decon, levels) = (&prep.0, &prep.1);
+        let (decon, levels) = (&prep.decon, &prep.levels);
         let dm_p = colloc::expand_dm(decon, dm);
-        let lvs = collocate_all_levels(cell, decon, levels)?;
-        rho_g_from_level_values(cell, decon, &lvs, &dm_p)
+        // M-11: the cached table when the memory rule allows one; otherwise
+        // this entry point materialises every level for the call, as before.
+        let lvs = match prep.level_values(cell)? {
+            Some(l) => l,
+            None => Lvs::Owned(collocate_all_levels(cell, decon, levels)?),
+        };
+        rho_g_from_level_values(cell, decon, lvs.as_slice(), &dm_p)
     }
 
     /// `get_j_kpts` at gamma — `multigrid.py:515-544`, `_get_j_pass2`
@@ -187,15 +260,20 @@ impl MultiGridNumInt {
     #[allow(clippy::needless_range_loop)]
     pub fn get_j(&self, cell: &Cell, dm: &[f64]) -> Result<Vec<f64>, PbcDftError> {
         let prep = self.build_tasks(cell)?;
-        let (decon, levels) = (&prep.0, &prep.1);
+        let (decon, levels) = (&prep.decon, &prep.levels);
         let dm_p = colloc::expand_dm(decon, dm);
         // M-02: collocate each level ONCE and share it between the forward
         // (density) and reverse (`pass2`) directions. They used to be two
         // independent `collocate_level` sweeps over the same levels with the
         // same inputs, i.e. the collocation — the dominant cost of a v1 call —
         // was done twice. Bit-exact: the same table, used twice.
-        let lvs = collocate_all_levels(cell, decon, levels)?;
-        let rho_g = rho_g_from_level_values(cell, decon, &lvs, &dm_p)?;
+        // M-11: and, across calls, the cached table (see `V1Tasks`).
+        let lvs = match prep.level_values(cell)? {
+            Some(l) => l,
+            None => Lvs::Owned(collocate_all_levels(cell, decon, levels)?),
+        };
+        let lvs = lvs.as_slice();
+        let rho_g = rho_g_from_level_values(cell, decon, lvs, &dm_p)?;
 
         let mesh = cell.mesh;
         let gv = get_gv(cell, Some(mesh))?;
@@ -205,7 +283,7 @@ impl MultiGridNumInt {
             vg.re[g] *= coulg[g];
             vg.im[g] *= coulg[g];
         }
-        let v_p = pass2_from_level_values(cell, decon, &lvs, &vg)?;
+        let v_p = pass2_from_level_values(cell, decon, lvs, &vg)?;
         Ok(colloc::contract_v(decon, &v_p))
     }
 
@@ -229,19 +307,18 @@ impl MultiGridNumInt {
         dm: &[f64],
     ) -> Result<MgNrRksResult, PbcDftError> {
         let prep = self.build_tasks(cell)?;
-        let (decon, levels) = (&prep.0, &prep.1);
+        let (decon, levels) = (&prep.decon, &prep.levels);
         let dm_p = colloc::expand_dm(decon, dm);
-        let keep = keep_level_values(decon, levels);
         tracing::debug!(
             target: "pyscf_pbc_dft::multigrid",
-            keep_all_levels = keep,
+            keep_all_levels = keep_level_values(decon, levels),
             estimated_bytes = estimated_level_value_bytes(decon, levels),
             "v1 level-value memory decision"
         );
-        let lvs = keep
-            .then(|| collocate_all_levels(cell, decon, levels))
-            .transpose()?;
-        let rho_g = if let Some(lvs) = &lvs {
+        // M-11: `None` means the memory rule said stream.
+        let lvs = prep.level_values(cell)?;
+        let lvs = lvs.as_ref().map(Lvs::as_slice);
+        let rho_g = if let Some(lvs) = lvs {
             rho_g_from_level_values(cell, decon, lvs, &dm_p)?
         } else {
             rho_g_streaming(cell, decon, levels, &[dm_p.as_slice()])?.remove(0)
@@ -249,7 +326,7 @@ impl MultiGridNumInt {
 
         // M-00: the middle is shared with `nr_uks` and with the v2 driver.
         let parts = mg_xc_parts(cell, xc_code, std::slice::from_ref(&rho_g))?;
-        let v_p = if let Some(lvs) = &lvs {
+        let v_p = if let Some(lvs) = lvs {
             pass2_from_level_values(cell, decon, lvs, &parts.wv_freq0[0])?
         } else {
             pass2_streaming(cell, decon, levels, &[&parts.wv_freq0[0]])?.remove(0)
@@ -290,19 +367,18 @@ impl MultiGridNumInt {
         dm: &[&[f64]; 2],
     ) -> Result<MgNrUksResult, PbcDftError> {
         let prep = self.build_tasks(cell)?;
-        let (decon, levels) = (&prep.0, &prep.1);
+        let (decon, levels) = (&prep.decon, &prep.levels);
         let dm_p = dm.map(|d| colloc::expand_dm(decon, d));
-        let keep = keep_level_values(decon, levels);
         tracing::debug!(
             target: "pyscf_pbc_dft::multigrid",
-            keep_all_levels = keep,
+            keep_all_levels = keep_level_values(decon, levels),
             estimated_bytes = estimated_level_value_bytes(decon, levels),
             "v1 level-value memory decision"
         );
-        let lvs = keep
-            .then(|| collocate_all_levels(cell, decon, levels))
-            .transpose()?;
-        let rho_g = if let Some(lvs) = &lvs {
+        // M-11, as in `nr_rks`.
+        let lvs = prep.level_values(cell)?;
+        let lvs = lvs.as_ref().map(Lvs::as_slice);
+        let rho_g = if let Some(lvs) = lvs {
             vec![
                 rho_g_from_level_values(cell, decon, lvs, &dm_p[0])?,
                 rho_g_from_level_values(cell, decon, lvs, &dm_p[1])?,
@@ -312,7 +388,7 @@ impl MultiGridNumInt {
         };
 
         let parts = mg_xc_parts(cell, xc_code, &rho_g)?;
-        let vps = if let Some(lvs) = &lvs {
+        let vps = if let Some(lvs) = lvs {
             vec![
                 pass2_from_level_values(cell, decon, lvs, &parts.wv_freq0[0])?,
                 pass2_from_level_values(cell, decon, lvs, &parts.wv_freq0[1])?,
@@ -396,6 +472,7 @@ pub(crate) fn mg_xc_parts(
     xc_code: &str,
     rho_g: &[CTensor],
 ) -> Result<MgXcParts, PbcDftError> {
+    let _span = tracing::info_span!("pbc_mg_xc_parts").entered();
     let nspin = rho_g.len();
     if nspin != 1 && nspin != 2 {
         return Err(PbcDftError::Core(pyscf_core::PyscfRsError::Core(
@@ -581,6 +658,7 @@ fn collocate_all_levels(
     decon: &Decontracted,
     levels: &[GridLevel],
 ) -> Result<Vec<LevelValues>, PbcDftError> {
+    let _span = tracing::info_span!("pbc_mg_collocate", levels = levels.len() as u64).entered();
     levels
         .iter()
         .map(|level| colloc::collocate_level(cell, decon, level))

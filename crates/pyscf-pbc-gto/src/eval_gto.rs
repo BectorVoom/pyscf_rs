@@ -193,6 +193,16 @@ pub fn eval_ao_kpts_with_images(
     let nkpts = kpts.len();
     let ngrids = coords.len();
     let nao = cell.mol.nao_nr;
+    // One span per cold evaluation, so a driver-level profile can count how
+    // many AO tables an SCF builds and at how many k-points each.
+    let _call_span = tracing::info_span!(
+        "pbc_eval_ao_kpts",
+        nkpts = nkpts as u64,
+        ngrids = ngrids as u64,
+        nao = nao as u64,
+        eval_name
+    )
+    .entered();
 
     let client = select_backend()
         .map_err(|e| {
@@ -288,7 +298,11 @@ pub fn eval_ao_kpts_with_images(
                         }
                     }
                     let ao = {
-                        let span = tracing::info_span!("pbc_eval_ao_eval_gto");
+                        // `points` — how many grid points this launch covers, so
+                        // the A-00 instrument can report the launched-image count
+                        // and the kept-point total (the screen's actual yield).
+                        let span =
+                            tracing::info_span!("pbc_eval_ao_eval_gto", points = ngrids as u64);
                         let _entered = span.enter();
                         eval_gto_device(&client, cell, eval_name, &shifted_workspace, ngrids)?
                     };
@@ -307,7 +321,10 @@ pub fn eval_ao_kpts_with_images(
                         );
                     }
                     let ao = {
-                        let span = tracing::info_span!("pbc_eval_ao_eval_gto");
+                        let span = tracing::info_span!(
+                            "pbc_eval_ao_eval_gto",
+                            points = index_workspace.len() as u64
+                        );
                         let _entered = span.enter();
                         eval_gto_device(
                             &client,

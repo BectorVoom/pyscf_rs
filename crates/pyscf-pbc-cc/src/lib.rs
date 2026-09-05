@@ -9,7 +9,21 @@ pub mod ktensor;
 // Plan 16-04 onward — the shaped planar-complex host array and the
 // deterministic `einsum` every k-point CC contraction is written in.
 pub mod zarr;
+// Plan 16-05 Task 1 — the seven k-point MO integral blocks, their three
+// storage tiers, and the exxdiv/Madelung treatment they must ship with.
+pub mod keris;
+// Plan 16-04 — the k-point restricted CC intermediates 16-05's `update_amps`
+// contracts against.
+pub mod kintermediates_rhf;
+// Plan 16-05 — KRCCSD itself: update_amps, energy, init_amps, the DIIS kernel.
+pub mod kccsd_rhf;
+// Plan 16-08 Task 1 — the loop-explicit (T) reference, ported BEFORE either
+// fast path because it is the only oracle-free gate the blocked path has.
+pub mod kccsd_t_rhf_slow;
 
 pub use error::*;
-pub use ktensor::{KRank, KTensor, Tier};
+pub use ktensor::{KBlocks, KRank, KTensor, Tier};
+pub use keris::{Blk, ErisMethod, KEris, KErisOpts, adjust_occ};
+pub use kccsd_rhf::{KrccsdOpts, KrccsdResult, LARGE_DENOM};
+pub use kintermediates_rhf as imdk;
 pub use zarr::{ZArr, einsum, einsum_scaled};

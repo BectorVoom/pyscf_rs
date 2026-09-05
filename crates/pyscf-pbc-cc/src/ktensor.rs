@@ -36,8 +36,13 @@
 //!   allocation carries its own lock, so two rayon threads writing two
 //!   different blocks make concurrent progress.
 
+use std::sync::Arc;
+
 use pyscf_algebra::CTensor;
 use pyscf_runtime::{BackendError, ZBufferId, ZWorkspacePool};
+
+use crate::error::PbcCcError;
+use crate::zarr::ZArr;
 
 /// How many k-indices address a block.
 ///
@@ -317,5 +322,107 @@ impl KTensor {
         for id in &self.buffers {
             pool.release(*id);
         }
+    }
+}
+
+/// A [`KTensor`] carried together with the arena it lives in, so a caller can
+/// read and write blocks as shaped [`ZArr`]s without threading the pool.
+///
+/// This is what the `W` intermediates and every `nkpts³` CC block are returned
+/// as: the tier decision (`kccsd_rhf.py:132-137`, `:179-192`, `:423-455`) rides
+/// with the data rather than being re-derived by each consumer.
+#[derive(Debug, Clone)]
+pub struct KBlocks {
+    pool: Arc<ZWorkspacePool>,
+    inner: Arc<KTensor>,
+    shape: Vec<usize>,
+}
+
+impl KBlocks {
+    /// Allocate a zeroed rank-3 k-indexed tensor of `block_shape` blocks.
+    ///
+    /// # Errors
+    /// The arena's HARD refusal, or a spill failure.
+    pub fn zeros(
+        pool: &Arc<ZWorkspacePool>,
+        nkpts: usize,
+        block_shape: &[usize],
+        allow_spill: bool,
+    ) -> Result<Self, PbcCcError> {
+        let inner = KTensor::zeros(pool, nkpts, KRank::Three, block_shape, allow_spill)?;
+        Ok(Self {
+            pool: Arc::clone(pool),
+            inner: Arc::new(inner),
+            shape: block_shape.to_vec(),
+        })
+    }
+
+    /// Allocate, choosing the tier from the exact byte count against
+    /// `max_memory_bytes`: in memory when it fits, spilled when it does not.
+    ///
+    /// This is the port of upstream's three-way branch, with the estimate
+    /// replaced by an exact count (D-PBC-29 clause 4).
+    ///
+    /// # Errors
+    /// A spill failure.
+    pub fn with_budget(
+        pool: &Arc<ZWorkspacePool>,
+        nkpts: usize,
+        block_shape: &[usize],
+        max_memory_bytes: usize,
+    ) -> Result<Self, PbcCcError> {
+        let need = KTensor::exact_bytes(nkpts, KRank::Three, block_shape);
+        let fits = pool.live_inmem_bytes().saturating_add(need) <= max_memory_bytes;
+        Self::zeros(pool, nkpts, block_shape, !fits)
+    }
+
+    /// The block at `[k0, k1, k2]`.
+    ///
+    /// # Errors
+    /// A bad k-address, or a spill read failure.
+    pub fn get(&self, k: [usize; 3]) -> Result<ZArr, PbcCcError> {
+        let c = self.inner.block(&self.pool, &k)?;
+        Ok(ZArr::from_ctensor(&self.shape, c)?)
+    }
+
+    /// Overwrite the block at `[k0, k1, k2]`.
+    ///
+    /// # Errors
+    /// A shape mismatch, a bad k-address, or a spill write failure.
+    pub fn set(&self, k: [usize; 3], v: &ZArr) -> Result<(), PbcCcError> {
+        if v.shape() != self.shape.as_slice() {
+            return Err(PbcCcError::Shape(format!(
+                "KBlocks::set: block shape {:?} does not match {:?}",
+                v.shape(),
+                self.shape
+            )));
+        }
+        self.inner.set_block(&self.pool, &k, v.data())?;
+        Ok(())
+    }
+
+    /// Which storage tier this tensor landed in.
+    pub fn tier(&self) -> Tier {
+        self.inner.tier()
+    }
+
+    /// Exact bytes.
+    pub fn bytes(&self) -> usize {
+        self.inner.bytes()
+    }
+
+    /// Per-block shape.
+    pub fn block_shape(&self) -> &[usize] {
+        &self.shape
+    }
+
+    /// k-point count.
+    pub fn nkpts(&self) -> usize {
+        self.inner.nkpts()
+    }
+
+    /// Return every buffer to the arena's free-list.
+    pub fn release(&self) {
+        self.inner.release(&self.pool);
     }
 }

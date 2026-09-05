@@ -308,6 +308,53 @@ impl ZArr {
         })
     }
 
+    /// A rectangular sub-array — one `(start, stop)` per axis, the
+    /// `x[:, :, c0:c1, :]` slicing `kccsd_t_rhf_slow.py` is written in.
+    ///
+    /// # Errors
+    /// [`PbcCcError::Shape`] on a rank mismatch or an out-of-bounds range.
+    pub fn slice_axes(&self, ranges: &[(usize, usize)]) -> Result<Self, PbcCcError> {
+        let nd = self.shape.len();
+        if ranges.len() != nd {
+            return Err(PbcCcError::Shape(format!(
+                "slice_axes: {} ranges for a rank-{nd} array",
+                ranges.len()
+            )));
+        }
+        for (k, &(a, b)) in ranges.iter().enumerate() {
+            if a > b || b > self.shape[k] {
+                return Err(PbcCcError::Shape(format!(
+                    "slice_axes: range {a}..{b} out of bounds on axis {k} of {:?}",
+                    self.shape
+                )));
+            }
+        }
+        let out_shape: Vec<usize> = ranges.iter().map(|&(a, b)| b - a).collect();
+        let src_strides = self.strides();
+        let mut out = Self::zeros(&out_shape);
+        let n = out.len();
+        if n == 0 {
+            return Ok(out);
+        }
+        let mut idx = vec![0_usize; nd];
+        for dst in 0..n {
+            let mut src = 0_usize;
+            for k in 0..nd {
+                src += (idx[k] + ranges[k].0) * src_strides[k];
+            }
+            out.data.re[dst] = self.data.re[src];
+            out.data.im[dst] = self.data.im[src];
+            for k in (0..nd).rev() {
+                idx[k] += 1;
+                if idx[k] < out_shape[k] {
+                    break;
+                }
+                idx[k] = 0;
+            }
+        }
+        Ok(out)
+    }
+
     /// Write a sub-array back at a leading multi-index — the assignment form of
     /// [`ZArr::slice_leading`].
     ///

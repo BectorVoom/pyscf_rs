@@ -160,6 +160,14 @@ struct MultigridReport {
     warm_get_veff_ms: f64,
     build_tasks_cache_miss_ms: f64,
     build_tasks_cache_hit_ms: f64,
+    /// v1 only: level-value collocation inside the WHOLE `kernel()`, and the
+    /// number of times it ran (one per cycle before session 3's cache).
+    kernel_collocate_ms: f64,
+    kernel_collocate_calls: u64,
+    /// The warm `get_veff`'s collocation and shared Coulomb/XC middle.
+    warm_collocate_ms: f64,
+    warm_collocate_calls: u64,
+    warm_xc_parts_ms: f64,
     warm_levels: Vec<MultigridLevelReport>,
     e_tot: f64,
     converged: bool,
@@ -258,6 +266,11 @@ fn run_multigrid(args: &[String]) {
         warm_get_veff_ms: warm_ms,
         build_tasks_cache_miss_ms: kernel_timing.build_miss_ms,
         build_tasks_cache_hit_ms: warm_timing.build_hit_ms,
+        kernel_collocate_ms: kernel_timing.collocate_ms,
+        kernel_collocate_calls: kernel_timing.collocate_calls,
+        warm_collocate_ms: warm_timing.collocate_ms,
+        warm_collocate_calls: warm_timing.collocate_calls,
+        warm_xc_parts_ms: warm_timing.xc_parts_ms,
         warm_levels: warm_timing.levels,
         e_tot: result.e_tot,
         converged: result.converged,
@@ -304,6 +317,25 @@ struct AoStageLayer {
 struct AoStageLayerInner {
     entered: Mutex<HashMap<Id, Instant>>,
     elapsed: Mutex<[Duration; 4]>,
+    /// `(launched images, kept grid points summed over them)` — read off the
+    /// `points` field of every `pbc_eval_ao_eval_gto` span. The screen's
+    /// actual yield, which `nimgs` (the image LIST length) cannot show.
+    launches: Mutex<(u64, u64)>,
+}
+
+#[derive(Default)]
+struct AoPointsVisitor {
+    points: Option<u64>,
+}
+
+impl Visit for AoPointsVisitor {
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        if field.name() == "points" {
+            self.points = Some(value);
+        }
+    }
+
+    fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
 }
 
 impl AoStageLayer {
@@ -311,12 +343,27 @@ impl AoStageLayer {
         let elapsed = self.inner.elapsed.lock().expect("AO stage elapsed mutex");
         elapsed.map(|d| d.as_secs_f64() * 1e3)
     }
+
+    fn launches(&self) -> (u64, u64) {
+        *self.inner.launches.lock().expect("AO launches mutex")
+    }
 }
 
 impl<S> Layer<S> for AoStageLayer
 where
     S: Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
+    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+        if attrs.metadata().name() != AO_STAGE_NAMES[1] {
+            return;
+        }
+        let mut visitor = AoPointsVisitor::default();
+        attrs.record(&mut visitor);
+        let mut launches = self.inner.launches.lock().expect("AO launches mutex");
+        launches.0 += 1;
+        launches.1 += visitor.points.unwrap_or(0);
+    }
+
     fn on_enter(&self, id: &Id, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
         if AO_STAGE_NAMES.contains(&span.metadata().name()) {
@@ -349,12 +396,87 @@ where
     }
 }
 
-const MG_STAGE_NAMES: [&str; 5] = [
+/// Counts every cold `eval_ao_kpts` (the `pbc_eval_ao_kpts` span) inside a
+/// timed region: how many AO tables a driver builds, at how many k-points
+/// each, and their summed wall time. S-07's instrument.
+#[derive(Clone, Default)]
+struct AoCallLayer {
+    inner: Arc<AoCallLayerInner>,
+}
+
+#[derive(Default)]
+struct AoCallLayerInner {
+    entered: Mutex<HashMap<Id, (Instant, u64)>>,
+    calls: Mutex<Vec<(u64, f64)>>,
+}
+
+#[derive(Default)]
+struct AoCallVisitor {
+    nkpts: Option<u64>,
+}
+
+impl Visit for AoCallVisitor {
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        if field.name() == "nkpts" {
+            self.nkpts = Some(value);
+        }
+    }
+
+    fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
+}
+
+impl AoCallLayer {
+    /// `(calls, total ms, k-point count of every call)`.
+    fn summary(&self) -> (u64, f64, Vec<u64>) {
+        let calls = self.inner.calls.lock().expect("AO call mutex");
+        (
+            calls.len() as u64,
+            calls.iter().map(|c| c.1).sum(),
+            calls.iter().map(|c| c.0).collect(),
+        )
+    }
+}
+
+impl<S> Layer<S> for AoCallLayer
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &Id, _ctx: Context<'_, S>) {
+        if attrs.metadata().name() != "pbc_eval_ao_kpts" {
+            return;
+        }
+        let mut visitor = AoCallVisitor::default();
+        attrs.record(&mut visitor);
+        self.inner
+            .entered
+            .lock()
+            .expect("AO call mutex")
+            .insert(id.clone(), (Instant::now(), visitor.nkpts.unwrap_or(0)));
+    }
+
+    fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
+        let Some((started, nkpts)) = self.inner.entered.lock().expect("AO call mutex").remove(&id)
+        else {
+            return;
+        };
+        self.inner
+            .calls
+            .lock()
+            .expect("AO call mutex")
+            .push((nkpts, started.elapsed().as_secs_f64() * 1e3));
+    }
+}
+
+const MG_STAGE_NAMES: [&str; 7] = [
     "pbc_mg_build_tasks_hit",
     "pbc_mg_build_tasks_miss",
     "pbc_mg_forward_level",
     "pbc_mg_reverse_level",
     "pbc_mg_fft",
+    // Session 3: the two v1 stages that sat OUTSIDE the level spans — the
+    // per-call re-collocation and the shared Coulomb/XC middle.
+    "pbc_mg_collocate",
+    "pbc_mg_xc_parts",
 ];
 
 #[derive(Clone, Default)]
@@ -412,6 +534,9 @@ impl Visit for MgFieldVisitor {
 struct MgTiming {
     build_hit_ms: f64,
     build_miss_ms: f64,
+    collocate_ms: f64,
+    collocate_calls: u64,
+    xc_parts_ms: f64,
     levels: Vec<MultigridLevelReport>,
 }
 
@@ -490,6 +615,11 @@ where
         match meta.name {
             "pbc_mg_build_tasks_hit" => timing.build_hit_ms += elapsed_ms,
             "pbc_mg_build_tasks_miss" => timing.build_miss_ms += elapsed_ms,
+            "pbc_mg_collocate" => {
+                timing.collocate_ms += elapsed_ms;
+                timing.collocate_calls += 1;
+            }
+            "pbc_mg_xc_parts" => timing.xc_parts_ms += elapsed_ms,
             _ => {
                 if timing.levels.len() <= meta.level {
                     timing
@@ -1251,6 +1381,14 @@ struct KsymmReport {
     warm_unfold_kdms_ms: f64,
     /// How many unfolds one `get_veff` is worth, at this cell.
     unfolds_per_get_veff_equivalent: f64,
+    /// S-07: cold `eval_ao_kpts` calls inside each `kernel()` — count, summed
+    /// ms, and the k-point count of every call.
+    full_ao_calls: u64,
+    full_ao_ms: f64,
+    full_ao_nkpts: Vec<u64>,
+    ksymm_ao_calls: u64,
+    ksymm_ao_ms: f64,
+    ksymm_ao_nkpts: Vec<u64>,
     peak_rss_mib: f64,
     load_average_at_start: f64,
     full_e_tot: f64,
@@ -1444,17 +1582,25 @@ fn run_ksymm(args: &[String]) {
     let nao = cell.mol.nao_nr;
 
     // ---- the ordinary full-BZ driver ----
+    let full_ao = AoCallLayer::default();
+    let ksymm_ao = AoCallLayer::default();
     let df_full = Fftdf::with_mesh(cell.clone(), &kpts.kpts, mesh).expect("FFTDF");
     let (full_result, full_kernel_ms, warm_full_get_veff_ms) = if driver == "kuks" {
         let mf = Kuks::from_df(Box::new(df_full), &xc).expect("KUKS");
-        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KUKS kernel"));
+        let (r, ms) = tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(full_ao.clone()),
+            || time_ms(|| mf.kernel(&cfg).expect("KUKS kernel")),
+        );
         // Warm: the AO / coulG caches are already populated by the SCF above,
         // so this is what one converged iteration actually costs.
         let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
         (r, ms, veff_ms)
     } else {
         let mf = Krks::from_df(Box::new(df_full), &xc).expect("KRKS");
-        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KRKS kernel"));
+        let (r, ms) = tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(full_ao.clone()),
+            || time_ms(|| mf.kernel(&cfg).expect("KRKS kernel")),
+        );
         let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
         (r, ms, veff_ms)
     };
@@ -1470,7 +1616,10 @@ fn run_ksymm(args: &[String]) {
         mf.with_df = Box::new(df_sym);
         mf.grids = grids;
         mf.use_ao_symmetry = use_ao_symmetry;
-        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("ksymm KUKS kernel"));
+        let (r, ms) = tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(ksymm_ao.clone()),
+            || time_ms(|| mf.kernel(&cfg).expect("ksymm KUKS kernel")),
+        );
         let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
         let (_, unfold_ms) = time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
         (r, ms, veff_ms, unfold_ms)
@@ -1480,7 +1629,10 @@ fn run_ksymm(args: &[String]) {
         mf.with_df = Box::new(df_sym);
         mf.grids = grids;
         mf.use_ao_symmetry = use_ao_symmetry;
-        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("ksymm KRKS kernel"));
+        let (r, ms) = tracing::subscriber::with_default(
+            tracing_subscriber::registry().with(ksymm_ao.clone()),
+            || time_ms(|| mf.kernel(&cfg).expect("ksymm KRKS kernel")),
+        );
         let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
         let (_, unfold_ms) = time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
         (r, ms, veff_ms, unfold_ms)
@@ -1508,6 +1660,12 @@ fn run_ksymm(args: &[String]) {
         ksymm_over_full_get_veff: warm_ksymm_get_veff_ms / warm_full_get_veff_ms,
         warm_unfold_kdms_ms,
         unfolds_per_get_veff_equivalent: warm_ksymm_get_veff_ms / warm_unfold_kdms_ms.max(1e-12),
+        full_ao_calls: full_ao.summary().0,
+        full_ao_ms: full_ao.summary().1,
+        full_ao_nkpts: full_ao.summary().2,
+        ksymm_ao_calls: ksymm_ao.summary().0,
+        ksymm_ao_ms: ksymm_ao.summary().1,
+        ksymm_ao_nkpts: ksymm_ao.summary().2,
         peak_rss_mib: peak_rss_mib(),
         load_average_at_start: load0,
         full_e_tot: full_result.e_tot,
@@ -1524,6 +1682,8 @@ fn run_ksymm(args: &[String]) {
          kernel()   full = {:.3} ms   ksymm = {:.3} ms   ksymm/full = {:.4}\n  \
          get_veff   full = {:.3} ms   ksymm = {:.3} ms   ksymm/full = {:.4}\n  \
          unfold_kdms (one call) = {:.3} ms   -> {:.1} unfolds per ksymm get_veff\n  \
+         cold eval_ao_kpts inside kernel(): full {} call(s) = {:.1} ms at nkpts {:?}; \
+         ksymm {} call(s) = {:.1} ms at nkpts {:?}\n  \
          e_tot      full = {:.12} ({})   ksymm = {:.12} ({})\n  \
          NOTE: the two energies are NOT a correctness comparison — RULE K. An\n  \
          IBZ run is CONSTRAINED to symmetric occupations and an unconstrained\n  \
@@ -1552,6 +1712,12 @@ fn run_ksymm(args: &[String]) {
         report.ksymm_over_full_get_veff,
         report.warm_unfold_kdms_ms,
         report.unfolds_per_get_veff_equivalent,
+        report.full_ao_calls,
+        report.full_ao_ms,
+        report.full_ao_nkpts,
+        report.ksymm_ao_calls,
+        report.ksymm_ao_ms,
+        report.ksymm_ao_nkpts,
         report.full_e_tot,
         report.full_converged,
         report.ksymm_e_tot,
@@ -1580,6 +1746,8 @@ fn run_ksymm(args: &[String]) {
             "warm_ksymm_get_veff_ms",
             "ksymm_over_full_get_veff",
             "warm_unfold_kdms_ms",
+            "full_ao_ms",
+            "ksymm_ao_ms",
             "peak_rss_mib",
         ] {
             let (a, b) = (
@@ -1610,6 +1778,13 @@ struct AoReport {
     nkpts: usize,
     ngrids: usize,
     nimgs: usize,
+    /// Images the W-09 screen let through to a kernel launch.
+    launched_images: u64,
+    /// Grid points those launches covered, summed — `launched_images ·
+    /// ngrids` when the screen is off.
+    kept_points_total: u64,
+    /// `kept_points_total / (nimgs · ngrids)`.
+    kept_fraction: f64,
     comp: usize,
     ao_block_reals: usize,
     ao_cache_bytes: usize,
@@ -1689,6 +1864,7 @@ fn run_ao(args: &[String]) {
         time_ms(|| eval_ao_kpts(&cell, eval_name, coords, &kpts).expect("eval_ao_kpts"))
     });
     let [shift_pack_ms, eval_gto_ms, scatter_ms, k08_accumulate_ms] = stages.milliseconds();
+    let (launched_images, kept_points_total) = stages.launches();
     let n = out.comp * out.ngrids * out.nao;
     let report = AoReport {
         driver,
@@ -1703,6 +1879,9 @@ fn run_ao(args: &[String]) {
         nkpts: out.nkpts(),
         ngrids: out.ngrids,
         nimgs,
+        launched_images,
+        kept_points_total,
+        kept_fraction: kept_points_total as f64 / (nimgs * out.ngrids).max(1) as f64,
         comp: out.comp,
         ao_block_reals: n,
         ao_cache_bytes: out.nkpts() * n * 2 * size_of::<f64>(),
@@ -1721,7 +1900,8 @@ fn run_ao(args: &[String]) {
     };
     println!(
         "driver={} rho_route={} cell={} basis={} nk={:?} mesh={:?} deriv={} screen={}\n  \
-         nao={} nkpts={} ngrids={} nimgs={} comp={} n={} cache={} bytes\n  \
+         nao={} nkpts={} ngrids={} nimgs={} launched={} kept_points={} ({:.3} of nimgs*ngrids) \
+         comp={} n={} cache={} bytes\n  \
          RULE T/image: legacy round-trip={} bytes + zero-fill={} bytes; \
          resident round-trip={} bytes + zero-fill={} bytes + phases={} bytes\n  \
          load average at start={:.2} peak RSS={:.1} MiB\n  \
@@ -1740,6 +1920,9 @@ fn run_ao(args: &[String]) {
         report.nkpts,
         report.ngrids,
         report.nimgs,
+        report.launched_images,
+        report.kept_points_total,
+        report.kept_fraction,
         report.comp,
         report.ao_block_reals,
         report.ao_cache_bytes,

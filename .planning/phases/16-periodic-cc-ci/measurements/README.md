@@ -397,3 +397,55 @@ Stated rather than extrapolated, the `15-VERIFICATION §8` discipline:
   and is listed as a 16-14 carry-over.
 * **`nkpts = 27` / `64` `_ERIS` wall clock** — only the orbit COUNTS were taken
   at those meshes, not the integral transform.
+
+---
+
+## 10. ADDENDUM (2026-09-06, found while gating 16-04/16-05) — this port's KRHF and upstream's differ by `1.35e-5 Ha` at the PINNED mesh
+
+Building the first end-to-end `KRCCSD` run surfaced a divergence that belongs
+to neither 16-04 nor 16-05:
+
+```
+diamond gth-szv [1,1,2], cell.mesh = [15,15,15], precision 1e-8, exxdiv = None
+  this port   KRHF e_tot  -8.652011318061934
+  upstream    KRHF e_tot  -8.651997841504999
+  |Δ|                      1.3476556937e-05
+```
+
+**It is a COARSE-MESH property of the mean field, not of anything Phase 16
+wrote.** Phase 15's `oracle_phase15` measured the two agreeing to **`4.772e-11`
+on the same cell at the DEFAULT mesh**; upstream's own `rcut` (21.319) and
+`nimgs` ([6,6,6]) are identical at both meshes, so the lattice sums are not the
+difference — the FFT-grid-evaluated part of the mean field is. Phase 16 does not
+own it and does not fix it here; it is recorded and carried to 16-14 as a
+finding for whichever phase owns `FFTDF`'s coarse-mesh behaviour.
+
+**What it changes for Phase 16's gates.** A correlation energy compared across
+two different mean fields measures the mean fields. Every CC oracle test
+therefore drives this port's `_ERIS` from **upstream's own `fock` /
+`mo_energy` / `mo_coeff`** through `KEris::from_parts` — the discipline
+`15-VERIFICATION` used when it drove `Lov` from "upstream's own padded MOs" and
+got `2e-15`. The mean-field residual is printed beside every result and is
+never absorbed into a tolerance.
+
+### Measured on upstream's mean field (`cargo test -p pyscf-pbc-cc --test oracle_phase16`)
+
+| quantity | this port vs upstream |
+|---|---|
+| **`KRCCSD e_corr`** | **`6.56e-9`** (G1 = `1e-7`) |
+| `init_amps` `emp2` | `3.49e-9` |
+| `energy()` on synthetic amplitudes | `3.22e-9` |
+| `_ERIS` `oooo` / `ooov` / `oovv` | `1.21e-8` / `6.62e-8` / `1.46e-7` |
+| `_ERIS` `ovov` / `voov` / `vovv` / `vvvv` | `1.09e-7` / `1.46e-7` / `2.34e-7` / `2.27e-7` |
+| `cc_Foo` / `cc_Fvv` / `cc_Fov` | `1.13e-8` / `2.52e-8` / `3.51e-9` |
+| `Loo` / `Lvv` | `1.21e-8` / `2.52e-8` |
+| `cc_Woooo` / `cc_Wvvvv` / `cc_Wvoov` / `cc_Wvovo` | `1.55e-8` / `2.28e-7` / `1.44e-7` / `1.13e-7` |
+| `update_amps` `t1new` / `t2new` | `1.84e-8` / `7.01e-8` |
+
+The ERI residuals are the **FFT integral-transform floor at `mesh = 15`**, not a
+transposition — a transposition is `O(1)` — and for scale §7 measured
+upstream's OWN symmetry-loop and all-triples paths differing by up to `1.32e-7`
+on this same fixture. **The block gate is therefore `1e-6`**, one order above
+the largest measured residual and four orders below anything a defect would
+produce. `e_corr` is two orders tighter than the blocks it is built from,
+because the errors are random-signed and largely cancel in the contraction.
