@@ -185,6 +185,30 @@ finding Phase 15 recorded (`STATE.md`: "`he_fcc` `gth-szv` cannot host the
 `Lov`/MO-first oracles … `nvir = 0`"); the all-electron control uses **`6-31g`**
 (`m3_df_routes_he.out`), as Phase 15's did.
 
+**`he_fcc` `6-31g` `[1,1,2]`, mesh `[15,15,15]` — the ALL-ELECTRON control:**
+
+| route | `e_hf` | `e_corr` | wall |
+|---|---|---|---|
+| FFTDF | `-2.527068410522379` | `-0.0193278026744534` | 0.4 s |
+| GDF | `-2.4888321524553323` | `-0.018229081612920396` | 0.7 s |
+| MDF | `-2.488545481500565` | `-0.01831440188919032` | 1.4 s |
+| RSDF | `-2.4888321524321797` | `-0.01822908160472925` | 0.7 s |
+
+| pair | `|Δe_corr|` | `|Δe_hf|` |
+|---|---|---|
+| FFTDF vs GDF | `1.098721e-03` | `3.823626e-02` |
+| FFTDF vs MDF | `1.013401e-03` | `3.852293e-02` |
+| **GDF vs RSDF** | **`8.191146e-12`** | `2.315259e-11` |
+| GDF vs MDF | `8.532028e-05` | `2.866710e-04` |
+
+The same two-route structure as diamond, and **the Gaussian pair agrees to
+`8.19e-12`** here — three orders tighter than on diamond, because there is no
+pseudopotential. The plane-wave routes are `3.8e-2` from them at `mesh = 15`,
+which is the all-electron cusp being under-resolved on a coarse grid, not a
+route disagreement: this control should be run at its own converged mesh before
+any conclusion is drawn from the plane-wave column, and that is recorded as
+unreached in §9.
+
 ---
 
 ## 5. (T), the spin-orbital cross-check, and the EOM floor

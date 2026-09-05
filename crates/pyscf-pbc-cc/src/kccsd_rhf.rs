@@ -837,8 +837,12 @@ impl<'a> Krccsd<'a> {
     /// # Errors
     /// Propagates the density-fitting builder and the arena.
     pub fn ao2mo(&mut self) -> Result<KEris, PbcCcError> {
-        let mut opts = self.eris_opts;
-        opts.max_memory = self.opts.max_memory;
+        // `eris_opts.max_memory` is the ERI build's OWN budget and is the
+        // authority here. It is initialised from `opts.max_memory` in
+        // [`Krccsd::new`] so the two agree by default; overwriting it on every
+        // call would make the storage tier unreachable from a caller, which is
+        // exactly what 16-05 test 4 has to set.
+        let opts = self.eris_opts;
         KEris::new(
             self.with_df.cell(),
             self.with_df,

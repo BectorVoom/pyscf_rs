@@ -200,6 +200,16 @@ def section_triples(nk=(1, 1, 2)):
 
     cell, kpts, mf, cc = build(list(nk))
     eris = cc.ao2mo(cc.mo_coeff)
+    scalar("e_hf", mf.e_tot)
+    emit("fock", eris.fock)
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    scalar("nao", eris.mo_coeff[0].shape[0])
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+    scalar("nkpts", len(kpts))
+    scalar("nocc", cc.nocc)
+    scalar("nmo", cc.nmo)
     e_corr, t1, t2 = cc.kernel(eris=eris)
     scalar("e_corr", e_corr)
     scalar("et_fast", kccsd_t_rhf.kernel(cc, eris, t1, t2))

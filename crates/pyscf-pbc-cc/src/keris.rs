@@ -164,6 +164,17 @@ pub struct KErisOpts {
     pub max_memory: f64,
     /// Incore or forced-outcore.
     pub method: ErisMethod,
+    /// Drive the integral loop through `symm_map`'s orbit representatives
+    /// (`kccsd_rhf.py:798-805`) rather than transforming all `nkpts³` triples.
+    ///
+    /// **`true` is the only shipped path**; `false` exists so a test can
+    /// compare the two. 16-01 Task 6 measured the saving at **2.10× wall
+    /// clock** and — the finding that corrects `16-05-PLAN.md` test 5 —
+    /// measured upstream's own two paths differing by up to **`1.32e-7`**, so
+    /// the comparison is a `1e-6` gate, NOT the bit-identity the plan asked
+    /// for. A symmetry-related k-quadruple's FFT transform and its transposed
+    /// sibling are not the same floating-point computation.
+    pub use_symm_map: bool,
 }
 
 impl Default for KErisOpts {
@@ -173,6 +184,7 @@ impl Default for KErisOpts {
             exxdiv: Some(ExxDiv::Ewald),
             max_memory: 4000.0,
             method: ErisMethod::Incore,
+            use_symm_map: true,
         }
     }
 }
@@ -331,12 +343,24 @@ impl KEris {
             (opts.max_memory * 1e6).max(0.0) as usize,
         ));
         khelper.build_symm_map(None); // `:783` — LAZY, built here, not in `new`
-        let symm = khelper
-            .symm_map
-            .as_ref()
-            .ok_or_else(|| shape("build_symm_map produced no map"))?
-            .entries()
-            .to_vec();
+        let symm: Vec<([usize; 3], Vec<[usize; 3]>)> = if opts.use_symm_map {
+            khelper
+                .symm_map
+                .as_ref()
+                .ok_or_else(|| shape("build_symm_map produced no map"))?
+                .entries()
+                .to_vec()
+        } else {
+            // Every triple its own representative with a singleton orbit — the
+            // all-triples build, for the equivalence test only.
+            (0..nkpts)
+                .flat_map(|p| {
+                    (0..nkpts).flat_map(move |q| {
+                        (0..nkpts).map(move |r| ([p, q, r], vec![[p, q, r]]))
+                    })
+                })
+                .collect()
+        };
 
         let allow_spill = matches!(opts.method, ErisMethod::Outcore);
         let mut blocks: Vec<(Blk, KTensor)> = Vec::with_capacity(7);
@@ -417,10 +441,22 @@ impl KEris {
             let eri_kpt = ZArr::from_ctensor(&[nmo, nmo, nmo, nmo], eri.data)?;
 
             for &[kp, kq, kr] in orbit {
-                let t = khelper
-                    .transform_symm(eri_kpt.data(), [nmo; 4], kp, kq, kr)
-                    .map_err(|e| PbcCcError::Shape(e.to_string()))?;
-                let symm_block = ZArr::from_ctensor(&[nmo; 4], t)?.transpose(&[0, 2, 1, 3])?;
+                // In the all-triples build every triple IS its own
+                // representative, so the operation is the identity — reading
+                // `khelper._operation` there would apply the map's operation to
+                // a block that was transformed directly, which is silently
+                // wrong rather than a shape error.
+                let raw = if opts.use_symm_map {
+                    ZArr::from_ctensor(
+                        &[nmo; 4],
+                        khelper
+                            .transform_symm(eri_kpt.data(), [nmo; 4], kp, kq, kr)
+                            .map_err(|e| PbcCcError::Shape(e.to_string()))?,
+                    )?
+                } else {
+                    eri_kpt.clone()
+                };
+                let symm_block = raw.transpose(&[0, 2, 1, 3])?;
                 for (b, tensor) in blocks.iter() {
                     if *b == Blk::Vvvv {
                         continue; // built by ao2mo_7d above, as upstream does

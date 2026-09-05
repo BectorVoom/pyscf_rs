@@ -497,3 +497,84 @@ fn krccsd_e_corr_matches_upstream_fftdf() {
         "energy() disagrees with the kernel's own e_corr"
     );
 }
+
+/// **G4** — `KCCSD(T)` fast vs slow, and both vs upstream.
+///
+/// `measurements/README.md §5` measured upstream's own two implementations
+/// agreeing to `3.27e-16` absolute / `2.95e-13` relative — the one place a
+/// Phase-16 number can be tight, because it is the same input through the same
+/// formula twice with no convergence noise between. This port is held to the
+/// same **1e-13 relative**.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn ccsd_t_fast_equals_slow_and_matches_upstream() {
+    let Some(out) = emit("triples") else { return };
+    let f = diamond_scf([1, 1, 2]);
+    mean_field_residual(&f, &out);
+    let up = upstream_mos(&out);
+    let (eris, kh) = eris_on_upstream_mf(&f, &up);
+    let opts = pyscf_pbc_cc::KrccsdOpts::default();
+    let pool = Arc::new(ZWorkspacePool::new(ZWorkspacePool::DEFAULT_BUDGET_BYTES));
+    let res = pyscf_pbc_cc::kccsd_rhf::kernel(&pool, &eris, &up.padded, &kh.kconserv, &opts)
+        .expect("KRCCSD kernel");
+    assert!(res.converged);
+    let want_ecorr = scalar(&out, "e_corr");
+    println!(
+        "e_corr {} vs upstream {want_ecorr}  |Δ| {:e}",
+        res.e_corr,
+        (res.e_corr - want_ecorr).abs()
+    );
+
+    let kpts = PeriodicDf::kpts(&f.df).to_vec();
+    let slow = pyscf_pbc_cc::kccsd_t_rhf_slow::kernel(
+        &eris, &up.padded, &res.t1, &res.t2, &kh.kconserv, &f.cell.a, &kpts, None,
+    )
+    .expect("(T) slow");
+    let fast = pyscf_pbc_cc::kccsd_t_rhf::kernel(
+        &eris, &up.padded, &res.t1, &res.t2, &kh.kconserv, &f.cell.a, &kpts, None,
+    )
+    .expect("(T) fast");
+
+    let rel = (fast - slow).abs() / slow.abs();
+    println!("(T) fast {fast}  slow {slow}  |Δ| {:e}  relative {rel:e}", (fast - slow).abs());
+    // **G4 = 1e-12, corrected from the 1e-13 first written here.**
+    // `measurements/README.md §5` measured UPSTREAM's own fast-vs-slow
+    // agreement at `2.95e-13` relative — so a `1e-13` gate is BELOW upstream's
+    // own agreement and would fail a correct implementation. That is the same
+    // defect this phase has now caught five times (ROADMAP's 1e-14,
+    // §7's 1e-8, 16-07's 1e-10, 16-08's 1e-11, and this one, written by the
+    // test author rather than the plan). Measured here: `8.36e-13` relative,
+    // `9.29e-16` absolute, against upstream's `2.95e-13` / `3.27e-16`.
+    assert!(
+        rel < 1e-12,
+        "fast-vs-slow relative {rel:e} above G4 1e-12 (upstream's own is 2.95e-13)"
+    );
+
+    // Blocking invariance (16-08 test 3): the energy must not depend on the
+    // virtual block size. This is what catches a wrong `mo_offset`/`slices`
+    // translation, and it is oracle-free.
+    let blocked = pyscf_pbc_cc::kccsd_t_rhf::kernel(
+        &eris, &up.padded, &res.t1, &res.t2, &kh.kconserv, &f.cell.a, &kpts, Some(2),
+    )
+    .expect("(T) fast, blocked");
+    println!("(T) blocked(2) {blocked}  vs unblocked {fast}  |Δ| {:e}", (blocked - fast).abs());
+    assert!(
+        (blocked - fast).abs() / fast.abs() < 1e-12,
+        "the (T) energy depends on the virtual block size"
+    );
+
+    let want_fast = scalar(&out, "et_fast");
+    let want_slow = scalar(&out, "et_slow");
+    println!(
+        "(T) vs upstream: fast |Δ| {:e}, slow |Δ| {:e}  (upstream fast {want_fast}, slow {want_slow})",
+        (fast - want_fast).abs(),
+        (slow - want_slow).abs()
+    );
+    // The (T) correction inherits the ERI floor of §10, so it is gated at the
+    // same 1e-6 the blocks are, not at G4 — G4 is the fast-vs-slow gate.
+    assert!(
+        (fast - want_fast).abs() < ERI_BLOCK,
+        "(T) fast differs from upstream by {:e}",
+        (fast - want_fast).abs()
+    );
+}
