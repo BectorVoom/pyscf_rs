@@ -43,13 +43,51 @@
 //! the builder that actually cares about memory is GDF, whose `general` in
 //! [`crate::df_ao2mo`] IS factorised through `cderi`.
 
-use pyscf_algebra::CTensor;
+use pyscf_algebra::{CTensor, oracle_zdotu};
 use pyscf_pbc_gto::Cell;
 
 use crate::aftdf::Aftdf;
 use crate::error::PbcDfError;
 use crate::fftdf::Fftdf;
 use crate::ft_ao::{FtKernel, FtScreen, RcutChoice};
+
+/// Caller-owned reciprocal-grid data at one momentum transfer. KMP2 reuses
+/// one of these per distinct `q` instead of rebuilding it for every triple.
+#[derive(Debug, Clone)]
+pub struct CoulGCache {
+    pub q: [f64; 3],
+    pub mesh: [usize; 3],
+    pub gv: Vec<[f64; 3]>,
+    pub coulg: Vec<f64>,
+    pub weighted_coulg: Vec<f64>,
+}
+
+impl CoulGCache {
+    pub fn build(cell: &Cell, mesh: [usize; 3], q: [f64; 3]) -> Result<Self, PbcDfError> {
+        let weights = pyscf_pbc_gto::gv::get_gv_weights(cell, Some(mesh))?;
+        let gv = pyscf_pbc_gto::gv::get_gv(cell, Some(mesh))?;
+        let coulg = pyscf_pbc_gto::get_coulg(
+            cell,
+            pyscf_pbc_gto::CoulGArgs {
+                k: q,
+                mesh: Some(mesh),
+                gv: Some(&gv),
+                ..Default::default()
+            },
+        )?;
+        let mut weighted_coulg = coulg.clone();
+        for (g, v) in weighted_coulg.iter_mut().enumerate() {
+            *v *= weights.weight(g);
+        }
+        Ok(Self {
+            q,
+            mesh,
+            gv,
+            coulg,
+            weighted_coulg,
+        })
+    }
+}
 
 /// `_iskconserv(cell, kptijkl)` — `aft_ao2mo.py` via `kpts_helper`.
 ///
@@ -217,6 +255,33 @@ pub fn aft_get_eri(df: &Aftdf, kptijkl: [[f64; 3]; 4]) -> Result<CTensor, PbcDfE
     Ok(contract_eri(&pq, &rs, &coulg, nao))
 }
 
+pub fn aft_get_eri_with_cache(
+    df: &Aftdf,
+    kptijkl: [[f64; 3]; 4],
+    cache: &CoulGCache,
+) -> Result<CTensor, PbcDfError> {
+    let nao = df.cell.mol.nao_nr;
+    if !is_kconserv(&df.cell, &kptijkl) {
+        return Ok(CTensor::zeros(nao.pow(4)));
+    }
+    let q = [
+        kptijkl[1][0] - kptijkl[0][0],
+        kptijkl[1][1] - kptijkl[0][1],
+        kptijkl[1][2] - kptijkl[0][2],
+    ];
+    if cache.mesh != df.mesh || cache.q.iter().zip(q).any(|(a, b)| (*a - b).abs() > 1e-12) {
+        return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(
+                "CoulGCache does not match AFT AO2MO q/mesh".into(),
+            ),
+        )));
+    }
+    let pq = aft_ao_pairs_g(df, kptijkl[1], q, &cache.gv)?;
+    let neg_l = [-kptijkl[3][0], -kptijkl[3][1], -kptijkl[3][2]];
+    let rs = aft_ao_pairs_g(df, neg_l, q, &cache.gv)?;
+    Ok(contract_eri(&pq, &rs, &cache.weighted_coulg, nao))
+}
+
 /// `FFTDF.get_eri(kptijkl)` — `fft_ao2mo.py`, through the SAME contraction as
 /// [`aft_get_eri`].
 ///
@@ -241,28 +306,47 @@ pub fn fft_get_eri(df: &Fftdf, kptijkl: [[f64; 3]; 4]) -> Result<CTensor, PbcDfE
         kptijkl[1][1] - kptijkl[0][1],
         kptijkl[1][2] - kptijkl[0][2],
     ];
-    let mesh = df.mesh;
-    let gw = pyscf_pbc_gto::gv::get_gv_weights(cell, Some(mesh))?;
-    let gv = pyscf_pbc_gto::gv::get_gv(cell, Some(mesh))?;
-    let mut coulg = pyscf_pbc_gto::get_coulg(
-        cell,
-        pyscf_pbc_gto::CoulGArgs {
-            k: q,
-            mesh: Some(mesh),
-            gv: Some(&gv),
-            ..Default::default()
-        },
-    )?;
-    for (g, v) in coulg.iter_mut().enumerate() {
-        *v *= gw.weight(g);
+    let cache = CoulGCache::build(cell, df.mesh, q)?;
+    fft_get_eri_with_cache(df, kptijkl, &cache)
+}
+
+pub fn fft_get_eri_with_cache(
+    df: &Fftdf,
+    kptijkl: [[f64; 3]; 4],
+    cache: &CoulGCache,
+) -> Result<CTensor, PbcDfError> {
+    let cell = &df.cell;
+    let nao = cell.mol.nao_nr;
+    let n2 = nao * nao;
+    if !is_kconserv(cell, &kptijkl) {
+        return Ok(CTensor::zeros(n2 * n2));
     }
-    let pq = fft_ao_pairs_g(df, [kptijkl[0], kptijkl[1]], q)?;
-    let neg = [
-        [-kptijkl[2][0], -kptijkl[2][1], -kptijkl[2][2]],
-        [-kptijkl[3][0], -kptijkl[3][1], -kptijkl[3][2]],
+    let q = [
+        kptijkl[1][0] - kptijkl[0][0],
+        kptijkl[1][1] - kptijkl[0][1],
+        kptijkl[1][2] - kptijkl[0][2],
     ];
-    let rs = fft_ao_pairs_g(df, neg, q)?;
-    Ok(contract_eri(&pq, &rs, &coulg, nao))
+    if cache.mesh != df.mesh || cache.q.iter().zip(q).any(|(a, b)| (*a - b).abs() > 1e-12) {
+        return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(
+                "CoulGCache does not match FFT AO2MO q/mesh".into(),
+            ),
+        )));
+    }
+    // Use the real-space `_contract_plain` convention even for AO output.
+    // At a Brillouin-zone boundary, reconstructing the ket through
+    // `(-k_k,-k_l,q)` requires an additional reciprocal-vector permutation of
+    // the FFT bins; treating the bins as identical gives the wrong non-gamma
+    // block. Identity MOs preserve the public AO layout while sharing the
+    // upstream phase spelling with `fft_ao2mo.general`.
+    let identity = MoCoeff::identity(nao);
+    Ok(fft_general_mo_first(
+        df,
+        [&identity, &identity, &identity, &identity],
+        kptijkl,
+        Some(cache),
+    )?
+    .data)
 }
 
 // ---------------------------------------------------------------------------
@@ -442,6 +526,98 @@ pub fn aft_general(
     Ok(mo_eri(&ao, nao, mos))
 }
 
+fn transform_pairs_g(
+    pair: &(Vec<f64>, Vec<f64>),
+    ng: usize,
+    a: &MoCoeff,
+    b: &MoCoeff,
+) -> (Vec<f64>, Vec<f64>) {
+    let out = get_mo_pairs_g(pair, a.nao, a, b);
+    debug_assert_eq!(out.re.len(), ng * a.nmo * b.nmo);
+    (out.re, out.im)
+}
+
+/// Transform analytical AO-pair Fourier slices into MO-pair slices before
+/// forming the four-index block, avoiding a materialised `nao^2 x nao^2` ERI.
+pub fn aft_general_mo_first(
+    df: &Aftdf,
+    mos: [&MoCoeff; 4],
+    kptijkl: [[f64; 3]; 4],
+    cache: Option<&CoulGCache>,
+) -> Result<Eri, PbcDfError> {
+    warn_pbc2d_eri(&df.cell);
+    let dims = mos.map(|m| m.nmo);
+    if !is_kconserv(&df.cell, &kptijkl) {
+        return Ok(Eri {
+            data: CTensor::zeros(dims.iter().product()),
+            row: PairDims::plain(dims[0], dims[1]),
+            col: PairDims::plain(dims[2], dims[3]),
+        });
+    }
+    let q = [
+        kptijkl[1][0] - kptijkl[0][0],
+        kptijkl[1][1] - kptijkl[0][1],
+        kptijkl[1][2] - kptijkl[0][2],
+    ];
+    let owned_gv;
+    let owned_w;
+    let (gv, w) = match cache {
+        Some(c) => {
+            if c.mesh != df.mesh || c.q.iter().zip(q).any(|(a, b)| (*a - b).abs() > 1e-12) {
+                return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                    pyscf_core::CoreError::InvalidMolecule(
+                        "CoulGCache does not match AFT MO-first q/mesh".into(),
+                    ),
+                )));
+            }
+            (&c.gv[..], &c.weighted_coulg[..])
+        }
+        None => {
+            owned_gv = df.gv(df.mesh)?;
+            owned_w = df.weighted_coulg(q, None, df.mesh, None)?;
+            (&owned_gv[..], &owned_w[..])
+        }
+    };
+    let pq = transform_pairs_g(
+        &aft_ao_pairs_g(df, kptijkl[1], q, gv)?,
+        gv.len(),
+        mos[0],
+        mos[1],
+    );
+    let neg_l = [-kptijkl[3][0], -kptijkl[3][1], -kptijkl[3][2]];
+    // `aft_ao2mo.py:215-216` conjugates the ket AO pair BEFORE the MO
+    // transform (`rskR - rskI*1j`, then `r_e2`), and `r_e2` itself conjugates
+    // the bra coefficient. Conjugating the TRANSFORMED pair instead gives
+    // `conj(conj(c_k) c_l A) = c_k conj(c_l) conj(A)` — the wrong one of the
+    // two coefficients — which is invisible for real coefficients and wrong by
+    // O(1) for complex ones.
+    let rs_ao = aft_ao_pairs_g(df, neg_l, q, gv)?;
+    let rs_ao = (rs_ao.0, rs_ao.1.iter().map(|v| -v).collect::<Vec<f64>>());
+    let rs = transform_pairs_g(&rs_ao, gv.len(), mos[2], mos[3]);
+    let (nrow, ncol) = (dims[0] * dims[1], dims[2] * dims[3]);
+    let mut data = CTensor::zeros(nrow * ncol);
+    for a in 0..nrow {
+        for b in 0..ncol {
+            let mut x = CTensor::zeros(gv.len());
+            let mut y = CTensor::zeros(gv.len());
+            for (g, &wg) in w.iter().enumerate().take(gv.len()) {
+                x.re[g] = pq.0[g * nrow + a] * wg;
+                x.im[g] = pq.1[g * nrow + a] * wg;
+                y.re[g] = rs.0[g * ncol + b];
+                y.im[g] = rs.1[g * ncol + b];
+            }
+            let (re, im) = oracle_zdotu(&x, &y);
+            data.re[a * ncol + b] = re;
+            data.im[a * ncol + b] = im;
+        }
+    }
+    Ok(Eri {
+        data,
+        row: PairDims::plain(dims[0], dims[1]),
+        col: PairDims::plain(dims[2], dims[3]),
+    })
+}
+
 /// `fft_ao2mo.general(mydf, mo_coeffs, kpts)` — `fft_ao2mo.py:101-155`.
 ///
 /// # Errors
@@ -455,6 +631,129 @@ pub fn fft_general(
     let nao = df.cell.mol.nao_nr;
     let ao = fft_get_eri(df, kptijkl)?;
     Ok(mo_eri(&ao, nao, mos))
+}
+
+fn mo_on_grid(mo: &MoCoeff, ao: &CTensor, ngrids: usize) -> CTensor {
+    let mut out = CTensor::zeros(mo.nmo * ngrids);
+    for m in 0..mo.nmo {
+        for r in 0..ngrids {
+            for p in 0..mo.nao {
+                let ci = p * mo.nmo + m;
+                let ai = p * ngrids + r;
+                let (cr, cim) = (mo.c.re[ci], mo.c.im[ci]);
+                let (ar, aim) = (ao.re[ai], ao.im[ai]);
+                let z = m * ngrids + r;
+                out.re[z] += cr * ar - cim * aim;
+                out.im[z] += cr * aim + cim * ar;
+            }
+        }
+    }
+    out
+}
+
+/// The actual upstream FFT AO2MO route: AO→MO on the real-space grid before
+/// pair formation. One bra pair is live at a time, bounding scratch memory.
+pub fn fft_general_mo_first(
+    df: &Fftdf,
+    mos: [&MoCoeff; 4],
+    kptijkl: [[f64; 3]; 4],
+    cache: Option<&CoulGCache>,
+) -> Result<Eri, PbcDfError> {
+    warn_pbc2d_eri(&df.cell);
+    let dims = mos.map(|m| m.nmo);
+    if !is_kconserv(&df.cell, &kptijkl) {
+        return Ok(Eri {
+            data: CTensor::zeros(dims.iter().product()),
+            row: PairDims::plain(dims[0], dims[1]),
+            col: PairDims::plain(dims[2], dims[3]),
+        });
+    }
+    let q = [
+        kptijkl[1][0] - kptijkl[0][0],
+        kptijkl[1][1] - kptijkl[0][1],
+        kptijkl[1][2] - kptijkl[0][2],
+    ];
+    let owned;
+    let cache = match cache {
+        Some(v) => v,
+        None => {
+            owned = CoulGCache::build(&df.cell, df.mesh, q)?;
+            &owned
+        }
+    };
+    if cache.mesh != df.mesh || cache.q.iter().zip(q).any(|(a, b)| (*a - b).abs() > 1e-12) {
+        return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(
+                "CoulGCache does not match FFT MO-first q/mesh".into(),
+            ),
+        )));
+    }
+    let ao = df.ao_kpts(&kptijkl)?;
+    let ng = ao.ngrids;
+    let mg = [
+        mo_on_grid(mos[0], ao.at(0), ng),
+        mo_on_grid(mos[1], ao.at(1), ng),
+        mo_on_grid(mos[2], ao.at(2), ng),
+        mo_on_grid(mos[3], ao.at(3), ng),
+    ];
+    let mut phase = CTensor::zeros(ng);
+    for (r, c) in df.grids.coords.iter().enumerate() {
+        let th = -(q[0] * c[0] + q[1] * c[1] + q[2] * c[2]);
+        let (s, co) = th.sin_cos();
+        phase.re[r] = co;
+        phase.im[r] = s;
+    }
+    let mut data = CTensor::zeros(dims.iter().product());
+    let wcoul_scale = df.cell.vol() / ng as f64;
+    for i in 0..dims[0] {
+        for j in 0..dims[1] {
+            let mut pair = CTensor::zeros(ng);
+            for r in 0..ng {
+                let x = i * ng + r;
+                let y = j * ng + r;
+                let (xr, xi) = (mg[0].re[x], -mg[0].im[x]);
+                let (yr, yi) = (mg[1].re[y], mg[1].im[y]);
+                let (pr, pi) = (xr * yr - xi * yi, xr * yi + xi * yr);
+                pair.re[r] = pr * phase.re[r] - pi * phase.im[r];
+                pair.im[r] = pr * phase.im[r] + pi * phase.re[r];
+            }
+            let mut v = pyscf_pbc_tools::fft::fft(&pair, df.mesh)?;
+            for g in 0..ng {
+                v.re[g] *= cache.coulg[g] * wcoul_scale;
+                v.im[g] *= cache.coulg[g] * wcoul_scale;
+            }
+            v = pyscf_pbc_tools::fft::ifft(&v, df.mesh)?;
+            for r in 0..ng {
+                let (vr, vi) = (v.re[r], v.im[r]);
+                v.re[r] = vr * phase.re[r] + vi * phase.im[r];
+                v.im[r] = vi * phase.re[r] - vr * phase.im[r];
+            }
+            for k in 0..dims[2] {
+                for l in 0..dims[3] {
+                    let mut ket = CTensor::zeros(ng);
+                    for r in 0..ng {
+                        let x = k * ng + r;
+                        let y = l * ng + r;
+                        let (xr, xi) = (mg[2].re[x], -mg[2].im[x]);
+                        let (yr, yi) = (mg[3].re[y], mg[3].im[y]);
+                        ket.re[r] = xr * yr - xi * yi;
+                        ket.im[r] = xr * yi + xi * yr;
+                    }
+                    let (re, im) = oracle_zdotu(&v, &ket);
+                    let z = ((i * dims[1] + j) * dims[2] + k) * dims[3] + l;
+                    data.re[z] = re;
+                    data.im[z] = im;
+                }
+            }
+        }
+    }
+    // DEVIATION: fft_ao2mo.py:126-143's gamma/all-real compact shortcut is
+    // intentionally omitted; KMP2 requests non-identical (o,v,o,v) blocks.
+    Ok(Eri {
+        data,
+        row: PairDims::plain(dims[0], dims[1]),
+        col: PairDims::plain(dims[2], dims[3]),
+    })
 }
 
 fn mo_eri(ao: &CTensor, nao: usize, mos: [&MoCoeff; 4]) -> Eri {

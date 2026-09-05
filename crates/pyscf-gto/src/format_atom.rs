@@ -366,58 +366,14 @@ pub(crate) fn atom_symbol(token: &str) -> Result<String, PyscfRsError> {
     Ok(format!("{}{}", canonical_leading, suffix))
 }
 
-/// Strip the suffix from an atom symbol and look up the leading-symbol's
-/// nuclear charge.
+/// Nuclear charge for an atom symbol, ghost/label suffix stripped
+/// (`"Cu1"` → `"Cu"`).
 ///
-/// Phase 2 minimal table covering Z=1..36 + ghost. Full table lives in
-/// `pyscf/data/elements.py` `ELEMENTS_PROTON` (~118 entries); Phase 3 PyO3
-/// can pull the full table at construction time.
+/// Delegates to [`pyscf_core::elements::charge_for_symbol`], the workspace's
+/// single periodic table. This used to be a private Z≤36 stub, which made
+/// [`atom_symbol`] reject every element above krypton.
 pub fn charge_for_symbol(symb: &str) -> Option<i32> {
-    let alpha_end = symb
-        .find(|c: char| !c.is_alphabetic())
-        .unwrap_or(symb.len());
-    let leading = &symb[..alpha_end];
-    match leading {
-        "H" => Some(1),
-        "He" => Some(2),
-        "Li" => Some(3),
-        "Be" => Some(4),
-        "B" => Some(5),
-        "C" => Some(6),
-        "N" => Some(7),
-        "O" => Some(8),
-        "F" => Some(9),
-        "Ne" => Some(10),
-        "Na" => Some(11),
-        "Mg" => Some(12),
-        "Al" => Some(13),
-        "Si" => Some(14),
-        "P" => Some(15),
-        "S" => Some(16),
-        "Cl" => Some(17),
-        "Ar" => Some(18),
-        "K" => Some(19),
-        "Ca" => Some(20),
-        "Sc" => Some(21),
-        "Ti" => Some(22),
-        "V" => Some(23),
-        "Cr" => Some(24),
-        "Mn" => Some(25),
-        "Fe" => Some(26),
-        "Co" => Some(27),
-        "Ni" => Some(28),
-        "Cu" => Some(29),
-        "Zn" => Some(30),
-        "Ga" => Some(31),
-        "Ge" => Some(32),
-        "As" => Some(33),
-        "Se" => Some(34),
-        "Br" => Some(35),
-        "Kr" => Some(36),
-        // Ghost atom convention upstream: "GHOST" / "X" → 0 charge.
-        "GHOST" | "X" | "Ghost" | "ghost" => Some(0),
-        _ => None,
-    }
+    pyscf_core::elements::charge_for_symbol(symb)
 }
 
 fn invalid_coord(line: &str) -> PyscfRsError {

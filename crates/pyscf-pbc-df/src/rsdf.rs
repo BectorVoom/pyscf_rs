@@ -123,4 +123,32 @@ impl crate::traits::PeriodicDf for Rsdf {
     ) -> Result<crate::traits::JkResult, PbcDfError> {
         self.gdf.get_jk(dms, kpts, opts)
     }
+    fn ao2mo(
+        &self,
+        mos: [&crate::MoCoeff; 4],
+        kidx: [usize; 4],
+        compact: bool,
+    ) -> Result<crate::Eri, PbcDfError> {
+        crate::traits::PeriodicDf::ao2mo(&self.gdf, mos, kidx, compact)
+    }
+    fn get_ao_eri(&self, kidx: [usize; 4], compact: bool) -> Result<crate::Eri, PbcDfError> {
+        crate::traits::PeriodicDf::get_ao_eri(&self.gdf, kidx, compact)
+    }
+    fn ao2mo_7d(&self, mos: crate::MoKpts<'_>, factor: f64) -> Result<crate::Eri7d, PbcDfError> {
+        crate::traits::PeriodicDf::ao2mo_7d(&self.gdf, mos, factor)
+    }
+    fn has_cderi(&self) -> bool {
+        true
+    }
+    fn sr_loop(
+        &self,
+        ki: usize,
+        kj: usize,
+        compact: bool,
+    ) -> Result<Vec<crate::SrBlock>, PbcDfError> {
+        self.gdf.sr_loop(ki, kj, compact)
+    }
+    fn get_naoaux(&self) -> Result<usize, PbcDfError> {
+        self.gdf.get_naoaux()
+    }
 }

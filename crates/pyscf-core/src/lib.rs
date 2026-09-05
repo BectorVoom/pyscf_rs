@@ -20,6 +20,9 @@ pub mod basis_set;
 // `pyscf/scf/hf.py:1349-1357`. Zero algebra dep per FOUND-02.
 pub mod canonicalize;
 pub mod density;
+// The one symbol↔atomic-number table for the workspace, replacing the two
+// independent Z≤36 stubs that used to live here and in pyscf-gto.
+pub mod elements;
 pub mod energy;
 pub mod error;
 pub mod mo;
@@ -32,6 +35,7 @@ pub use amplitudes::Amplitudes;
 pub use basis_set::{Atom, BasisMeta, BasisSet, CintxNuclearModel, Shell, raw_layout};
 pub use canonicalize::canonicalize_signs;
 pub use density::Density;
+pub use elements::{ELEMENTS, charge_for_symbol};
 pub use energy::Energy;
 pub use error::{BasisLoadError, CoreError, EcpLoadError, PyscfRsError};
 pub use mo::MOCoefficients;

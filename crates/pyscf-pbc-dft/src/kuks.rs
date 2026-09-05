@@ -168,6 +168,51 @@ impl Kuks {
         self.ni.get_rho(self.cell(), &total, &self.grids)
     }
 
+    /// `get_bands(kpts_band, dms)` — the KS analogue of
+    /// [`pyscf_pbc_scf::Kuhf::get_bands`], and the unrestricted counterpart of
+    /// [`crate::Krks::get_bands`].
+    ///
+    /// The exchange-correlation potential is rebuilt at the band k-points from
+    /// the SCF density: [`Kuks::get_veff_tagged`] passes `kpts_band` down to
+    /// `nr_uks` and to the J/K build, and seeing `Some(..)` there also switches
+    /// off the ground-state energy tags, which are meaningless off the mesh.
+    ///
+    /// # Layout
+    /// Alpha for every band k-point, then beta — the split point is
+    /// `kpts_band.len()`, matching this class's `eig` / `get_occ`.
+    ///
+    /// # Errors
+    /// Propagates the grid loop, the J/K build and the generalized eigensolve.
+    pub fn get_bands(
+        &self,
+        kpts_band: &[[f64; 3]],
+        dms: &KDms,
+    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+        let nao = self.cell().mol.nao_nr;
+        let hcore = pyscf_pbc_df::get_hcore(self.with_df.as_ref(), kpts_band).map_err(df_err)?;
+        let (veff, _) = self
+            .get_veff_tagged(dms, Some(kpts_band))
+            .map_err(unwrap_err)?;
+
+        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), kpts_band)?, nao);
+        let mut es = Vec::with_capacity(2 * kpts_band.len());
+        let mut cs = Vec::with_capacity(2 * kpts_band.len());
+        for (s, channel) in veff.iter().enumerate().take(2) {
+            let mut fock = hcore.clone();
+            for (k, f) in fock.iter_mut().enumerate() {
+                for i in 0..f.len() {
+                    f.re[i] += channel[k].re[i];
+                    f.im[i] += channel[k].im[i];
+                }
+            }
+            let (e, c) = eig_channel(&fock, &s1e, nao)?;
+            debug_assert_eq!(e.len(), kpts_band.len(), "channel {s} band count");
+            es.extend(e);
+            cs.extend(c);
+        }
+        Ok((es, cs))
+    }
+
     /// `get_veff` proper — `kuks.py:38-101`.
     ///
     /// # Errors

@@ -113,4 +113,4 @@ pub use zeigh::{
     zsolve_linear, zsolve_linear_embedding, zsolve_linear_faer,
 };
 pub use zgemm::{zgemm_dense, zgemm_h_dense};
-pub use zoracle::{oracle_zdot, oracle_zsum};
+pub use zoracle::{oracle_zdot, oracle_zdot_re, oracle_zdotu, oracle_zdotu_re, oracle_zsum};

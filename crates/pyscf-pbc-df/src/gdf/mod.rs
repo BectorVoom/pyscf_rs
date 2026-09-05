@@ -345,4 +345,27 @@ impl PeriodicDf for Gdf {
     ) -> Result<JkResult, PbcDfError> {
         jk::get_jk(self, dms, kpts, opts)
     }
+    fn ao2mo(
+        &self,
+        mos: [&crate::MoCoeff; 4],
+        kidx: [usize; 4],
+        compact: bool,
+    ) -> Result<crate::Eri, PbcDfError> {
+        crate::df_ao2mo::general(self, mos, kidx, compact)
+    }
+    fn get_ao_eri(&self, kidx: [usize; 4], compact: bool) -> Result<crate::Eri, PbcDfError> {
+        crate::df_ao2mo::get_eri(self, kidx, compact)
+    }
+    fn ao2mo_7d(&self, mos: crate::MoKpts<'_>, factor: f64) -> Result<crate::Eri7d, PbcDfError> {
+        crate::df_ao2mo::ao2mo_7d(self, mos, factor)
+    }
+    fn has_cderi(&self) -> bool {
+        true
+    }
+    fn sr_loop(&self, ki: usize, kj: usize, compact: bool) -> Result<Vec<SrBlock>, PbcDfError> {
+        Gdf::sr_loop(self, ki, kj, compact)
+    }
+    fn get_naoaux(&self) -> Result<usize, PbcDfError> {
+        Gdf::get_naoaux(self)
+    }
 }

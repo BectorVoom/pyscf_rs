@@ -258,7 +258,13 @@ impl KOverrideHooks for Krhf {
             self.entropy.set(Some(entropy));
             return Ok((occ, vec![fermi]));
         }
-        let (occ, fermi) = get_occ_restricted(mo_energy, self.nelectron() / 2)?;
+        // `khf.py:191-192`: `nkpts = len(mo_energy_kpts)`, i.e. the electron
+        // count comes from the ARGUMENT, not from `mf.kpts`. The two agree on
+        // every SCF iteration and diverge only when `get_occ` is called on
+        // bands evaluated on a different mesh — which is exactly what
+        // `kmp2_stagger`'s full-mesh path does (`kmp2_stagger.py:271`).
+        let nocc = self.cell().tot_electrons(mo_energy.len()) / 2;
+        let (occ, fermi) = get_occ_restricted(mo_energy, nocc)?;
         Ok((occ, vec![fermi]))
     }
 

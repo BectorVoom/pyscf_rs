@@ -392,4 +392,32 @@ impl PeriodicDf for Mdf {
     ) -> Result<JkResult, PbcDfError> {
         mdf_jk::get_jk(self, dms, kpts, opts)
     }
+    fn ao2mo(
+        &self,
+        mos: [&crate::MoCoeff; 4],
+        kidx: [usize; 4],
+        _compact: bool,
+    ) -> Result<crate::Eri, PbcDfError> {
+        mdf_ao2mo::general(self, mos, kidx)
+    }
+    fn get_ao_eri(&self, kidx: [usize; 4], _compact: bool) -> Result<crate::Eri, PbcDfError> {
+        mdf_ao2mo::get_eri(self, kidx)
+    }
+    fn ao2mo_7d(&self, mos: crate::MoKpts<'_>, factor: f64) -> Result<crate::Eri7d, PbcDfError> {
+        mdf_ao2mo::ao2mo_7d(self, mos, factor)
+    }
+    fn has_cderi(&self) -> bool {
+        true
+    }
+    fn sr_loop(
+        &self,
+        ki: usize,
+        kj: usize,
+        compact: bool,
+    ) -> Result<Vec<crate::SrBlock>, PbcDfError> {
+        Mdf::sr_loop(self, ki, kj, compact)
+    }
+    fn get_naoaux(&self) -> Result<usize, PbcDfError> {
+        Mdf::get_naoaux(self)
+    }
 }

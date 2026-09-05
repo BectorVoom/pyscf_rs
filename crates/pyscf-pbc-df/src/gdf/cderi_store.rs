@@ -83,7 +83,15 @@ pub fn sr_loop(
     nao: usize,
     compact: bool,
 ) -> Result<Vec<SrBlock>, PbcDfError> {
-    let b = cderi.get(ki, kj).ok_or_else(|| {
+    // PySCF's v1 cderi store contains the lower-triangular k-pairs.  `_load3c`
+    // serves an upper-triangular request from the reverse pair by applying
+    // L(ki,kj)[mu,nu] = conj(L(kj,ki)[nu,mu]).  Builders in this port retain
+    // both directions for convenience, but using the independently evaluated
+    // upper block loses that exact identity and makes the KMP2 Lov route differ
+    // from `df_ao2mo` at self-inverse momentum transfers.
+    let reverse = ki < kj;
+    let (bi, bj) = if reverse { (kj, ki) } else { (ki, kj) };
+    let b = cderi.get(bi, bj).ok_or_else(|| {
         PbcDfError::Core(pyscf_core::PyscfRsError::Core(
             pyscf_core::CoreError::InvalidMolecule(format!(
                 "sr_loop: no cderi block for the k-pair ({ki}, {kj}); build() with \
@@ -91,7 +99,11 @@ pub fn sr_loop(
             )),
         ))
     })?;
-    let mut out = vec![reshape_block(b, cderi.aosym, nao, compact)?];
+    let mut first = reshape_block(b, cderi.aosym, nao, compact)?;
+    if reverse {
+        reverse_pair_in_place(&mut first, nao, compact);
+    }
+    let mut out = vec![first];
     if let Some(neg) = &b.negative {
         let nb = CderiBlock {
             data: neg.clone(),
@@ -100,10 +112,37 @@ pub fn sr_loop(
             negative: None,
         };
         let mut m = reshape_block(&nb, cderi.aosym, nao, compact)?;
+        if reverse {
+            reverse_pair_in_place(&mut m, nao, compact);
+        }
         m.sign = -1;
         out.push(m);
     }
     Ok(out)
+}
+
+fn reverse_pair_in_place(block: &mut SrBlock, nao: usize, compact: bool) {
+    if compact {
+        // A packed Hermitian AO pair is unchanged by transpose; conjugation
+        // remains load-bearing away from gamma.
+        block.im.iter_mut().for_each(|v| *v = -*v);
+        return;
+    }
+    let mut re = vec![0.0; block.re.len()];
+    let mut im = vec![0.0; block.im.len()];
+    for l in 0..block.naux {
+        let base = l * nao * nao;
+        for mu in 0..nao {
+            for nu in 0..nao {
+                let dst = base + mu * nao + nu;
+                let src = base + nu * nao + mu;
+                re[dst] = block.re[src];
+                im[dst] = -block.im[src];
+            }
+        }
+    }
+    block.re = re;
+    block.im = im;
 }
 
 /// `pack_tril` / `unpack_tril(..., ANTIHERMI)` on one block.

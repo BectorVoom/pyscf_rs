@@ -10,7 +10,10 @@ pub use error::*;
 // Phase 9 plan 09-07 — `is_zero`, `member`, `intersection`, `unique`,
 // `get_kconserv`, `get_kconserv3`.
 pub mod kpts_helper;
+// Phase 15 plan 15-02 — correlated-method ERI symmetry helper.
+pub mod khelper;
 
+pub use khelper::{KptsHelper, SymmMap};
 pub use kpts_helper::{
     KCONSERV_TOL, KIdx, KPT_DIFF_TOL, Kconserv, Kconserv3, UniqueKpts, gamma_point, get_kconserv,
     get_kconserv3, intersection, is_gamma_point, is_zero, member, round_to_fbz, unique,

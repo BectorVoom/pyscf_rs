@@ -34,8 +34,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use pyscf_algebra::{AlgebraClient, CTensor, select_backend};
-use pyscf_core::{CoreError, PyscfRsError};
+use pyscf_algebra::CTensor;
 use pyscf_pbc_gto::{
     Cell, CoulGArgs, ExxDiv, UniformGrids, eval_ao_kpts, get_coulg, get_coulg_at_gv, get_gv,
     get_si, is_zero,
@@ -277,16 +276,6 @@ impl Fftdf {
         Ok(entry)
     }
 
-    pub(crate) fn client(&self) -> Result<AlgebraClient, PbcDfError> {
-        Ok(select_backend()
-            .map_err(|e| {
-                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                    "FFTDF: backend selection failed: {e}"
-                )))
-            })?
-            .client)
-    }
-
     /// Contract a REAL local potential on the grid into `nao x nao` matrices:
     /// `v[k][p, q] = sum_g conj(ao_k[p, g]) vR[g] ao_k[q, g]`.
     ///
@@ -507,5 +496,41 @@ impl PeriodicDf for Fftdf {
             None
         };
         Ok(JkResult { vj, vk })
+    }
+
+    fn ao2mo(
+        &self,
+        mos: [&crate::MoCoeff; 4],
+        kidx: [usize; 4],
+        _compact: bool,
+    ) -> Result<crate::Eri, PbcDfError> {
+        let k = kidx.map(|i| self.kpts[i]);
+        crate::pbc_ao2mo::fft_general_mo_first(self, mos, k, None)
+    }
+
+    fn ao2mo_cached(
+        &self,
+        mos: [&crate::MoCoeff; 4],
+        kidx: [usize; 4],
+        _compact: bool,
+        cache: Option<&crate::CoulGCache>,
+    ) -> Result<crate::Eri, PbcDfError> {
+        let k = kidx.map(|i| self.kpts[i]);
+        crate::pbc_ao2mo::fft_general_mo_first(self, mos, k, cache)
+    }
+
+    fn get_ao_eri(&self, kidx: [usize; 4], _compact: bool) -> Result<crate::Eri, PbcDfError> {
+        let k = kidx.map(|i| self.kpts[i]);
+        let data = crate::pbc_ao2mo::fft_get_eri(self, k)?;
+        let d = crate::PairDims::plain(self.cell.mol.nao_nr, self.cell.mol.nao_nr);
+        Ok(crate::Eri {
+            data,
+            row: d,
+            col: d,
+        })
+    }
+
+    fn ao2mo_7d(&self, mos: crate::MoKpts<'_>, factor: f64) -> Result<crate::Eri7d, PbcDfError> {
+        crate::pbc_ao2mo::fft_ao2mo_7d(self, mos, factor)
     }
 }

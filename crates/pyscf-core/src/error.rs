@@ -72,6 +72,18 @@ pub enum BasisLoadError {
     #[error("unknown basis name '{name}' (not in ALIAS, GTH_ALIAS, or PP_ALIAS)")]
     UnknownName { name: String },
 
+    /// The basis set is known but defines nothing for this element — e.g.
+    /// `def2-svp` covers no lanthanide, so `Eu` has no block in
+    /// `def2-svp.dat`. Distinct from [`BasisLoadError::UnknownName`] because
+    /// the two route differently: both may be retried against the Basis Set
+    /// Exchange, but only this one means "the name was right".
+    #[error("basis '{name}' has no entry for element '{symbol}' in {file}")]
+    ElementAbsent {
+        name: String,
+        symbol: String,
+        file: String,
+    },
+
     #[error("parse error in {file}:{line}: {reason}")]
     Parse {
         file: String,
@@ -84,6 +96,16 @@ pub enum BasisLoadError {
         path: String,
         #[source]
         source: std::io::Error,
+    },
+
+    /// The Basis Set Exchange fallback was reached and did not yield a basis.
+    /// Mirrors the `BasisNotFoundError` upstream raises after its own BSE
+    /// attempt fails (`pyscf/gto/basis/__init__.py:707-714`).
+    #[error("Basis Set Exchange lookup failed for basis '{name}', element '{symbol}': {reason}")]
+    Bse {
+        name: String,
+        symbol: String,
+        reason: String,
     },
 }
 
@@ -98,6 +120,15 @@ pub enum EcpLoadError {
     Parse {
         file: String,
         line: usize,
+        reason: String,
+    },
+
+    /// Counterpart of [`BasisLoadError::Bse`] on the ECP surface
+    /// (`pyscf/gto/basis/__init__.py:765-779`).
+    #[error("Basis Set Exchange lookup failed for ECP '{name}', element '{symbol}': {reason}")]
+    Bse {
+        name: String,
+        symbol: String,
         reason: String,
     },
 }

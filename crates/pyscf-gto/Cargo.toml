@@ -34,6 +34,11 @@ thiserror     = { workspace = true }
 tracing       = { workspace = true }
 serde         = { workspace = true, features = ["derive"] }
 serde_json    = { workspace = true }
+# Optional, gated behind the `bse` feature: the Basis Set Exchange REST client.
+# `rustls-tls` rather than the default `native-tls` so no system OpenSSL is
+# needed (consistent with DIST-05). This adds NO new crates to the build —
+# reqwest 0.12 is already in the graph via cubecl-cpu → tracel-llvm-bundler.
+reqwest       = { version = "0.12", optional = true, default-features = false, features = ["blocking", "rustls-tls"] }
 
 [dev-dependencies]
 approx        = { workspace = true }
@@ -41,6 +46,13 @@ rstest        = { workspace = true }
 
 [features]
 default = []
+# Basis Set Exchange online download. OFF by default so a stock build makes no
+# network calls: basis loading stays a pure filesystem operation, which is what
+# air-gapped compute nodes and reproducible runs need. Enabling this mirrors
+# upstream's `pip install basis-set-exchange` — the BSE route is then tried
+# automatically as the LAST fallback for a basis name absent from the local
+# ALIAS tables (`pyscf/gto/basis/__init__.py:699-714`).
+bse = ["dep:reqwest"]
 # Plan 02-09 GTO-12: gates the dump_*_for_oracle.rs integration tests
 # invoked by the pytest harness in tests/oracle/. Each helper is also
 # marked #[ignore], so even with the feature on `cargo test --workspace`

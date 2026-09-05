@@ -1,0 +1,7 @@
+pyscf.__version__=2.12.1
+system=He/6-31g all-electron, mesh=[1,1,2], cell.mesh=[9,9,9], exxdiv=None, conv_tol=1e-11
+FFTDF e_corr=-0.033241446759957924 ss=-1.1861279878419215e-06 os=-0.033240260631970081 median_s=0.019187749 spread_s=0.00594433599 run_spread=1.3877787807814457e-17
+GDF e_corr=-0.016989369077568279 ss=-3.2102396847681451e-06 os=-0.01698615883788351 median_s=0.00340698801 spread_s=0.000716553011 run_spread=0
+GDF_forced_ao2mo e_corr=-0.016989369077568282
+abs_route_gap=0.016252077682389645
+FFTDF_over_GDF_median_ratio=5.63130

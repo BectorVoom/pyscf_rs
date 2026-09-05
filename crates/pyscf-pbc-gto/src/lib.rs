@@ -25,6 +25,7 @@ pub mod supercell;
 
 // Phase 9 plan 09-07 — k-point meshes (`cell.py:827-884`) plus the `Cell`-taking
 // wrappers over `pyscf_pbc_lib::kpts_helper`.
+pub mod kpath;
 pub mod kpts_mesh;
 
 // Phase 9 plan 09-08 — Ewald summation (`cell.py:650-824`) and the
@@ -87,6 +88,7 @@ pub use gv::{
     GvWeights, fftfreq, fftfreq_scaled, get_gv, get_gv_weights, get_si, get_uniform_grids,
 };
 pub use hcore::{HcoreParts, get_hcore, get_hcore_parts, get_ovlp, get_t};
+pub use kpath::{BravaisLattice, KPath, band_path, band_path_from_segments, detect_lattice};
 pub use kpts_mesh::{
     KCONSERV_TOL, KIdx, KPT_DIFF_TOL, Kconserv, Kconserv3, UniqueKpts, WITH_GAMMA, WRAP_AROUND,
     gamma_point, get_kconserv, get_kconserv3, intersection, is_gamma_point, is_trim, is_zero,

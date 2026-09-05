@@ -117,6 +117,72 @@ impl Kuhf {
     pub fn run(&self) -> Result<KScfResult, PyscfRsError> {
         self.kernel(&KScfConfig::for_cell(self.cell()))
     }
+
+    /// `get_bands(kpts_band, dm_kpts)` — energy bands at arbitrary k-points,
+    /// the unrestricted counterpart of [`crate::Krhf::get_bands`]
+    /// (`kuhf.py:524-550`).
+    ///
+    /// The converged density stays on the SCF k-mesh (`self.kpts()`); only the
+    /// one-electron term, the J/K contraction and the overlap move to
+    /// `kpts_band`. That is what makes this a *non*-self-consistent band
+    /// evaluation, and it is why the band k-points need not belong to the mesh.
+    ///
+    /// # Layout
+    /// Both returned vectors carry alpha for every band k-point followed by
+    /// beta, so the split point is `kpts_band.len()`. This is the same
+    /// convention [`KOverrideHooks::eig`], `get_occ` and `make_rdm1` already
+    /// use for this class, not upstream's nested `((e_a, e_b), (c_a, c_b))`.
+    ///
+    /// # Errors
+    /// Propagates the integrals and the generalized eigensolve.
+    pub fn get_bands(
+        &self,
+        kpts_band: &[[f64; 3]],
+        dm_kpts: &KDms,
+    ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
+        let nao = self.cell().mol.nao_nr;
+        let hcore = pyscf_pbc_df::get_hcore(self.with_df.as_ref(), kpts_band).map_err(df_err)?;
+        let r = self
+            .with_df
+            .get_jk(
+                dm_kpts,
+                self.kpts(),
+                JkOpts {
+                    hermi: 1,
+                    kpts_band: Some(kpts_band),
+                    with_j: true,
+                    with_k: true,
+                    exxdiv: self.exxdiv,
+                    omega: None,
+                    // Matches `Kuhf::get_veff`: the unrestricted path does not
+                    // take the k/k symmetry shortcut, and band k-points are not
+                    // part of the sampled mesh it would rely on anyway.
+                    kk_symmetry: false,
+                },
+            )
+            .map_err(df_err)?;
+        let vj = r.vj.ok_or_else(|| missing("vj"))?;
+        let vk = r.vk.ok_or_else(|| missing("vk"))?;
+
+        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), kpts_band)?, nao);
+        let mut es = Vec::with_capacity(2 * kpts_band.len());
+        let mut cs = Vec::with_capacity(2 * kpts_band.len());
+        for s in 0..2 {
+            // kuhf.py:493 — vhf[s] = vj[a] + vj[b] - vk[s]. The same formula
+            // `get_veff` uses; only the k-points it is evaluated at differ.
+            let mut fock = hcore.clone();
+            for (k, f) in fock.iter_mut().enumerate() {
+                for i in 0..f.len() {
+                    f.re[i] += vj[0][k].re[i] + vj[1][k].re[i] - vk[s][k].re[i];
+                    f.im[i] += vj[0][k].im[i] + vj[1][k].im[i] - vk[s][k].im[i];
+                }
+            }
+            let (e, c) = eig_channel(&fock, &s1e, nao)?;
+            es.extend(e);
+            cs.extend(c);
+        }
+        Ok((es, cs))
+    }
 }
 
 impl KOverrideHooks for Kuhf {

@@ -103,7 +103,9 @@ pub fn make_auxbasis(
         let Some(auxb) = predefined_auxbasis(name, hybrid_xc, mp2fit) else {
             continue;
         };
-        match pyscf_gto::basis::load_basis(auxb, sym) {
+        // `_local`: this is a probe, and an unanswered probe must fall to ETB
+        // rather than reach for the network.
+        match pyscf_gto::basis::load_basis_local(auxb, sym) {
             Ok(b) if !b.shells.is_empty() => {
                 tracing::debug!(
                     target: "pyscf_df::make_auxbasis",

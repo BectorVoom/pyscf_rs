@@ -9,6 +9,7 @@ use pyscf_pbc_gto::{Cell, ExxDiv};
 
 use crate::df_jk::KMats;
 use crate::error::PbcDfError;
+use crate::{CoulGCache, Eri, Eri7d, MoCoeff, MoKpts, SrBlock};
 
 /// The `(vj, vk)` pair a J/K build returns. Either half is `None` when the
 /// caller asked for the other only.
@@ -98,7 +99,7 @@ impl JkOpts<'_> {
 /// generic, none returns `Self`), which is what lets plan 13-07 store it as
 /// `Box<dyn PeriodicDf>` in every k-point driver (D-PBC-22). The `Debug`
 /// supertrait is required because those drivers `#[derive(Debug)]`.
-pub trait PeriodicDf: std::fmt::Debug {
+pub trait PeriodicDf: std::fmt::Debug + Send + Sync {
     /// The cell the builder is bound to.
     fn cell(&self) -> &Cell;
     /// The FFT mesh (or, for a Gaussian builder, the auxiliary mesh).
@@ -133,4 +134,53 @@ pub trait PeriodicDf: std::fmt::Debug {
         kpts: &[[f64; 3]],
         opts: JkOpts<'_>,
     ) -> Result<JkResult, PbcDfError>;
+
+    /// Four-index MO transform at one momentum-conserving k-quadruple.
+    fn ao2mo(&self, mos: [&MoCoeff; 4], kidx: [usize; 4], compact: bool)
+    -> Result<Eri, PbcDfError>;
+
+    /// [`Self::ao2mo`] with a caller-owned momentum-transfer cache. Builders
+    /// without a reciprocal-grid route ignore it through this default.
+    fn ao2mo_cached(
+        &self,
+        mos: [&MoCoeff; 4],
+        kidx: [usize; 4],
+        compact: bool,
+        _cache: Option<&CoulGCache>,
+    ) -> Result<Eri, PbcDfError> {
+        self.ao2mo(mos, kidx, compact)
+    }
+
+    /// AO-level ERI at one k-quadruple.
+    fn get_ao_eri(&self, kidx: [usize; 4], compact: bool) -> Result<Eri, PbcDfError>;
+
+    /// Seven-dimensional k-point MO transform; the index contract is documented
+    /// by [`crate::df_ao2mo`].
+    fn ao2mo_7d(&self, mos: MoKpts<'_>, factor: f64) -> Result<Eri7d, PbcDfError>;
+
+    /// Upstream's `isinstance(with_df, df.GDF)` route discriminator.
+    fn has_cderi(&self) -> bool {
+        false
+    }
+
+    /// Three-index fitted blocks for a k-point pair. Only cderi-backed
+    /// builders implement this surface.
+    fn sr_loop(&self, _ki: usize, _kj: usize, _compact: bool) -> Result<Vec<SrBlock>, PbcDfError> {
+        Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(format!(
+                "{} has no cderi/sr_loop surface",
+                self.name()
+            )),
+        )))
+    }
+
+    /// Auxiliary rank of a cderi-backed builder.
+    fn get_naoaux(&self) -> Result<usize, PbcDfError> {
+        Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(format!(
+                "{} has no cderi auxiliary rank",
+                self.name()
+            )),
+        )))
+    }
 }

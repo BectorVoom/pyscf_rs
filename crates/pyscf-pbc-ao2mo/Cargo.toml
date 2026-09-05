@@ -19,3 +19,6 @@ pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+
+[dev-dependencies]
+pyscf-gto = { path = "../pyscf-gto" }

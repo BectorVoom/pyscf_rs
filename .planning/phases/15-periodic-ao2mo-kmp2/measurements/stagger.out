@@ -1,0 +1,25 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf.__version__=2.12.1
+mesh=[29, 29, 29]
+nao=2
+e_tot_krhf=-1.1004620466064836
+converged=True
+stagger_submesh_fftdf=-0.016089900380356827
+stagger_submesh_fftdf_residual=3.54029e-07
+stagger_submesh_nkpts_ov=1
+stagger_submesh_kpts_idx_occ=[7]
+stagger_submesh_kpts_idx_vir=[0]
+stagger_fullmesh_fftdf=-0.014028716824109303
+stagger_fullmesh_fftdf_residual=2.80206e-07
+stagger_fullmesh_nkpts_ov=8
+standard_kmp2_fftdf=-0.014390203713094872
+standard_kmp2_fftdf_residual=2.84186e-07
+e_tot_krhf_gdf=-1.101860799440054
+stagger_submesh_gdf=-0.015836452346190341
+stagger_submesh_gdf_with_df_ints=True
+stagger_submesh_gdf_ao2mo=-0.015886558478292751
+stagger_scaled_occ=[[0.5 0.5 0.5]]
+stagger_scaled_vir=[[0. 0. 0.]]

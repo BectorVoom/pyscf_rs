@@ -349,7 +349,7 @@ impl Mole {
             return self
                 ._atom
                 .iter()
-                .map(|(s, _)| charge_for_symbol_internal(s).unwrap_or(0))
+                .map(|(s, _)| crate::elements::charge_for_symbol(s).unwrap_or(0))
                 .collect();
         }
         (0..self.natm)
@@ -397,57 +397,6 @@ impl Mole {
             }
         }
         e
-    }
-}
-
-/// Internal helper: minimal symbol→atomic-number table sufficient for
-/// plan 02-02's `atom_charges()` fallback (Z=1..36 + ghost). pyscf-gto
-/// owns the complete table + symbol-suffix normalisation; this fallback
-/// only handles the canonical leading-symbol case.
-fn charge_for_symbol_internal(symb: &str) -> Option<i32> {
-    let alpha_end = symb
-        .find(|c: char| !c.is_alphabetic())
-        .unwrap_or(symb.len());
-    let leading = &symb[..alpha_end];
-    match leading {
-        "H" => Some(1),
-        "He" => Some(2),
-        "Li" => Some(3),
-        "Be" => Some(4),
-        "B" => Some(5),
-        "C" => Some(6),
-        "N" => Some(7),
-        "O" => Some(8),
-        "F" => Some(9),
-        "Ne" => Some(10),
-        "Na" => Some(11),
-        "Mg" => Some(12),
-        "Al" => Some(13),
-        "Si" => Some(14),
-        "P" => Some(15),
-        "S" => Some(16),
-        "Cl" => Some(17),
-        "Ar" => Some(18),
-        "K" => Some(19),
-        "Ca" => Some(20),
-        "Sc" => Some(21),
-        "Ti" => Some(22),
-        "V" => Some(23),
-        "Cr" => Some(24),
-        "Mn" => Some(25),
-        "Fe" => Some(26),
-        "Co" => Some(27),
-        "Ni" => Some(28),
-        "Cu" => Some(29),
-        "Zn" => Some(30),
-        "Ga" => Some(31),
-        "Ge" => Some(32),
-        "As" => Some(33),
-        "Se" => Some(34),
-        "Br" => Some(35),
-        "Kr" => Some(36),
-        "GHOST" | "X" | "Ghost" | "ghost" => Some(0),
-        _ => None,
     }
 }
 

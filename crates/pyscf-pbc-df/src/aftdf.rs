@@ -461,4 +461,34 @@ impl PeriodicDf for Aftdf {
     ) -> Result<JkResult, PbcDfError> {
         crate::aft_jk::get_jk(self, dms, kpts, opts)
     }
+
+    fn ao2mo(
+        &self,
+        mos: [&crate::MoCoeff; 4],
+        kidx: [usize; 4],
+        _compact: bool,
+    ) -> Result<crate::Eri, PbcDfError> {
+        crate::pbc_ao2mo::aft_general_mo_first(self, mos, kidx.map(|i| self.kpts[i]), None)
+    }
+    fn ao2mo_cached(
+        &self,
+        mos: [&crate::MoCoeff; 4],
+        kidx: [usize; 4],
+        _compact: bool,
+        cache: Option<&crate::CoulGCache>,
+    ) -> Result<crate::Eri, PbcDfError> {
+        crate::pbc_ao2mo::aft_general_mo_first(self, mos, kidx.map(|i| self.kpts[i]), cache)
+    }
+    fn get_ao_eri(&self, kidx: [usize; 4], _compact: bool) -> Result<crate::Eri, PbcDfError> {
+        let data = crate::pbc_ao2mo::aft_get_eri(self, kidx.map(|i| self.kpts[i]))?;
+        let d = crate::PairDims::plain(self.cell.mol.nao_nr, self.cell.mol.nao_nr);
+        Ok(crate::Eri {
+            data,
+            row: d,
+            col: d,
+        })
+    }
+    fn ao2mo_7d(&self, mos: crate::MoKpts<'_>, factor: f64) -> Result<crate::Eri7d, PbcDfError> {
+        crate::pbc_ao2mo::aft_ao2mo_7d(self, mos, factor)
+    }
 }

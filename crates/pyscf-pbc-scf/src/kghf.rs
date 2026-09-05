@@ -265,8 +265,10 @@ impl KOverrideHooks for Kghf {
     }
 
     fn get_occ(&self, mo_energy: &[Vec<f64>]) -> Result<(Vec<Vec<f64>>, Vec<f64>), PyscfRsError> {
-        // kghf.py:105-120 — nocc = cell.nelectron * nkpts, occupancy 1.
-        let nocc = self.cell().tot_electrons(self.kpts().len());
+        // kghf.py:105-120 — nocc = cell.nelectron * nkpts, occupancy 1, with
+        // `nkpts = len(mo_energy_kpts)` (`:109`) rather than `len(mf.kpts)`.
+        // The two agree during SCF and differ only for bands on another mesh.
+        let nocc = self.cell().tot_electrons(mo_energy.len());
         let (fermi, _) = fermi_level(mo_energy, nocc)?;
         let occ = mo_energy
             .iter()

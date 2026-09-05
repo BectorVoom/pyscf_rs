@@ -20,3 +20,7 @@ pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
 pyscf-pbc-ao2mo  = { path = "../pyscf-pbc-ao2mo" }
 thiserror        = { workspace = true }
 tracing          = { workspace = true }
+rayon            = { workspace = true }
+
+[dev-dependencies]
+pyscf-gto = { path = "../pyscf-gto" }

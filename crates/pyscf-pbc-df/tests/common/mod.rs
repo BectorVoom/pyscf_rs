@@ -212,3 +212,22 @@ pub fn max_dev(got: &[pyscf_algebra::CTensor], want: &serde_json::Value) -> f64 
     }
     w
 }
+
+/// He with a **two**-function basis. [`he_all_electron`] is `sto-3g`, i.e. one
+/// AO, which makes every MO transform on it a 1x1 identity — see
+/// `pbc_ao2mo_mofirst.rs::mo_first_matches_ao_first_with_complex_coefficients`.
+pub fn he_631g() -> Cell {
+    let h = 2.834589;
+    Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![("He".into(), [0.0, 0.0, 0.0])]),
+            basis: BasisInput::Name("6-31g".into()),
+            unit: Unit::Bohr,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]),
+        mesh: Some([9, 9, 9]),
+        ..Default::default()
+    })
+    .expect("He 6-31g cell must build")
+}

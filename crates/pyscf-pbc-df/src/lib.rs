@@ -48,6 +48,7 @@ pub use gdf_builder::{ETA_MIN, EtaChoice, FusedCell, auxbar, fuse_auxcell, guess
 pub use incore::{Aosym, AuxCell, aux_e2, fill_2c2e, make_auxcell, make_modrho_basis};
 pub use mdf::Mdf;
 pub use outcore::{Aux3cFile, Blocking, Orientation, balance_segs};
+pub use pbc_ao2mo::CoulGCache;
 pub use pp_int::get_pp_loc_part2_kpts;
 pub use rsdf::{Rsdf, get_aux_chg};
 pub use rsdf_builder::{OMEGA_MIN, RsGdfBuilder};

@@ -13,7 +13,7 @@ use pyscf_core::raw_layout::{
     ANG_OF, ATM_SLOTS, ATOM_OF, BAS_SLOTS, CHARGE_OF, KAPPA_OF, NCTR_OF, NPRIM_OF, PTR_COEFF,
     PTR_EXP,
 };
-use pyscf_core::{BasisLoadError, ParsedAtom, ParsedEcp, PyscfRsError};
+use pyscf_core::{ParsedAtom, ParsedEcp, PyscfRsError};
 use std::collections::HashMap;
 
 /// Resolve `EcpInput` → per-element-symbol `ParsedEcp` map.
@@ -62,41 +62,11 @@ pub fn format_ecp(
 fn resolve_for_symbol(input: &EcpInput, symbol: &str) -> Result<Option<ParsedEcp>, PyscfRsError> {
     match input {
         EcpInput::None => Ok(None),
-        EcpInput::Name(name) => {
-            // ECP files in `pyscf/gto/basis/` (e.g. `lanl2dz.dat`) carry
-            // BOTH basis blocks AND ECP blocks. Resolve via the same
-            // ALIAS table as basis loading; read the file; pass to
-            // `parse_nwchem_ecp`.
-            let canonical = basis::canonicalise_basis_name(name);
-            let filename = match basis::alias::lookup(&canonical) {
-                Some(f) => f,
-                None => {
-                    return Err(PyscfRsError::from(BasisLoadError::UnknownName {
-                        name: format!("ECP basis '{}' not in ALIAS", canonical),
-                    }));
-                }
-            };
-            let dir = basis::path::basis_dir().map_err(PyscfRsError::from)?;
-            let full = dir.join(filename);
-            let text = std::fs::read_to_string(&full).map_err(|e| {
-                PyscfRsError::from(BasisLoadError::Io {
-                    path: full.display().to_string(),
-                    source: e,
-                })
-            })?;
-            // No ECP section in the file → no ECP for this symbol.
-            // (This is normal for non-ECP basis files like sto-3g.dat.)
-            if !text.contains("ECP") {
-                return Ok(None);
-            }
-            // Parse the ECP block; absence of THIS symbol's block is
-            // not an error (e.g. asking for H ECP from lanl2dz.dat).
-            match basis::nwchem_ecp::parse_nwchem_ecp(&text, symbol, &full.display().to_string()) {
-                Ok(p) => Ok(Some(p)),
-                Err(pyscf_core::EcpLoadError::UnknownName(_)) => Ok(None),
-                Err(other) => Err(PyscfRsError::from(other)),
-            }
-        }
+        // ECP files in `pyscf/gto/basis/` (e.g. `lanl2dz.dat`) carry BOTH basis
+        // blocks and ECP blocks, so resolution runs through the same ALIAS
+        // table as basis loading — and, like it, reaches the Basis Set Exchange
+        // when the local files come up short.
+        EcpInput::Name(name) => basis::load_ecp(name, symbol).map_err(PyscfRsError::from),
         EcpInput::PerElement(map) => {
             let sub = map
                 .get(symbol)

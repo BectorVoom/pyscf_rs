@@ -141,6 +141,16 @@ disagree by the same *class* of amount. **Gate each route against its own
 upstream number.** A single "KMP2 matches upstream" assertion that does not name
 its DF backend is untestable.
 
+### 2.3 Measured resolution (2026-09-05)
+
+Plan 15-01 replaced both guesses with a **2e-6 Ha** headline tolerance. The
+vendored 2.12.1 diamond program produces `-0.20472143304034024 Ha`, already
+`2.11344e-10 Ha` from the constant embedded in its own source. On the small
+He/6-31g fixture, upstream gives FFTDF `-0.033241446759957924 Ha` and GDF
+`-0.016989369077568279 Ha`; forcing that same GDF mean field through AO2MO
+changes only `3.469e-18 Ha`. Thus the two implementations are compared within
+one backend, while different DF approximations retain separate targets.
+
 ---
 
 ## 3. Traps this phase will hit, with the line that proves each

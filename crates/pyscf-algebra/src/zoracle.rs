@@ -33,10 +33,32 @@ pub fn oracle_zsum(x: &CTensor) -> (f64, f64) {
 /// On a length mismatch each `oracle_dot` returns NaN, so the result is
 /// `(NaN, NaN)` — matching [`oracle_dot`]'s panic-free contract (callers verify
 /// shapes upstream).
+///
+/// This is `zdotc`. KMP2's already-conjugated contractions require
+/// [`oracle_zdotu`] instead (Phase 15 context §3.10).
 pub fn oracle_zdot(x: &CTensor, y: &CTensor) -> (f64, f64) {
     let rr = oracle_dot(&x.re, &y.re);
     let ii = oracle_dot(&x.im, &y.im);
     let ri = oracle_dot(&x.re, &y.im);
     let ir = oracle_dot(&x.im, &y.re);
     (rr + ii, ri - ir)
+}
+
+/// Bit-deterministic unconjugated inner product `xᵀ · y = Σ x[i] * y[i]`.
+pub fn oracle_zdotu(x: &CTensor, y: &CTensor) -> (f64, f64) {
+    let rr = oracle_dot(&x.re, &y.re);
+    let ii = oracle_dot(&x.im, &y.im);
+    let ri = oracle_dot(&x.re, &y.im);
+    let ir = oracle_dot(&x.im, &y.re);
+    (rr - ii, ri + ir)
+}
+
+/// Real part of [`oracle_zdotu`], avoiding the two imaginary-output products.
+pub fn oracle_zdotu_re(x: &CTensor, y: &CTensor) -> f64 {
+    oracle_dot(&x.re, &y.re) - oracle_dot(&x.im, &y.im)
+}
+
+/// Real part of the conjugated [`oracle_zdot`] product.
+pub fn oracle_zdot_re(x: &CTensor, y: &CTensor) -> f64 {
+    oracle_dot(&x.re, &y.re) + oracle_dot(&x.im, &y.im)
 }

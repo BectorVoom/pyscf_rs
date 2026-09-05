@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Periodic Boundary Conditions
 status: in_progress
-last_updated: "2026-09-02T00:00:00.000Z"
-last_activity: 2026-09-02
+last_updated: "2026-09-05T12:00:00.000Z"
+last_activity: 2026-09-05
 progress:
   total_phases: 5
   completed_phases: 5
@@ -20,12 +20,71 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 15 — KMP2 (still next in sequence; unchanged by the
-17-01 measurement below, which is an out-of-order autonomous measure-only
-plan with no dependencies). Phase 14 is CLOSED (2026-08-29); its one
-outstanding gate was REOPENED and MET on 2026-08-30 (see below).
+**Current focus:** Phase 16 (periodic CC/CI) — Phase 15, its hard blocker, is
+**CLOSED as of 2026-09-05**. Restricted KMP2, periodic AO2MO dispatch, K-point
+padding/frozen-core bookkeeping, KUMP2's upstream surface/refusal and staggered
+KMP2 all ship with a green nine-part opt-in oracle matrix. FFTDF clears its
+`2e-6 Ha` gate by five orders. One row is `NOT MET` and belongs to Phase 14: the
+GDF route's `1.289e-1 Ha` upstream residual, which is the inherited `j3c`
+baseline, not KMP2 — `Lov` and forced AO2MO agree to `2e-15 Ha` on the same
+mean field. See `15-VERIFICATION.md`.
 
 ## Current Position
+
+**Phase 15 CLOSED, 2026-09-05.** Eight plan summaries and a rewritten
+`15-VERIFICATION.md` record the result. All eight surfaces ship; the nine-part
+opt-in oracle matrix (`crates/pyscf-pbc-mp/tests/oracle_phase15.rs`) is green
+and never runs under a plain `cargo test`.
+
+* **FFTDF KMP2 clears its measured `2e-6 Ha` gate by five orders**: diamond
+  `[1,1,2]` residual `5.418e-11` (SS `1.677e-11`, OS `3.741e-11`), He/6-31g
+  `2.719e-11`. `symm_map` + `_operation` and the whole padding/frozen surface
+  match upstream **exactly**; `t2`/`rdm1`/`gamma1` land at `1.6e-11`…`3.7e-11`.
+* **The staggered-energy oracle — the row the implementation pass left `NOT
+  MET` — was run, and CAUGHT THREE DEFECTS.** (1) `Krhf::get_occ` took its
+  k-point count from `mf.kpts` instead of from its `mo_energy` argument
+  (`khf.py:191-192`); a no-op during SCF, but on `kmp2_stagger`'s full-mesh
+  path it left 8 of 16 k-points unoccupied and returned **`-0.3737 Ha` where
+  upstream gives `-0.014029 Ha`, a factor of 26.6**. `Kghf::get_occ` carried
+  the identical divergence and is fixed with it. (2) `Kmp2Stagger::kernel` used
+  the mean field's own DF for the four-index path; upstream always builds a
+  fresh `FFTDF(mp.cell, mp.kpts)` there (`kmp2_stagger.py:74`) **even on a GDF
+  mean field**, unlike plain `KMP2` (`kmp2.py:92`) — worth `5.01e-5 Ha`.
+  (3) `new_full_mesh` hardcoded `with_df_ints = false`; upstream sets it from
+  the mean field (`:279-282`). After the fixes the three staggered numbers land
+  at `1.408e-12` / `8.28e-13` / inside `2e-6`.
+* **Two upstream constants no longer reproduce in 2.12.1.**
+  `kmp2_stagger.py:385/390/395` sit `2.8e-7`…`3.5e-7` from what the code
+  produces (the same shape as the diamond anchor's `2.1e-10` from
+  `kmp2.py:820`). The tests gate on live-measured values;
+  `15-VERIFICATION.md §2` records both, and §7 makes "never gate against a
+  constant embedded in upstream's source" a standing caveat.
+* **D-PBC-28 measured** (`15-VERIFICATION.md §8`): MO-first FFT AO2MO is
+  **9.784×** the AO-ERI route on diamond `gth-szv` `[1,1,2]` (78.289 s →
+  8.002 s, residual `1.735e-17`) — against §7.0's `16×` prediction, which
+  **over-states it** because both routes pay the same grid-side cost.
+  `build_symm_map` costs `0.143 ms / 5.59 ms / 245 ms / 3.040 s` at
+  `nkpts = 8/27/64/125` and grows **faster** than `n³` at the two larger steps.
+  The `[2,2,2]` and `gth-dzvp` legs (~26 s/quadruple × 512) were **not
+  reached** and are reported unreached, not extrapolated.
+* **The one NOT-MET row is Phase 14's, and it is worse than Phase 14 knew.**
+  `oracle_phase15::kmp2_energies` now prints the **mean-field** residual beside
+  the KMP2 one, and that is where the whole thing goes wrong: this port's
+  **diamond GDF KRHF at `[1,1,2]` is `-23.8828` against upstream's `-8.6553`,
+  `1.523e+1 Ha` out**; He/6-31g GDF is `1.461e-1` out. The FFTDF mean fields on
+  the same cells are `4.772e-11` and `5.849e-12`. A correlation energy on a
+  reference 15 Hartree wrong is not an MP2 result at all. It is not KMP2's:
+  `Lov` and forced AO2MO agree to `2e-15 Ha` on the same mean field, upstream's
+  own two routes agree to `6.9e-13` on its, and the `Lov` blocks differ from
+  `_init_mp_df_eris` by `7.518e-1` when driven from **upstream's own** padded
+  MOs. **This is a NEW finding**: `14-VERIFICATION` gates GDF on
+  `he_all_electron` (`sto-3g`, one AO) and on **diamond at gamma only**, where
+  it is already `PARTIAL` — diamond GDF at a non-gamma k-mesh with a
+  pseudopotential had never been run against upstream. Phase 14 owns it, and
+  Phase 16's `16-01` must treat any GDF row as blocked rather than loose.
+* **`he_fcc` `gth-szv` cannot host the `Lov`/MO-first oracles** that
+  `15-07-PLAN.md` specified — it is one He atom with **one** AO, so `nvir = 0`
+  and the block is empty. Those parts use diamond `gth-szv` `[1,1,2]` instead.
 
 **Phase 16 PLANNED + REVIEWED, 2026-09-02 (no Rust written).**
 `.planning/phases/16-periodic-cc-ci/` — `16-CONTEXT.md`, fourteen plan files
@@ -1075,14 +1134,26 @@ unblocks Gate 3 without porting `CINTsr_rys_roots` at all.
 `get_k_kpts` (Phase 17); `outcore`'s k-pair blocking axis; diamond's `make_j3c`
 wall time.
 
-## Phase 15 is UNBLOCKED
+## Phase 15 is CLOSED
 
-Both prerequisites are met: `ao2mo_7d`'s index order is fixed and asserted
-(14-05), and `sr_loop` / `get_naoaux` / the HDF5 `_cderi` store give KMP2 a GDF
-it can read (14-03), now also constructible from an existing file through
-`Gdf::with_cderi` / `Gdf::load_cderi`.
+The two prerequisites described here were consumed successfully. Restricted
+KMP2 and its AO2MO/Lov dependencies landed on 2026-09-05 and verification
+closed the same day: the nine-part oracle matrix is green, the staggered energy
+oracle ran (and found three defects — see Current Position), and both open
+D-PBC-28 rows are measured. The GDF-vs-upstream numerical gap stays assigned to
+Phase 14, because both Phase-15 GDF integral routes agree to `2e-15 Ha`.
 
-Last activity: 2026-08-29 — Phase 14 implemented, verified and CLOSED.
+### Phase 15 deferrals
+
+| refusal | owner |
+|---|---|
+| `ktensor` / `KsymmArray`, `KPoints` inside `KMP2::new` | 17 (shipped there) |
+| `KUMP2::kernel` energy, `kump2::_add_padding` | upstream — `kump2.py:38/:384/:402` all raise in 2.12.1; oracle-gated so the refusal cannot outlive its reason |
+| `dimension == 2` in the DF `Lov`/`ao2mo` path | upstream |
+| `kmp2_stagger` non-submesh at `dimension < 3`; odd Monkhorst-Pack submesh | upstream |
+| fractional occupations in `get_nocc` | upstream — load-bearing here, because this port has live smearing that upstream's KMP2 never sees |
+| `Frozen::{Auto, Window}` at k-points | 15, deliberately: upstream's `frozen='auto'` at k-points is molecular-only |
+| `fft_ao2mo.general`'s gamma/all-real shortcut | 15, deliberately: a speed shortcut only, and KMP2 never reaches it |
 
 ---
 
@@ -1443,7 +1514,29 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-26
+Last session: 2026-09-05
+Stopped at: **Phase 15 CLOSED — 15-07 verification rollup completed.**
+
+Completed the six missing parts of `15-07-PLAN.md` Task 1's nine-part oracle
+matrix, ran the staggered-mesh energy oracle, measured both open D-PBC-28 rows,
+and brought `15-VERIFICATION.md`, `ROADMAP.md`, `PBC-MASTER-PLAN.md §8.7` and
+the `D-PBC-28` decision entry back into agreement.
+
+**New files.** `.planning/phases/15-periodic-ao2mo-kmp2/measurements/stagger.py`
+(+ `stagger.out`) and `measurements/oracle_rollup.py` (seven sections);
+`crates/pyscf-pbc-mp/tests/perf_dpbc28.rs` and
+`crates/pyscf-pbc-df/tests/perf_dpbc28_mofirst.rs` (both fully `#[ignore]`d).
+`crates/pyscf-pbc-mp/tests/oracle_phase15.rs` grew from 3 tests to 10, every one
+`#[ignore]`d **and** short-circuiting unless `PYSCF_ORACLE_VENV` is set.
+
+**Three defects fixed, all found by the staggered oracle.** `Krhf::get_occ` and
+`Kghf::get_occ` now take `nkpts` from `mo_energy.len()` (`khf.py:191-192`,
+`kghf.py:109`) — a no-op during SCF, and a factor of 26.6 on `kmp2_stagger`'s
+full-mesh path. `Kmp2Stagger` grew a real `flag_submesh` field and an
+`integral_df()` that resolves the builder inside `kernel` the way upstream does
+(`kmp2_stagger.py:73-75`, `:165-169`, `:279-282`).
+
+Previous session: 2026-08-26
 Stopped at: **Completed 09-08-PLAN.md and 09-09-PLAN.md — Phase 9 is CLOSED.**
 
 **09-08 (Ewald, K-05 + K-06).** `pyscf-kernels/src/pbc/ewald.rs` adds TWO `#[cube(launch_unchecked)] fn ..<F: Float>` kernels launched via `dispatch_backend!` (AGENTS.md §3 / RULE 5): **K-05** `ewald_rlij` (the `(nL, natm, natm)` C-order table of `r = |R_i - R_j + L|`, `cell.py:729-732`) and **K-06** `ewald_gs_terms` (`term[g] = |ZSI[g]|^2 * exp(-absG2/4eta^2) * (4pi/absG2) * weights`, `cell.py:753-770`). Both REDUCE ON THE HOST with `oracle_sum` (D-PBC-17 / §9.3), so `ewald()` is bit-reproducible — pinned by a test. `pyscf-pbc-gto` gains `ewald.rs` (`get_ewald_params` with ALL FOUR upstream branches including the `dimension == 2` parameter algebra, `ewald` for the 3D path, the three public term functions `ewald_real_space`/`ewald_self`/`ewald_g_space` that Phase 18 will reuse, and `Cell::{get_ewald_params, ewald, energy_nuc}`) and `ewald_pme.rs` (`_bspline`/`_bspline_grad`/`bspline` in full including the Euler exponential-spline coefficients and the odd-order/even-grid Nyquist zeroing, the screened `get_ewald_direct` = the C loop `lib/pbc/cell.c:get_ewald_direct`, `pme_charge_mesh`, and `particle_mesh_ewald` which computes everything up to the FFT then defers). **Gates:** `cargo test -p pyscf-pbc-gto --test ewald` **22/0** (16 tier-1 + 6 tier-2); `-p pyscf-pbc-tools` 30/0; clippy `--all-targets -D warnings` clean on pyscf-pbc-gto + pyscf-kernels; `cargo build --workspace` clean; both xtask lints PASS. **Tier-2 vs live PySCF 2.12.1** (Bohr-specified §9.2 cells, no pseudo): `cell.ewald()` matches to **< 1e-9 Ha** on diamond (-28.771040577654524), si (-102.88216217333321), lif (-30.95510482656236) and he_fcc (-1.6174696832216189); `ew_eta`/`ew_cut` to 1e-12/1e-10 and `len(get_lattice_Ls(rcut=ew_cut))` + the internal `cutoff_to_mesh` EXACTLY, on all five. `ew_eta`-invariance spread **< 1e-13 Ha**. **SEVEN documented deviations in 09-08-SUMMARY.md**, the load-bearing ones: (1) the plan's invariance gate is unsatisfiable as written — upstream itself drifts 8.1e-7 Ha when `ew_cut` is pinned while `ew_eta` scales, so the gate re-derives `ew_cut` per `eta`; (2) the plan's reference snippet uses `pseudo='gth-pade'` but this port has no GTH parser before 10-01, so references are generated WITHOUT `pseudo=` and the pseudised targets are committed separately; (3) tier-2 cells are Bohr-specified because the 4.95e-9 CODATA gap costs 1.4e-7 Ha; (4) **new workspace dep `libm = "0.2"`** for FDLIBM `erfc` (A&S 7.1.26 is ~1.5e-7, two orders too coarse); (5) `4*pi` and the `1e200` sentinel ride in an `Array<F>` because cubecl's `F::new` takes an `f32`.

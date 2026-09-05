@@ -55,6 +55,18 @@ pub fn format_basis(
     let mut out: HashMap<String, ParsedBasis> = HashMap::new();
     for symbol in &seen {
         let parsed = resolve_for_symbol(input, symbol)?;
+        // Inline text and pre-parsed input can also carry nothing for this
+        // element; `load_basis` already rejects the named case. Upstream makes
+        // the same check here (`pyscf/gto/mole.py:457-458`). Without it the
+        // element would silently contribute no AOs and the calculation would be
+        // wrong in a way no later stage can detect.
+        if parsed.shells.is_empty() {
+            return Err(PyscfRsError::from(BasisLoadError::ElementAbsent {
+                name: "<supplied basis>".into(),
+                symbol: symbol.clone(),
+                file: "<inline input>".into(),
+            }));
+        }
         out.insert(symbol.clone(), parsed);
     }
     Ok(out)

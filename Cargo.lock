@@ -5717,6 +5717,7 @@ dependencies = [
  "pyscf-algebra",
  "pyscf-core",
  "pyscf-kernels",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",
@@ -5798,6 +5799,7 @@ dependencies = [
  "pyscf-algebra",
  "pyscf-ao2mo",
  "pyscf-core",
+ "pyscf-gto",
  "pyscf-pbc-df",
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
@@ -5997,6 +5999,7 @@ version = "0.1.0"
 dependencies = [
  "pyscf-algebra",
  "pyscf-core",
+ "pyscf-gto",
  "pyscf-mp2",
  "pyscf-pbc-ao2mo",
  "pyscf-pbc-df",
@@ -6004,6 +6007,7 @@ dependencies = [
  "pyscf-pbc-lib",
  "pyscf-pbc-scf",
  "pyscf-pbc-tools",
+ "rayon",
  "thiserror 2.0.18",
  "tracing",
 ]

@@ -1,0 +1,21 @@
+pyscf.__version__=2.12.1
+frozen=None
+nocc_per_k=[2, 3, 2]; nmo_per_k=[6, 6, 5]; nocc_dense=3; nmo_dense=7
+mask=[[T,T,T,T,T,T],[T,T,T,T,T,T],[T,T,T,T,T]]
+split=([[0,1],[0,1,2],[0,1]],[[0,1,2,3],[1,2,3],[1,2,3]])
+joint=[[0,1,3,4,5,6],[0,1,2,4,5,6],[0,1,4,5,6]]
+frozen=1
+nocc_per_k=[1,2,1]; nmo_per_k=[5,5,4]; nocc_dense=2; nmo_dense=6
+mask=[[F,T,T,T,T,T],[F,T,T,T,T,T],[F,T,T,T,T]]
+split=([[0],[0,1],[0]],[[0,1,2,3],[1,2,3],[1,2,3]])
+joint=[[0,2,3,4,5],[0,1,3,4,5],[0,3,4,5]]
+frozen=[0,1]
+nocc_per_k=[0,1,0]; nmo_per_k=[4,4,3]; nocc_dense=1; nmo_dense=5
+mask=[[F,F,T,T,T,T],[F,F,T,T,T,T],[F,F,T,T,T]]
+split=([[],[0],[]],[[0,1,2,3],[1,2,3],[1,2,3]])
+joint=[[1,2,3,4],[0,2,3,4],[2,3,4]]
+frozen=[[0],[0,1],[1]]
+nocc_per_k=[1,1,1]; nmo_per_k=[5,4,4]; nocc_dense=1; nmo_dense=5
+mask=[[F,T,T,T,T,T],[F,F,T,T,T,T],[T,F,T,T,T]]
+split=([[0],[0],[0]],[[0,1,2,3],[1,2,3],[1,2,3]])
+joint=[[0,1,2,3,4],[0,2,3,4],[0,2,3,4]]

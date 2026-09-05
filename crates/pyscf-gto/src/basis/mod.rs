@@ -14,6 +14,7 @@
 //!   * [`canonicalise_basis_name`] — case-insensitive ALIAS-key normaliser
 
 pub mod alias;
+pub mod bse;
 pub mod cp2k;
 pub mod cp2k_pp;
 pub mod nwchem;
@@ -21,28 +22,106 @@ pub mod nwchem_ecp;
 pub mod path;
 pub mod pydict;
 
-use pyscf_core::{BasisLoadError, EcpLoadError, GthPseudo, ParsedBasis};
+use pyscf_core::{BasisLoadError, EcpLoadError, GthPseudo, ParsedBasis, ParsedEcp};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// Process-local parsed-basis cache. Key: `(canonical_basis_name, element_symbol_upper)`.
+/// Where a cached basis came from. Part of the cache key, so a downloaded
+/// basis can never be handed back to [`load_basis_local`]: that function
+/// promises "the vendored files say X", and a cache shared with the network
+/// path would make its answer depend on whether something else happened to
+/// download the same basis earlier in the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Source {
+    /// Parsed from a file under the vendored basis tree.
+    Local,
+    /// Fetched from the Basis Set Exchange.
+    Bse,
+}
+
+/// Process-local parsed-basis cache. Key:
+/// `(canonical_basis_name, element_symbol_upper, source)`.
 ///
 /// Lookups are protected by a [`Mutex`] (per RESEARCH Pitfall 6 — simpler than
 /// the per-name `OnceLock<RwLock<...>>` pattern; basis-load latency is dwarfed
 /// by integral evaluation).
-static BASIS_CACHE: OnceLock<Mutex<HashMap<(String, String), ParsedBasis>>> = OnceLock::new();
+static BASIS_CACHE: OnceLock<Mutex<HashMap<(String, String, Source), ParsedBasis>>> =
+    OnceLock::new();
 
-fn cache() -> &'static Mutex<HashMap<(String, String), ParsedBasis>> {
+fn cache() -> &'static Mutex<HashMap<(String, String, Source), ParsedBasis>> {
     BASIS_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Load a basis for one element symbol. First call parses + caches; subsequent
-/// calls hit the cache.
+/// Load a basis for one element symbol, falling back to the Basis Set Exchange
+/// when the vendored files cannot supply it.
+///
+/// Two misses route to BSE: a name absent from every ALIAS table, and a known
+/// name whose file carries no block for this element (`def2-svp` + `Eu`, say).
+/// Upstream only covers the first — its second case raises
+/// `BasisNotFoundError` — but the second is the one that puts a lanthanide in
+/// reach of a def2 basis, and the alternative is a hard error either way.
+///
+/// Use [`load_basis_local`] instead when you only want to know whether the
+/// local files cover an element; this function may go to the network.
 ///
 /// Source: `pyscf/gto/basis/__init__.py:621-728` `load`.
 pub fn load_basis(name: &str, symbol: &str) -> Result<ParsedBasis, BasisLoadError> {
+    // Local data always wins; only a local miss looks outward.
+    let miss = match load_basis_local(name, symbol) {
+        Ok(parsed) => return Ok(parsed),
+        // Only a genuine "the local files do not have this" routes onward. An
+        // IO or parse failure means the local data IS meant to answer and is
+        // broken, which the network must not paper over.
+        Err(e @ (BasisLoadError::UnknownName { .. } | BasisLoadError::ElementAbsent { .. })) => e,
+        Err(other) => return Err(other),
+    };
+
+    let key = (
+        canonicalise_basis_name(name),
+        symbol.to_ascii_uppercase(),
+        Source::Bse,
+    );
+    if let Some(parsed) = cache()
+        .lock()
+        .expect("BASIS_CACHE mutex poisoned")
+        .get(&key)
+    {
+        return Ok(parsed.clone());
+    }
+
+    if !bse::is_available() {
+        tracing::warn!(
+            basis = %name,
+            symbol = %symbol,
+            "not available from the local basis files; it may exist at the Basis Set \
+             Exchange — rebuild pyscf-gto with --features bse to fetch it"
+        );
+        return Err(miss);
+    }
+
+    let parsed = bse::fetch_basis(name, symbol)?;
+    cache()
+        .lock()
+        .expect("BASIS_CACHE mutex poisoned")
+        .insert(key, parsed.clone());
+    Ok(parsed)
+}
+
+/// Resolve a basis from the vendored files only — never the network.
+///
+/// This is the right entry point for a *probe*: `make_auxbasis` asks whether a
+/// predefined auxiliary basis happens to cover an element and quietly generates
+/// even-tempered functions when it does not (`pyscf/df/addons.py:196-214`).
+/// Routing that question through [`load_basis`] would turn each unanswered
+/// probe into an HTTP round-trip and let a downloaded basis silently displace
+/// the even-tempered fallback.
+pub fn load_basis_local(name: &str, symbol: &str) -> Result<ParsedBasis, BasisLoadError> {
     let canonical = canonicalise_basis_name(name);
-    let key = (canonical.clone(), symbol.to_ascii_uppercase());
+    let key = (
+        canonical.clone(),
+        symbol.to_ascii_uppercase(),
+        Source::Local,
+    );
 
     // Fast path: cache hit. The lock-poison case unwraps to a panic, which is
     // fine because if the cache is poisoned the wider basis-load path is
@@ -114,12 +193,112 @@ pub fn load_basis(name: &str, symbol: &str) -> Result<ParsedBasis, BasisLoadErro
         nwchem::parse_nwchem(&text, &key.1, &full.display().to_string())?
     };
 
+    // An element with no block in the file parses to zero shells. Upstream
+    // raises here (`pyscf/gto/basis/__init__.py`, via `parse_nwchem.load`);
+    // returning `Ok` with an empty basis would let the element contribute no
+    // AOs and corrupt the calculation silently. Never cached, so a later
+    // `load_basis` can still try the network for it.
+    if parsed.shells.is_empty() {
+        return Err(BasisLoadError::ElementAbsent {
+            name: canonical.clone(),
+            symbol: key.1.clone(),
+            file: full.display().to_string(),
+        });
+    }
+
     cache()
         .lock()
         .expect("BASIS_CACHE mutex poisoned")
         .insert(key.clone(), parsed.clone());
     tracing::debug!(name = %canonical, symbol = %key.1, file = %full.display(), "basis loaded");
     Ok(parsed)
+}
+
+/// Resolve the ECP that accompanies a basis set, falling back to the Basis Set
+/// Exchange the way [`load_basis`] does.
+///
+/// `Ok(None)` means "this basis is all-electron for this element" — a normal
+/// answer, not a failure (`pyscf/gto/basis/__init__.py:773-777`).
+///
+/// The fallback is gated on `bse_meta.json`, which records exactly which
+/// elements each basis gives an ECP to. Without that gate every all-electron
+/// element of every calculation would trigger a network round-trip just to be
+/// told "no ECP here".
+///
+/// Source: `pyscf/gto/basis/__init__.py:730-779` `load_ecp`.
+pub fn load_ecp(name: &str, symbol: &str) -> Result<Option<ParsedEcp>, EcpLoadError> {
+    match load_ecp_local(name, symbol) {
+        Ok(Some(ecp)) => return Ok(Some(ecp)),
+        // The local files answered "all-electron" AND the metadata agrees, so
+        // that is the real answer — no reason to ask the network.
+        Ok(None) if !bse_defines_ecp(name, symbol) => return Ok(None),
+        // Either the metadata says this element DOES take an ECP under this
+        // basis (so the local files are simply incomplete — def2-svp + Eu), or
+        // the name is not one we carry at all. Both look outward.
+        Ok(None) => {}
+        Err(EcpLoadError::UnknownName(_)) => {}
+        Err(other) => return Err(other),
+    }
+
+    if !bse::is_available() {
+        // Returning `None` here would be silently catastrophic: a valence-only
+        // basis paired with no ECP describes an atom with the wrong number of
+        // electrons, and nothing downstream can detect it.
+        return Err(EcpLoadError::Bse {
+            name: name.to_string(),
+            symbol: symbol.to_string(),
+            reason: "this basis defines an ECP for this element but the local files do not \
+                     carry it; rebuild pyscf-gto with --features bse to fetch it"
+                .into(),
+        });
+    }
+    bse::fetch_ecp(name, symbol)
+}
+
+/// ECP resolution from the vendored files only — never the network. The
+/// counterpart of [`load_basis_local`].
+pub fn load_ecp_local(name: &str, symbol: &str) -> Result<Option<ParsedEcp>, EcpLoadError> {
+    let canonical = canonicalise_basis_name(name);
+    let filename =
+        alias::lookup(&canonical).ok_or_else(|| EcpLoadError::UnknownName(canonical.clone()))?;
+
+    let dir = path::basis_dir().map_err(|e| EcpLoadError::Parse {
+        file: "<basis-dir>".into(),
+        line: 0,
+        reason: e.to_string(),
+    })?;
+    let full = dir.join(filename);
+    let text = std::fs::read_to_string(&full).map_err(|e| EcpLoadError::Parse {
+        file: full.display().to_string(),
+        line: 0,
+        reason: format!("io error reading ECP file: {e}"),
+    })?;
+
+    // No ECP section at all — normal for sto-3g and friends.
+    if !text.contains("ECP") {
+        return Ok(None);
+    }
+    match nwchem_ecp::parse_nwchem_ecp(&text, symbol, &full.display().to_string()) {
+        Ok(p) if p.channels.is_empty() => Ok(None),
+        Ok(p) => Ok(Some(p)),
+        // The file has ECP blocks, just not for this element.
+        Err(EcpLoadError::UnknownName(_)) => Ok(None),
+        Err(other) => Err(other),
+    }
+}
+
+/// Does `bse_meta.json` record an ECP for this element under this basis?
+///
+/// This is upstream's `bse_predefined_ecp` test (`pyscf/gto/mole.py:4317-4334`)
+/// and it is what keeps the ECP fallback from stampeding the network.
+fn bse_defines_ecp(name: &str, symbol: &str) -> bool {
+    let Some(zs) = bse::ecp_elements(name) else {
+        return false;
+    };
+    let Some(z) = pyscf_core::elements::charge_for_symbol(symbol) else {
+        return false;
+    };
+    u32::try_from(z).is_ok_and(|z| zs.contains(&z))
 }
 
 /// Lower-case + strip `-` / `_` so `"cc-pVDZ"`, `"CC-PVDZ"`, `"ccpvdz"` all map
