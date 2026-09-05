@@ -5823,6 +5823,8 @@ dependencies = [
  "pyscf-pbc-mp",
  "pyscf-pbc-scf",
  "pyscf-pbc-tools",
+ "pyscf-runtime",
+ "rayon",
  "thiserror 2.0.18",
  "tracing",
 ]

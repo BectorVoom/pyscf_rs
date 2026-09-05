@@ -79,6 +79,11 @@ pub mod zblas;
 pub mod zeigh;
 pub mod zgemm;
 pub mod zoracle;
+// Phase 16 plan 16-03 — the iterative NON-symmetric Davidson that four
+// Phase-16 plans (16-09/10/11/13) depend on. `eigh_gen` is symmetric and
+// 17-02's faer `Eigen` path is dense; neither is this. Host-only control flow
+// over small dense algebra, named no cubecl type.
+pub mod davidson;
 // Phase 5 plan 05-09 — rank-revealing DF/RI 2-center metric fit (eigh route)
 // for ill-conditioned (P|Q) auxiliary metrics that a plain Cholesky rejects.
 pub mod df_metric;
@@ -92,6 +97,10 @@ pub use tensor::{BufferId, Tensor};
 
 pub use axpy::{axpy, axpy_dense};
 pub use complex::CTensor;
+pub use davidson::{
+    DAVIDSON_LINDEP, DavidsonOptions, DavidsonResult, Picked, davidson_nosym1, eig_general,
+    pick_real_eigs,
+};
 pub use device_buffer::{download, release, upload};
 pub use df_metric::{DF_METRIC_LINEAR_DEP, df_metric_fit};
 pub use dot::{dot, dot_dense};

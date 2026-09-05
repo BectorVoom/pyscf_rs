@@ -29,8 +29,13 @@ pub mod error;
 pub mod probe;
 pub mod tracing_init;
 pub mod workspace_pool;
+// Phase 16 plan 16-02 (D-PBC-29 clause 1) — the COMPLEX sibling arena. A
+// distinct type, never a reinterpretation of `WorkspacePool`'s `Box<[f64]>`:
+// see the module doc for why `shape_bytes` must be `* 16`.
+pub mod zworkspace_pool;
 
 pub use backend::{BackendKind, DType};
 pub use error::BackendError;
 pub use tracing_init::init_tracing;
 pub use workspace_pool::{BufferId, SpillHandle, TensorBackend, WorkspacePool};
+pub use zworkspace_pool::{ZBuffer, ZBufferId, ZSpillHandle, ZTensorBackend, ZWorkspacePool};

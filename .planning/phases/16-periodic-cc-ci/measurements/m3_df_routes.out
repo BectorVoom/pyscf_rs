@@ -1,0 +1,38 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf 2.12.1 at /home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py
+
+===== diamond gth-szv nk=[1, 1, 2] mesh=[15, 15, 15] precision=default(1e-8) =====
+  FFTDF  e_hf -8.651997841505  e_corr -0.1552984784873315  (13.8 s)
+  GDF    e_hf -8.655276573450518  e_corr -0.1543761305810659  (22.8 s)
+  MDF    e_hf -8.651923985178758  e_corr -0.15529821981195518  (67.9 s)
+  RSDF   e_hf -8.655276596707562  e_corr -0.15437612376295026  (56.6 s)
+  pairwise |Δe_corr| between routes:
+    FFTDF  vs GDF     9.223479e-04  (mean field 3.278732e-03)
+    FFTDF  vs MDF     2.586754e-07  (mean field 7.385633e-05)
+    FFTDF  vs RSDF    9.223547e-04  (mean field 3.278755e-03)
+    GDF    vs MDF     9.220892e-04  (mean field 3.352588e-03)
+    GDF    vs RSDF    6.818116e-09  (mean field 2.325704e-08)
+    MDF    vs RSDF    9.220960e-04  (mean field 3.352612e-03)
+
+===== he_fcc gth-szv (all-electron control) nk=[1, 1, 2] mesh=[15, 15, 15] precision=default(1e-8) =====
+  FFTDF  FAILED: IndexError: index 2 is out of bounds for axis 0 with size 2
+  GDF    FAILED: IndexError: index 2 is out of bounds for axis 0 with size 2
+  MDF    FAILED: IndexError: index 2 is out of bounds for axis 0 with size 2
+  RSDF   FAILED: IndexError: index 2 is out of bounds for axis 0 with size 2
+  pairwise |Δe_corr| between routes:
+
+===== diamond gth-szv nk=[2, 2, 2] mesh=[15, 15, 15] precision=default(1e-8) =====
+  FFTDF  e_hf -9.570449081564522  e_corr -0.11866306760186804  (182.3 s)
+  GDF    e_hf -9.571642883866053  e_corr -0.11840695354427425  (41.5 s)
+  MDF    e_hf -9.570421817271491  e_corr -0.11866315219093013  (113.8 s)
+  RSDF   e_hf -9.57164289788608  e_corr -0.11840695151232208  (30.9 s)
+  pairwise |Δe_corr| between routes:
+    FFTDF  vs GDF     2.561141e-04  (mean field 1.193802e-03)
+    FFTDF  vs MDF     8.458906e-08  (mean field 2.726429e-05)
+    FFTDF  vs RSDF    2.561161e-04  (mean field 1.193816e-03)
+    GDF    vs MDF     2.561986e-04  (mean field 1.221067e-03)
+    GDF    vs RSDF    2.031952e-09  (mean field 1.402003e-08)
+    MDF    vs RSDF    2.562007e-04  (mean field 1.221081e-03)

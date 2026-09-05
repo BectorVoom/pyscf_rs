@@ -198,7 +198,31 @@ same energy and it is the only way to gate the fast path without a C oracle.
 
 ---
 
-## 2. The gate cannot be believed as written — for the fourth time
+## 2. The gate — MEASURED 2026-09-06, and what it was before
+
+> **THE GATE IS NOW MEASURED.** `measurements/README.md §1` is the authority
+> and this section is history. Eleven gates, each naming its DF route, fixture,
+> mesh and `cell.precision`; in brief:
+> `KRCCSD e_corr` **1e-7 per DF route**; `KUCCSD`/`KGCCSD` vs `KRCCSD`
+> **1e-8**; (T) fast-vs-slow **1e-13 relative**; spin-orbital vs RHF (T)
+> **1e-9**; EOM / KCIS roots **1e-5**; supercell equivalence **1e-7**;
+> incore-vs-spilled **bit-identical**; `symm_map`-vs-all-triples **1e-6, NOT
+> bit-identical**; determinism at `RAYON_NUM_THREADS` 1 and 8 **bit-identical
+> on `t1`, `t2` and `e_corr`**. Everything runs at `conv_tol = 1e-9`,
+> `conv_tol_normt = 1e-7`, `cell.mesh` pinned.
+>
+> **Three of the plan set's own numbers were too tight and are corrected by the
+> measurement**, not by negotiation: 16-07 test 2's `1e-10` for
+> `KGCCSD == KRCCSD` (upstream's own gap is `4.95e-9`), 16-08 test 2's `1e-11`
+> for spin-orbital-vs-RHF (T) (`2.86e-10`), and 16-05 test 5's *bit-identity*
+> for the `symm_map` loop (upstream's own two paths differ by `1.32e-7`).
+>
+> **Three upstream anchors are excluded from every gate**: `test_frozen_n3`'s
+> `ehf_bench`/`ecc_bench` FAIL on the vendored 2.12.1 tree, and every
+> `cu_metallic` anchor lives in a test upstream disabled with
+> `@unittest.skip('Results not match')` (`test_krccsd.py:403`).
+
+## 2.1 Why the gate could not be believed as written — the fourth instance
 
 | document | Phase-16 gate |
 |---|---|

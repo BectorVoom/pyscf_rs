@@ -1,0 +1,91 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf 2.12.1 at /home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py
+
+--- diamond gth-szv 1x1x2: nkpts 2 nocc 4 nvir 4 ---
+  oooo         0.031 MiB
+  ooov         0.031 MiB
+  oovv         0.031 MiB
+  ovov         0.031 MiB
+  voov         0.031 MiB
+  vovv         0.031 MiB
+  vvvv         0.031 MiB
+  SUM of 7 blocks              0.219 MiB
+  upstream _mem_usage          2.000 MiB (kccsd_rhf.py:1100-1107, its own '# TODO: Improve incore estimate')
+  OVER-ESTIMATE FACTOR         9.143x
+
+--- diamond gth-szv 2x2x2: nkpts 8 nocc 4 nvir 4 ---
+  oooo         2.000 MiB
+  ooov         2.000 MiB
+  oovv         2.000 MiB
+  ovov         2.000 MiB
+  voov         2.000 MiB
+  vovv         2.000 MiB
+  vvvv         2.000 MiB
+  SUM of 7 blocks             14.000 MiB
+  upstream _mem_usage        128.000 MiB (kccsd_rhf.py:1100-1107, its own '# TODO: Improve incore estimate')
+  OVER-ESTIMATE FACTOR         9.143x
+
+--- diamond gth-szv 3x3x3: nkpts 27 nocc 4 nvir 4 ---
+  oooo        76.887 MiB
+  ooov        76.887 MiB
+  oovv        76.887 MiB
+  ovov        76.887 MiB
+  voov        76.887 MiB
+  vovv        76.887 MiB
+  vvvv        76.887 MiB
+  SUM of 7 blocks            538.207 MiB
+  upstream _mem_usage       4920.750 MiB (kccsd_rhf.py:1100-1107, its own '# TODO: Improve incore estimate')
+  OVER-ESTIMATE FACTOR         9.143x
+
+--- diamond gth-dzvp 2x2x2: nkpts 8 nocc 4 nvir 22 ---
+  oooo         2.000 MiB
+  ooov        11.000 MiB
+  oovv        60.500 MiB
+  ovov        60.500 MiB
+  voov        60.500 MiB
+  vovv       332.750 MiB
+  vvvv      1830.125 MiB
+  SUM of 7 blocks           2357.375 MiB
+  upstream _mem_usage      14280.500 MiB (kccsd_rhf.py:1100-1107, its own '# TODO: Improve incore estimate')
+  OVER-ESTIMATE FACTOR         6.058x
+
+--- diamond gth-dzvp 3x3x3: nkpts 27 nocc 4 nvir 22 ---
+  oooo        76.887 MiB
+  ooov       422.877 MiB
+  oovv      2325.823 MiB
+  ovov      2325.823 MiB
+  voov      2325.823 MiB
+  vovv     12792.028 MiB
+  vvvv     70356.153 MiB
+  SUM of 7 blocks          90625.414 MiB
+  upstream _mem_usage     548990.394 MiB (kccsd_rhf.py:1100-1107, its own '# TODO: Improve incore estimate')
+  OVER-ESTIMATE FACTOR         6.058x
+
+=== tier equivalence, diamond gth-szv nk=[2, 2, 2] ===
+
+--- diamond gth-szv: nkpts 8 nocc 4 nvir 4 ---
+  oooo         2.000 MiB
+  ooov         2.000 MiB
+  oovv         2.000 MiB
+  ovov         2.000 MiB
+  voov         2.000 MiB
+  vovv         2.000 MiB
+  vvvv         2.000 MiB
+  SUM of 7 blocks             14.000 MiB
+  upstream _mem_usage        128.000 MiB (kccsd_rhf.py:1100-1107, its own '# TODO: Improve incore estimate')
+  OVER-ESTIMATE FACTOR         9.143x
+  TIER FLIP: incore iff  mem_incore (134.218 MB) + mem_now (130.662 MB) < cc.max_memory
+             -> max_memory > 264.880 MB is incore, below it spills
+  outcore floor 130.671 MB, incore flip 264.880 MB -> spill run uses max_memory = 197.775 MB
+  incore build 58.69 s, outcore build 179.25 s
+  max|oooo_incore - oooo_outcore| = 9.5554025885957249e-09
+  max|ooov_incore - ooov_outcore| = 3.388152113582327e-08
+  max|oovv_incore - oovv_outcore| = 9.6038076179617599e-08
+  max|ovov_incore - ovov_outcore| = 5.117714393213647e-08
+  max|voov_incore - voov_outcore| = 5.07499364191015e-08
+  max|vovv_incore - vovv_outcore| = 9.0742429681325894e-08
+  max|vvvv_incore - vvvv_outcore| = 2.3029736088409355e-07
+  (upstream asserts each of these at 12 decimals, test_krccsd.py:250-256)

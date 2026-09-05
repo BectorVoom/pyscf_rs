@@ -1,0 +1,26 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf 2.12.1 at /home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py
+
+=== orbit counts and build_symm_map cost ===
+  nk [1, 1, 1] nkpts    1  nkpts^3        1  representatives        1  ratio 1.0000  orbit sizes [4]  distinct-members 1  kconserv 0.0020 s  build_symm_map 0.0001 s
+  nk [1, 1, 2] nkpts    2  nkpts^3        8  representatives        5  ratio 1.6000  orbit sizes [4]  distinct-members 8  kconserv 0.0005 s  build_symm_map 0.0001 s
+  nk [1, 2, 2] nkpts    4  nkpts^3       64  representatives       28  ratio 2.2857  orbit sizes [4]  distinct-members 64  kconserv 0.0034 s  build_symm_map 0.0003 s
+  nk [2, 2, 2] nkpts    8  nkpts^3      512  representatives      176  ratio 2.9091  orbit sizes [4]  distinct-members 512  kconserv 0.0009 s  build_symm_map 0.0019 s
+  nk [3, 3, 3] nkpts   27  nkpts^3    19683  representatives     5292  ratio 3.7194  orbit sizes [4]  distinct-members 19683  kconserv 0.0011 s  build_symm_map 0.1276 s
+  nk [4, 4, 4] nkpts   64  nkpts^3   262144  representatives    67712  ratio 3.8715  orbit sizes [4]  distinct-members 262144  kconserv 0.0038 s  build_symm_map 1.5114 s
+
+=== _ERIS wall clock, diamond gth-szv nk=[2, 2, 2] ===
+  symmetry loop (176 representatives of 512 triples): 59.487 s
+  all-triples loop (512 transforms): 125.029 s
+  SPEED RATIO (all / symm) = 2.102x
+  max|oooo_symm - oooo_all| = 9.5554025721207554e-09
+  max|ooov_symm - ooov_all| = 3.3881521120141785e-08
+  max|oovv_symm - oovv_all| = 9.6038076179013399e-08
+  max|ovov_symm - ovov_all| = 5.1177143918550227e-08
+  max|voov_symm - voov_all| = 5.0749936402648878e-08
+  max|vovv_symm - vovv_all| = 1.3196230946222721e-07
+  max|vvvv_symm - vvvv_all| = 2.0816681711721685e-17
+  (the symmetry loop must be BIT-identical to the all-triples one; 16-05 test 5 asserts this)

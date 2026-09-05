@@ -1,0 +1,67 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf 2.12.1 at /home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py
+
+=== (T): kccsd_t_rhf vs kccsd_t_rhf_slow, nk=[1, 1, 2] ===
+CCSD(T) correction per cell = -0.0011113056256267
+CCSD(T) correction per cell (imag) = 4.27932913777062e-13
+CCSD(T) correction per cell = -0.00111130562562703
+CCSD(T) correction per cell (imag) = -5.80940797001257e-13
+  e_corr        -0.1552984784873314
+  fast  (kccsd_t_rhf, C kernel at :236)  -0.001111305625626701  (0.17 s)
+  slow  (kccsd_t_rhf_slow)               -0.0011113056256270284  (0.10 s)
+  |fast - slow| = 3.2742905609062234e-16
+  relative      = 2.946e-13
+CCSD(T) correction per cell = -0.00111130591172482
+  KGCCSD e_corr -0.1552984834364875
+  spin-orbital (T) (kccsd_t)             -0.0011113059117248167
+  |spinorb - rhf| = 2.8609811568436339e-10
+
+=== EOM-EE surface and refusals, nk=[1, 1, 2] ===
+
+kshift = 0
+  EOMEESinglet (eom_kccsd_rhf.py:1425): vector_size 1088  roots array([0.2677977 , 0.26870819])  (1.3 s)
+  EOMEE.vector_size (eom_kccsd_rhf.py:1417): RAISES NotImplementedError
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+        File "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/cc/eom_kccsd_rhf.py", line 1417, in vector_size
+          raise NotImplementedError
+      NotImplementedError
+  EOMEETriplet.kernel (eom_kccsd_rhf.py:1483): RAISES NotImplementedError
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+        File "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/cc/eom_kccsd_rhf.py", line 835, in eeccsd
+          raise NotImplementedError
+      NotImplementedError
+  EOMEESpinFlip.kernel (eom_kccsd_rhf.py:1489): RAISES NotImplementedError
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+        File "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/cc/eom_kccsd_rhf.py", line 835, in eeccsd
+          raise NotImplementedError
+      NotImplementedError
+  eom_kccsd_uhf.EOMEE (class must not exist, 16-CONTEXT §1.5): RAISES AttributeError
+        File "/home/user/Documents/workspace/pyscf_rs/.planning/phases/16-periodic-cc-ci/measurements/m4_eom_and_t.py", line 188, in <lambda>
+          lambda: getattr(eom_kccsd_uhf, "EOMEE"),
+                  ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+      AttributeError: module 'pyscf.pbc.cc.eom_kccsd_uhf' has no attribute 'EOMEE'. Did you mean: 'EOMEA'?
+  eom_kccsd_uhf._IMDS.make_ee (eom_kccsd_uhf.py:1120): RAISES NotImplementedError
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        File "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/cc/eom_kccsd_uhf.py", line 1120, in make_ee
+          raise NotImplementedError
+      NotImplementedError
+
+=== EOM-IP/EA, diamond gth-szv nk=[1, 1, 2] mesh=[15, 15, 15] ===
+  e_corr -0.15529847848684303
+  IP nroots=3 conv_tol=1e-7  ['-0.8268859724113091', '-0.7532755389443693', '-0.7532027768695687']  (0.1 s)
+     run-to-run max|Δ| 0.000e+00
+     conv_tol 1e-06 vs 1e-7: max|Δ| 2.143e-07
+     conv_tol 1e-08 vs 1e-7: max|Δ| 4.419e-09
+     conv_tol 1e-09 vs 1e-7: max|Δ| 1.389e-09
+     nroots 2 vs 3 (first 2): max|Δ| 1.921e-08
+     nroots 4 vs 3 (first 3): max|Δ| 3.351e-09
+  EA nroots=3 conv_tol=1e-7  ['1.0737187523628222', '1.094274695221061', '1.094371048889709']  (0.1 s)
+     run-to-run max|Δ| 0.000e+00
+     conv_tol 1e-06 vs 1e-7: max|Δ| 0.000e+00
+     conv_tol 1e-08 vs 1e-7: max|Δ| 4.804e-07
+     conv_tol 1e-09 vs 1e-7: max|Δ| 4.849e-07
+     nroots 2 vs 3 (first 2): max|Δ| 6.217e-15
+     nroots 4 vs 3 (first 3): max|Δ| 5.108e-07

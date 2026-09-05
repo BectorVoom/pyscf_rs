@@ -11,6 +11,9 @@ description = "KCCSD RHF/UHF/GHF, (T), EOM"
 [dependencies]
 pyscf-core       = { path = "../pyscf-core" }
 pyscf-algebra    = { path = "../pyscf-algebra" }
+# Plan 16-02: the complex tensor arena (`ZWorkspacePool`) lives in
+# pyscf-runtime, exactly as the f64 `WorkspacePool` pyscf-ccsd consumes does.
+pyscf-runtime    = { path = "../pyscf-runtime" }
 pyscf-ccsd       = { path = "../pyscf-ccsd" }
 pyscf-pbc-lib    = { path = "../pyscf-pbc-lib" }
 pyscf-pbc-tools  = { path = "../pyscf-pbc-tools" }
@@ -21,3 +24,6 @@ pyscf-pbc-ao2mo  = { path = "../pyscf-pbc-ao2mo" }
 pyscf-pbc-mp     = { path = "../pyscf-pbc-mp" }
 thiserror        = { workspace = true }
 tracing          = { workspace = true }
+# D-PBC-29 clause 2: every Phase-16 contraction is a host rayon loop over
+# k-point triples with `oracle_*` accumulators, not `zgemm_dense`.
+rayon            = { workspace = true }

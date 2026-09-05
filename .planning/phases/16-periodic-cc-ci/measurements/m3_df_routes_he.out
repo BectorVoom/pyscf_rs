@@ -1,0 +1,18 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf 2.12.1 at /home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py
+
+===== he_fcc 6-31g (all-electron control) nk=[1, 1, 2] mesh=[15, 15, 15] precision=default(1e-8) =====
+  FFTDF  e_hf -2.527068410522379  e_corr -0.0193278026744534  (0.4 s)
+  GDF    e_hf -2.4888321524553323  e_corr -0.018229081612920396  (0.7 s)
+  MDF    e_hf -2.488545481500565  e_corr -0.01831440188919032  (1.4 s)
+  RSDF   e_hf -2.4888321524321797  e_corr -0.01822908160472925  (0.7 s)
+  pairwise |Δe_corr| between routes:
+    FFTDF  vs GDF     1.098721e-03  (mean field 3.823626e-02)
+    FFTDF  vs MDF     1.013401e-03  (mean field 3.852293e-02)
+    FFTDF  vs RSDF    1.098721e-03  (mean field 3.823626e-02)
+    GDF    vs MDF     8.532028e-05  (mean field 2.866710e-04)
+    GDF    vs RSDF    8.191146e-12  (mean field 2.315259e-11)
+    MDF    vs RSDF    8.532028e-05  (mean field 2.866709e-04)

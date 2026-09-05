@@ -1,0 +1,78 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf 2.12.1 at /home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py
+
+===== cu =====
+output file: /dev/null
+ANCHOR ehf_bench_cu
+  source     test_krccsd.py:407/:416
+  pinned     -52.5393701339723
+  produced   -52.571911473054136
+  residual   0.032541339081838316
+  asserted   6 decimals (tol 5.0e-07)
+  verdict    DOES NOT REPRODUCE
+  scf wall   14.1 s
+WARN: Non-zero imaginary part found in KRCCSD energy (-0.31102699631711705-0.00019032861172167608j)
+ANCHOR ecc2_bench
+  source     test_krccsd.py:333/:338
+  pinned     -0.7651806468801496
+  produced   -0.8056840959680466
+  residual   0.040503449087896937
+  asserted   6 decimals (tol 5.0e-07)
+  verdict    DOES NOT REPRODUCE
+  wall       11.4 s
+WARN: Non-zero imaginary part found in KRCCSD energy (-0.3198667894298881-0.00015914897709549876j)
+ANCHOR ecc3_bench
+  source     test_krccsd.py:351/:356
+  pinned     -0.7679405371155709
+  produced   -0.8151820087410461
+  residual   0.047241471625475207
+  asserted   6 decimals (tol 5.0e-07)
+  verdict    DOES NOT REPRODUCE
+<class 'pyscf.pbc.cc.eom_kccsd_rhf.EOMIP'> does not have attributes  kpts kconserv nonzero_opadding nonzero_vpadding
+ANCHOR ip_root_0
+  source     test_krccsd.py:359
+  pinned     -3.028339571372944
+  produced   -3.0486594076715745
+  residual   0.020319836298630545
+  asserted   3 decimals (tol 5.0e-04)
+  verdict    DOES NOT REPRODUCE
+ANCHOR ip_root_1
+  source     test_krccsd.py:360
+  pinned     -2.850636489429295
+  produced   -2.8026646524885463
+  residual   0.047971836940748691
+  asserted   3 decimals (tol 5.0e-04)
+  verdict    DOES NOT REPRODUCE
+ANCHOR ip_root_2
+  source     test_krccsd.py:361
+  pinned     -2.801491561537961
+  produced   -2.773036590511469
+  residual   0.028454971026492082
+  asserted   3 decimals (tol 5.0e-04)
+  verdict    DOES NOT REPRODUCE
+<class 'pyscf.pbc.cc.eom_kccsd_rhf.EOMEA'> does not have attributes  kpts kconserv nonzero_opadding nonzero_vpadding
+ANCHOR ea_root_0
+  source     test_krccsd.py:364
+  pinned     3.266064683223669
+  produced   3.2759191122592903
+  residual   0.0098544290356215036
+  asserted   2 decimals (tol 5.0e-03)
+  verdict    DOES NOT REPRODUCE
+ANCHOR ea_root_1
+  source     test_krccsd.py:365
+  pinned     3.281390137070985
+  produced   3.286032414255047
+  residual   0.0046422771840624044
+  asserted   2 decimals (tol 5.0e-03)
+  verdict    REPRODUCES
+ANCHOR ea_root_2
+  source     test_krccsd.py:366
+  pinned     3.426297911456726
+  produced   3.4402380679171816
+  residual   0.013940156460455544
+  asserted   2 decimals (tol 5.0e-03)
+  verdict    DOES NOT REPRODUCE
+  wall       32.0 s

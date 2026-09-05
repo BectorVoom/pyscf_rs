@@ -1,0 +1,29 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf 2.12.1 at /home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py
+
+===== repeat =====
+# diamond gth-szv nk=[2, 2, 2] mesh=[15, 15, 15] precision=default(1e-8)
+  run 0  ehf -9.570449081564522  e_corr -0.11866306760186794  (315.8 s)
+  run 1  ehf -9.57044908156452  e_corr -0.11866306760186808  (187.3 s)
+  run 2  ehf -9.570449081564522  e_corr -0.11866306760186802  (18.1 s)
+  run 3  ehf -9.570449081564522  e_corr -0.11866306760186814  (18.0 s)
+  run 4  ehf -9.570449081564522  e_corr -0.11866306760186802  (16.0 s)
+REPEAT-SPREAD max-min = 1.9428902930940239e-16   std = 6.4796043696850617e-17   mean = -0.11866306760186804
+
+===== convtol =====
+# diamond gth-szv nk=[2, 2, 2] mesh=[15, 15, 15]
+  conv_tol 1e-07 normt 1e-05  e_corr -0.11866301486029165  d(e_corr) 0.000e+00  fp(t1) (0.00010150671995690444-0.0005557736268659452j)  fp(t2) (0.11650562847470425+0.21882000711702004j)  (13.9 s)
+  conv_tol 1e-08 normt 1e-06  e_corr -0.11866306697155163  d(e_corr) 5.211e-08  fp(t1) (0.00010149754823956909-0.0005557544109152904j)  fp(t2) (0.11650604400389307+0.21881836436398402j)  (15.7 s)
+  conv_tol 1e-09 normt 1e-07  e_corr -0.11866306760186805  d(e_corr) 6.303e-10  fp(t1) (0.00010149761032337564-0.0005557542923387602j)  fp(t2) (0.11650603290197971+0.21881858111384037j)  (16.1 s)
+  conv_tol 1e-10 normt 1e-08  e_corr -0.11866306840351801  d(e_corr) 8.016e-10  fp(t1) (0.00010149783805332527-0.0005557540838046751j)  fp(t2) (0.11650626832693986+0.21881852653805317j)  (188.1 s)
+  conv_tol 1e-11 normt 1e-09  e_corr -0.11866306862822656  d(e_corr) 2.247e-10  fp(t1) (0.00010149788942950863-0.0005557540507077439j)  fp(t2) (0.11650582640278748+0.21881846161727456j)  (745.9 s)
+  (d(e_corr) is against the PREVIOUS ladder rung: the plateau is where it stops shrinking)
+
+===== threads =====
+  OMP_NUM_THREADS=1  e_corr -0.11866306760186801
+  OMP_NUM_THREADS=4  e_corr -0.11866306760186797
+  OMP_NUM_THREADS=8  e_corr -0.11866306760186804
+THREAD-SPREAD max-min = 6.9388939039072284e-17

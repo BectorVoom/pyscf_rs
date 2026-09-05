@@ -1,0 +1,83 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+pyscf 2.12.1 at /home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py
+
+===== 311 =====
+output file: /dev/null
+ANCHOR hf_311
+  source     test_krccsd.py:177/:179
+  pinned     -0.9268762991822949
+  produced   -0.9268762991429551
+  residual   3.9339753676870259e-11
+  asserted   8 decimals (tol 5.0e-09)
+  verdict    REPRODUCES
+ANCHOR cc_311
+  source     test_krccsd.py:178/:180
+  pinned     -0.04270217758641424
+  produced   -0.04270218735912376
+  residual   9.7727095235700112e-09
+  asserted   6 decimals (tol 5.0e-07)
+  verdict    REPRODUCES
+  wall       6.3 s
+
+===== frozen_n3 =====
+output file: /dev/null
+ANCHOR ehf_bench
+  source     test_krccsd.py:210/:225
+  pinned     -8.648503065380389
+  produced   -8.648501503147841
+  residual   1.5622325477693266e-06
+  asserted   6 decimals (tol 5.0e-07)
+  verdict    DOES NOT REPRODUCE
+ANCHOR ecc_bench
+  source     test_krccsd.py:211/:226
+  pinned     -0.100045112503651
+  produced   -0.10004455671597806
+  residual   5.5578767294006681e-07
+  asserted   6 decimals (tol 5.0e-07)
+  verdict    DOES NOT REPRODUCE
+  wall(kpts) 5.1 s
+ANCHOR ehf_bench_supercell/2
+  source     test_krccsd.py:229
+  pinned     -8.648503065380389
+  produced   -8.648501501162452
+  residual   1.5642179373998033e-06
+  asserted   5 decimals (tol 5.0e-06)
+  verdict    REPRODUCES
+ANCHOR ecc_bench_supercell/2
+  source     test_krccsd.py:232
+  pinned     -0.100045112503651
+  produced   -0.10004473676128034
+  residual   3.7574237066184679e-07
+  asserted   6 decimals (tol 5.0e-07)
+  verdict    REPRODUCES
+  wall(super) 4.7 s
+
+===== supercell =====
+output file: /dev/null
+ANCHOR ercc/prod(nk)
+  source     test_krccsd.py:478
+  pinned     -0.15632445245405927
+  produced   -0.1563244457272586
+  residual   6.7268006720411222e-09
+  asserted   4 decimals (tol 5.0e-05)
+  verdict    REPRODUCES
+SUPERCELL-EQUIVALENCE (oracle-free, upstream asserts 5 decimals at :479)
+  ekcc           -0.1563244160359924
+  ercc/prod(nk)  -0.1563244457272586
+  |diff|         2.969126619567497e-08
+ANCHOR ercc_t/prod(nk)
+  source     test_krccsd.py:481
+  pinned     -0.00114619248449
+  produced   -0.0011461924913841962
+  residual   6.894196151463472e-12
+  asserted   5 decimals (tol 5.0e-06)
+  verdict    REPRODUCES
+(T)-SUPERCELL-EQUIVALENCE (upstream asserts 6 decimals at :482)
+  ekcc_t          -0.0011461929877441429
+  ercc_t/prod(nk) -0.0011461924913841962
+  |diff|          4.9635994663413396e-10
+  ekks            -10.757463191579529
+  wall            15.4 s
