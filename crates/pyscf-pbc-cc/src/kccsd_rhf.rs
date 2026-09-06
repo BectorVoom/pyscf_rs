@@ -630,12 +630,13 @@ fn shift_diagonal(x: &mut ZArr, k: usize, e: &[f64]) -> Result<(), PbcCcError> {
 /// `pyscf-diis` machinery be reused with no new DIIS body, exactly as
 /// `pyscf-ccsd`'s `AmplitudeSubspace` does for the molecular case.
 #[derive(Debug, Clone)]
-pub(crate) struct KAmplitudeSubspace {
+pub struct KAmplitudeSubspace {
     flat: Vec<f64>,
 }
 
 impl KAmplitudeSubspace {
-    pub(crate) fn from_amplitudes(t1: &ZArr, t2: &ZArr) -> Self {
+    #[must_use]
+    pub fn from_amplitudes(t1: &ZArr, t2: &ZArr) -> Self {
         let mut flat = Vec::with_capacity(2 * (t1.len() + t2.len()));
         flat.extend_from_slice(&t1.data().re);
         flat.extend_from_slice(&t1.data().im);
@@ -644,7 +645,8 @@ impl KAmplitudeSubspace {
         Self { flat }
     }
 
-    pub(crate) fn to_amplitudes(&self, t1: &ZArr, t2: &ZArr) -> (ZArr, ZArr) {
+    #[must_use]
+    pub fn to_amplitudes(&self, t1: &ZArr, t2: &ZArr) -> (ZArr, ZArr) {
         let n1 = t1.len();
         let n2 = t2.len();
         let mut a = t1.clone();
@@ -660,7 +662,8 @@ impl KAmplitudeSubspace {
         (a, b)
     }
 
-    pub(crate) fn residual(&self, prev: &Self) -> Vec<f64> {
+    #[must_use]
+    pub fn residual(&self, prev: &Self) -> Vec<f64> {
         self.flat
             .iter()
             .zip(prev.flat.iter())

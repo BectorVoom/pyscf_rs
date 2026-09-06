@@ -26,6 +26,8 @@ pub mod kintermediates;
 // Plan 16-08 Task 3 — the SPIN-ORBITAL (T), on 16-07's KGCCSD amplitudes.
 pub mod kccsd_t;
 // Plan 16-08 Task 2 — the BLOCKED (T), replacing kccsd_t_rhf.py:236's C kernel.
+/// The Γ-point `pbc/cc/ccsd.py` shim.
+pub mod ccsd;
 /// EOM-CCSD over spin orbitals at k-points (16-09).
 pub mod eom_kccsd_ghf;
 /// EOM-CCSD over spin-adapted k-point orbitals (16-10).
@@ -41,6 +43,9 @@ pub mod kintermediates_uhf;
 pub mod kuccsd_rdm;
 /// The unrestricted k-point ERIs (16-06 Task 1).
 pub mod kueris;
+/// The MOLECULAR, complex-capable restricted CCSD (`pyscf/cc/rccsd.py`) the
+/// Γ-point shim inherits from — see the module doc for why it lives here.
+pub mod rccsd;
 
 pub use eom_kccsd_ghf::{EomImds, ip_vector_size};
 pub use error::*;

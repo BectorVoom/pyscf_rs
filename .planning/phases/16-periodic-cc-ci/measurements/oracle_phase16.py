@@ -2092,6 +2092,121 @@ def section_ee_singlet(nk=(1, 1, 2)):
              np.asarray(np.real(eom2.converged), dtype=float).ravel())
 
 
+def _gamma_rccsd_emit(cell, kpt, tag):
+    """One single-k-point `pbc.cc.RCCSD` fixture.
+
+    `kpt` at the origin gives a REAL mean field; a shifted one gives a COMPLEX
+    one, which is the whole point of `rccsd.RCCSD` over `ccsd.CCSD`.
+    """
+    from pyscf.cc import rccsd as _rccsd
+    from pyscf.pbc import cc as pbcc
+    from pyscf.pbc import scf as _pbcscf
+
+    mf = _pbcscf.RHF(cell, kpt=np.asarray(kpt), exxdiv=None)
+    mf.conv_tol = 1e-10
+    mf.kernel()
+    cc = pbcc.RCCSD(mf)
+    cc.conv_tol = 1e-9
+    cc.conv_tol_normt = 1e-7
+    eris = cc.ao2mo(cc.mo_coeff)
+
+    nocc = cc.nocc
+    nmo = cc.nmo
+    nvir = nmo - nocc
+    scalar("%s_e_hf" % tag, mf.e_tot)
+    scalar("%s_nocc" % tag, nocc)
+    scalar("%s_nmo" % tag, nmo)
+    scalar("%s_nao" % tag, np.asarray(eris.mo_coeff).shape[0])
+    emit("%s_kpt" % tag, np.asarray(kpt, dtype=float).ravel())
+    emit("%s_mo_coeff" % tag, np.asarray(eris.mo_coeff, dtype=complex))
+    emit("%s_fock" % tag, np.asarray(eris.fock, dtype=complex))
+    emit("%s_mo_energy" % tag, np.asarray(eris.mo_energy))
+    # Every array below is emitted as COMPLEX even at Gamma, where upstream's
+    # own dtype is real: the Rust reader parses a fixed interleaved layout, and
+    # a dtype that depends on the k-point would silently halve the block.
+    scalar("%s_mo_is_complex" % tag,
+           float(np.abs(np.asarray(eris.mo_coeff).imag).max() > 1e-12))
+
+    # The seven CHEMIST blocks `_make_eris_incore` slices.
+    for name in ("oooo", "ovoo", "ovov", "oovv", "ovvo", "ovvv", "vvvv"):
+        emit("%s_%s" % (tag, name), np.asarray(getattr(eris, name), dtype=complex))
+
+    # `update_amps` and `energy` on FIXED synthetic amplitudes: the equations,
+    # not a converged answer.
+    st1, st2 = synthetic_amps((nocc, nvir), (nocc, nocc, nvir, nvir))
+    emit("%s_st1" % tag, np.asarray(st1, dtype=complex))
+    emit("%s_st2" % tag, np.asarray(st2, dtype=complex))
+    for name, arr in (
+        ("cc_Foo", _rccsd.imd.cc_Foo(st1, st2, eris)),
+        ("cc_Fvv", _rccsd.imd.cc_Fvv(st1, st2, eris)),
+        ("cc_Fov", _rccsd.imd.cc_Fov(st1, st2, eris)),
+        ("Loo", _rccsd.imd.Loo(st1, st2, eris)),
+        ("Lvv", _rccsd.imd.Lvv(st1, st2, eris)),
+        ("cc_Woooo", _rccsd.imd.cc_Woooo(st1, st2, eris)),
+        ("cc_Wvvvv", _rccsd.imd.cc_Wvvvv(st1, st2, eris)),
+        ("cc_Wvoov", _rccsd.imd.cc_Wvoov(st1, st2, eris)),
+        ("cc_Wvovo", _rccsd.imd.cc_Wvovo(st1, st2, eris)),
+    ):
+        emit("%s_%s" % (tag, name), np.asarray(arr, dtype=complex))
+    t1new, t2new = _rccsd.update_amps(cc, st1, st2, eris)
+    emit("%s_t1new" % tag, np.asarray(t1new, dtype=complex))
+    emit("%s_t2new" % tag, np.asarray(t2new, dtype=complex))
+    scalar("%s_energy_synth" % tag, _rccsd.energy(cc, st1, st2, eris))
+
+    # `init_amps` — the MP2 starting guess, which is also the `mbpt2` answer.
+    emp2, it1, it2 = cc.init_amps(eris)
+    scalar("%s_emp2" % tag, emp2)
+    emit("%s_init_t1" % tag, np.asarray(it1, dtype=complex))
+    emit("%s_init_t2" % tag, np.asarray(it2, dtype=complex))
+
+    # `mbpt2=True`. It goes through `pbc.mp.RMP2`, whose `__init__` REFUSES a
+    # non-Gamma k-point outright (`pbc/mp/mp2.py:22-23`), so the branch exists
+    # only at Gamma — recorded as a flag rather than assumed.
+    cc_mb = pbcc.RCCSD(mf)
+    try:
+        e_mbpt2, mt1, mt2 = cc_mb.ccsd(eris=eris, mbpt2=True)
+        scalar("%s_mbpt2_refused" % tag, 0.0)
+        scalar("%s_e_mbpt2" % tag, e_mbpt2)
+        scalar("%s_mbpt2_t1_max" % tag, float(np.abs(np.asarray(mt1)).max()))
+    except NotImplementedError:
+        print("# pbc.mp.RMP2 refused kpt %r" % (np.asarray(kpt).tolist(),))
+        scalar("%s_mbpt2_refused" % tag, 1.0)
+
+    e_corr, t1, t2 = cc.ccsd(eris=eris)
+    scalar("%s_e_corr" % tag, e_corr)
+    scalar("%s_converged" % tag, float(cc.converged))
+    emit("%s_t1" % tag, np.asarray(t1, dtype=complex))
+    emit("%s_t2" % tag, np.asarray(t2, dtype=complex))
+
+
+def section_gamma_rccsd():
+    """`pbc/cc/ccsd.py`'s single-k-point RCCSD, at Gamma AND at a shifted k.
+
+    The shifted-k fixture is the one that exercises "complex-capable": at
+    Gamma with a real cell the MO coefficients are real and `ccsd.CCSD` would
+    do, which is exactly why upstream's shim subclasses `rccsd.RCCSD` instead.
+    """
+    cell = diamond()
+    _gamma_rccsd_emit(cell, [0.0, 0.0, 0.0], "g")
+    # The second k-point of a [1,1,2] mesh — a k a KRHF run would also visit,
+    # so the two paths can be compared.
+    kpts = cell.make_kpts([1, 1, 2])
+    _gamma_rccsd_emit(cell, kpts[1], "k")
+
+    # And the cross-check `16-VERIFICATION` G9 records for the OTHER direction:
+    # KRCCSD at [1,1,1] against this shim at Gamma.
+    from pyscf.pbc import cc as pbcc
+    from pyscf.pbc import scf as _pbcscf
+    kmf = _pbcscf.KRHF(cell, cell.make_kpts([1, 1, 1]), exxdiv=None)
+    kmf.conv_tol = 1e-10
+    kmf.kernel()
+    kcc = pbcc.KRCCSD(kmf)
+    kcc.conv_tol = 1e-9
+    kcc.conv_tol_normt = 1e-7
+    ke, _, _ = kcc.kernel()
+    scalar("krccsd111_e_corr", ke)
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
@@ -2104,6 +2219,7 @@ SECTIONS = {
     "t3p2_ghf": lambda: section_t3p2_ghf((1, 1, 2)),
     "t3p2_rhf": lambda: section_t3p2_rhf((1, 1, 2)),
     "ee_singlet": lambda: section_ee_singlet((1, 1, 2)),
+    "gamma_rccsd": section_gamma_rccsd,
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
     "kuccsd_eom": lambda: section_kuccsd_eom((1, 1, 2)),
