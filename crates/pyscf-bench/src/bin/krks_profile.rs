@@ -187,6 +187,12 @@ struct MultigridLevelReport {
     reverse_launches: u64,
     transfer_bytes_before: u64,
     transfer_bytes_after: u64,
+    /// v2 only — the concatenated batch table sizes (summed over chunks) and
+    /// the level's own kernel-slot count.
+    batch_points: u64,
+    batch_instances: u64,
+    batch_slots: u64,
+    kslots: u64,
 }
 
 fn run_multigrid(args: &[String]) {
@@ -406,13 +412,14 @@ struct AoCallLayer {
 
 #[derive(Default)]
 struct AoCallLayerInner {
-    entered: Mutex<HashMap<Id, (Instant, u64)>>,
-    calls: Mutex<Vec<(u64, f64)>>,
+    entered: Mutex<HashMap<Id, (Instant, u64, String)>>,
+    calls: Mutex<Vec<(u64, f64, String)>>,
 }
 
 #[derive(Default)]
 struct AoCallVisitor {
     nkpts: Option<u64>,
+    eval_name: Option<String>,
 }
 
 impl Visit for AoCallVisitor {
@@ -422,17 +429,30 @@ impl Visit for AoCallVisitor {
         }
     }
 
-    fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn std::fmt::Debug) {}
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "eval_name" {
+            self.eval_name = Some(value.to_owned());
+        }
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "eval_name" {
+            self.eval_name = Some(format!("{value:?}"));
+        }
+    }
 }
 
 impl AoCallLayer {
-    /// `(calls, total ms, k-point count of every call)`.
-    fn summary(&self) -> (u64, f64, Vec<u64>) {
+    /// `(calls, total ms, "nkpts/eval_name/ms" of every call)`.
+    fn summary(&self) -> (u64, f64, Vec<String>) {
         let calls = self.inner.calls.lock().expect("AO call mutex");
         (
             calls.len() as u64,
             calls.iter().map(|c| c.1).sum(),
-            calls.iter().map(|c| c.0).collect(),
+            calls
+                .iter()
+                .map(|c| format!("{}k/{}/{:.0}ms", c.0, c.2, c.1))
+                .collect(),
         )
     }
 }
@@ -447,23 +467,31 @@ where
         }
         let mut visitor = AoCallVisitor::default();
         attrs.record(&mut visitor);
-        self.inner
-            .entered
-            .lock()
-            .expect("AO call mutex")
-            .insert(id.clone(), (Instant::now(), visitor.nkpts.unwrap_or(0)));
+        self.inner.entered.lock().expect("AO call mutex").insert(
+            id.clone(),
+            (
+                Instant::now(),
+                visitor.nkpts.unwrap_or(0),
+                visitor.eval_name.unwrap_or_default(),
+            ),
+        );
     }
 
     fn on_close(&self, id: Id, _ctx: Context<'_, S>) {
-        let Some((started, nkpts)) = self.inner.entered.lock().expect("AO call mutex").remove(&id)
+        let Some((started, nkpts, name)) = self
+            .inner
+            .entered
+            .lock()
+            .expect("AO call mutex")
+            .remove(&id)
         else {
             return;
         };
-        self.inner
-            .calls
-            .lock()
-            .expect("AO call mutex")
-            .push((nkpts, started.elapsed().as_secs_f64() * 1e3));
+        self.inner.calls.lock().expect("AO call mutex").push((
+            nkpts,
+            started.elapsed().as_secs_f64() * 1e3,
+            name,
+        ));
     }
 }
 
@@ -498,6 +526,10 @@ struct MgSpanMetadata {
     launches: u64,
     transfer_bytes_before: u64,
     transfer_bytes_after: u64,
+    batch_points: u64,
+    batch_instances: u64,
+    batch_slots: u64,
+    kslots: u64,
     direction: String,
 }
 
@@ -507,6 +539,10 @@ struct MgFieldVisitor {
     launches: Option<u64>,
     transfer_bytes_before: Option<u64>,
     transfer_bytes_after: Option<u64>,
+    batch_points: Option<u64>,
+    batch_instances: Option<u64>,
+    batch_slots: Option<u64>,
+    kslots: Option<u64>,
     direction: Option<String>,
 }
 
@@ -517,6 +553,10 @@ impl Visit for MgFieldVisitor {
             "launches" => self.launches = Some(value),
             "transfer_bytes_before" => self.transfer_bytes_before = Some(value),
             "transfer_bytes_after" => self.transfer_bytes_after = Some(value),
+            "batch_points" => self.batch_points = Some(value),
+            "batch_instances" => self.batch_instances = Some(value),
+            "batch_slots" => self.batch_slots = Some(value),
+            "kslots" => self.kslots = Some(value),
             _ => {}
         }
     }
@@ -569,6 +609,10 @@ where
                     launches: visitor.launches.unwrap_or(0),
                     transfer_bytes_before: visitor.transfer_bytes_before.unwrap_or(0),
                     transfer_bytes_after: visitor.transfer_bytes_after.unwrap_or(0),
+                    batch_points: visitor.batch_points.unwrap_or(0),
+                    batch_instances: visitor.batch_instances.unwrap_or(0),
+                    batch_slots: visitor.batch_slots.unwrap_or(0),
+                    kslots: visitor.kslots.unwrap_or(0),
                     direction: visitor.direction.unwrap_or_default(),
                 },
             );
@@ -628,6 +672,12 @@ where
                 }
                 let level = &mut timing.levels[meta.level];
                 level.level = meta.level;
+                if meta.batch_slots > 0 {
+                    level.batch_points = meta.batch_points;
+                    level.batch_instances = meta.batch_instances;
+                    level.batch_slots = meta.batch_slots;
+                    level.kslots = meta.kslots;
+                }
                 match meta.name {
                     "pbc_mg_forward_level" => {
                         level.forward_ms += elapsed_ms;
@@ -1385,10 +1435,10 @@ struct KsymmReport {
     /// ms, and the k-point count of every call.
     full_ao_calls: u64,
     full_ao_ms: f64,
-    full_ao_nkpts: Vec<u64>,
+    full_ao_nkpts: Vec<String>,
     ksymm_ao_calls: u64,
     ksymm_ao_ms: f64,
-    ksymm_ao_nkpts: Vec<u64>,
+    ksymm_ao_nkpts: Vec<String>,
     peak_rss_mib: f64,
     load_average_at_start: f64,
     full_e_tot: f64,

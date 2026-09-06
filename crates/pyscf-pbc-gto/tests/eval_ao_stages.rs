@@ -62,14 +62,21 @@ fn child_output_path(threads: usize, screen: bool) -> PathBuf {
 }
 
 fn run_child(threads: usize, screen: bool) -> Vec<u8> {
+    run_child_env(threads, screen, &[])
+}
+
+/// `run_child` with extra environment — the K-08b A/B switches.
+fn run_child_env(threads: usize, screen: bool, extra: &[(&str, &str)]) -> Vec<u8> {
     let path = child_output_path(threads, screen);
-    let status = Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", "emit_ao_bits", "--ignored"])
+    let mut cmd = Command::new(std::env::current_exe().expect("test executable"));
+    cmd.args(["--exact", "emit_ao_bits", "--ignored"])
         .env("RAYON_NUM_THREADS", threads.to_string())
         .env("PYSCF_PBC_AO_SCREEN", if screen { "1" } else { "0" })
-        .env("PYSCF_AO_STAGE_OUTPUT", &path)
-        .status()
-        .expect("run AO gate child");
+        .env("PYSCF_AO_STAGE_OUTPUT", &path);
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    let status = cmd.status().expect("run AO gate child");
     assert!(
         status.success(),
         "AO gate child failed: threads={threads} screen={screen}"
@@ -104,6 +111,31 @@ fn image_loop_is_thread_bit_exact_and_screen_stays_inside_its_gate() {
     }
     println!("A-00 screen on/off worst absolute AO delta = {worst:.3e}");
     assert!(worst < 1e-11, "AO screen exceeded the W-09 gate: {worst:e}");
+}
+
+/// K-08b (session 3): the k-loop scatter accumulate and the dense path for
+/// fully-kept images are bit-identical to the per-`(k, element)` scatter
+/// kernel on every image — asserted on the screened loop, whole table.
+#[test]
+fn k08b_scatter_and_dense_full_images_are_bit_exact() {
+    let new_path = run_child(8, true);
+    let legacy = run_child_env(
+        8,
+        true,
+        &[
+            ("PYSCF_PBC_K08_SCATTER", "legacy"),
+            ("PYSCF_PBC_AO_DENSE_FULL", "0"),
+        ],
+    );
+    assert_eq!(new_path.len(), legacy.len());
+    assert!(
+        new_path == legacy,
+        "K-08b moved the screened AO table against the legacy scatter kernel"
+    );
+    println!(
+        "K-08b: {} AO reals bit-identical to the legacy scatter path",
+        new_path.len() / 8
+    );
 }
 
 #[test]

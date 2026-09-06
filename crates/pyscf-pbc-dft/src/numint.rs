@@ -238,13 +238,7 @@ impl KsNumInt {
     /// point's single real `veff` promoted to the k-resolved `vmat` the KS
     /// seam expects. Shared by the v1 and v2 arms, whose results differ only
     /// in the type that carries them.
-    fn wrap_mg_rks(
-        cell: &Cell,
-        nelec: f64,
-        exc: f64,
-        ecoul: f64,
-        veff: Vec<f64>,
-    ) -> KsNrRksResult {
+    fn wrap_mg_rks(cell: &Cell, nelec: f64, exc: f64, ecoul: f64, veff: Vec<f64>) -> KsNrRksResult {
         let n = cell.mol.nao_nr * cell.mol.nao_nr;
         KsNrRksResult {
             nelec,
@@ -1282,11 +1276,8 @@ impl KNumInt {
         if std::env::var("PYSCF_PBC_BAND_AO_REUSE").is_ok_and(|v| v == "0") {
             return None;
         }
-        let same = |a: &[f64; 3], b: &[f64; 3]| {
-            a.iter()
-                .zip(b)
-                .all(|(x, y)| x.to_bits() == y.to_bits())
-        };
+        let same =
+            |a: &[f64; 3], b: &[f64; 3]| a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
         band.iter()
             .map(|b| self.kpts.iter().position(|k| same(k, b)))
             .collect()

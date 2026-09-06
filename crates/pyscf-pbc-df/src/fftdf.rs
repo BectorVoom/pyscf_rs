@@ -58,8 +58,10 @@ pub struct AoKpts {
     pub nao: usize,
     /// Grid-point count.
     pub ngrids: usize,
-    /// `aot[k][mu * ngrids + g]`.
-    pub aot: Vec<CTensor>,
+    /// `aot[k][mu * ngrids + g]`. Shared (`Arc`) so that a band table that is
+    /// a subset of the sampling table — S-08 — points at the sampling table's
+    /// blocks instead of copying or re-evaluating them.
+    pub aot: Vec<Arc<CTensor>>,
 }
 
 impl AoKpts {
@@ -184,12 +186,41 @@ impl Fftdf {
                 return Ok(Arc::clone(v));
             }
         }
+        // S-08: a k-list that is a (bitwise) subset of the sampling list —
+        // what every k-symmetric driver passes as `kpts_band = kpts_ibz` — is
+        // served from the sampling table. K-08 accumulates each k
+        // independently (`out[k·n+p] += phase_k · ao[p]`, the same AO block
+        // and the same phase whichever list it is launched with), so the
+        // block is bit-identical; the `Arc` makes it free of copies too.
+        // `PYSCF_PBC_BAND_AO_REUSE=0` restores the separate evaluation.
+        let reuse = !std::env::var("PYSCF_PBC_BAND_AO_REUSE").is_ok_and(|v| v == "0");
+        if reuse && kpts.len() < self.kpts.len() {
+            let same = |a: &[f64; 3], b: &[f64; 3]| {
+                a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+            };
+            let map: Option<Vec<usize>> = kpts
+                .iter()
+                .map(|b| self.kpts.iter().position(|k| same(k, b)))
+                .collect();
+            if let Some(map) = map {
+                let full = self.ao_kpts(&self.kpts.clone())?;
+                let block = Arc::new(AoKpts {
+                    nao: full.nao,
+                    ngrids: full.ngrids,
+                    aot: map.iter().map(|&k| Arc::clone(&full.aot[k])).collect(),
+                });
+                if let Ok(mut c) = self.ao_cache.lock() {
+                    c.insert(key, Arc::clone(&block));
+                }
+                return Ok(block);
+            }
+        }
         let out = eval_ao_kpts(&self.cell, "GTOval_sph", &self.grids.coords, kpts)?;
         debug_assert_eq!(out.comp, 1, "the LDA AO path evaluates one component");
         let block = Arc::new(AoKpts {
             nao: out.nao,
             ngrids: out.ngrids,
-            aot: out.kaos,
+            aot: out.kaos.into_iter().map(Arc::new).collect(),
         });
         // 16 bytes per complex entry; keep the cache under a quarter of the
         // memory budget so the J/K scratch still fits.

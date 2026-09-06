@@ -49,7 +49,9 @@ fn cached_level_values_are_bit_identical_to_per_call_collocation() {
     let ni = MultiGridNumInt::new();
     let miss = ni.nr_rks(&cell, "pbe", &dm_a).expect("nr_rks miss");
     let hit = ni.nr_rks(&cell, "pbe", &dm_a).expect("nr_rks hit");
-    let hit_b = ni.nr_rks(&cell, "pbe", &dm_b).expect("nr_rks hit, other dm");
+    let hit_b = ni
+        .nr_rks(&cell, "pbe", &dm_b)
+        .expect("nr_rks hit, other dm");
     let j_hit = ni.get_j(&cell, &dm_a).expect("get_j hit");
     let u_hit = ni
         .nr_uks(&cell, "pbe", &[&dm_a, &dm_b])
@@ -74,8 +76,16 @@ fn cached_level_values_are_bit_identical_to_per_call_collocation() {
         ("hit vs uncached veff", &hit.veff, &off.veff),
         ("hit vs uncached veff (dm b)", &hit_b.veff, &off_b.veff),
         ("get_j hit vs uncached", &j_hit, &j_off),
-        ("nr_uks alpha hit vs uncached", &u_hit.veff[0], &u_off.veff[0]),
-        ("nr_uks beta hit vs uncached", &u_hit.veff[1], &u_off.veff[1]),
+        (
+            "nr_uks alpha hit vs uncached",
+            &u_hit.veff[0],
+            &u_off.veff[0],
+        ),
+        (
+            "nr_uks beta hit vs uncached",
+            &u_hit.veff[1],
+            &u_off.veff[1],
+        ),
     ] {
         same_bits(what, a, b);
     }
@@ -96,7 +106,9 @@ fn cached_level_values_are_bit_identical_to_per_call_collocation() {
     let fresh = MultiGridNumInt::new()
         .nr_rks(&other, "pbe", &dm_a)
         .expect("fresh cell");
-    let via_cache = ni.nr_rks(&other, "pbe", &dm_a).expect("other cell on the cached numint");
+    let via_cache = ni
+        .nr_rks(&other, "pbe", &dm_a)
+        .expect("other cell on the cached numint");
     same_bits("other cell veff", &fresh.veff, &via_cache.veff);
     println!("v1 level-value cache: miss/hit/uncached bit-identical on two cells");
 }

@@ -241,9 +241,25 @@ pub fn make_kpts_ibz(kpts: &mut KPoints, cell: &Cell, tol: f64) -> Result<(), Pb
     }
     kpts.weights_ibz = counts.iter().map(|&c| c as f64 / nkpts as f64).collect();
     kpts.kpts_scaled_ibz = kpts.ibz2bz.iter().map(|&k| kpts.kpts_scaled[k]).collect();
-    kpts.kpts_ibz = cell
-        .get_abs_kpts(&kpts.kpts_scaled_ibz)
-        .map_err(PbcSymmError::Core)?;
+    // S-09 (optimisation session 3): the IBZ points ARE full-BZ points
+    // (`kpts_ibz[i] == kpts[ibz2bz[i]]` by definition), so take them as
+    // copies. Upstream (`kpts.py:74`) re-derives them through
+    // `cell.get_abs_kpts(kpts_scaled_ibz)` — an abs→scaled→abs round trip
+    // that is not a bitwise identity, so the IBZ list was never a BITWISE
+    // subset of the sampling list, and the two band-table reuses
+    // (`KNumInt::band_subset_map`, `Fftdf::ao_kpts`) refused on every
+    // k-symmetric driver — measured: 4 cold AO tables per ksymm SCF instead
+    // of 2. The copy moves each IBZ k-vector by at most a few ulps; every
+    // ksymm gate is 1e-11 or looser (GATE C) or a same-binary bit-identity,
+    // and the star/little-group bookkeeping below uses the SCALED points.
+    // `PYSCF_PBC_KPTS_IBZ_ROUNDTRIP=1` restores upstream's derivation.
+    let roundtrip = std::env::var("PYSCF_PBC_KPTS_IBZ_ROUNDTRIP").is_ok_and(|v| v == "1");
+    kpts.kpts_ibz = if roundtrip {
+        cell.get_abs_kpts(&kpts.kpts_scaled_ibz)
+            .map_err(PbcSymmError::Core)?
+    } else {
+        kpts.ibz2bz.iter().map(|&k| kpts.kpts[k]).collect()
+    };
     kpts.set_nkpts_ibz(kpts.kpts_ibz.len());
 
     // ---- the star-op search (kpts.py:83-99) -------------------------

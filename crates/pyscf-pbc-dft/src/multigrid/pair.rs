@@ -349,12 +349,12 @@ pub struct PairLevelTable {
 /// scatter a batched result back into mesh / kernel-slot order.
 #[derive(Debug)]
 pub struct BatchedLevel {
-    /// Geometry only — `slot_coef` is empty here and filled per call.
+    /// Geometry only. M-12: the per-call coefficients are indexed INSIDE the
+    /// kernel through `batch.slot_global`, so nothing per concatenated slot
+    /// is built or moved per call.
     pub batch: PairSlotBatch,
     /// Concatenated point index -> this level's mesh grid index.
     pub point_global: Vec<u32>,
-    /// Concatenated slot index -> this level's kernel-slot index.
-    pub slot_global: Vec<u32>,
     /// M-06: invariant geometry, uploaded lazily on first use.
     pub device: std::sync::OnceLock<PairSlotBatchDevice>,
 }
@@ -891,12 +891,20 @@ fn build_batched_range(lv: &PairLevelTable, range: std::ops::Range<usize>) -> Op
         // Filled below: one START per instance, then the final end, which is
         // exactly the `ninst + 1` prefix shape the kernel indexes.
         inst_slot0: Vec::new(),
-        slot_pow: Vec::with_capacity(nslots),
-        // Geometry only: the coefficients are per call.
-        slot_coef: Vec::new(),
+        slot_global: Vec::with_capacity(nslots),
+        // M-12: the level's packed powers, once per KERNEL slot — shared by
+        // every chunk of the level (a `nkslots · 4` B copy per chunk).
+        kslot_pow: (0..lv.nkslots())
+            .map(|k| {
+                let ix = lv.kslot_pow[k * 3];
+                let iy = lv.kslot_pow[k * 3 + 1];
+                let iz = lv.kslot_pow[k * 3 + 2];
+                debug_assert!(ix < 256 && iy < 256 && iz < 256);
+                ix | (iy << 8) | (iz << 16)
+            })
+            .collect(),
     };
     let mut point_global = Vec::with_capacity(npoints);
-    let mut slot_global = Vec::with_capacity(nslots);
 
     b.block_point0.push(0);
     b.block_inst0.push(0);
@@ -925,20 +933,15 @@ fn build_batched_range(lv: &PairLevelTable, range: std::ops::Range<usize>) -> Op
                     .extend_from_slice(&lv.instance_center[i * 3..i * 3 + 3]);
                 b.inst_block.push(local_bi as u32);
                 // This instance's slots start at the running slot count.
-                b.inst_slot0.push(slot_global.len() as u32);
+                b.inst_slot0.push(b.slot_global.len() as u32);
             }
-            let ix = lv.kslot_pow[k * 3];
-            let iy = lv.kslot_pow[k * 3 + 1];
-            let iz = lv.kslot_pow[k * 3 + 2];
-            debug_assert!(ix < 256 && iy < 256 && iz < 256);
-            b.slot_pow.push(ix | (iy << 8) | (iz << 16));
-            slot_global.push(k as u32);
+            b.slot_global.push(k as u32);
         }
         b.block_point0.push(b.point_block.len() as u32);
         b.block_inst0.push(b.instance_alpha.len() as u32);
     }
     // One START was pushed per instance; the final end closes the prefix.
-    b.inst_slot0.push(slot_global.len() as u32);
+    b.inst_slot0.push(b.slot_global.len() as u32);
     debug_assert_eq!(b.inst_slot0.len(), b.instance_alpha.len() + 1);
     debug_assert_eq!(b.inst_slot0[0], 0);
     debug_assert!(
@@ -947,12 +950,9 @@ fn build_batched_range(lv: &PairLevelTable, range: std::ops::Range<usize>) -> Op
             .all(|w| (w[1] - w[0]) as usize <= MAX_SLOTS_PER_INSTANCE),
         "M-08 reverse register bound exceeded"
     );
-    b.slot_coef = vec![0.0; slot_global.len()];
-
     Some(BatchedLevel {
         batch: b,
         point_global,
-        slot_global,
         device: std::sync::OnceLock::new(),
     })
 }
@@ -1176,9 +1176,10 @@ pub fn pairlevel_rho_with(
     // slot list in the same order, and every output is written by one lane.
     if use_batch && !lv.batches.is_empty() {
         for bl in &lv.batches {
-            let slot_coef: Vec<f64> = bl.slot_global.iter().map(|&k| kcoef[k as usize]).collect();
+            // M-12: the per-kernel-slot coefficients go up as they are; the
+            // kernel indexes them through the resident `slot_global`.
             let out = resident_batch(bl, &client)?
-                .rho(&client, &slot_coef)
+                .rho(&client, &kcoef)
                 .map_err(wrap_alg)?;
             for (p, v) in out.into_iter().enumerate() {
                 rho[bl.point_global[p] as usize] = v;
@@ -1234,14 +1235,8 @@ pub fn pairlevel_rho2(
     let client = backend_client()?;
     let mut rho = [vec![0.0; lv.ngrids], vec![0.0; lv.ngrids]];
     for bl in &lv.batches {
-        let coef = kcoef.each_ref().map(|kc| {
-            bl.slot_global
-                .iter()
-                .map(|&k| kc[k as usize])
-                .collect::<Vec<_>>()
-        });
         let out = resident_batch(bl, &client)?
-            .rho2(&client, [&coef[0], &coef[1]])
+            .rho2(&client, [&kcoef[0], &kcoef[1]])
             .map_err(wrap_alg)?;
         for spin in 0..2 {
             for (p, &v) in out[spin].iter().enumerate() {
@@ -1304,17 +1299,16 @@ pub fn pairlevel_pass2_with(
     let mut batched = false;
     if use_batch && !lv.batches.is_empty() {
         for bl in &lv.batches {
-            let slot_coef = vec![1.0; bl.slot_global.len()];
             let w: Vec<f64> = bl
                 .point_global
                 .iter()
                 .map(|&g| weight[g as usize])
                 .collect();
             let out = resident_batch(bl, &client)?
-                .integrate(&client, &slot_coef, &w)
+                .integrate(&client, &w)
                 .map_err(wrap_alg)?;
             for (s, v) in out.into_iter().enumerate() {
-                kint[bl.slot_global[s] as usize] += v;
+                kint[bl.batch.slot_global[s] as usize] += v;
             }
         }
         batched = true;
@@ -1368,7 +1362,6 @@ pub fn pairlevel_pass2_2(
     let client = backend_client()?;
     let mut kint = [vec![0.0f64; lv.nkslots()], vec![0.0f64; lv.nkslots()]];
     for bl in &lv.batches {
-        let ones = vec![1.0; bl.slot_global.len()];
         let w = weight.map(|src| {
             bl.point_global
                 .iter()
@@ -1376,11 +1369,11 @@ pub fn pairlevel_pass2_2(
                 .collect::<Vec<_>>()
         });
         let out = resident_batch(bl, &client)?
-            .integrate2(&client, [&ones, &ones], [&w[0], &w[1]])
+            .integrate2(&client, [&w[0], &w[1]])
             .map_err(wrap_alg)?;
         for spin in 0..2 {
             for (s, &v) in out[spin].iter().enumerate() {
-                kint[spin][bl.slot_global[s] as usize] += v;
+                kint[spin][bl.batch.slot_global[s] as usize] += v;
             }
         }
     }
@@ -1652,7 +1645,8 @@ fn batch_geometry_bytes(batch: &PairSlotBatch) -> u64 {
         .saturating_add(batch.block_inst0.len())
         .saturating_add(batch.inst_block.len())
         .saturating_add(batch.inst_slot0.len())
-        .saturating_add(batch.slot_pow.len())
+        .saturating_add(batch.slot_global.len())
+        .saturating_add(batch.kslot_pow.len())
         .saturating_mul(core::mem::size_of::<u32>());
     f64_bytes.saturating_add(u32_bytes) as u64
 }
@@ -1670,23 +1664,22 @@ fn pair_level_transfer_bytes(
         .fold((0_u64, 0_u64), |(before, after), bl| {
             let batch = &bl.batch;
             let geometry = batch_geometry_bytes(batch);
-            let coef = batch.nslots().saturating_mul(8).saturating_mul(channels) as u64;
-            let (varying, output) = if direction == "forward" {
-                (
-                    coef,
-                    batch.npoints().saturating_mul(8).saturating_mul(channels) as u64,
-                )
+            // M-12: the per-call coefficient is per KERNEL slot (forward) and
+            // gone (reverse). `before` keeps the pre-M-06 model — the
+            // per-concatenated-slot coefficient — so the column stays the
+            // same reference it has been.
+            let coef_before = batch.nslots().saturating_mul(8).saturating_mul(channels) as u64;
+            let coef_after = batch.nkslots().saturating_mul(8).saturating_mul(channels) as u64;
+            let points = batch.npoints().saturating_mul(8).saturating_mul(channels) as u64;
+            let slots = batch.nslots().saturating_mul(8).saturating_mul(channels) as u64;
+            let (varying_before, varying, output) = if direction == "forward" {
+                (coef_before, coef_after, points)
             } else {
-                (
-                    coef.saturating_add(
-                        batch.npoints().saturating_mul(8).saturating_mul(channels) as u64
-                    ),
-                    batch.nslots().saturating_mul(8).saturating_mul(channels) as u64,
-                )
+                (coef_before.saturating_add(points), points, slots)
             };
             let after_chunk = varying.saturating_add(output); // one read-back
             let before_chunk = geometry
-                .saturating_add(varying)
+                .saturating_add(varying_before)
                 .saturating_add(output) // zero upload
                 .saturating_add(output); // read-back
             (
@@ -1705,6 +1698,24 @@ fn pair_level_span(
     let launches = pairlevel_launch_count(lv) as u64;
     let (transfer_bytes_before, transfer_bytes_after) =
         pair_level_transfer_bytes(direction, channels, lv);
+    // Session 3: the concatenated table sizes, so the instrument can show
+    // where the resident bytes go (per-slot data dominates).
+    let batch_points = lv
+        .batches
+        .iter()
+        .map(|b| b.batch.npoints() as u64)
+        .sum::<u64>();
+    let batch_instances = lv
+        .batches
+        .iter()
+        .map(|b| b.batch.ninstances() as u64)
+        .sum::<u64>();
+    let batch_slots = lv
+        .batches
+        .iter()
+        .map(|b| b.batch.nslots() as u64)
+        .sum::<u64>();
+    let kslots = lv.nkslots() as u64;
     match direction {
         "forward" => tracing::info_span!(
             "pbc_mg_forward_level",
@@ -1712,6 +1723,10 @@ fn pair_level_span(
             launches,
             transfer_bytes_before,
             transfer_bytes_after,
+            batch_points,
+            batch_instances,
+            batch_slots,
+            kslots,
             mesh = ?lv.mesh,
         ),
         _ => tracing::info_span!(
@@ -1720,6 +1735,10 @@ fn pair_level_span(
             launches,
             transfer_bytes_before,
             transfer_bytes_after,
+            batch_points,
+            batch_instances,
+            batch_slots,
+            kslots,
             mesh = ?lv.mesh,
         ),
     }

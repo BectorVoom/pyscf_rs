@@ -158,6 +158,56 @@ fn launch_on_handles<R: Runtime, F: DeviceScalar>(
     }
 }
 
+/// K-08b (session 3): the scatter accumulate with the `k` loop INSIDE the
+/// lane — one lane per kept AO element instead of one per `(k, element)`.
+///
+/// The session-3 instrument measured the per-`(k, element)` form at the same
+/// 2.1 s whether the W-09 screen kept 24 % or 100 % of the grid, i.e. ~4×
+/// less efficient per element than the dense vectorised kernel: every lane
+/// re-did the five-division index decode and re-read `ao[q]` / `index[j]`
+/// for each of the `nkpts` k-points. Here the decode and the two loads happen
+/// once per element and the `nkpts` accumulations follow.
+///
+/// Bit-exact: each `(k, p)` accumulator still receives exactly one addition
+/// per image, `pr[k] * ao[q]`, the same product in the same place — only
+/// which lane performs it changes.
+#[cube(launch_unchecked)]
+fn eval_ao_k_accumulate_scatter_kloop_kernel<F: Float + CubeElement>(
+    ao: &Array<F>,
+    index: &Array<u32>,
+    pr: &Array<F>,
+    pi: &Array<F>,
+    out_re: &mut Array<F>,
+    out_im: &mut Array<F>,
+    nkpts: usize,
+    nkeep: usize,
+    ngrids: usize,
+    nao: usize,
+    comp: usize,
+) {
+    let sub_n = comp * nkeep * nao;
+    let q = ABSOLUTE_POS;
+    if q < sub_n {
+        let c = q / (nkeep * nao);
+        let rem = q % (nkeep * nao);
+        let a = rem / nkeep;
+        let j = rem % nkeep;
+        let p = c * ngrids * nao + a * ngrids + index[j] as usize;
+        let n = comp * ngrids * nao;
+        let v = ao[q];
+        for k in 0..nkpts {
+            out_re[k * n + p] += pr[k] * v;
+            out_im[k * n + p] += pi[k] * v;
+        }
+    }
+}
+
+/// `PYSCF_PBC_K08_SCATTER=legacy` pins the per-`(k, element)` kernel so the
+/// profiler can measure both forms with one binary.
+fn legacy_scatter_kernel() -> bool {
+    std::env::var("PYSCF_PBC_K08_SCATTER").is_ok_and(|v| v.eq_ignore_ascii_case("legacy"))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn launch_scatter_on_handles<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
@@ -174,6 +224,29 @@ fn launch_scatter_on_handles<R: Runtime, F: DeviceScalar>(
     comp: usize,
 ) {
     let sub_n = comp * nkeep * nao;
+    if !legacy_scatter_kernel() {
+        // K-08b: one lane per element, `2 * nkpts` multiply-adds each.
+        let (count, dim) = launch_1d(client, sub_n, 2 * nkpts);
+        unsafe {
+            eval_ao_k_accumulate_scatter_kloop_kernel::launch_unchecked::<F, R>(
+                client,
+                count,
+                dim,
+                ArrayArg::from_raw_parts(ao.clone(), sub_n),
+                ArrayArg::from_raw_parts(index.clone(), nkeep),
+                ArrayArg::from_raw_parts(pr.clone(), nkpts),
+                ArrayArg::from_raw_parts(pi.clone(), nkpts),
+                ArrayArg::from_raw_parts(out_re.clone(), nkpts * comp * ngrids * nao),
+                ArrayArg::from_raw_parts(out_im.clone(), nkpts * comp * ngrids * nao),
+                nkpts,
+                nkeep,
+                ngrids,
+                nao,
+                comp,
+            );
+        }
+        return;
+    }
     let lanes = nkpts * sub_n;
     let (count, dim) = launch_1d(client, lanes, 2);
     unsafe {

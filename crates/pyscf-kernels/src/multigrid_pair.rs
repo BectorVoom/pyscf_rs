@@ -746,11 +746,16 @@ pub struct PairSlotBatch {
     /// `inst_slot0[i]..inst_slot0[i+1]` — instance `i`'s slots.
     /// `n_instances + 1` entries.
     pub inst_slot0: Vec<u32>,
-    /// Per slot, packed as `ix | iy << 8 | iz << 16`.
-    pub slot_pow: Vec<u32>,
-    /// Per concatenated slot: the scalar coefficient. **The only field that
-    /// varies per call.**
-    pub slot_coef: Vec<f64>,
+    /// Per concatenated slot: the level's KERNEL slot it is an image of —
+    /// M-12. The only per-slot array: the slot's monomial powers and its
+    /// coefficient are both functions of this index
+    /// (`kslot_pow[slot_global[s]]`, `kcoef[slot_global[s]]`), so they are
+    /// stored once per kernel slot instead of once per concatenated slot.
+    /// A concatenated table is a multiple of the level's own slot count
+    /// (~`0.35 · nkslots · nblocks`), which is why this is the byte lever.
+    pub slot_global: Vec<u32>,
+    /// Per KERNEL slot, packed as `ix | iy << 8 | iz << 16`.
+    pub kslot_pow: Vec<u32>,
 }
 
 impl PairSlotBatch {
@@ -764,7 +769,11 @@ impl PairSlotBatch {
     }
     /// Concatenated slots.
     pub fn nslots(&self) -> usize {
-        self.slot_coef.len()
+        self.slot_global.len()
+    }
+    /// Kernel slots of the level this batch was cut from.
+    pub fn nkslots(&self) -> usize {
+        self.kslot_pow.len()
     }
     /// Blocks.
     pub fn nblocks(&self) -> usize {
@@ -775,8 +784,10 @@ impl PairSlotBatch {
 /// M-06: device-resident invariant geometry for one batch chunk.
 ///
 /// Handles remain private to keep CubeCL behind the kernels dependency wall.
-/// Only `slot_coef` and `weight` are uploaded per call; outputs are allocated
-/// once and every launched lane overwrites its complete logical output.
+/// Only the per-kernel-slot coefficients (forward, `nkslots · 8` B) and the
+/// weights (reverse, `npoints · 8` B) are uploaded per call — M-12; outputs
+/// are allocated once and every launched lane overwrites its complete
+/// logical output.
 pub struct PairSlotBatchDevice {
     backend: BackendKind,
     /// The cubecl stream the handles below were allocated on.
@@ -810,7 +821,8 @@ pub struct PairSlotBatchDevice {
     instance_alpha: Handle,
     instance_center: Handle,
     inst_slot0: Handle,
-    slot_pow: Handle,
+    slot_global: Handle,
+    kslot_pow: Handle,
     out_rho: Handle,
     out_rho_b: std::sync::OnceLock<Handle>,
     out_integrate: Handle,
@@ -818,6 +830,7 @@ pub struct PairSlotBatchDevice {
     npoints: usize,
     ninstances: usize,
     nslots: usize,
+    nkslots: usize,
     nblocks: usize,
 }
 
@@ -854,7 +867,8 @@ impl PairSlotBatchDevice {
                 instance_alpha: upload::<Rt, f64>(c, &batch.instance_alpha),
                 instance_center: upload::<Rt, f64>(c, &batch.instance_center),
                 inst_slot0: upload_u32::<Rt>(c, &batch.inst_slot0),
-                slot_pow: upload_u32::<Rt>(c, &batch.slot_pow),
+                slot_global: upload_u32::<Rt>(c, &batch.slot_global),
+                kslot_pow: upload_u32::<Rt>(c, &batch.kslot_pow),
                 out_rho: c.empty(batch.npoints() * core::mem::size_of::<f64>()),
                 out_rho_b: std::sync::OnceLock::new(),
                 out_integrate: c.empty(batch.nslots() * core::mem::size_of::<f64>()),
@@ -862,6 +876,7 @@ impl PairSlotBatchDevice {
                 npoints: batch.npoints(),
                 ninstances: batch.ninstances(),
                 nslots: batch.nslots(),
+                nkslots: batch.nkslots(),
                 nblocks: batch.nblocks(),
             }
         }))
@@ -878,40 +893,37 @@ impl PairSlotBatchDevice {
         Ok(())
     }
 
-    pub fn rho(&self, client: &AlgebraClient, slot_coef: &[f64]) -> Result<Vec<f64>, AlgebraError> {
+    /// `kcoef` — one coefficient per KERNEL slot of the level (`nkslots`).
+    pub fn rho(&self, client: &AlgebraClient, kcoef: &[f64]) -> Result<Vec<f64>, AlgebraError> {
         self.check_backend(client)?;
-        if slot_coef.len() != self.nslots {
+        if kcoef.len() != self.nkslots {
             return Err(AlgebraError::ShapeMismatch {
-                expected: format!("slot_coef.len() == {}", self.nslots),
-                actual: slot_coef.len().to_string(),
+                expected: format!("kcoef.len() == nkslots = {}", self.nkslots),
+                actual: kcoef.len().to_string(),
             });
         }
         Ok(self.stream.executes(|| {
-            dispatch_backend!(client, c, Rt, {
-                launch_rho_resident::<Rt>(self, slot_coef, c)
-            })
+            dispatch_backend!(client, c, Rt, { launch_rho_resident::<Rt>(self, kcoef, c) })
         }))
     }
 
+    /// The reverse direction has no coefficient (M-12): the drivers always
+    /// passed `1.0`, and `1.0 · x == x` exactly, so the multiply is gone.
     pub fn integrate(
         &self,
         client: &AlgebraClient,
-        slot_coef: &[f64],
         weight: &[f64],
     ) -> Result<Vec<f64>, AlgebraError> {
         self.check_backend(client)?;
-        if slot_coef.len() != self.nslots || weight.len() != self.npoints {
+        if weight.len() != self.npoints {
             return Err(AlgebraError::ShapeMismatch {
-                expected: format!(
-                    "slot_coef/weight lengths == {}/{}",
-                    self.nslots, self.npoints
-                ),
-                actual: format!("{}/{}", slot_coef.len(), weight.len()),
+                expected: format!("weight.len() == npoints = {}", self.npoints),
+                actual: weight.len().to_string(),
             });
         }
         Ok(self.stream.executes(|| {
             dispatch_backend!(client, c, Rt, {
-                launch_integrate_resident::<Rt>(self, slot_coef, weight, c)
+                launch_integrate_resident::<Rt>(self, weight, c)
             })
         }))
     }
@@ -920,18 +932,18 @@ impl PairSlotBatchDevice {
     pub fn rho2(
         &self,
         client: &AlgebraClient,
-        slot_coef: [&[f64]; 2],
+        kcoef: [&[f64]; 2],
     ) -> Result<[Vec<f64>; 2], AlgebraError> {
         self.check_backend(client)?;
-        if slot_coef.iter().any(|c| c.len() != self.nslots) {
+        if kcoef.iter().any(|c| c.len() != self.nkslots) {
             return Err(AlgebraError::ShapeMismatch {
-                expected: format!("both slot coefficient lengths == {}", self.nslots),
-                actual: format!("{}/{}", slot_coef[0].len(), slot_coef[1].len()),
+                expected: format!("both kcoef lengths == nkslots = {}", self.nkslots),
+                actual: format!("{}/{}", kcoef[0].len(), kcoef[1].len()),
             });
         }
         Ok(self.stream.executes(|| {
             dispatch_backend!(client, c, Rt, {
-                launch_rho2_resident::<Rt>(self, slot_coef, c)
+                launch_rho2_resident::<Rt>(self, kcoef, c)
             })
         }))
     }
@@ -940,30 +952,18 @@ impl PairSlotBatchDevice {
     pub fn integrate2(
         &self,
         client: &AlgebraClient,
-        slot_coef: [&[f64]; 2],
         weight: [&[f64]; 2],
     ) -> Result<[Vec<f64>; 2], AlgebraError> {
         self.check_backend(client)?;
-        if slot_coef.iter().any(|c| c.len() != self.nslots)
-            || weight.iter().any(|w| w.len() != self.npoints)
-        {
+        if weight.iter().any(|w| w.len() != self.npoints) {
             return Err(AlgebraError::ShapeMismatch {
-                expected: format!(
-                    "both slot coefficient/weight lengths == {}/{}",
-                    self.nslots, self.npoints
-                ),
-                actual: format!(
-                    "{}/{}, {}/{}",
-                    slot_coef[0].len(),
-                    weight[0].len(),
-                    slot_coef[1].len(),
-                    weight[1].len()
-                ),
+                expected: format!("both weight lengths == npoints = {}", self.npoints),
+                actual: format!("{}/{}", weight[0].len(), weight[1].len()),
             });
         }
         Ok(self.stream.executes(|| {
             dispatch_backend!(client, c, Rt, {
-                launch_integrate2_resident::<Rt>(self, slot_coef, weight, c)
+                launch_integrate2_resident::<Rt>(self, weight, c)
             })
         }))
     }
@@ -979,8 +979,9 @@ fn collocate_pairs_rho_batched_kernel(
     coords_z: &Array<f64>,
     point_block: &Array<u32>,
     block_inst0: &Array<u32>,
-    slot_pow: &Array<u32>,
-    slot_coef: &Array<f64>,
+    slot_global: &Array<u32>,
+    kslot_pow: &Array<u32>,
+    kcoef: &Array<f64>,
     inst_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
@@ -1006,11 +1007,14 @@ fn collocate_pairs_rho_batched_kernel(
             let s0 = inst_slot0[inst] as usize;
             let s1 = inst_slot0[inst + 1] as usize;
             for slot in s0..s1 {
-                let packed = slot_pow[slot];
+                // M-12: one per-slot load, then two gathers from the small
+                // per-kernel-slot tables (cache-resident on either runtime).
+                let k = slot_global[slot] as usize;
+                let packed = kslot_pow[k];
                 let ix = packed & 255;
                 let iy = (packed >> 8) & 255;
                 let iz = (packed >> 16) & 255;
-                let coef = slot_coef[slot];
+                let coef = kcoef[k];
                 let mut poly = 1.0;
                 let mut i = 0u32;
                 while i < ix {
@@ -1046,8 +1050,8 @@ fn collocate_pairs_integrate_batched_kernel(
     weight: &Array<f64>,
     inst_block: &Array<u32>,
     block_point0: &Array<u32>,
-    slot_pow: &Array<u32>,
-    slot_coef: &Array<f64>,
+    slot_global: &Array<u32>,
+    kslot_pow: &Array<u32>,
     inst_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
@@ -1077,11 +1081,10 @@ fn collocate_pairs_integrate_batched_kernel(
             let e = cube_math::double::exp::exp(0.0 - eta * r2, cube_math::MathConfig::EXACT);
             let we = weight[g] * e;
             for slot in s0..s1 {
-                let packed = slot_pow[slot];
+                let packed = kslot_pow[slot_global[slot] as usize];
                 let ix = packed & 255;
                 let iy = (packed >> 8) & 255;
                 let iz = (packed >> 16) & 255;
-                let coef = slot_coef[slot];
                 let mut poly = 1.0;
                 let mut i = 0u32;
                 while i < ix {
@@ -1098,7 +1101,9 @@ fn collocate_pairs_integrate_batched_kernel(
                     poly *= dz;
                     i += 1;
                 }
-                acc[slot - s0] += coef * poly * we;
+                // M-12: the driver's coefficient was always `1.0` here, and
+                // `1.0 * x == x` exactly, so dropping it is bit-exact.
+                acc[slot - s0] += poly * we;
             }
         }
         for slot in s0..s1 {
@@ -1114,9 +1119,10 @@ fn collocate_pairs_rho2_batched_kernel(
     coords_z: &Array<f64>,
     point_block: &Array<u32>,
     block_inst0: &Array<u32>,
-    slot_pow: &Array<u32>,
-    slot_coef_a: &Array<f64>,
-    slot_coef_b: &Array<f64>,
+    slot_global: &Array<u32>,
+    kslot_pow: &Array<u32>,
+    kcoef_a: &Array<f64>,
+    kcoef_b: &Array<f64>,
     inst_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
@@ -1142,7 +1148,8 @@ fn collocate_pairs_rho2_batched_kernel(
                 cube_math::MathConfig::EXACT,
             );
             for slot in inst_slot0[inst] as usize..inst_slot0[inst + 1] as usize {
-                let packed = slot_pow[slot];
+                let k = slot_global[slot] as usize;
+                let packed = kslot_pow[k];
                 let ix = packed & 255;
                 let iy = (packed >> 8) & 255;
                 let iz = (packed >> 16) & 255;
@@ -1162,8 +1169,8 @@ fn collocate_pairs_rho2_batched_kernel(
                     poly *= dz;
                     i += 1;
                 }
-                acc_a += slot_coef_a[slot] * poly * e;
-                acc_b += slot_coef_b[slot] * poly * e;
+                acc_a += kcoef_a[k] * poly * e;
+                acc_b += kcoef_b[k] * poly * e;
             }
         }
         out_a[p] = acc_a;
@@ -1180,9 +1187,8 @@ fn collocate_pairs_integrate2_batched_kernel(
     weight_b: &Array<f64>,
     inst_block: &Array<u32>,
     block_point0: &Array<u32>,
-    slot_pow: &Array<u32>,
-    slot_coef_a: &Array<f64>,
-    slot_coef_b: &Array<f64>,
+    slot_global: &Array<u32>,
+    kslot_pow: &Array<u32>,
     inst_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
@@ -1214,7 +1220,7 @@ fn collocate_pairs_integrate2_batched_kernel(
                 cube_math::MathConfig::EXACT,
             );
             for slot in s0..s1 {
-                let packed = slot_pow[slot];
+                let packed = kslot_pow[slot_global[slot] as usize];
                 let ix = packed & 255;
                 let iy = (packed >> 8) & 255;
                 let iz = (packed >> 16) & 255;
@@ -1236,8 +1242,8 @@ fn collocate_pairs_integrate2_batched_kernel(
                 }
                 let we_a = weight_a[g] * e;
                 let we_b = weight_b[g] * e;
-                acc_a[slot - s0] += slot_coef_a[slot] * poly * we_a;
-                acc_b[slot - s0] += slot_coef_b[slot] * poly * we_b;
+                acc_a[slot - s0] += poly * we_a;
+                acc_b[slot - s0] += poly * we_b;
             }
         }
         for slot in s0..s1 {
@@ -1249,10 +1255,10 @@ fn collocate_pairs_integrate2_batched_kernel(
 
 fn launch_rho_resident<R: Runtime>(
     d: &PairSlotBatchDevice,
-    slot_coef: &[f64],
+    kcoef: &[f64],
     client: &ComputeClient<R>,
 ) -> Vec<f64> {
-    let coef = upload::<R, f64>(client, slot_coef);
+    let coef = upload::<R, f64>(client, kcoef);
     let per_lane =
         50 * (d.ninstances / d.nblocks.max(1)).max(1) + 10 * (d.nslots / d.nblocks.max(1)).max(1);
     let (count, dim) = launch_1d(client, d.npoints, per_lane);
@@ -1266,8 +1272,9 @@ fn launch_rho_resident<R: Runtime>(
             ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.point_block.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.block_inst0.clone(), d.nblocks + 1),
-            ArrayArg::from_raw_parts(d.slot_pow.clone(), d.nslots),
-            ArrayArg::from_raw_parts(coef, d.nslots),
+            ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
+            ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
+            ArrayArg::from_raw_parts(coef, d.nkslots),
             ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
             ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.instance_center.clone(), d.ninstances * 3),
@@ -1281,11 +1288,9 @@ fn launch_rho_resident<R: Runtime>(
 
 fn launch_integrate_resident<R: Runtime>(
     d: &PairSlotBatchDevice,
-    slot_coef: &[f64],
     weight: &[f64],
     client: &ComputeClient<R>,
 ) -> Vec<f64> {
-    let coef = upload::<R, f64>(client, slot_coef);
     let weight = upload::<R, f64>(client, weight);
     let per_lane = 50 * (d.npoints / d.nblocks.max(1)).max(1);
     let (count, dim) = launch_1d(client, d.ninstances, per_lane);
@@ -1300,8 +1305,8 @@ fn launch_integrate_resident<R: Runtime>(
             ArrayArg::from_raw_parts(weight, d.npoints),
             ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
-            ArrayArg::from_raw_parts(d.slot_pow.clone(), d.nslots),
-            ArrayArg::from_raw_parts(coef, d.nslots),
+            ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
+            ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
             ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
             ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.instance_center.clone(), d.ninstances * 3),
@@ -1315,11 +1320,11 @@ fn launch_integrate_resident<R: Runtime>(
 
 fn launch_rho2_resident<R: Runtime>(
     d: &PairSlotBatchDevice,
-    slot_coef: [&[f64]; 2],
+    kcoef: [&[f64]; 2],
     client: &ComputeClient<R>,
 ) -> [Vec<f64>; 2] {
-    let ca = upload::<R, f64>(client, slot_coef[0]);
-    let cb = upload::<R, f64>(client, slot_coef[1]);
+    let ca = upload::<R, f64>(client, kcoef[0]);
+    let cb = upload::<R, f64>(client, kcoef[1]);
     let per_lane =
         50 * (d.ninstances / d.nblocks.max(1)).max(1) + 10 * (d.nslots / d.nblocks.max(1)).max(1);
     let (count, dim) = launch_1d(client, d.npoints, per_lane);
@@ -1336,9 +1341,10 @@ fn launch_rho2_resident<R: Runtime>(
             ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.point_block.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.block_inst0.clone(), d.nblocks + 1),
-            ArrayArg::from_raw_parts(d.slot_pow.clone(), d.nslots),
-            ArrayArg::from_raw_parts(ca, d.nslots),
-            ArrayArg::from_raw_parts(cb, d.nslots),
+            ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
+            ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
+            ArrayArg::from_raw_parts(ca, d.nkslots),
+            ArrayArg::from_raw_parts(cb, d.nkslots),
             ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
             ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.instance_center.clone(), d.ninstances * 3),
@@ -1356,12 +1362,9 @@ fn launch_rho2_resident<R: Runtime>(
 
 fn launch_integrate2_resident<R: Runtime>(
     d: &PairSlotBatchDevice,
-    slot_coef: [&[f64]; 2],
     weight: [&[f64]; 2],
     client: &ComputeClient<R>,
 ) -> [Vec<f64>; 2] {
-    let ca = upload::<R, f64>(client, slot_coef[0]);
-    let cb = upload::<R, f64>(client, slot_coef[1]);
     let wa = upload::<R, f64>(client, weight[0]);
     let wb = upload::<R, f64>(client, weight[1]);
     let per_lane = 50 * (d.npoints / d.nblocks.max(1)).max(1);
@@ -1381,9 +1384,8 @@ fn launch_integrate2_resident<R: Runtime>(
             ArrayArg::from_raw_parts(wb, d.npoints),
             ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
-            ArrayArg::from_raw_parts(d.slot_pow.clone(), d.nslots),
-            ArrayArg::from_raw_parts(ca, d.nslots),
-            ArrayArg::from_raw_parts(cb, d.nslots),
+            ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
+            ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
             ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
             ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.instance_center.clone(), d.ninstances * 3),
@@ -1399,22 +1401,27 @@ fn launch_integrate2_resident<R: Runtime>(
     ]
 }
 
-fn launch_rho_batched<R: Runtime>(b: &PairSlotBatch, client: &ComputeClient<R>) -> Vec<f64> {
+fn launch_rho_batched<R: Runtime>(
+    b: &PairSlotBatch,
+    kcoef: &[f64],
+    client: &ComputeClient<R>,
+) -> Vec<f64> {
     let npoints = b.npoints();
     let out_h = upload::<R, f64>(client, &vec![0.0f64; npoints]);
     let h = [
         upload::<R, f64>(client, &b.coords_x),
         upload::<R, f64>(client, &b.coords_y),
         upload::<R, f64>(client, &b.coords_z),
-        upload::<R, f64>(client, &b.slot_coef),
+        upload::<R, f64>(client, kcoef),
         upload::<R, f64>(client, &b.instance_alpha),
         upload::<R, f64>(client, &b.instance_center),
     ];
     let hu = [
         upload_u32::<R>(client, &b.point_block),
         upload_u32::<R>(client, &b.block_inst0),
-        upload_u32::<R>(client, &b.slot_pow),
+        upload_u32::<R>(client, &b.slot_global),
         upload_u32::<R>(client, &b.inst_slot0),
+        upload_u32::<R>(client, &b.kslot_pow),
     ];
     // Per lane: its block's instances (one `exp` each) and their slots. The
     // average is the total divided by the block count, which is what
@@ -1432,8 +1439,9 @@ fn launch_rho_batched<R: Runtime>(b: &PairSlotBatch, client: &ComputeClient<R>) 
             ArrayArg::from_raw_parts(h[2].clone(), b.coords_z.len()),
             ArrayArg::from_raw_parts(hu[0].clone(), b.point_block.len()),
             ArrayArg::from_raw_parts(hu[1].clone(), b.block_inst0.len()),
-            ArrayArg::from_raw_parts(hu[2].clone(), b.slot_pow.len()),
-            ArrayArg::from_raw_parts(h[3].clone(), b.slot_coef.len()),
+            ArrayArg::from_raw_parts(hu[2].clone(), b.slot_global.len()),
+            ArrayArg::from_raw_parts(hu[4].clone(), b.kslot_pow.len()),
+            ArrayArg::from_raw_parts(h[3].clone(), kcoef.len()),
             ArrayArg::from_raw_parts(hu[3].clone(), b.inst_slot0.len()),
             ArrayArg::from_raw_parts(h[4].clone(), b.instance_alpha.len()),
             ArrayArg::from_raw_parts(h[5].clone(), b.instance_center.len()),
@@ -1458,15 +1466,15 @@ fn launch_integrate_batched<R: Runtime>(
         upload::<R, f64>(client, &b.coords_y),
         upload::<R, f64>(client, &b.coords_z),
         upload::<R, f64>(client, weight),
-        upload::<R, f64>(client, &b.slot_coef),
         upload::<R, f64>(client, &b.instance_alpha),
         upload::<R, f64>(client, &b.instance_center),
     ];
     let hu = [
         upload_u32::<R>(client, &b.inst_block),
         upload_u32::<R>(client, &b.block_point0),
-        upload_u32::<R>(client, &b.slot_pow),
+        upload_u32::<R>(client, &b.slot_global),
         upload_u32::<R>(client, &b.inst_slot0),
+        upload_u32::<R>(client, &b.kslot_pow),
     ];
     let nblocks = b.nblocks().max(1);
     let per_lane = 50 * (b.npoints() / nblocks).max(1);
@@ -1482,11 +1490,11 @@ fn launch_integrate_batched<R: Runtime>(
             ArrayArg::from_raw_parts(h[3].clone(), weight.len()),
             ArrayArg::from_raw_parts(hu[0].clone(), b.inst_block.len()),
             ArrayArg::from_raw_parts(hu[1].clone(), b.block_point0.len()),
-            ArrayArg::from_raw_parts(hu[2].clone(), b.slot_pow.len()),
-            ArrayArg::from_raw_parts(h[4].clone(), b.slot_coef.len()),
+            ArrayArg::from_raw_parts(hu[2].clone(), b.slot_global.len()),
+            ArrayArg::from_raw_parts(hu[4].clone(), b.kslot_pow.len()),
             ArrayArg::from_raw_parts(hu[3].clone(), b.inst_slot0.len()),
-            ArrayArg::from_raw_parts(h[5].clone(), b.instance_alpha.len()),
-            ArrayArg::from_raw_parts(h[6].clone(), b.instance_center.len()),
+            ArrayArg::from_raw_parts(h[4].clone(), b.instance_alpha.len()),
+            ArrayArg::from_raw_parts(h[5].clone(), b.instance_center.len()),
             ArrayArg::from_raw_parts(out_h.clone(), nslots),
             ninst,
         );
@@ -1507,8 +1515,15 @@ fn launch_integrate_batched<R: Runtime>(
 pub fn collocate_pairs_rho_batched(
     client: &AlgebraClient,
     b: &PairSlotBatch,
+    kcoef: &[f64],
 ) -> Result<Vec<f64>, AlgebraError> {
     validate_batch(b)?;
+    if kcoef.len() != b.nkslots() {
+        return Err(AlgebraError::ShapeMismatch {
+            expected: format!("kcoef.len() == nkslots = {}", b.nkslots()),
+            actual: format!("{}", kcoef.len()),
+        });
+    }
     if b.npoints() == 0 {
         return Ok(Vec::new());
     }
@@ -1519,7 +1534,7 @@ pub fn collocate_pairs_rho_batched(
         client,
         c,
         Rt,
-        launch_rho_batched::<Rt>(b, c)
+        launch_rho_batched::<Rt>(b, kcoef, c)
     ))
 }
 
@@ -1631,10 +1646,22 @@ fn validate_batch(b: &PairSlotBatch) -> Result<(), AlgebraError> {
             "instance slot span exceeds the M-08 register bound".to_string(),
         ));
     }
-    if b.slot_pow.len() != b.slot_coef.len() {
+    if b.inst_slot0
+        .last()
+        .is_some_and(|&end| end as usize != b.slot_global.len())
+    {
         return Err(shape(
-            format!("slot_pow.len() == nslots = {}", b.slot_coef.len()),
-            format!("{}", b.slot_pow.len()),
+            format!("inst_slot0 to end at nslots = {}", b.slot_global.len()),
+            format!("{:?}", b.inst_slot0.last()),
+        ));
+    }
+    if b.slot_global
+        .iter()
+        .any(|&k| k as usize >= b.kslot_pow.len())
+    {
+        return Err(shape(
+            format!("every slot_global < nkslots = {}", b.kslot_pow.len()),
+            "an out-of-range kernel-slot index".to_string(),
         ));
     }
     Ok(())

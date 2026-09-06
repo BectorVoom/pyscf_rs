@@ -82,6 +82,23 @@ struct V1Tasks {
     level_values: std::sync::OnceLock<Vec<colloc::LevelValues>>,
 }
 
+impl core::fmt::Debug for V1Tasks {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("V1Tasks")
+            .field("nao_p", &self.decon.nao_p)
+            .field("levels", &self.levels.len())
+            .field(
+                "cached_level_value_bytes",
+                &self.level_values.get().map(|v| {
+                    v.iter()
+                        .map(|lv| lv.values.len() * core::mem::size_of::<f64>())
+                        .sum::<usize>()
+                }),
+            )
+            .finish()
+    }
+}
+
 /// M-11: collocated level values, either borrowed from the task cache or
 /// owned by this call.
 enum Lvs<'a> {

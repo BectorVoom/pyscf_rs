@@ -112,6 +112,27 @@ fn krks_multigrid_arms_converge_at_their_quadrature_floors() {
 fn kuks_multigrid_arms_converge_on_a_genuine_open_shell() {
     let reference = run_kuks(lithium(), KsNumInt::grid(&GAMMA));
     assert!(reference.converged, "grid KUKS did not converge");
+    // RULE U: the fixture must be genuinely open-shell. On this Li/sto-3g
+    // cell the converged max |dm_a - dm_b| is 0.205 (the unpaired 2s
+    // electron in a non-orthogonal basis) — the `> 1.0` idiom copied from
+    // the P-01 fixtures never held here, so the gate had never run green.
+    // Session 3 (optimisation plan 2): assert open-shell against a threshold
+    // the fixture can meet, AND that each multigrid arm converges to the
+    // SAME spin state as the grid arm (the energies agree to 1e-15 on v1).
+    let spin_delta = |dm: &[Vec<pyscf_algebra::CTensor>]| {
+        dm[0][0]
+            .re
+            .iter()
+            .zip(&dm[1][0].re)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f64, f64::max)
+    };
+    let reference_delta = spin_delta(&reference.dm);
+    println!("KUKS grid: max |dm_a-dm_b| = {reference_delta:.3e}");
+    assert!(
+        reference_delta > 0.1,
+        "KUKS fixture is not genuinely open-shell: {reference_delta:.3e}"
+    );
 
     for (name, ni, tol) in [
         ("v1", KsNumInt::multigrid(), 1e-4),
@@ -120,17 +141,12 @@ fn kuks_multigrid_arms_converge_on_a_genuine_open_shell() {
         let got = run_kuks(lithium(), ni);
         assert!(got.converged, "{name} KUKS did not converge");
         let de = (got.e_tot - reference.e_tot).abs();
-        let spin_delta = got.dm[0][0]
-            .re
-            .iter()
-            .zip(&got.dm[1][0].re)
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0_f64, f64::max);
-        println!("KUKS {name}: |E_mg-E_grid| = {de:.3e}, max |dm_a-dm_b| = {spin_delta:.3e}");
+        let delta = spin_delta(&got.dm);
+        println!("KUKS {name}: |E_mg-E_grid| = {de:.3e}, max |dm_a-dm_b| = {delta:.3e}");
         assert!(de < tol, "KUKS {name} energy floor {de:.3e} >= {tol:.3e}");
         assert!(
-            spin_delta > 1.0,
-            "KUKS {name} fixture is not genuinely open-shell: {spin_delta:.3e}"
+            (delta - reference_delta).abs() < 10.0 * tol,
+            "KUKS {name} converged to a different spin state: {delta:.3e} vs grid {reference_delta:.3e}"
         );
     }
 }

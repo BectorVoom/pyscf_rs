@@ -281,6 +281,13 @@ pub fn eval_ao_kpts_with_images(
                     // image: it contributes nothing anywhere. This is the
                     // skip that pays for the whole item.
                     None => continue,
+                    // K-08b (session 3): every block kept means the "sub-grid"
+                    // IS the grid, in grid order — so take the dense path
+                    // (contiguous shift, the vectorised K-08) instead of
+                    // gathering every point and scatter-accumulating it back.
+                    // The dense kernel adds the same `phase_k · ao[p]` to the
+                    // same `(k, p)`; `eval_ao_stages` asserts the identity.
+                    Some(keep) if dense_full_images_enabled() && keep.iter().all(|&b| b) => None,
                     some => some,
                 }
             }
@@ -575,6 +582,12 @@ fn block_boxes(coords: &[[f64; 3]]) -> Vec<BlockBox> {
 /// squared so the test needs no square root. Returns `None` when no block
 /// survives — the caller then skips the image entirely, which is where most of
 /// the saving comes from.
+/// `PYSCF_PBC_AO_DENSE_FULL=0` keeps the gather/scatter path even for images
+/// whose every block is kept — the profiler's A/B switch for K-08b.
+fn dense_full_images_enabled() -> bool {
+    !std::env::var("PYSCF_PBC_AO_DENSE_FULL").is_ok_and(|v| v == "0")
+}
+
 fn screen_one_image(
     boxes: &[BlockBox],
     shell_centres: &[[f64; 3]],

@@ -248,55 +248,46 @@ fn the_batch_is_actually_built() {
                 let total_points: usize = lv.batches.iter().map(|bl| bl.batch.npoints()).sum();
                 for (chunk, bl) in lv.batches.iter().enumerate() {
                     let b = &bl.batch;
-                    let mut host_batch = b.clone();
-                    for (i, x) in host_batch.slot_coef.iter_mut().enumerate() {
-                        *x = ((i * 17 + 3) as f64).sin();
-                    }
+                    // M-12: coefficients are per KERNEL slot of the level.
+                    let kcoef: Vec<f64> = (0..b.nkslots())
+                        .map(|i| ((i * 17 + 3) as f64).sin())
+                        .collect();
                     let client = pyscf_algebra::select_backend().expect("backend").client;
-                    let resident =
-                        PairSlotBatchDevice::new(&client, &host_batch).expect("resident");
-                    let plain_rho = collocate_pairs_rho_batched(&client, &host_batch).expect("rho");
-                    let resident_rho = resident
-                        .rho(&client, &host_batch.slot_coef)
-                        .expect("resident rho");
+                    let resident = PairSlotBatchDevice::new(&client, b).expect("resident");
+                    let plain_rho = collocate_pairs_rho_batched(&client, b, &kcoef).expect("rho");
+                    let resident_rho = resident.rho(&client, &kcoef).expect("resident rho");
                     same_bits("resident rho", &plain_rho, &resident_rho);
-                    let coef_b: Vec<f64> = host_batch
-                        .slot_coef
+                    let coef_b: Vec<f64> = kcoef
                         .iter()
                         .enumerate()
                         .map(|(i, &x)| x * 0.37 - (i as f64 * 0.013).cos())
                         .collect();
                     let single_rho_b = resident.rho(&client, &coef_b).expect("single rho b");
                     let fused_rho = resident
-                        .rho2(&client, [&host_batch.slot_coef, &coef_b])
+                        .rho2(&client, [&kcoef, &coef_b])
                         .expect("fused rho");
                     same_bits("fused rho alpha", &resident_rho, &fused_rho[0]);
                     same_bits("fused rho beta", &single_rho_b, &fused_rho[1]);
                     let weight = model_weight(b.npoints(), 0xABCD_0000 + chunk as u64);
                     let plain_int =
-                        collocate_pairs_integrate_batched(&client, &host_batch, &weight)
-                            .expect("integrate");
+                        collocate_pairs_integrate_batched(&client, b, &weight).expect("integrate");
                     let resident_int = resident
-                        .integrate(&client, &host_batch.slot_coef, &weight)
+                        .integrate(&client, &weight)
                         .expect("resident integrate");
                     same_bits("resident integrate", &plain_int, &resident_int);
                     let weight_b = model_weight(b.npoints(), 0xDCBA_0000 + chunk as u64);
                     let single_int_b = resident
-                        .integrate(&client, &coef_b, &weight_b)
+                        .integrate(&client, &weight_b)
                         .expect("single integrate b");
                     let fused_int = resident
-                        .integrate2(
-                            &client,
-                            [&host_batch.slot_coef, &coef_b],
-                            [&weight, &weight_b],
-                        )
+                        .integrate2(&client, [&weight, &weight_b])
                         .expect("fused integrate");
                     same_bits("fused integrate alpha", &resident_int, &fused_int[0]);
                     same_bits("fused integrate beta", &single_int_b, &fused_int[1]);
                     let bytes = (b.coords_x.len() + b.coords_y.len() + b.coords_z.len()) * 8
                         + b.point_block.len() * 4
-                        + b.slot_pow.len() * 4
-                        + b.slot_coef.len() * 8
+                        + b.slot_global.len() * 4
+                        + b.kslot_pow.len() * 4
                         + b.inst_slot0.len() * 4
                         + b.instance_alpha.len() * 8
                         + b.instance_center.len() * 8;
