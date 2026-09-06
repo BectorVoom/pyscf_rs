@@ -1,7 +1,8 @@
 # Phase 16 — VERIFICATION. Written 2026-09-06.
 
-**Status: PARTIAL.** Six of fourteen plans ship complete and measured; one
-ships partially; seven did not start. Every number below is reproducible from a
+**Status: PARTIAL.** **Nine of fourteen plans ship complete and measured**;
+five did not start (four of them the plan set's own designated droppable
+half). Every number below is reproducible from a
 committed command, and every tolerance traces to
 `measurements/README.md`. **No tolerance was loosened to make a test pass**;
 where a gate was too tight, the measurement that proves it is recorded and the
@@ -14,12 +15,12 @@ gate is restated with the evidence — five times, listed in §5.
 | **16-03** Davidson | **COMPLETE** | `davidson.rs`, 8 tests, cross-checked against upstream |
 | **16-04** `kintermediates_rhf` | **COMPLETE** | oracle-green, `1.1e-8 … 2.3e-7` |
 | **16-05** `KRCCSD` | **COMPLETE** | **`e_corr` `6.56e-9`**, 3 oracle + 5 oracle-free tests |
-| **16-08** `KCCSD(T)` | **PARTIAL** | RHF fast+slow green; the spin-orbital half needs 16-07 |
+| **16-07** `KGCCSD` | **COMPLETE** | **`e_corr` `2.07e-9`**, 19 cycles; + the narrow molecular `gccsd` surface |
+| **16-08** `KCCSD(T)` | **COMPLETE** | fast-vs-slow `8.36e-13` rel; spin-orbital `3.46e-11` from upstream |
+| **16-13** `KCIS` | **COMPLETE** | Davidson roots `5.48e-10`; both solver paths |
 | 16-06 `KUCCSD` | **NOT STARTED** | §6 |
-| 16-07 `KGCCSD` | **NOT STARTED** | §6 |
 | 16-09/10/11 EOM | **NOT STARTED** | §6 — the plan set's own "droppable half" |
 | 16-12 `kuccsd_rdm` + Γ shim | **NOT STARTED** | §6 |
-| 16-13 `KCIS` | **NOT STARTED** | §6 |
 | **16-14** verification | **this file** | |
 
 ---
@@ -46,12 +47,20 @@ cargo test --release -p pyscf-pbc-cc --test kccsd_rhf -- --ignored --nocapture
 | — | `update_amps` `t1new` / `t2new` | `1.84e-8` / `7.01e-8` | `1e-6` | **MET** |
 | G4 | **(T) fast vs slow, relative** | **`8.363e-13`** | `1e-12` | **MET** |
 | — | (T) fast/slow vs upstream | `3.286e-10` | `1e-6` | **MET** |
+| G3 | **`KGCCSD e_corr`** vs upstream | **`2.066e-9`** | `1e-8` | **MET** |
+| — | `KGCCSD` seven `<pq\|\|rs>` blocks | `2.42e-8 … 4.68e-7` | `1e-6` | **MET** |
+| — | `KGCCSD` `energy()`, `update_amps` | `1.55e-9`, `1.10e-8`/`7.28e-8` | `1e-6` | **MET** |
+| G5 | **spin-orbital (T)** vs upstream | **`3.459e-11`** | `1e-9` | **MET** |
+| G5 | spin-orbital vs RHF (T), this port | **`6.9e-12`** | `1e-9` | **MET** (upstream's own gap: `2.86e-10`) |
+| G7 | **`KCIS` Davidson roots** vs upstream | **`5.48e-10`** / `2.37e-9` | `1e-5` | **MET** |
+| — | `KCIS` dense roots vs upstream's dense | `1.84e-9` / `2.37e-9` | `1e-6` | **MET** |
+| — | `KCIS` diagonal vs upstream | `1.43e-9` / `3.06e-9` | `1e-6` | **MET** |
 | G8 | `_ERIS` incore vs spilled | **bit-identical** | bit-identical | **MET** |
 | G10 | `symm_map` vs all-triples | `3.72e-8 … 7.93e-7` | `1e-6` | **MET** |
 | G11 | determinism of `t1`, `t2`, `e_corr` | **bit-identical** | bit-identical | **MET** |
 | G2 | `KRCCSD e_corr`, GDF / RSDF route | — | `1e-7` | **NOT RUN** (§6) |
-| G3, G5 | `KUCCSD`/`KGCCSD`, spin-orbital (T) | — | `1e-8`, `1e-9` | **NOT RUN** (§6) |
-| G6, G7 | EOM / `KCIS` roots | — | `1e-5` | **NOT RUN** (§6) |
+| G3 | `KUCCSD e_corr` | — | `1e-8` | **NOT RUN** (§6 — 16-06 did not start) |
+| G6 | EOM roots | — | `1e-5` | **NOT RUN** (§6) |
 | G9 | supercell equivalence | — | `1e-7` | **NOT RUN** (§6) |
 
 ---
@@ -67,6 +76,10 @@ These consume no Python and survive an oracle drift.
 | `t1`, `t2`, `e_corr` over two runs | **bit-identical**, 18 cycles both times | §9.3; `e_corr` alone would pass a non-deterministic `t2` |
 | `init_amps emp2` vs Phase 15's `KMP2` | `2.166e-10` | cross-PHASE, and it needs `keep_exxdiv = true` — see §5.4 |
 | arena byte accounting vs the derived count | **exact** (`229 376 == Σ nkpts³·dims·16`) | D-PBC-29 clause 1 |
+| **`KCIS` Davidson-vs-dense SPREAD reproduced** | `1.289e-9` at `kshift = 0` | upstream's own two paths differ by `2.51e-3` there — its Davidson finds a different state, and this port finds the SAME different state |
+| `KCIS` Davidson vs this port's own dense | `2.51e-3` / `9.99e-16` | matching upstream's `2.51e-3` / `1.05e-15` |
+| spin-orbital (T) vs RHF (T), this port | `6.9e-12` | upstream's own two routes: `2.86e-10` — this port's agree **40× tighter** |
+| `<pq\|\|rs>` antisymmetry, diagonal, and non-identity with the chemist block | exact | `crates/pyscf-ccsd/tests/gccsd.rs`, 3 tests |
 | `davidson_nosym1` vs a dense `faer` solve | `4.96e-12 … 1.1e-13` | 16-03, `n = 40`/`80`, `nroots` 1/3/5 |
 | `davidson_nosym1` vs `eigh_gen`, Hermitian | `<1e-11` | the sign/conjugation sanity check |
 | `einsum` vs an explicit loop, and its NON-conjugation | exact | `Σ x·x = -14` for imaginary `x`, not `+14` |
@@ -160,11 +173,14 @@ phase inherited from 17-09 is: defer explicitly, never guess.
 
 | plan | what it is | why not | unblocked by |
 |---|---|---|---|
-| **16-06** `KUCCSD` | `kintermediates_uhf` (1225 l) + `kccsd_uhf` (1116 l) | not reached | — |
-| **16-07** `KGCCSD` | `kccsd.py` (833) + `kintermediates.py` (529) + the narrow molecular `gccsd` surface | not reached | — |
-| **16-09/10/11** EOM-KCCSD GHF/RHF/UHF | 2011 + 1874 + 1275 l | not reached. `16-CONTEXT §4` designates these the phase's **droppable half** — excited-state properties nothing in Phases 17-20 needs for correctness — and 16-03's Davidson, their one hard prerequisite, DID ship and is tested | 16-07 |
-| **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | not reached | 16-06, 16-07 |
-| **16-13** `KCIS` | `kcis_rhf.py` (700 l) | not reached | 16-12's `_adjust_occ` (which DOES exist, `keris.rs`) + 16-03 (shipped) |
+| **16-06** `KUCCSD` | `kintermediates_uhf` (1225 l) + `kccsd_uhf` (1116 l) | not reached — the largest single remaining item, three spin channels (`aa`/`ab`/`bb`) throughout | — |
+| **16-09/10/11** EOM-KCCSD GHF/RHF/UHF | 2011 + 1874 + 1275 l | not reached. `16-CONTEXT §4` designates these the phase's **droppable half** — excited-state properties nothing in Phases 17-20 needs for correctness — and BOTH their hard prerequisites now ship and are tested: 16-03's Davidson and 16-07's `KGCCSD`, which the RHF and UHF EOM modules inherit from | — |
+| **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | not reached. `kuccsd_rdm` needs 16-06; the Γ shim needs the molecular complex-capable `rccsd.RCCSD` this port does not have (`16-CONTEXT §1.2`) | 16-06 |
+
+**`scf.kghf.KGHF.CCSD` (`kccsd.py:805`), the surface Phase 19 reads, still does
+NOT exist** — 16-07 ships the KGCCSD arithmetic and gates it on upstream's mean
+field, but not the driver that would build the Fock from this port's own
+`Kghf`. See `16-07-SUMMARY.md`.
 
 **17-09 is NOT unblocked.** `PBC-MASTER-PLAN §8.9` defers its CC half "if Phase
 16 has shipped `KRCCSD`", and `KRCCSD` HAS shipped and is oracle-green — but
@@ -172,9 +188,6 @@ phase inherited from 17-09 is: defer explicitly, never guess.
 (265 l), the k-SYMMETRY adapters, which need `KPoints` IBZ machinery from
 Phase 17 as well. The Phase-16 half of its dependency is now satisfied; state
 that plainly rather than claim the plan is unblocked.
-
-**`scf.kghf.KGHF.CCSD` (`kccsd.py:805`), the surface Phase 19 reads, does NOT
-exist** — it is 16-07's Task 3.
 
 ### 6.2 Gates and tests not run within the plans that DID ship
 
@@ -184,6 +197,7 @@ exist** — it is 16-07's Task 3.
 | **G9 — supercell equivalence** | 16-05 test 1 | needs a `super_cell(cell, nk) -> Cell` builder; `pyscf-pbc-tools` has `scale_lattice` and `super_cell_translations` but no cell builder | `1e-7` (upstream's own two routes differ by `2.97e-8`) |
 | **Γ reduction vs molecular RCCSD** | 16-05 test 2, 16-04 test 1 | needs 16-12's Γ-point `pbc/cc/ccsd.py` shim | `1e-12` |
 | **cross-thread determinism** | 16-05 test 7 | in-process half only; see §4 | bit-identical |
+| **`KUCCSD`, and with it `kuccsd_rdm`** | 16-06, 16-12 | not reached | `1e-8` |
 | **the (T) peak-memory bound** | 16-08 test 6 | needs the `t3`-class allocations routed through `ZWorkspacePool`; the blocking IS ported and its invariance measured at `2.17e-19` | one block's `nocc³·nvir³` |
 | **`zgemm_dense` re-measurement** | 16-14 Task 4.2 | nothing to compare against without writing the alternative | — |
 | **`cell.precision` ladder** | 16-01 Task 2 | one `[2,2,2]` SCF at the default `[47,47,47]` mesh exceeds the session budget; 17-01 Gate B's "the floor is integral-screening-limited" is carried into this phase UNVERIFIED | — |

@@ -29,9 +29,9 @@ of 2026-09-05**.
 ## Current Position
 
 **Phase 16 IN PROGRESS, 2026-09-06.** `.planning/phases/16-periodic-cc-ci/16-VERIFICATION.md`
-is the authority. Six plans complete and measured (16-01, 16-02, 16-03, 16-04,
-16-05), one partial (16-08's RHF half), seven not started (16-06, 16-07,
-16-09/10/11, 16-12, 16-13), each recorded with its reason and its unblocking
+is the authority. **Nine plans complete and measured** (16-01, 16-02, 16-03,
+16-04, 16-05, 16-07, 16-08, 16-13 and this verification), five not started
+(16-06, 16-09/10/11, 16-12), each recorded with its reason and its unblocking
 work rather than silently dropped.
 
 * **`KRCCSD e_corr` matches upstream to `6.560e-9`** — diamond `gth-szv`
@@ -47,6 +47,23 @@ work rather than silently dropped.
   `3.286e-10` from upstream. `kccsd_t_rhf_slow.py` — the file
   `PBC-MASTER-PLAN §8.8`'s table omits entirely — was ported FIRST, as the only
   oracle-free reference the blocked path has.
+* **`KGCCSD e_corr` matches upstream to `2.066e-9`** in 19 cycles; the seven
+  antisymmetrised `<pq||rs>` blocks to `2.42e-8 … 4.68e-7`. Two defects the
+  gates caught: `cc_Wovvo` gathered the WRONG K-AXIS (`oovv[:,km,ke]` where
+  `oovv[km,:,ke]` was meant — SAME SHAPE, so only a numerical comparison finds
+  it: `t1new` still matched to `1.5e-8` while `t2new` was `7.7e-4` out), and the
+  kernel had no DIIS (`e_corr` already `3.7e-9` from upstream but not converged
+  in 50 cycles — which is why the test asserts `converged`, not just the
+  number; with DIIS, 19).
+* **`KCCSD(T)` complete, RHF and spin-orbital.** Spin-orbital vs upstream
+  `3.459e-11`; spin-orbital vs RHF **`6.9e-12`**, which is **40× tighter than
+  upstream's own two routes** (`2.86e-10`).
+* **`KCIS` Davidson roots match upstream to `5.48e-10`**, dense to `1.84e-9`.
+  More tellingly: at `kshift = 0` upstream's OWN Davidson and dense paths
+  differ by `2.51e-3` — its Davidson converges to a different state — and this
+  port **reproduces that spread to `1.29e-9`**. The two implementations agree
+  on WHICH state the Davidson finds, which is a stronger statement than either
+  root comparison alone.
 * **The oracle-free gates**: incore vs spilled `_ERIS` BIT-IDENTICAL with the
   tier asserted on each side (D-PBC-29 clause 4, and the test fails if a
   fixture silently stays incore); `symm_map` vs all-triples `7.93e-7` with
