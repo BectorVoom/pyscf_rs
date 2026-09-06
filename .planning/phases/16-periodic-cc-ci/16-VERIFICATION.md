@@ -202,10 +202,56 @@ phase inherited from 17-09 is: defer explicitly, never guess.
 | plan | what it is | why not | unblocked by |
 |---|---|---|---|
 | ~~**16-06** `KUCCSD`~~ | `kintermediates_uhf` (1225 l) + `kccsd_uhf` (1116 l) | **CLOSED.** `kccsd_uhf.py` and `kintermediates_uhf.py:26-588` ship; `:590-1225` is EOM-KUCCSD's and stays with 16-11. Found and fixed THREE latent defects in the already-shipped complex arena — see `16-06-SUMMARY.md`. | — |
-| ~~**16-09** EOM-KCCSD GHF~~ | 2011 l | **CLOSED for IP, EA and EE.** The ten EOM intermediates, all three vector packings, matvecs, left matvecs, diagonals, `mask_frozen`, and the Davidson driver — gated at the equation level on synthetic amplitudes AND at the root level on upstream's own converged amplitudes. Still out of scope and recorded in `16-09-SUMMARY.md`: the CCSD\* corrections, the `*_Ta` variants, and the `partition='mp'` diagonal branch nothing selects. | — |
-| ~~**16-10** EOM-KCCSD RHF~~ | 1716 l | **CLOSED for IP and EA.** Twelve spin-adapted EOM intermediates, both packings, matvecs, left matvecs, diagonals and the driver — sixteen block gates plus eight roots at `6.86e-11 … 1.40e-9`. EE is NOT ported: `EOMEESinglet` is a separate 250-line matvec, and `EOMEETriplet`/`EOMEESpinFlip` are SHELLS upstream. | — |
+| ~~**16-09** EOM-KCCSD GHF~~ | 2011 l | **CLOSED, and now COMPLETE.** The ten EOM intermediates, all three vector packings, matvecs, left matvecs, diagonals, `mask_frozen`, and the Davidson driver — gated at the equation level on synthetic amplitudes AND at the root level on upstream's own converged amplitudes. The three items `16-09-SUMMARY.md` recorded as out of scope have since shipped: the CCSD\* corrections (`1.8e-11 … 1.5e-10`), the `*_Ta` variants with `get_full_t3p2` / `get_t3p2_imds_slow` under them (roots at `1.6e-10 … 6.4e-10`), and the `partition='mp'` diagonals (`2.7e-9 … 6.4e-9`) — see §6.3. | — |
+| ~~**16-10** EOM-KCCSD RHF~~ | 1716 l | **CLOSED for IP, EA and EE.** Twelve spin-adapted EOM intermediates, both packings, matvecs, left matvecs, diagonals and the driver — sixteen block gates plus eight roots at `6.86e-11 … 1.40e-9`. `EOMEESinglet` has since shipped (roots at `6.5e-10 … 3.7e-7`), and it IS the whole of RHF EE: `eeccsd`/`eeccsd_matvec` are bare `raise NotImplementedError` and `EOMEETriplet`/`EOMEESpinFlip` are SHELLS upstream. So have the CCSD\* corrections, the `*_Ta` variants and both `partition='mp'` matvecs and diagonals — see §6.3. | — |
 | ~~**16-11** EOM-KCCSD UHF~~ | 1275 l + `kintermediates_uhf:590-1117` | **CLOSED.** Thirteen four-spin-block intermediates (51 blocks gated at `5.14e-12 … 8.17e-10`), both packings, matvecs, diagonals, masks and the driver; eight roots at `2.48e-10 … 4.13e-10`. IP and EA are the WHOLE surface — `eom_kccsd_uhf` declares no `EOMEE`. The gating caught an `O(1)` defect: `_IMDS.get_Wvvvv(ka,kb,kc)` returns `Wvvvv[ka,kc,kb]`, swapped on lookup. | — |
-| **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | **`kuccsd_rdm` SHIPS** — `6.94e-18` against upstream on fixed synthetic amplitudes, exactly Hermitian, with the converged comparison gated from the measured `2.41e-9` amplitude spread rather than from the RDM. The Γ shim is still blocked and NOT by 16-06: it needs the molecular complex-capable `rccsd.RCCSD` this port does not have (`16-CONTEXT §1.2`), which is a phase, not a task. | molecular `RCCSD` |
+| ~~**16-12** `kuccsd_rdm` + the Γ shim~~ | 157 + 157 l | **CLOSED.** `kuccsd_rdm` — `6.94e-18` against upstream on fixed synthetic amplitudes, exactly Hermitian, with the converged comparison gated from the measured `2.41e-9` amplitude spread rather than from the RDM. The Γ shim's blocker — the molecular complex-capable `rccsd.RCCSD` `16-CONTEXT §1.2` recorded as absent — has since been ported (`crates/pyscf-pbc-cc/src/rccsd.rs`), and the RCCSD shim ships with it: `e_corr` `2.3e-8` at Γ and `7.8e-10` at a shifted, genuinely COMPLEX k-point. `UCCSD`/`GCCSD` at Γ remain refused — they need molecular complex `uccsd`/`gccsd`, which are as absent as `rccsd` was. | — |
+
+### 6.3 The five gaps §6.1 recorded, and how each closed
+
+Everything `16-09-SUMMARY.md` / `16-10-SUMMARY.md` / this section left open in
+the EOM and Γ-shim rows has since shipped. Each is gated in its own opt-in
+oracle file under `crates/pyscf-pbc-cc/tests/`, on diamond `gth-szv [1,1,2]`
+at the pinned `[15,15,15]` mesh unless stated.
+
+| gap | where | gate | measured |
+|---|---|---|---|
+| the `partition` branches | `oracle_eom_partition.rs` | `1e-6` | `3.9e-9 … 3.9e-7` |
+| the CCSD\* corrections | `oracle_eom_star.rs` | `1e-6` | `1.8e-11 … 1.5e-10` |
+| the `*_Ta` variants + `T3[2]` | `oracle_eom_ta.rs` | `1e-6` blocks, `1e-5` roots | `3.4e-11 … 4.6e-7` |
+| `EOMEESinglet` | `oracle_eom_ee_singlet.rs` | `1e-6` blocks, `1e-5` roots | packing exact; `2.4e-8 … 4.6e-7`; roots `6.5e-10 … 3.7e-7` |
+| the Γ shim + molecular complex `rccsd` | `oracle_gamma_rccsd.rs` | `1e-6` blocks, `1e-7` `e_corr` | `7.7e-11 … 6.2e-9`; `e_corr` `7.8e-10` (shifted k) / `2.3e-8` (Γ) |
+
+**Four upstream facts were MEASURED rather than read, and each changed what
+was shipped:**
+
+1. **No caller reaches `eom.partition` through the public API.** `ipccsd` and
+   `eaccsd` raise `NotImplementedError` for both `'mp'` and `'full'`, in all
+   three modules — twelve entry points, all twelve verified. The branches are
+   exposed as explicit `*_mp` / `*_partition` functions instead, which is the
+   same access upstream leaves them.
+2. **Four of the six `'mp'` branches read `eom.eris`, which no EOM object
+   has** (`AttributeError`; `EOM.__init__` never assigns it, only `_IMDS`
+   does). Their siblings read `imds.eris`. This port reads the Fock from the
+   intermediates uniformly and the oracle supplies `eom.eris` so upstream's
+   own arithmetic produces the reference.
+3. **`'full'` computes nothing anywhere.** Only the two RHF matvecs have the
+   branch, and it raises `TypeError: EOMIP.vector_to_amplitudes() takes from 2
+   to 3 positional arguments but 4 were given` before any arithmetic. The
+   DIAGONALS have no `'full'` branch, so there `'full'` IS the `None`
+   diagonal — reproduced rather than refused.
+4. **Upstream's own two spin-adapted `T3[2]` implementations disagree.**
+   `kintermediates_rhf.get_t3p2_imds_slow` and the blocked `get_t3p2_imds`
+   that `_IMDS.make_t3p2_ip` actually calls differ by `1.3e-9` (`pt1`),
+   `6.1e-10` (`pt2`) and `9.4e-10` (both `W`) against magnitudes `9.9e-3`,
+   `0.106` and `6.2e-4`. Neither can be gated against the other more tightly,
+   so this port took the loop-explicit one — 16-08's reasoning for the
+   loop-explicit `(T)`.
+
+**One cross-check, in both directions.** This port's Γ shim sits `2.1e-8` from
+upstream's `KRCCSD` at `[1,1,1]`, where upstream's own two routes are `1.2e-9`
+apart; and its `(T)a` roots agree between the spin-orbital and spin-adapted
+modules, which run different equations.
 
 **`scf.kghf.KGHF.CCSD` (`kccsd.py:805`), the surface Phase 19 reads, still does
 NOT exist** — 16-07 ships the KGCCSD arithmetic and gates it on upstream's mean

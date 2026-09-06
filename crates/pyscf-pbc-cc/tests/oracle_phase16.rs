@@ -1478,17 +1478,28 @@ fn krccsd_eom_roots_match_upstream() {
         }
     }
 
-    // `EOMEESinglet` is not ported and `EOMEETriplet`/`EOMEESpinFlip` are
-    // shells upstream; the refusal must name that rather than silently
-    // returning something.
+    // `EOMEESinglet` IS ported now (gated in `oracle_eom_ee_singlet.rs`), so
+    // what has to refuse here is the LEFT EE: `gen_matvec` (`:1464`) raises
+    // for `left=True`, and `EOMEETriplet`/`EOMEESpinFlip` are shells with no
+    // matvec at all, so `Excitation::Ee` here is always the singlet.
     let imds = eomr::RhfEomImds::make_shared(&t1, &t2, &eris, kc)
         .expect("shared")
-        .make_ip(kc)
-        .expect("IP imds");
-    let e = eomr::eom_kernel(eom::Excitation::Ee, 0, &imds, &padding, kc, &opts)
-        .expect_err("EE must refuse");
+        .make_ee(kc)
+        .expect("EE imds");
+    let e = eomr::eom_kernel(
+        eom::Excitation::Ee,
+        0,
+        &imds,
+        &padding,
+        kc,
+        &eom::EomOpts {
+            left: true,
+            ..opts
+        },
+    )
+    .expect_err("the LEFT EE must refuse");
     let msg = e.to_string();
-    assert!(msg.contains("eom_kccsd_rhf.py:1425"), "{msg}");
+    assert!(msg.contains("eom_kccsd_rhf.py:1464"), "{msg}");
 
     assert!(
         failures.is_empty(),
