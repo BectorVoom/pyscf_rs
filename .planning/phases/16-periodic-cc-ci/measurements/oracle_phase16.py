@@ -2207,6 +2207,191 @@ def section_gamma_rccsd():
     scalar("krccsd111_e_corr", ke)
 
 
+UCCSD_BLOCKS = (
+    "oooo", "ovoo", "ovov", "oovv", "ovvo", "ovvv", "vvvv",
+    "OOOO", "OVOO", "OVOV", "OOVV", "OVVO", "OVVV", "VVVV",
+    "ooOO", "ovOO", "ovOV", "ooVV", "ovVO", "ovVV", "vvVV",
+    "OVoo", "OOvv", "OVvo", "OVvv",
+)
+
+GCCSD_BLOCKS = ("oooo", "ooov", "oovv", "ovov", "ovvv", "vvvv")
+
+
+def _uccsd_emit(cell, kpt, tag):
+    """One single-k-point `pbc.cc.UCCSD` fixture."""
+    from pyscf.cc import uccsd as _uccsd
+    from pyscf.pbc import cc as pbcc
+    from pyscf.pbc import scf as _pbcscf
+
+    mf = _pbcscf.UHF(cell, kpt=np.asarray(kpt), exxdiv=None)
+    mf.conv_tol = 1e-10
+    mf.kernel()
+    cc = pbcc.UCCSD(mf)
+    cc.conv_tol = 1e-9
+    cc.conv_tol_normt = 1e-7
+    eris = cc.ao2mo(cc.mo_coeff)
+
+    nocca, noccb = cc.nocc
+    nmoa, nmob = cc.nmo
+    nvira, nvirb = nmoa - nocca, nmob - noccb
+    scalar("%s_e_hf" % tag, mf.e_tot)
+    scalar("%s_nocca" % tag, nocca)
+    scalar("%s_noccb" % tag, noccb)
+    scalar("%s_nmoa" % tag, nmoa)
+    scalar("%s_nmob" % tag, nmob)
+    scalar("%s_nao" % tag, np.asarray(eris.mo_coeff[0]).shape[0])
+    emit("%s_kpt" % tag, np.asarray(kpt, dtype=float).ravel())
+    emit("%s_mo_coeff_a" % tag, np.asarray(eris.mo_coeff[0], dtype=complex))
+    emit("%s_mo_coeff_b" % tag, np.asarray(eris.mo_coeff[1], dtype=complex))
+    emit("%s_focka" % tag, np.asarray(eris.focka, dtype=complex))
+    emit("%s_fockb" % tag, np.asarray(eris.fockb, dtype=complex))
+    emit("%s_mo_energy_a" % tag, np.asarray(eris.mo_energy[0], dtype=float))
+    emit("%s_mo_energy_b" % tag, np.asarray(eris.mo_energy[1], dtype=float))
+    scalar("%s_mo_is_complex" % tag,
+           float(max(np.abs(np.asarray(eris.mo_coeff[0], dtype=complex).imag).max(),
+                     np.abs(np.asarray(eris.mo_coeff[1], dtype=complex).imag).max()) > 1e-12))
+    for name in UCCSD_BLOCKS:
+        emit("%s_%s" % (tag, name), np.asarray(getattr(eris, name), dtype=complex))
+
+    r = SplitMix64(20260915)
+    def rnd(shape):
+        n = int(np.prod(shape))
+        return np.array([complex(0.05 * r.unit(), 0.05 * r.unit())
+                         for _ in range(n)]).reshape(shape)
+    st1 = (rnd((nocca, nvira)), rnd((noccb, nvirb)))
+    st2 = (rnd((nocca, nocca, nvira, nvira)),
+           rnd((nocca, noccb, nvira, nvirb)),
+           rnd((noccb, noccb, nvirb, nvirb)))
+    for i, x in enumerate(st1):
+        emit("%s_st1_%d" % (tag, i), x)
+    for i, x in enumerate(st2):
+        emit("%s_st2_%d" % (tag, i), x)
+    t1new, t2new = _uccsd.update_amps(cc, st1, st2, eris)
+    for i, x in enumerate(t1new):
+        emit("%s_t1new_%d" % (tag, i), np.asarray(x, dtype=complex))
+    for i, x in enumerate(t2new):
+        emit("%s_t2new_%d" % (tag, i), np.asarray(x, dtype=complex))
+    scalar("%s_energy_synth" % tag, _uccsd.energy(cc, st1, st2, eris))
+
+    emp2, it1, it2 = cc.init_amps(eris)
+    scalar("%s_emp2" % tag, emp2)
+    for i, x in enumerate(it1):
+        emit("%s_init_t1_%d" % (tag, i), np.asarray(x, dtype=complex))
+    for i, x in enumerate(it2):
+        emit("%s_init_t2_%d" % (tag, i), np.asarray(x, dtype=complex))
+
+    cc_mb = pbcc.UCCSD(mf)
+    try:
+        e_mbpt2, mt1, mt2 = cc_mb.ccsd(eris=eris, mbpt2=True)
+        scalar("%s_mbpt2_refused" % tag, 0.0)
+        scalar("%s_e_mbpt2" % tag, e_mbpt2)
+    except NotImplementedError:
+        print("# pbc.mp.UMP2 refused kpt %r" % (np.asarray(kpt).tolist(),))
+        scalar("%s_mbpt2_refused" % tag, 1.0)
+
+    e_corr, t1, t2 = cc.ccsd(eris=eris)
+    scalar("%s_e_corr" % tag, e_corr)
+    scalar("%s_converged" % tag, float(cc.converged))
+
+
+def _gccsd_emit(cell, kpt, tag):
+    """One single-k-point `pbc.cc.GCCSD` fixture."""
+    from pyscf.cc import gccsd as _gccsd
+    from pyscf.pbc import cc as pbcc
+    from pyscf.pbc import scf as _pbcscf
+
+    mf = _pbcscf.GHF(cell, kpt=np.asarray(kpt), exxdiv=None)
+    mf.conv_tol = 1e-10
+    mf.kernel()
+    cc = pbcc.GCCSD(mf)
+    cc.conv_tol = 1e-9
+    cc.conv_tol_normt = 1e-7
+    eris = cc.ao2mo(cc.mo_coeff)
+
+    nocc, nmo = cc.nocc, cc.nmo
+    nvir = nmo - nocc
+    scalar("%s_e_hf" % tag, mf.e_tot)
+    scalar("%s_nocc" % tag, nocc)
+    scalar("%s_nmo" % tag, nmo)
+    scalar("%s_nao" % tag, np.asarray(eris.mo_coeff).shape[0])
+    emit("%s_kpt" % tag, np.asarray(kpt, dtype=float).ravel())
+    emit("%s_mo_coeff" % tag, np.asarray(eris.mo_coeff, dtype=complex))
+    emit("%s_fock" % tag, np.asarray(eris.fock, dtype=complex))
+    emit("%s_mo_energy" % tag, np.asarray(eris.mo_energy, dtype=float))
+    scalar("%s_mo_is_complex" % tag,
+           float(np.abs(np.asarray(eris.mo_coeff, dtype=complex).imag).max() > 1e-12))
+    scalar("%s_has_orbspin" % tag, float(getattr(eris, "orbspin", None) is not None))
+    for name in GCCSD_BLOCKS:
+        emit("%s_%s" % (tag, name), np.asarray(getattr(eris, name), dtype=complex))
+
+    st1, st2 = synthetic_amps((nocc, nvir), (nocc, nocc, nvir, nvir))
+    emit("%s_st1" % tag, np.asarray(st1, dtype=complex))
+    emit("%s_st2" % tag, np.asarray(st2, dtype=complex))
+    for name, arr in (
+        ("make_tau", _gccsd.imd.make_tau(st2, st1, st1)),
+        ("cc_Fvv", _gccsd.imd.cc_Fvv(st1, st2, eris)),
+        ("cc_Foo", _gccsd.imd.cc_Foo(st1, st2, eris)),
+        ("cc_Fov", _gccsd.imd.cc_Fov(st1, st2, eris)),
+        ("cc_Woooo", _gccsd.imd.cc_Woooo(st1, st2, eris)),
+        ("cc_Wvvvv", _gccsd.imd.cc_Wvvvv(st1, st2, eris)),
+        ("cc_Wovvo", _gccsd.imd.cc_Wovvo(st1, st2, eris)),
+    ):
+        emit("%s_%s" % (tag, name), np.asarray(arr, dtype=complex))
+    t1new, t2new = _gccsd.update_amps(cc, st1, st2, eris)
+    emit("%s_t1new" % tag, np.asarray(t1new, dtype=complex))
+    emit("%s_t2new" % tag, np.asarray(t2new, dtype=complex))
+    scalar("%s_energy_synth" % tag, _gccsd.energy(cc, st1, st2, eris))
+
+    emp2, it1, it2 = cc.init_amps(eris)
+    scalar("%s_emp2" % tag, emp2)
+    emit("%s_init_t1" % tag, np.asarray(it1, dtype=complex))
+    emit("%s_init_t2" % tag, np.asarray(it2, dtype=complex))
+
+    cc_mb = pbcc.GCCSD(mf)
+    try:
+        e_mbpt2, mt1, mt2 = cc_mb.ccsd(eris=eris, mbpt2=True)
+        scalar("%s_mbpt2_refused" % tag, 0.0)
+        scalar("%s_e_mbpt2" % tag, e_mbpt2)
+    except NotImplementedError:
+        print("# pbc.mp.GMP2 refused kpt %r" % (np.asarray(kpt).tolist(),))
+        scalar("%s_mbpt2_refused" % tag, 1.0)
+
+    e_corr, t1, t2 = cc.ccsd(eris=eris)
+    scalar("%s_e_corr" % tag, e_corr)
+    scalar("%s_converged" % tag, float(cc.converged))
+
+
+def section_gamma_ug():
+    """`pbc/cc/ccsd.py`'s UCCSD and GCCSD shims, at Gamma AND a shifted k.
+
+    The shifted-k fixtures are the ones that measure complex-capability, and
+    they also settle a `mbpt2` asymmetry that is invisible at Gamma: `RMP2` and
+    `UMP2` refuse a non-Gamma k-point (`pbc/mp/mp2.py:22`, `:36`) and `GMP2`
+    does not (`:47-51`).
+    """
+    cell = diamond()
+    kpts = cell.make_kpts([1, 1, 2])
+    _uccsd_emit(cell, [0.0, 0.0, 0.0], "ug")
+    _uccsd_emit(cell, kpts[1], "uk")
+    _gccsd_emit(cell, [0.0, 0.0, 0.0], "gg")
+    _gccsd_emit(cell, kpts[1], "gk")
+
+    # The k-point routes at [1,1,1], for the same cross-check the RCCSD shim
+    # carries.
+    from pyscf.pbc import cc as pbcc
+    from pyscf.pbc import scf as _pbcscf
+    for name, SCF, CC in (("kuccsd111", _pbcscf.KUHF, pbcc.KUCCSD),
+                          ("kgccsd111", _pbcscf.KGHF, pbcc.KGCCSD)):
+        mf = SCF(cell, cell.make_kpts([1, 1, 1]), exxdiv=None)
+        mf.conv_tol = 1e-10
+        mf.kernel()
+        cc = CC(mf)
+        cc.conv_tol = 1e-9
+        cc.conv_tol_normt = 1e-7
+        e, _, _ = cc.kernel()
+        scalar("%s_e_corr" % name, e)
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
@@ -2220,6 +2405,7 @@ SECTIONS = {
     "t3p2_rhf": lambda: section_t3p2_rhf((1, 1, 2)),
     "ee_singlet": lambda: section_ee_singlet((1, 1, 2)),
     "gamma_rccsd": section_gamma_rccsd,
+    "gamma_ug": section_gamma_ug,
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
     "kuccsd_eom": lambda: section_kuccsd_eom((1, 1, 2)),

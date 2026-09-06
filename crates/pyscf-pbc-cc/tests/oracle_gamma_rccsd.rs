@@ -353,21 +353,3 @@ fn gamma_shim_runs_on_this_ports_own_mean_field() {
     assert!((emp2 - scalar(&out, "g_e_mbpt2")).abs() < 1e-5);
     assert!(t1.data().re.iter().all(|v| *v == 0.0));
 }
-
-/// The two Γ shims this port does NOT provide say where, and why.
-#[test]
-fn uccsd_and_gccsd_shims_refuse_and_say_where() {
-    use pyscf_pbc_cc::PbcCcError;
-    for (err, line) in [
-        (pyscf_pbc_cc::ccsd::uccsd_refusal(), "pbc/cc/ccsd.py:61"),
-        (pyscf_pbc_cc::ccsd::gccsd_refusal(), "pbc/cc/ccsd.py:94"),
-    ] {
-        match err {
-            PbcCcError::NotImplementedUpstream { upstream, what } => {
-                assert_eq!(upstream, line);
-                assert!(what.contains("molecular"), "{what}");
-            }
-            other => panic!("expected NotImplementedUpstream, got {other:?}"),
-        }
-    }
-}

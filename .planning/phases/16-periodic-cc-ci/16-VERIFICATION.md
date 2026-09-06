@@ -205,9 +205,9 @@ phase inherited from 17-09 is: defer explicitly, never guess.
 | ~~**16-09** EOM-KCCSD GHF~~ | 2011 l | **CLOSED, and now COMPLETE.** The ten EOM intermediates, all three vector packings, matvecs, left matvecs, diagonals, `mask_frozen`, and the Davidson driver — gated at the equation level on synthetic amplitudes AND at the root level on upstream's own converged amplitudes. The three items `16-09-SUMMARY.md` recorded as out of scope have since shipped: the CCSD\* corrections (`1.8e-11 … 1.5e-10`), the `*_Ta` variants with `get_full_t3p2` / `get_t3p2_imds_slow` under them (roots at `1.6e-10 … 6.4e-10`), and the `partition='mp'` diagonals (`2.7e-9 … 6.4e-9`) — see §6.3. | — |
 | ~~**16-10** EOM-KCCSD RHF~~ | 1716 l | **CLOSED for IP, EA and EE.** Twelve spin-adapted EOM intermediates, both packings, matvecs, left matvecs, diagonals and the driver — sixteen block gates plus eight roots at `6.86e-11 … 1.40e-9`. `EOMEESinglet` has since shipped (roots at `6.5e-10 … 3.7e-7`), and it IS the whole of RHF EE: `eeccsd`/`eeccsd_matvec` are bare `raise NotImplementedError` and `EOMEETriplet`/`EOMEESpinFlip` are SHELLS upstream. So have the CCSD\* corrections, the `*_Ta` variants and both `partition='mp'` matvecs and diagonals — see §6.3. | — |
 | ~~**16-11** EOM-KCCSD UHF~~ | 1275 l + `kintermediates_uhf:590-1117` | **CLOSED.** Thirteen four-spin-block intermediates (51 blocks gated at `5.14e-12 … 8.17e-10`), both packings, matvecs, diagonals, masks and the driver; eight roots at `2.48e-10 … 4.13e-10`. IP and EA are the WHOLE surface — `eom_kccsd_uhf` declares no `EOMEE`. The gating caught an `O(1)` defect: `_IMDS.get_Wvvvv(ka,kb,kc)` returns `Wvvvv[ka,kc,kb]`, swapped on lookup. | — |
-| ~~**16-12** `kuccsd_rdm` + the Γ shim~~ | 157 + 157 l | **CLOSED.** `kuccsd_rdm` — `6.94e-18` against upstream on fixed synthetic amplitudes, exactly Hermitian, with the converged comparison gated from the measured `2.41e-9` amplitude spread rather than from the RDM. The Γ shim's blocker — the molecular complex-capable `rccsd.RCCSD` `16-CONTEXT §1.2` recorded as absent — has since been ported (`crates/pyscf-pbc-cc/src/rccsd.rs`), and the RCCSD shim ships with it: `e_corr` `2.3e-8` at Γ and `7.8e-10` at a shifted, genuinely COMPLEX k-point. `UCCSD`/`GCCSD` at Γ remain refused — they need molecular complex `uccsd`/`gccsd`, which are as absent as `rccsd` was. | — |
+| ~~**16-12** `kuccsd_rdm` + the Γ shim~~ | 157 + 157 l | **CLOSED, and COMPLETE.** `kuccsd_rdm` — `6.94e-18` against upstream on fixed synthetic amplitudes, exactly Hermitian, with the converged comparison gated from the measured `2.41e-9` amplitude spread rather than from the RDM. The Γ shim's blocker — the molecular complex-capable `rccsd.RCCSD` `16-CONTEXT §1.2` recorded as absent — has since been ported, and so have `cc/uccsd.py` and `cc/gccsd.py`: **all three** classes of `pbc/cc/ccsd.py` now ship (`src/rccsd.rs`, `src/uccsd.rs`, `src/gccsd.rs`, `src/ccsd.rs`). `e_corr` against upstream is `7.9e-10 … 2.3e-8` at Γ and `7.8e-10 … 2.7e-9` at a shifted, genuinely COMPLEX k-point. | — |
 
-### 6.3 The five gaps §6.1 recorded, and how each closed
+### 6.3 The gaps §6.1 recorded, and how each closed
 
 Everything `16-09-SUMMARY.md` / `16-10-SUMMARY.md` / this section left open in
 the EOM and Γ-shim rows has since shipped. Each is gated in its own opt-in
@@ -220,9 +220,10 @@ at the pinned `[15,15,15]` mesh unless stated.
 | the CCSD\* corrections | `oracle_eom_star.rs` | `1e-6` | `1.8e-11 … 1.5e-10` |
 | the `*_Ta` variants + `T3[2]` | `oracle_eom_ta.rs` | `1e-6` blocks, `1e-5` roots | `3.4e-11 … 4.6e-7` |
 | `EOMEESinglet` | `oracle_eom_ee_singlet.rs` | `1e-6` blocks, `1e-5` roots | packing exact; `2.4e-8 … 4.6e-7`; roots `6.5e-10 … 3.7e-7` |
-| the Γ shim + molecular complex `rccsd` | `oracle_gamma_rccsd.rs` | `1e-6` blocks, `1e-7` `e_corr` | `7.7e-11 … 6.2e-9`; `e_corr` `7.8e-10` (shifted k) / `2.3e-8` (Γ) |
+| the Γ RCCSD shim + molecular complex `rccsd` | `oracle_gamma_rccsd.rs` | `1e-6` blocks, `1e-7` `e_corr` | `7.7e-11 … 6.2e-9`; `e_corr` `7.8e-10` (shifted k) / `2.3e-8` (Γ) |
+| the Γ UCCSD and GCCSD shims + molecular complex `uccsd`/`gccsd` | `oracle_gamma_ug.rs` | `1e-6` blocks, `1e-7` `e_corr` | 25 + 6 blocks at `9.2e-10 … 6.2e-9`; `e_corr` `7.9e-10 … 2.7e-9` |
 
-**Four upstream facts were MEASURED rather than read, and each changed what
+**Five upstream facts were MEASURED rather than read, and each changed what
 was shipped:**
 
 1. **No caller reaches `eom.partition` through the public API.** `ipccsd` and
@@ -240,7 +241,17 @@ was shipped:**
    to 3 positional arguments but 4 were given` before any arithmetic. The
    DIAGONALS have no `'full'` branch, so there `'full'` IS the `None`
    diagonal — reproduced rather than refused.
-4. **Upstream's own two spin-adapted `T3[2]` implementations disagree.**
+4. **`uccsd._add_vvvv`'s same-spin blocks are NOT the `einsum` beside them.**
+   `uccsd.py:57-59` writes the contraction out as a comment —
+   `u2aa += einsum('ijef,aebf->ijab', tauaa, eris_vvvv) * .5` — but the code
+   contracts only `tauaa[tril_indices(nocca)]` and unpacks with
+   `_unpack_t2_tril(..., 'jiba')`, which forces `u2[j,i,b,a] = u2[i,j,a,b]`
+   and lets the straight write win on the `i == j` diagonal. For a physical
+   `tau` the two agree exactly; on the gate's synthetic amplitudes they are
+   `1.3e-2` apart. The `ab` block has no such structure and IS the plain
+   contraction — measured at `0.0`. Ported as the CODE, not as the comment;
+   the checkpoint bisect that found it is in the commit message.
+5. **Upstream's own two spin-adapted `T3[2]` implementations disagree.**
    `kintermediates_rhf.get_t3p2_imds_slow` and the blocked `get_t3p2_imds`
    that `_IMDS.make_t3p2_ip` actually calls differ by `1.3e-9` (`pt1`),
    `6.1e-10` (`pt2`) and `9.4e-10` (both `W`) against magnitudes `9.9e-3`,
@@ -248,10 +259,18 @@ was shipped:**
    so this port took the loop-explicit one — 16-08's reasoning for the
    loop-explicit `(T)`.
 
-**One cross-check, in both directions.** This port's Γ shim sits `2.1e-8` from
+**And a `mbpt2` asymmetry that is invisible at Γ.** Each shim's
+`ccsd(mbpt2=True)` constructs the matching `pbc.mp` class, and those do not
+agree with each other: `RMP2.__init__` (`pbc/mp/mp2.py:21-23`) and
+`UMP2.__init__` (`:35-37`) both refuse a non-Γ k-point, and `GMP2.__init__`
+(`:47-51`) does not. So the GCCSD shim's `mbpt2` runs at a shifted k-point
+where its two siblings refuse. Measured on both sides.
+
+**Cross-checks, in every direction.** This port's Γ RCCSD sits `2.1e-8` from
 upstream's `KRCCSD` at `[1,1,1]`, where upstream's own two routes are `1.2e-9`
-apart; and its `(T)a` roots agree between the spin-orbital and spin-adapted
-modules, which run different equations.
+apart; its Γ UCCSD and GCCSD agree with each other to `9.4e-11` although they
+run different equations; and its `(T)a` roots agree between the spin-orbital
+and spin-adapted EOM modules, likewise.
 
 **`scf.kghf.KGHF.CCSD` (`kccsd.py:805`), the surface Phase 19 reads, still does
 NOT exist** — 16-07 ships the KGCCSD arithmetic and gates it on upstream's mean

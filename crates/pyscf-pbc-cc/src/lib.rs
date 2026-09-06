@@ -34,6 +34,9 @@ pub mod eom_kccsd_ghf;
 pub mod eom_kccsd_rhf;
 /// EOM-CCSD over unrestricted k-point orbitals (16-11).
 pub mod eom_kccsd_uhf;
+/// The MOLECULAR, complex-capable spin-orbital CCSD (`pyscf/cc/gccsd.py`) the
+/// Γ-point shim inherits from.
+pub mod gccsd;
 pub mod kccsd_t_rhf;
 /// Unrestricted k-point CCSD (16-06 Tasks 3-5).
 pub mod kccsd_uhf;
@@ -46,6 +49,9 @@ pub mod kueris;
 /// The MOLECULAR, complex-capable restricted CCSD (`pyscf/cc/rccsd.py`) the
 /// Γ-point shim inherits from — see the module doc for why it lives here.
 pub mod rccsd;
+/// The MOLECULAR, complex-capable unrestricted CCSD (`pyscf/cc/uccsd.py`) the
+/// Γ-point shim inherits from.
+pub mod uccsd;
 
 pub use eom_kccsd_ghf::{EomImds, ip_vector_size};
 pub use error::*;
