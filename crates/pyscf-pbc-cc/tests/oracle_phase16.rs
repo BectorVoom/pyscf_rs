@@ -22,10 +22,10 @@ use pyscf_algebra::CTensor;
 use pyscf_pbc_cc::kccsd_rhf::{energy, init_amps, update_amps};
 use pyscf_pbc_cc::keris::Blk;
 use pyscf_pbc_cc::{ZArr, imdk};
+use pyscf_pbc_df::Fftdf;
 use pyscf_pbc_df::{MoCoeff, PeriodicDf};
 use pyscf_pbc_lib::KptsHelper;
 use pyscf_pbc_mp::PaddedMos;
-use pyscf_pbc_df::Fftdf;
 use pyscf_pbc_scf::{KScfConfig, Krhf};
 use pyscf_runtime::ZWorkspacePool;
 use std::sync::Arc;
@@ -72,7 +72,11 @@ fn python() -> Option<PathBuf> {
         root().join(".venv/bin/python")
     } else {
         let path = PathBuf::from(&raw);
-        if path.is_dir() { path.join("bin/python") } else { path }
+        if path.is_dir() {
+            path.join("bin/python")
+        } else {
+            path
+        }
     })
 }
 
@@ -190,7 +194,6 @@ fn synthetic(shape1: &[usize], shape2: &[usize]) -> (ZArr, ZArr) {
     }
     (t1, t2)
 }
-
 
 /// Everything the CC layer needs, taken from UPSTREAM's converged mean field.
 ///
@@ -378,14 +381,17 @@ fn intermediates_and_update_amps_match_upstream() {
     let up = upstream_mos(&out);
     let (eris, kh) = eris_on_upstream_mf(&f, &up);
     let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
-    let (t1, t2) = synthetic(
-        &[nk, nocc, nvir],
-        &[nk, nk, nk, nocc, nocc, nvir, nvir],
-    );
+    let (t1, t2) = synthetic(&[nk, nocc, nvir], &[nk, nk, nk, nocc, nocc, nvir, nvir]);
     // The two sides must be looking at the same amplitudes before anything else
     // is compared.
-    assert!(maxdiff(&t1, &cblock(&out, "t1"), "t1") == 0.0, "t1 streams differ");
-    assert!(maxdiff(&t2, &cblock(&out, "t2"), "t2") == 0.0, "t2 streams differ");
+    assert!(
+        maxdiff(&t1, &cblock(&out, "t1"), "t1") == 0.0,
+        "t1 streams differ"
+    );
+    assert!(
+        maxdiff(&t2, &cblock(&out, "t2"), "t2") == 0.0,
+        "t2 streams differ"
+    );
 
     let kc = &kh.kconserv;
     let opts = pyscf_pbc_cc::KrccsdOpts::default();
@@ -401,7 +407,10 @@ fn intermediates_and_update_amps_match_upstream() {
     ] {
         let d = maxdiff(&got, &cblock(&out, name), name);
         println!("max|{name} - upstream| = {d:e}");
-        assert!(d < IMDS_BLOCK, "{name} differs by {d:e}, above {IMDS_BLOCK:e}");
+        assert!(
+            d < IMDS_BLOCK,
+            "{name} differs by {d:e}, above {IMDS_BLOCK:e}"
+        );
     }
 
     for (name, blocks) in [
@@ -436,7 +445,10 @@ fn intermediates_and_update_amps_match_upstream() {
         }
         let d = maxdiff(&got, &cblock(&out, name), name);
         println!("max|{name} - upstream| = {d:e}");
-        assert!(d < IMDS_BLOCK, "{name} differs by {d:e}, above {IMDS_BLOCK:e}");
+        assert!(
+            d < IMDS_BLOCK,
+            "{name} differs by {d:e}, above {IMDS_BLOCK:e}"
+        );
         blocks.release();
     }
 
@@ -472,7 +484,10 @@ fn krccsd_e_corr_matches_upstream_fftdf() {
 
     let (emp2, _, _) = init_amps(&eris, &up.padded, &kh.kconserv).expect("init_amps");
     let want_emp2 = scalar(&out, "emp2");
-    println!("emp2 {emp2} vs upstream {want_emp2}  |Δ| {:e}", (emp2 - want_emp2).abs());
+    println!(
+        "emp2 {emp2} vs upstream {want_emp2}  |Δ| {:e}",
+        (emp2 - want_emp2).abs()
+    );
     assert!(
         (emp2 - want_emp2).abs() < G1_E_CORR,
         "init_amps emp2 differs by {:e}",
@@ -489,7 +504,10 @@ fn krccsd_e_corr_matches_upstream_fftdf() {
         "e_corr {} vs upstream {want}  |Δ| {d:e}  (G1 = {G1_E_CORR:e})",
         res.e_corr
     );
-    assert!(d < G1_E_CORR, "e_corr differs by {d:e}, above G1 {G1_E_CORR:e}");
+    assert!(
+        d < G1_E_CORR,
+        "e_corr differs by {d:e}, above G1 {G1_E_CORR:e}"
+    );
 
     let e = energy(&res.t1, &res.t2, &eris, &kh.kconserv).expect("energy");
     assert!(
@@ -527,16 +545,33 @@ fn ccsd_t_fast_equals_slow_and_matches_upstream() {
 
     let kpts = PeriodicDf::kpts(&f.df).to_vec();
     let slow = pyscf_pbc_cc::kccsd_t_rhf_slow::kernel(
-        &eris, &up.padded, &res.t1, &res.t2, &kh.kconserv, &f.cell.a, &kpts, None,
+        &eris,
+        &up.padded,
+        &res.t1,
+        &res.t2,
+        &kh.kconserv,
+        &f.cell.a,
+        &kpts,
+        None,
     )
     .expect("(T) slow");
     let fast = pyscf_pbc_cc::kccsd_t_rhf::kernel(
-        &eris, &up.padded, &res.t1, &res.t2, &kh.kconserv, &f.cell.a, &kpts, None,
+        &eris,
+        &up.padded,
+        &res.t1,
+        &res.t2,
+        &kh.kconserv,
+        &f.cell.a,
+        &kpts,
+        None,
     )
     .expect("(T) fast");
 
     let rel = (fast - slow).abs() / slow.abs();
-    println!("(T) fast {fast}  slow {slow}  |Δ| {:e}  relative {rel:e}", (fast - slow).abs());
+    println!(
+        "(T) fast {fast}  slow {slow}  |Δ| {:e}  relative {rel:e}",
+        (fast - slow).abs()
+    );
     // **G4 = 1e-12, corrected from the 1e-13 first written here.**
     // `measurements/README.md §5` measured UPSTREAM's own fast-vs-slow
     // agreement at `2.95e-13` relative — so a `1e-13` gate is BELOW upstream's
@@ -554,10 +589,20 @@ fn ccsd_t_fast_equals_slow_and_matches_upstream() {
     // virtual block size. This is what catches a wrong `mo_offset`/`slices`
     // translation, and it is oracle-free.
     let blocked = pyscf_pbc_cc::kccsd_t_rhf::kernel(
-        &eris, &up.padded, &res.t1, &res.t2, &kh.kconserv, &f.cell.a, &kpts, Some(2),
+        &eris,
+        &up.padded,
+        &res.t1,
+        &res.t2,
+        &kh.kconserv,
+        &f.cell.a,
+        &kpts,
+        Some(2),
     )
     .expect("(T) fast, blocked");
-    println!("(T) blocked(2) {blocked}  vs unblocked {fast}  |Δ| {:e}", (blocked - fast).abs());
+    println!(
+        "(T) blocked(2) {blocked}  vs unblocked {fast}  |Δ| {:e}",
+        (blocked - fast).abs()
+    );
     assert!(
         (blocked - fast).abs() / fast.abs() < 1e-12,
         "the (T) energy depends on the virtual block size"
@@ -674,7 +719,10 @@ fn kgccsd_matches_upstream() {
         worst.push((name, m));
     }
     let bad: Vec<&(&str, f64)> = worst.iter().filter(|(_, d)| *d >= ERI_BLOCK).collect();
-    assert!(bad.is_empty(), "spin-orbital blocks above {ERI_BLOCK:e}: {bad:?}");
+    assert!(
+        bad.is_empty(),
+        "spin-orbital blocks above {ERI_BLOCK:e}: {bad:?}"
+    );
 
     // `energy` and `update_amps` on the SAME fixed synthetic amplitudes.
     let st1 = ZArr::from_ctensor(&[nkpts, nocc, nvir], cblock(&out, "st1")).expect("st1");
@@ -685,18 +733,19 @@ fn kgccsd_matches_upstream() {
     .expect("st2");
     let e = pyscf_pbc_cc::kccsd::energy(&st1, &st2, &eris).expect("energy");
     let want = scalar(&out, "energy_synth");
-    println!("energy(synthetic) {e} vs upstream {want}  |Δ| {:e}", (e - want).abs());
-    assert!((e - want).abs() < IMDS_BLOCK, "energy differs by {:e}", (e - want).abs());
+    println!(
+        "energy(synthetic) {e} vs upstream {want}  |Δ| {:e}",
+        (e - want).abs()
+    );
+    assert!(
+        (e - want).abs() < IMDS_BLOCK,
+        "energy differs by {:e}",
+        (e - want).abs()
+    );
 
-    let (t1n, t2n) = pyscf_pbc_cc::kccsd::update_amps(
-        &st1,
-        &st2,
-        &eris,
-        &padded,
-        &khelper.kconserv,
-        0.0,
-    )
-    .expect("update_amps");
+    let (t1n, t2n) =
+        pyscf_pbc_cc::kccsd::update_amps(&st1, &st2, &eris, &padded, &khelper.kconserv, 0.0)
+            .expect("update_amps");
     let d1 = maxdiff(&t1n, &cblock(&out, "st1new"), "st1new");
     let d2 = maxdiff(&t2n, &cblock(&out, "st2new"), "st2new");
     println!("max|t1new - upstream| = {d1:e}   max|t2new - upstream| = {d2:e}");
@@ -805,12 +854,18 @@ fn krccsd_e_corr_matches_upstream_gdf() {
     // The GDF fitting residual is its own floor and is NOT the FFT one; the
     // gate is reported per block so the two routes' floors stay separable.
     let bad: Vec<&(&str, f64)> = worst.iter().filter(|(_, d)| *d >= ERI_BLOCK).collect();
-    assert!(bad.is_empty(), "GDF blocks above {ERI_BLOCK:e}: {bad:?} (all: {worst:?})");
+    assert!(
+        bad.is_empty(),
+        "GDF blocks above {ERI_BLOCK:e}: {bad:?} (all: {worst:?})"
+    );
 
     let opts = pyscf_pbc_cc::KrccsdOpts::default();
     let (emp2, _, _) = init_amps(&eris, &up.padded, &khelper.kconserv).expect("init_amps");
     let want_emp2 = scalar(&out, "emp2");
-    println!("GDF: emp2 {emp2} vs upstream {want_emp2}  |Δ| {:e}", (emp2 - want_emp2).abs());
+    println!(
+        "GDF: emp2 {emp2} vs upstream {want_emp2}  |Δ| {:e}",
+        (emp2 - want_emp2).abs()
+    );
     assert!((emp2 - want_emp2).abs() < G1_E_CORR, "GDF emp2 differs");
 
     let pool = Arc::new(ZWorkspacePool::new(ZWorkspacePool::DEFAULT_BUDGET_BYTES));
@@ -823,5 +878,314 @@ fn krccsd_e_corr_matches_upstream_gdf() {
         "GDF: e_corr {} vs upstream {want}  |Δ| {d:e}  (G2 = {G1_E_CORR:e})",
         res.e_corr
     );
-    assert!(d < G1_E_CORR, "GDF e_corr differs by {d:e}, above G2 {G1_E_CORR:e}");
+    assert!(
+        d < G1_E_CORR,
+        "GDF e_corr differs by {d:e}, above G2 {G1_E_CORR:e}"
+    );
+}
+
+/// **16-09 Task 1 — the ten spin-orbital EOM intermediates.**
+///
+/// `_IMDS` (`eom_kccsd_ghf.py:1841-1966`) builds `Foo`/`Fvv`/`Fov`/`Wovvo`
+/// (shared), `Woooo`/`Wooov`/`Wovoo` (IP) and `Wvovv`/`Wvvvv`/`Wvvvo` (EA).
+/// Each is compared on its own, on the SAME fixed synthetic amplitudes the
+/// `update_amps` gate uses, rather than only through an EOM root.
+///
+/// That is not belt-and-braces: an EOM root is an eigenvalue of a matrix these
+/// ten assemble, and an error in one that happens to move a root by less than
+/// the `1e-5` the roots are gated at (upstream's own Davidson spread) would
+/// survive an end-to-end comparison. 16-06 made the same argument and then
+/// needed it.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn kgccsd_eom_intermediates_match_upstream() {
+    let Some(out) = emit("kgccsd") else { return };
+    let f = diamond_scf([1, 1, 2]);
+    let nkpts = scalar(&out, "nkpts") as usize;
+    let nocc = scalar(&out, "nocc") as usize;
+    let nmo = scalar(&out, "nmo") as usize;
+    let nao = scalar(&out, "nao") as usize;
+    let nvir = nmo - nocc;
+
+    let c = cblock(&out, "mo_coeff");
+    let mo_coeff: Vec<MoCoeff> = (0..nkpts)
+        .map(|k| {
+            let off = k * nao * nmo;
+            MoCoeff::new(
+                nao,
+                nmo,
+                CTensor {
+                    re: c.re[off..off + nao * nmo].to_vec(),
+                    im: c.im[off..off + nao * nmo].to_vec(),
+                },
+            )
+        })
+        .collect();
+    let me = block(&out, "mo_energy");
+    let mo_energy: Vec<Vec<f64>> = (0..nkpts)
+        .map(|k| me[k * nmo..(k + 1) * nmo].to_vec())
+        .collect();
+    let fock = ZArr::from_ctensor(&[nkpts, nmo, nmo], cblock(&out, "fock")).expect("fock");
+    let khelper = KptsHelper::without_symm_map(&f.cell.a, PeriodicDf::kpts(&f.df));
+    let eris = pyscf_pbc_cc::kccsd::KgEris::from_parts(
+        &f.df,
+        &khelper,
+        &mo_coeff,
+        fock,
+        mo_energy,
+        nocc,
+        4_000_000_000,
+    )
+    .expect("spin-orbital _ERIS");
+    let kc = &khelper.kconserv;
+
+    let st1 = ZArr::from_ctensor(&[nkpts, nocc, nvir], cblock(&out, "st1")).expect("st1");
+    let st2 = ZArr::from_ctensor(
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+        cblock(&out, "st2"),
+    )
+    .expect("st2");
+
+    use pyscf_pbc_cc::kintermediates as gimd;
+    let mut failures: Vec<String> = Vec::new();
+    let mut check = |name: &str, got: &ZArr, failures: &mut Vec<String>| {
+        let d = maxdiff(got, &cblock(&out, name), name);
+        println!("  {name:12} max|Δ| {d:e}");
+        if !(d < IMDS_BLOCK) {
+            failures.push(format!("{name} {d:e}"));
+        }
+    };
+
+    check(
+        "imds_Foo",
+        &gimd::foo(&st1, &st2, &eris, kc).expect("Foo"),
+        &mut failures,
+    );
+    check(
+        "imds_Fvv",
+        &gimd::fvv(&st1, &st2, &eris, kc).expect("Fvv"),
+        &mut failures,
+    );
+    check(
+        "imds_Fov",
+        &gimd::fov(&st1, &eris).expect("Fov"),
+        &mut failures,
+    );
+    check(
+        "imds_Woooo",
+        &gimd::woooo(&st1, &st2, &eris, kc).expect("Woooo"),
+        &mut failures,
+    );
+    check(
+        "imds_Wovvo",
+        &gimd::wovvo(&st1, &st2, &eris, kc).expect("Wovvo"),
+        &mut failures,
+    );
+    check(
+        "imds_Wooov",
+        &gimd::wooov(&st1, &eris).expect("Wooov"),
+        &mut failures,
+    );
+    check(
+        "imds_Wvovv",
+        &gimd::wvovv(&st1, &eris).expect("Wvovv"),
+        &mut failures,
+    );
+    let wvvvv = gimd::wvvvv(&st1, &st2, &eris, kc).expect("Wvvvv");
+    check("imds_Wvvvv", &wvvvv, &mut failures);
+    check(
+        "imds_Wovoo",
+        &gimd::wovoo(&st1, &st2, &eris, kc).expect("Wovoo"),
+        &mut failures,
+    );
+    check(
+        "imds_Wvvvo",
+        &gimd::wvvvo(&st1, &st2, &eris, kc, None).expect("Wvvvo"),
+        &mut failures,
+    );
+
+    // `_IMDS.make_ee` passes its own `Wvvvv` in (`:1966`); that path must give
+    // the same answer as rebuilding it, or the EE intermediates silently differ
+    // from the EA ones.
+    let with_given = gimd::wvvvo(&st1, &st2, &eris, kc, Some(&wvvvv)).expect("Wvvvo(given)");
+    let d = maxdiff(&with_given, &cblock(&out, "imds_Wvvvo"), "imds_Wvvvo");
+    println!("  Wvvvo with a CALLER-SUPPLIED Wvvvv: max|Δ| {d:e}");
+    assert!(d < IMDS_BLOCK, "the two Wvvvo routes disagree: {d:e}");
+
+    assert!(
+        failures.is_empty(),
+        "EOM intermediates above the gate: {failures:?}"
+    );
+}
+
+/// **16-09 Tasks 2-3 — EOM-IP and EOM-EA: matvec, left matvec, diagonal.**
+///
+/// On a FIXED synthetic trial vector, for EVERY `kshift`. This is the gate on
+/// the IP equations with no Davidson in it: an eigenvalue comparison would fold
+/// the matvec, the solver, the guess and the convergence criterion into one
+/// number, and upstream's own Davidson spread on these roots is `5.1e-7`
+/// (`measurements/README.md §1`), so a matvec error well above the ERI floor
+/// could hide inside it.
+///
+/// `ip_vector_size` is asserted separately because it is what the Davidson
+/// allocates: the `r2` packing keeps only the strict lower triangle of a
+/// `(nkpts·nocc)²` array, so a port that stored the full square would agree on
+/// every matvec and still be wrong here.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn kgccsd_eom_ip_and_ea_match_upstream() {
+    let Some(out) = emit("kgccsd_eom_ip") else {
+        return;
+    };
+    let f = diamond_scf([1, 1, 2]);
+    let nkpts = scalar(&out, "nkpts") as usize;
+    let nocc = scalar(&out, "nocc") as usize;
+    let nmo = scalar(&out, "nmo") as usize;
+    let nao = scalar(&out, "nao") as usize;
+    let nvir = nmo - nocc;
+
+    let c = cblock(&out, "mo_coeff");
+    let mo_coeff: Vec<MoCoeff> = (0..nkpts)
+        .map(|k| {
+            let off = k * nao * nmo;
+            MoCoeff::new(
+                nao,
+                nmo,
+                CTensor {
+                    re: c.re[off..off + nao * nmo].to_vec(),
+                    im: c.im[off..off + nao * nmo].to_vec(),
+                },
+            )
+        })
+        .collect();
+    let me = block(&out, "mo_energy");
+    let mo_energy: Vec<Vec<f64>> = (0..nkpts)
+        .map(|k| me[k * nmo..(k + 1) * nmo].to_vec())
+        .collect();
+    let fock = ZArr::from_ctensor(&[nkpts, nmo, nmo], cblock(&out, "fock")).expect("fock");
+    let khelper = KptsHelper::without_symm_map(&f.cell.a, PeriodicDf::kpts(&f.df));
+    let eris = pyscf_pbc_cc::kccsd::KgEris::from_parts(
+        &f.df,
+        &khelper,
+        &mo_coeff,
+        fock,
+        mo_energy,
+        nocc,
+        4_000_000_000,
+    )
+    .expect("spin-orbital _ERIS");
+    let kc = &khelper.kconserv;
+
+    let (st1, st2) = synthetic(
+        &[nkpts, nocc, nvir],
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+    );
+
+    use pyscf_pbc_cc::eom_kccsd_ghf as eom;
+    let size = eom::ip_vector_size(nkpts, nocc, nvir);
+    let want_size = scalar(&out, "ip_vector_size") as usize;
+    println!("ip_vector_size {size} vs upstream {want_size}");
+    assert_eq!(
+        size, want_size,
+        "the IP vector length disagrees with upstream"
+    );
+
+    let vec = ZArr::from_ctensor(&[size], cblock(&out, "ip_vec")).expect("ip_vec");
+
+    // The round trip must be exact: `vector_to_amplitudes_ip` mirrors the
+    // strict lower triangle with a minus sign and `amplitudes_to_vector_ip`
+    // reads only that triangle back, so any packing error shows up here at
+    // `O(1)` before a single contraction has run.
+    let (r1, r2) = eom::vector_to_amplitudes_ip(&vec, nkpts, nocc, nvir).expect("unpack");
+    let back = eom::amplitudes_to_vector_ip(&r1, &r2).expect("pack");
+    let d = maxdiff(&back, &cblock(&out, "ip_vec"), "ip_vec");
+    println!("IP vector round trip: max|Δ| {d:e}");
+    assert!(d == 0.0, "the IP vector round trip is not exact: {d:e}");
+
+    let imds = eom::EomImds::make_shared(&st1, &st2, &eris, kc)
+        .expect("shared imds")
+        .make_ip(kc)
+        .expect("IP imds");
+
+    let mut failures: Vec<String> = Vec::new();
+    for kshift in 0..nkpts {
+        for (got, name) in [
+            (
+                eom::ipccsd_matvec(&vec, kshift, &imds, kc).expect("matvec"),
+                format!("ip_matvec_{kshift}"),
+            ),
+            (
+                eom::lipccsd_matvec(&vec, kshift, &imds, kc).expect("l_matvec"),
+                format!("ip_lmatvec_{kshift}"),
+            ),
+            (
+                eom::ipccsd_diag(kshift, &imds, kc).expect("diag"),
+                format!("ip_diag_{kshift}"),
+            ),
+        ] {
+            let d = maxdiff(&got, &cblock(&out, &name), &name);
+            println!("  {name:16} max|Δ| {d:e}");
+            if !(d < IMDS_BLOCK) {
+                failures.push(format!("{name} {d:e}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "EOM-IP above the gate: {failures:?}");
+
+    // ---------------------------------------------------------------- EA
+    let imds_ea = eom::EomImds::make_shared(&st1, &st2, &eris, kc)
+        .expect("shared imds")
+        .make_ea(kc)
+        .expect("EA imds");
+
+    // Upstream's `EOMEA.vector_size` is a CLOSED FORM that does not mention
+    // `kshift` (`eom_kccsd_ghf.py:889` reuses the IP formula), while the
+    // packing loop chooses its virtual-pair list per `(kj, ka)` from whether
+    // `ka < kb` — which does depend on `kshift`. This asserts they agree for
+    // every shift; if a k-mesh ever made them disagree, the Davidson would
+    // allocate the wrong length and nothing else would notice.
+    let want_ea = scalar(&out, "ea_vector_size") as usize;
+    for kshift in 0..nkpts {
+        let n = eom::ea_vector_size(nkpts, nocc, nvir, kshift, kc);
+        println!("ea_vector_size[kshift={kshift}] {n} vs upstream {want_ea}");
+        assert_eq!(
+            n, want_ea,
+            "the EA packing writes {n} elements at kshift {kshift}, \
+             but upstream's closed form allocates {want_ea}"
+        );
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for kshift in 0..nkpts {
+        let name = format!("ea_vec_{kshift}");
+        let v = ZArr::from_ctensor(&[want_ea], cblock(&out, &name)).expect("ea_vec");
+        let (r1, r2) =
+            eom::vector_to_amplitudes_ea(&v, kshift, nkpts, nocc, nvir, kc).expect("unpack");
+        let back = eom::amplitudes_to_vector_ea(&r1, &r2, kshift, kc).expect("pack");
+        let d = maxdiff(&back, &cblock(&out, &name), &name);
+        println!("EA vector round trip[kshift={kshift}]: max|Δ| {d:e}");
+        assert!(d == 0.0, "the EA vector round trip is not exact: {d:e}");
+
+        for (got, name) in [
+            (
+                eom::eaccsd_matvec(&v, kshift, &imds_ea, kc).expect("matvec"),
+                format!("ea_matvec_{kshift}"),
+            ),
+            (
+                eom::leaccsd_matvec(&v, kshift, &imds_ea, kc).expect("l_matvec"),
+                format!("ea_lmatvec_{kshift}"),
+            ),
+            (
+                eom::eaccsd_diag(kshift, &imds_ea, kc).expect("diag"),
+                format!("ea_diag_{kshift}"),
+            ),
+        ] {
+            let d = maxdiff(&got, &cblock(&out, &name), &name);
+            println!("  {name:16} max|Δ| {d:e}");
+            if !(d < IMDS_BLOCK) {
+                failures.push(format!("{name} {d:e}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "EOM-EA above the gate: {failures:?}");
 }

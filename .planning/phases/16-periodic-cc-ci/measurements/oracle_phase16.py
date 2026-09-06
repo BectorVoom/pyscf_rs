@@ -265,6 +265,22 @@ def section_kgccsd(nk=(1, 1, 2)):
     emit("st1new", t1n)
     emit("st2new", t2n)
 
+    # 16-09 Task 1 — the ten EOM intermediates `_IMDS` builds
+    # (`eom_kccsd_ghf.py:1863-1966`), on the SAME synthetic amplitudes, so each
+    # is gated on its own rather than only through an EOM root.
+    from pyscf.pbc.cc import kintermediates as _gimd
+    kcon = cc.khelper.kconserv
+    emit("imds_Foo", _gimd.Foo(cc, st1, st2, eris, kcon))
+    emit("imds_Fvv", _gimd.Fvv(cc, st1, st2, eris, kcon))
+    emit("imds_Fov", _gimd.Fov(cc, st1, st2, eris, kcon))
+    emit("imds_Woooo", _gimd.Woooo(cc, st1, st2, eris, kcon))
+    emit("imds_Wovvo", _gimd.Wovvo(cc, st1, st2, eris, kcon))
+    emit("imds_Wooov", _gimd.Wooov(cc, st1, st2, eris, kcon))
+    emit("imds_Wvovv", _gimd.Wvovv(cc, st1, st2, eris, kcon))
+    emit("imds_Wvvvv", _gimd.Wvvvv(cc, st1, st2, eris, kcon))
+    emit("imds_Wovoo", _gimd.Wovoo(cc, st1, st2, eris, kcon))
+    emit("imds_Wvvvo", _gimd.Wvvvo(cc, st1, st2, eris, kcon))
+
     e_corr, t1, t2 = cc.kernel(eris=eris)
     scalar("e_corr", e_corr)
     emit("t1", t1)
@@ -1144,10 +1160,82 @@ def section_kuccsd_fock(nk=(1, 1, 2), mesh=(31, 31, 31)):
     emit("fock_t1b", Ht1b)
 
 
+def section_kgccsd_eom_ip(nk=(1, 1, 2)):
+    """EOM-IP-KCCSD's matvec, its left sibling and its diagonal, on a FIXED
+    synthetic trial vector — one emit per `kshift`.
+
+    The trial vector is drawn from its OWN SplitMix64 stream (seed 20260907) so
+    it does not depend on how many amplitudes were drawn before it.
+    """
+    from pyscf.pbc import scf as _pbcscf
+    from pyscf.pbc.cc import kccsd as _kccsd
+    from pyscf.pbc.cc import eom_kccsd_ghf as _eom
+
+    cell = diamond()
+    kpts = cell.make_kpts(list(nk))
+    kmf = _pbcscf.KGHF(cell, kpts, exxdiv=None)
+    kmf.conv_tol = 1e-10
+    kmf.kernel()
+    cc = _kccsd.KGCCSD(kmf)
+    cc.conv_tol = 1e-9
+    cc.conv_tol_normt = 1e-7
+    eris = cc.ao2mo(cc.mo_coeff)
+
+    nkpts = len(kpts)
+    nocc, nmo = cc.nocc, cc.nmo
+    nvir = nmo - nocc
+    scalar("e_hf", kmf.e_tot)
+    scalar("nkpts", nkpts)
+    scalar("nocc", nocc)
+    scalar("nmo", nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", np.asarray(eris.fock))
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+
+    # FIXED synthetic amplitudes, drawn exactly as `section_kgccsd` draws them,
+    # so the EOM intermediates here are the ones that gate ran against.
+    st1, st2 = synthetic_amps(
+        (nkpts, nocc, nvir), (nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir)
+    )
+    cc.t1, cc.t2 = st1, st2
+
+    eom = _eom.EOMIP(cc)
+    imds = eom.make_imds(eris=eris)
+    size = eom.vector_size()
+    scalar("ip_vector_size", size)
+
+    r = SplitMix64(20260907)
+    vec = np.array([complex(r.unit(), r.unit()) for _ in range(int(size))])
+    emit("ip_vec", vec)
+
+    for kshift in range(nkpts):
+        emit("ip_matvec_%d" % kshift, _eom.ipccsd_matvec(eom, vec, kshift, imds))
+        emit("ip_lmatvec_%d" % kshift, _eom.lipccsd_matvec(eom, vec, kshift, imds))
+        emit("ip_diag_%d" % kshift, _eom.ipccsd_diag(eom, kshift, imds))
+
+    # --- EA. The vector length depends on `kshift` (the pair list does), so
+    # the trial vector is drawn per shift from its own stream.
+    eom_ea = _eom.EOMEA(cc)
+    imds_ea = eom_ea.make_imds(eris=eris)
+    size_ea = eom_ea.vector_size()
+    scalar("ea_vector_size", size_ea)
+    for kshift in range(nkpts):
+        r = SplitMix64(20260908 + kshift)
+        v = np.array([complex(r.unit(), r.unit()) for _ in range(int(size_ea))])
+        emit("ea_vec_%d" % kshift, v)
+        emit("ea_matvec_%d" % kshift, _eom.eaccsd_matvec(eom_ea, v, kshift, imds_ea))
+        emit("ea_lmatvec_%d" % kshift, _eom.leaccsd_matvec(eom_ea, v, kshift, imds_ea))
+        emit("ea_diag_%d" % kshift, _eom.eaccsd_diag(eom_ea, kshift, imds_ea))
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
     "kgccsd": lambda: section_kgccsd((1, 1, 2)),
+    "kgccsd_eom_ip": lambda: section_kgccsd_eom_ip((1, 1, 2)),
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
     "kuccsd_imds": lambda: section_kuccsd_imds((1, 1, 2)),

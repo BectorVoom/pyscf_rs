@@ -26,6 +26,8 @@ pub mod kintermediates;
 // Plan 16-08 Task 3 — the SPIN-ORBITAL (T), on 16-07's KGCCSD amplitudes.
 pub mod kccsd_t;
 // Plan 16-08 Task 2 — the BLOCKED (T), replacing kccsd_t_rhf.py:236's C kernel.
+/// EOM-CCSD over spin orbitals at k-points (16-09).
+pub mod eom_kccsd_ghf;
 pub mod kccsd_t_rhf;
 /// Unrestricted k-point CCSD (16-06 Tasks 3-5).
 pub mod kccsd_uhf;
@@ -36,6 +38,7 @@ pub mod kuccsd_rdm;
 /// The unrestricted k-point ERIs (16-06 Task 1).
 pub mod kueris;
 
+pub use eom_kccsd_ghf::{EomImds, ip_vector_size};
 pub use error::*;
 pub use kccsd::{GBlk, KgEris, Kgccsd};
 pub use kccsd_rhf::{KrccsdOpts, KrccsdResult, LARGE_DENOM};
