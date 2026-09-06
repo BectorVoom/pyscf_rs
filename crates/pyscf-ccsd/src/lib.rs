@@ -25,6 +25,10 @@ pub mod diagnostics;
 pub mod diis_amps;
 pub mod direct;
 pub mod eris;
+// Plan 16-07 Task 1 — the NARROW molecular spin-orbital surface
+// `pbc/cc/kccsd.py` inherits from. A PARTIAL port by design; the module doc
+// lists what is deliberately absent and why.
+pub mod gccsd;
 pub mod error;
 pub mod hooks;
 pub mod lambda;

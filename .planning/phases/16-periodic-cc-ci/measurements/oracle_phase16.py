@@ -216,7 +216,61 @@ def section_triples(nk=(1, 1, 2)):
     scalar("et_slow", kccsd_t_rhf_slow.kernel(cc, eris, t1, t2))
 
 
+def section_kgccsd(nk=(1, 1, 2)):
+    """KGCCSD on a KGHF mean field, emitting the spin-orbital `_PhysicistsERIs`.
+
+    The Rust side rebuilds the seven blocks from these MO coefficients, so the
+    comparison is of the CC code and not of two SCFs — see `README §10`.
+    """
+    from pyscf.pbc import scf as _pbcscf
+    from pyscf.pbc.cc import kccsd as _kccsd
+
+    cell = diamond()
+    kpts = cell.make_kpts(list(nk))
+    kmf = _pbcscf.KGHF(cell, kpts, exxdiv=None)
+    kmf.conv_tol = 1e-10
+    kmf.kernel()
+    cc = _kccsd.KGCCSD(kmf)
+    cc.conv_tol = 1e-9
+    cc.conv_tol_normt = 1e-7
+    eris = cc.ao2mo(cc.mo_coeff)
+
+    scalar("e_hf", kmf.e_tot)
+    scalar("nkpts", len(kpts))
+    scalar("nocc", cc.nocc)
+    scalar("nmo", cc.nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", np.asarray(eris.fock))
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    emit("orbspin", np.asarray(eris.orbspin, dtype=float))
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+    for name in ("oooo", "ooov", "ovoo", "oovv", "ovov", "ovvv", "vvvv"):
+        emit(name, np.asarray(getattr(eris, name)))
+
+    emp2, t1, t2 = cc.init_amps(eris)
+    scalar("emp2", emp2)
+    # A FIXED synthetic amplitude pair, so update_amps is isolated from the
+    # iteration exactly as the RHF `imds` section does.
+    nkpts, nocc = len(kpts), cc.nocc
+    nvir = cc.nmo - nocc
+    st1, st2 = synthetic_amps(
+        (nkpts, nocc, nvir), (nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir)
+    )
+    emit("st1", st1)
+    emit("st2", st2)
+    scalar("energy_synth", _kccsd.energy(cc, st1, st2, eris))
+    t1n, t2n = _kccsd.update_amps(cc, st1, st2, eris)
+    emit("st1new", t1n)
+    emit("st2new", t2n)
+
+    e_corr, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", e_corr)
+
+
 SECTIONS = {
+    "kgccsd": lambda: section_kgccsd((1, 1, 2)),
     "eris": lambda: section_eris((1, 1, 2)),
     "eris222": lambda: section_eris((2, 2, 2)),
     "imds": lambda: section_imds((1, 1, 2)),

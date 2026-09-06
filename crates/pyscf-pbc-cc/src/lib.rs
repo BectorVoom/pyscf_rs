@@ -19,6 +19,9 @@ pub mod kintermediates_rhf;
 pub mod kccsd_rhf;
 // Plan 16-08 Task 1 — the loop-explicit (T) reference, ported BEFORE either
 // fast path because it is the only oracle-free gate the blocked path has.
+// Plan 16-07 — KGCCSD, the spin-orbital k-point coupled cluster.
+pub mod kccsd;
+pub mod kintermediates;
 pub mod kccsd_t_rhf_slow;
 // Plan 16-08 Task 2 — the BLOCKED (T), replacing kccsd_t_rhf.py:236's C kernel.
 pub mod kccsd_t_rhf;

@@ -578,3 +578,141 @@ fn ccsd_t_fast_equals_slow_and_matches_upstream() {
         (fast - want_fast).abs()
     );
 }
+
+/// **16-07** — `KGCCSD`, on upstream's own KGHF mean field.
+///
+/// Same design as the RHF tests: the seven spin-orbital `<pq||rs>` blocks are
+/// rebuilt here from upstream's `mo_coeff`, so what is compared is the CC code
+/// and not two SCFs (`measurements/README.md §10`).
+///
+/// `e_corr` is gated at **G3 = `1e-8`**, which 16-01 measured: upstream's own
+/// `KGCCSD` and `KRCCSD` differ by `4.95e-9` on this fixture, so `16-07`'s
+/// plan-time `1e-10` would fail a correct implementation.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn kgccsd_matches_upstream() {
+    let Some(out) = emit("kgccsd") else { return };
+    let f = diamond_scf([1, 1, 2]);
+    let nkpts = scalar(&out, "nkpts") as usize;
+    let nocc = scalar(&out, "nocc") as usize;
+    let nmo = scalar(&out, "nmo") as usize;
+    let nao = scalar(&out, "nao") as usize;
+    let nvir = nmo - nocc;
+
+    let c = cblock(&out, "mo_coeff");
+    let mo_coeff: Vec<MoCoeff> = (0..nkpts)
+        .map(|k| {
+            let off = k * nao * nmo;
+            MoCoeff::new(
+                nao,
+                nmo,
+                CTensor {
+                    re: c.re[off..off + nao * nmo].to_vec(),
+                    im: c.im[off..off + nao * nmo].to_vec(),
+                },
+            )
+        })
+        .collect();
+    let me = block(&out, "mo_energy");
+    let mo_energy: Vec<Vec<f64>> = (0..nkpts)
+        .map(|k| me[k * nmo..(k + 1) * nmo].to_vec())
+        .collect();
+    let fock = ZArr::from_ctensor(&[nkpts, nmo, nmo], cblock(&out, "fock")).expect("fock");
+    let nocc_per_kpt: Vec<usize> = block(&out, "nocc_per_kpt")
+        .iter()
+        .map(|v| *v as usize)
+        .collect();
+    let padded = PaddedMos {
+        mo_coeff: mo_coeff.clone(),
+        mo_energy: mo_energy.clone(),
+        nmo_per_kpt: vec![nmo; nkpts],
+        nocc_per_kpt,
+        nmo,
+        nocc,
+    };
+
+    let khelper = KptsHelper::without_symm_map(&f.cell.a, PeriodicDf::kpts(&f.df));
+    let eris = pyscf_pbc_cc::kccsd::KgEris::from_parts(
+        &f.df,
+        &khelper,
+        &mo_coeff,
+        fock,
+        mo_energy,
+        nocc,
+        4_000_000_000,
+    )
+    .expect("spin-orbital _ERIS");
+    assert_eq!(eris.nocc, nocc);
+    assert_eq!(eris.nvir, nvir);
+
+    use pyscf_pbc_cc::kccsd::GBlk;
+    let mut worst: Vec<(&str, f64)> = Vec::new();
+    for (b, name) in [
+        (GBlk::Oooo, "oooo"),
+        (GBlk::Ooov, "ooov"),
+        (GBlk::Ovoo, "ovoo"),
+        (GBlk::Oovv, "oovv"),
+        (GBlk::Ovov, "ovov"),
+        (GBlk::Ovvv, "ovvv"),
+        (GBlk::Vvvv, "vvvv"),
+    ] {
+        let want = cblock(&out, name);
+        let d = b.dims(nocc, nvir);
+        let mut shape = vec![nkpts, nkpts, nkpts];
+        shape.extend_from_slice(&d);
+        let mut got = ZArr::zeros(&shape);
+        for k0 in 0..nkpts {
+            for k1 in 0..nkpts {
+                for k2 in 0..nkpts {
+                    got.set_leading(&[k0, k1, k2], &eris.blk(b, k0, k1, k2).expect("block"))
+                        .expect("shape");
+                }
+            }
+        }
+        let m = maxdiff(&got, &want, name);
+        println!("max|{name} - upstream| = {m:e}");
+        worst.push((name, m));
+    }
+    let bad: Vec<&(&str, f64)> = worst.iter().filter(|(_, d)| *d >= ERI_BLOCK).collect();
+    assert!(bad.is_empty(), "spin-orbital blocks above {ERI_BLOCK:e}: {bad:?}");
+
+    // `energy` and `update_amps` on the SAME fixed synthetic amplitudes.
+    let st1 = ZArr::from_ctensor(&[nkpts, nocc, nvir], cblock(&out, "st1")).expect("st1");
+    let st2 = ZArr::from_ctensor(
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+        cblock(&out, "st2"),
+    )
+    .expect("st2");
+    let e = pyscf_pbc_cc::kccsd::energy(&st1, &st2, &eris).expect("energy");
+    let want = scalar(&out, "energy_synth");
+    println!("energy(synthetic) {e} vs upstream {want}  |Δ| {:e}", (e - want).abs());
+    assert!((e - want).abs() < IMDS_BLOCK, "energy differs by {:e}", (e - want).abs());
+
+    let (t1n, t2n) = pyscf_pbc_cc::kccsd::update_amps(
+        &st1,
+        &st2,
+        &eris,
+        &padded,
+        &khelper.kconserv,
+        0.0,
+    )
+    .expect("update_amps");
+    let d1 = maxdiff(&t1n, &cblock(&out, "st1new"), "st1new");
+    let d2 = maxdiff(&t2n, &cblock(&out, "st2new"), "st2new");
+    println!("max|t1new - upstream| = {d1:e}   max|t2new - upstream| = {d2:e}");
+    assert!(d1 < IMDS_BLOCK, "t1new differs by {d1:e}");
+    assert!(d2 < IMDS_BLOCK, "t2new differs by {d2:e}");
+
+    let opts = pyscf_pbc_cc::KrccsdOpts::default();
+    let res = pyscf_pbc_cc::kccsd::kernel(&eris, &padded, &khelper.kconserv, &opts)
+        .expect("KGCCSD kernel");
+    let want = scalar(&out, "e_corr");
+    let d = (res.e_corr - want).abs();
+    println!(
+        "KGCCSD e_corr {} vs upstream {want}  |Δ| {d:e}  converged {} in {} cycles",
+        res.e_corr, res.converged, res.cycles
+    );
+    assert!(res.converged, "KGCCSD did not converge");
+    // G3 = 1e-8 (measured: upstream's own KGCCSD and KRCCSD differ by 4.95e-9).
+    assert!(d < 1e-8, "KGCCSD e_corr differs by {d:e}, above G3 1e-8");
+}
