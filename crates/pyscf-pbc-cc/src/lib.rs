@@ -28,6 +28,8 @@ pub mod kccsd_t;
 // Plan 16-08 Task 2 — the BLOCKED (T), replacing kccsd_t_rhf.py:236's C kernel.
 /// EOM-CCSD over spin orbitals at k-points (16-09).
 pub mod eom_kccsd_ghf;
+/// EOM-CCSD over spin-adapted k-point orbitals (16-10).
+pub mod eom_kccsd_rhf;
 pub mod kccsd_t_rhf;
 /// Unrestricted k-point CCSD (16-06 Tasks 3-5).
 pub mod kccsd_uhf;

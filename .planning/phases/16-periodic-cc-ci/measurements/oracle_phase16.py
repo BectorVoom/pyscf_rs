@@ -1294,11 +1294,94 @@ def section_kgccsd_eom_ip(nk=(1, 1, 2)):
             )
 
 
+def section_krccsd_eom(nk=(1, 1, 2)):
+    """EOM-KRCCSD: the twelve RHF EOM intermediates on FIXED synthetic
+    amplitudes, then the IP/EA matvecs, diagonals and roots."""
+    from pyscf.pbc.cc import eom_kccsd_rhf as _eomr
+    from pyscf.pbc.cc import kintermediates_rhf as _rimd
+
+    cell, kpts, mf, cc = build(list(nk))
+    eris = cc.ao2mo(cc.mo_coeff)
+    nkpts = len(kpts)
+    nocc, nmo = cc.nocc, cc.nmo
+    nvir = nmo - nocc
+    kcon = cc.khelper.kconserv
+
+    scalar("e_hf", mf.e_tot)
+    scalar("nkpts", nkpts)
+    scalar("nocc", nocc)
+    scalar("nmo", nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", eris.fock)
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+
+    st1, st2 = synthetic_amps(
+        (nkpts, nocc, nvir), (nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir)
+    )
+    for name, arr in (
+        ("r_Wooov", _rimd.Wooov(st1, st2, eris, kcon)),
+        ("r_Wvovv", _rimd.Wvovv(st1, st2, eris, kcon)),
+        ("r_W1ovvo", _rimd.W1ovvo(st1, st2, eris, kcon)),
+        ("r_W2ovvo", _rimd.W2ovvo(st1, st2, eris, kcon)),
+        ("r_Wovvo", _rimd.Wovvo(st1, st2, eris, kcon)),
+        ("r_W1ovov", _rimd.W1ovov(st1, st2, eris, kcon)),
+        ("r_W2ovov", _rimd.W2ovov(st1, st2, eris, kcon)),
+        ("r_Wovov", _rimd.Wovov(st1, st2, eris, kcon)),
+        ("r_Woooo", _rimd.Woooo(st1, st2, eris, kcon)),
+        ("r_Wvvvv", _rimd.Wvvvv(st1, st2, eris, kcon)),
+        ("r_Wvvvo", _rimd.Wvvvo(st1, st2, eris, kcon)),
+        ("r_Wovoo", _rimd.Wovoo(st1, st2, eris, kcon)),
+    ):
+        emit(name, np.asarray(arr))
+
+    # IP/EA on the same synthetic amplitudes.
+    cc.t1, cc.t2 = st1, st2
+    for tag, cls, mv, lmv, dg in (
+        ("rip", _eomr.EOMIP, _eomr.ipccsd_matvec, _eomr.lipccsd_matvec, _eomr.ipccsd_diag),
+        ("rea", _eomr.EOMEA, _eomr.eaccsd_matvec, _eomr.leaccsd_matvec, _eomr.eaccsd_diag),
+    ):
+        e = cls(cc)
+        imd = e.make_imds(eris=eris)
+        size = e.vector_size()
+        scalar("%s_vector_size" % tag, size)
+        r = SplitMix64(20260910)
+        v = np.array([complex(r.unit(), r.unit()) for _ in range(int(size))])
+        emit("%s_vec" % tag, v)
+        for kshift in range(nkpts):
+            emit("%s_matvec_%d" % (tag, kshift), mv(e, v, kshift, imd))
+            emit("%s_lmatvec_%d" % (tag, kshift), lmv(e, v, kshift, imd))
+            emit("%s_diag_%d" % (tag, kshift), dg(e, kshift, imd))
+
+    # Roots, on the CONVERGED amplitudes.
+    ecc, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", ecc)
+    emit("t1", t1)
+    emit("t2", t2)
+    nroots = 2
+    scalar("nroots", nroots)
+    for tag, cls, fn in (("rip", _eomr.EOMIP, "ipccsd"), ("rea", _eomr.EOMEA, "eaccsd")):
+        e = cls(cc)
+        e.conv_tol = 1e-8
+        e.max_cycle = 100
+        imd = e.make_imds(eris=eris)
+        for kshift in range(nkpts):
+            evals, evecs = getattr(e, fn)(nroots=nroots, kptlist=[kshift], imds=imd)
+            emit("%s_roots_%d" % (tag, kshift), np.asarray(evals).ravel())
+            emit(
+                "%s_conv_%d" % (tag, kshift),
+                np.asarray(np.real(e.converged), dtype=float).ravel(),
+            )
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
     "kgccsd": lambda: section_kgccsd((1, 1, 2)),
     "kgccsd_eom_ip": lambda: section_kgccsd_eom_ip((1, 1, 2)),
+    "krccsd_eom": lambda: section_krccsd_eom((1, 1, 2)),
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
     "kuccsd_imds": lambda: section_kuccsd_imds((1, 1, 2)),

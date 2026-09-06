@@ -1470,3 +1470,288 @@ fn eom_ee_koopmans_refuses_and_says_where() {
     assert!(msg.contains("eom_kccsd_ghf.py:1749"), "{msg}");
     assert!(msg.contains("koopmans"), "{msg}");
 }
+
+/// **16-10 Task 1 — the twelve RHF EOM intermediates.**
+///
+/// `eom_kccsd_rhf._IMDS` builds `Loo`/`Lvv`/`cc_Fov` (already gated by 16-04),
+/// `Wovov`/`Wovvo` (shared), `Woooo`/`Wooov`/`Wovoo` (IP) and
+/// `Wvovv`/`Wvvvv`/`Wvvvo` (EA). The `W1`/`W2` halves are gated separately
+/// because upstream reuses the `W1` halves ALONE inside `Wvvvo` and `Wovoo`
+/// (`kintermediates_rhf.py:382-383`, `:424-426`) — an error confined to a `W2`
+/// half would move `Wovvo` and leave `Wovoo` right, and vice versa.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn krccsd_eom_intermediates_match_upstream() {
+    let Some(out) = emit("krccsd_eom") else {
+        return;
+    };
+    let f = diamond_scf([1, 1, 2]);
+    let up = upstream_mos(&out);
+    let (eris, khelper) = eris_on_upstream_mf(&f, &up);
+    let kc = &khelper.kconserv;
+    let (nkpts, nocc, nvir) = (up.nkpts, up.nocc, up.nmo - up.nocc);
+    let (st1, st2) = synthetic(
+        &[nkpts, nocc, nvir],
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+    );
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut check = |name: &str, got: &ZArr, failures: &mut Vec<String>| {
+        let d = maxdiff(got, &cblock(&out, name), name);
+        println!("  {name:12} max|Δ| {d:e}");
+        if !(d < IMDS_BLOCK) {
+            failures.push(format!("{name} {d:e}"));
+        }
+    };
+    check(
+        "r_Wooov",
+        &imdk::wooov(&st1, &eris).expect("Wooov"),
+        &mut failures,
+    );
+    check(
+        "r_Wvovv",
+        &imdk::wvovv(&st1, &eris).expect("Wvovv"),
+        &mut failures,
+    );
+    check(
+        "r_W1ovvo",
+        &imdk::w1ovvo(&st2, &eris, kc).expect("W1ovvo"),
+        &mut failures,
+    );
+    check(
+        "r_W2ovvo",
+        &imdk::w2ovvo(&st1, &eris, kc).expect("W2ovvo"),
+        &mut failures,
+    );
+    check(
+        "r_Wovvo",
+        &imdk::wovvo(&st1, &st2, &eris, kc).expect("Wovvo"),
+        &mut failures,
+    );
+    check(
+        "r_W1ovov",
+        &imdk::w1ovov(&st2, &eris, kc).expect("W1ovov"),
+        &mut failures,
+    );
+    check(
+        "r_W2ovov",
+        &imdk::w2ovov(&st1, &eris, kc).expect("W2ovov"),
+        &mut failures,
+    );
+    check(
+        "r_Wovov",
+        &imdk::wovov(&st1, &st2, &eris, kc).expect("Wovov"),
+        &mut failures,
+    );
+    check(
+        "r_Woooo",
+        &imdk::eom_woooo(&st1, &st2, &eris, kc).expect("Woooo"),
+        &mut failures,
+    );
+    let wvvvv = imdk::eom_wvvvv(&st1, &st2, &eris, kc).expect("Wvvvv");
+    check("r_Wvvvv", &wvvvv, &mut failures);
+    check(
+        "r_Wvvvo",
+        &imdk::wvvvo(&st1, &st2, &eris, kc, None).expect("Wvvvo"),
+        &mut failures,
+    );
+    check(
+        "r_Wovoo",
+        &imdk::wovoo(&st1, &st2, &eris, kc).expect("Wovoo"),
+        &mut failures,
+    );
+
+    // `_IMDS.make_ea` hands its own `Wvvvv` to `Wvvvo` (`:1624`); that path
+    // must agree with rebuilding it, or the two EA routes differ silently.
+    let given = imdk::wvvvo(&st1, &st2, &eris, kc, Some(&wvvvv)).expect("Wvvvo(given)");
+    let d = maxdiff(&given, &cblock(&out, "r_Wvvvo"), "r_Wvvvo");
+    println!("  Wvvvo with a CALLER-SUPPLIED Wvvvv: max|Δ| {d:e}");
+    assert!(d < IMDS_BLOCK, "the two Wvvvo routes disagree: {d:e}");
+
+    assert!(
+        failures.is_empty(),
+        "RHF EOM intermediates above the gate: {failures:?}"
+    );
+}
+
+/// **16-10 Tasks 2-3 — EOM-KRCCSD's IP and EA matvecs, left matvecs and diagonals.**
+///
+/// The spin-adapted equations are NOT the spin-orbital ones with `nocc` halved:
+/// they carry thirteen explicit `2·X − Xᵀ` combinations that antisymmetry
+/// supplies for free in `eom_kccsd_ghf`. Each is transcribed from the upstream
+/// line above it, and this compares the result on a FIXED synthetic vector for
+/// every `kshift`.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn krccsd_eom_ip_and_ea_match_upstream() {
+    let Some(out) = emit("krccsd_eom") else {
+        return;
+    };
+    let f = diamond_scf([1, 1, 2]);
+    let up = upstream_mos(&out);
+    let (eris, khelper) = eris_on_upstream_mf(&f, &up);
+    let kc = &khelper.kconserv;
+    let (nkpts, nocc, nvir) = (up.nkpts, up.nocc, up.nmo - up.nocc);
+    let (st1, st2) = synthetic(
+        &[nkpts, nocc, nvir],
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+    );
+
+    use pyscf_pbc_cc::eom_kccsd_rhf as eomr;
+    let ip_size = eomr::ip_vector_size(nkpts, nocc, nvir);
+    let ea_size = eomr::ea_vector_size(nkpts, nocc, nvir);
+    println!(
+        "rip_vector_size {ip_size} vs upstream {}; rea {ea_size} vs {}",
+        scalar(&out, "rip_vector_size") as usize,
+        scalar(&out, "rea_vector_size") as usize
+    );
+    assert_eq!(ip_size, scalar(&out, "rip_vector_size") as usize);
+    assert_eq!(ea_size, scalar(&out, "rea_vector_size") as usize);
+
+    let shared = || eomr::RhfEomImds::make_shared(&st1, &st2, &eris, kc).expect("shared imds");
+    let ip = shared().make_ip(kc).expect("IP imds");
+    let ea = shared().make_ea(kc).expect("EA imds");
+
+    let mut failures: Vec<String> = Vec::new();
+    let ipv = ZArr::from_ctensor(&[ip_size], cblock(&out, "rip_vec")).expect("rip_vec");
+    let eav = ZArr::from_ctensor(&[ea_size], cblock(&out, "rea_vec")).expect("rea_vec");
+
+    // The flat packing must round-trip exactly before anything is contracted.
+    let (r1, r2) = eomr::vector_to_amplitudes_ip(&ipv, nkpts, nocc, nvir).expect("unpack");
+    let back = eomr::amplitudes_to_vector_ip(&r1, &r2).expect("pack");
+    assert_eq!(
+        maxdiff(&back, &cblock(&out, "rip_vec"), "rip_vec"),
+        0.0,
+        "the RHF IP vector round trip is not exact"
+    );
+    let (r1, r2) = eomr::vector_to_amplitudes_ea(&eav, nkpts, nocc, nvir).expect("unpack");
+    let back = eomr::amplitudes_to_vector_ea(&r1, &r2).expect("pack");
+    assert_eq!(
+        maxdiff(&back, &cblock(&out, "rea_vec"), "rea_vec"),
+        0.0,
+        "the RHF EA vector round trip is not exact"
+    );
+
+    for kshift in 0..nkpts {
+        for (got, name) in [
+            (
+                eomr::ipccsd_matvec(&ipv, kshift, &ip, kc).expect("ip matvec"),
+                format!("rip_matvec_{kshift}"),
+            ),
+            (
+                eomr::lipccsd_matvec(&ipv, kshift, &ip, kc).expect("ip l_matvec"),
+                format!("rip_lmatvec_{kshift}"),
+            ),
+            (
+                eomr::ipccsd_diag(kshift, &ip, kc).expect("ip diag"),
+                format!("rip_diag_{kshift}"),
+            ),
+            (
+                eomr::eaccsd_matvec(&eav, kshift, &ea, kc).expect("ea matvec"),
+                format!("rea_matvec_{kshift}"),
+            ),
+            (
+                eomr::leaccsd_matvec(&eav, kshift, &ea, kc).expect("ea l_matvec"),
+                format!("rea_lmatvec_{kshift}"),
+            ),
+            (
+                eomr::eaccsd_diag(kshift, &ea, kc).expect("ea diag"),
+                format!("rea_diag_{kshift}"),
+            ),
+        ] {
+            let d = maxdiff(&got, &cblock(&out, &name), &name);
+            println!("  {name:18} max|Δ| {d:e}");
+            if !(d < IMDS_BLOCK) {
+                failures.push(format!("{name} {d:e}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "EOM-KRCCSD above the gate: {failures:?}"
+    );
+}
+
+/// **16-10 Task 4 — the EOM-KRCCSD IP and EA ROOTS.**
+///
+/// On UPSTREAM's own converged `t1`/`t2`, so the comparison is the eigensolve
+/// and not two CCSD convergences. Gate `1e-5`, as for the spin-orbital roots.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn krccsd_eom_roots_match_upstream() {
+    let Some(out) = emit("krccsd_eom") else {
+        return;
+    };
+    let f = diamond_scf([1, 1, 2]);
+    let up = upstream_mos(&out);
+    let (eris, khelper) = eris_on_upstream_mf(&f, &up);
+    let kc = &khelper.kconserv;
+    let (nkpts, nocc, nvir) = (up.nkpts, up.nocc, up.nmo - up.nocc);
+    let nroots = scalar(&out, "nroots") as usize;
+
+    let t1 = ZArr::from_ctensor(&[nkpts, nocc, nvir], cblock(&out, "t1")).expect("t1");
+    let t2 = ZArr::from_ctensor(
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+        cblock(&out, "t2"),
+    )
+    .expect("t2");
+
+    use pyscf_pbc_cc::eom_kccsd_ghf as eom;
+    use pyscf_pbc_cc::eom_kccsd_rhf as eomr;
+    let padding = eom::padding_from(&up.padded).expect("padding");
+    let opts = eom::EomOpts {
+        conv_tol: 1e-8,
+        max_cycle: 100,
+        nroots,
+        ..Default::default()
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    for (kind, tag) in [(eom::Excitation::Ip, "rip"), (eom::Excitation::Ea, "rea")] {
+        let imds = eomr::RhfEomImds::make_shared(&t1, &t2, &eris, kc).expect("shared");
+        let imds = match kind {
+            eom::Excitation::Ip => imds.make_ip(kc).expect("IP imds"),
+            _ => imds.make_ea(kc).expect("EA imds"),
+        };
+        for kshift in 0..nkpts {
+            let r =
+                eomr::eom_kernel(kind, kshift, &imds, &padding, kc, &opts).expect("EOM Davidson");
+            let want = block(&out, &format!("{tag}_roots_{kshift}"));
+            let want_conv = block(&out, &format!("{tag}_conv_{kshift}"));
+            for (n, (&e, &w)) in r.e.iter().zip(want.iter()).enumerate() {
+                let d = (e - w).abs();
+                println!(
+                    "  {tag} kshift={kshift} root {n}: {e:.12} vs upstream {w:.12}  \
+                     |Δ| {d:e}  conv {} (upstream {})  qpwt {:.4}",
+                    r.conv[n],
+                    want_conv[n] != 0.0,
+                    r.qp_weight[n]
+                );
+                if !(d < 1e-5) {
+                    failures.push(format!("{tag}_{kshift}_{n} {d:e}"));
+                }
+                assert!(
+                    r.conv[n],
+                    "{tag} root {n} at kshift {kshift} did not converge"
+                );
+            }
+        }
+    }
+
+    // `EOMEESinglet` is not ported and `EOMEETriplet`/`EOMEESpinFlip` are
+    // shells upstream; the refusal must name that rather than silently
+    // returning something.
+    let imds = eomr::RhfEomImds::make_shared(&t1, &t2, &eris, kc)
+        .expect("shared")
+        .make_ip(kc)
+        .expect("IP imds");
+    let e = eomr::eom_kernel(eom::Excitation::Ee, 0, &imds, &padding, kc, &opts)
+        .expect_err("EE must refuse");
+    let msg = e.to_string();
+    assert!(msg.contains("eom_kccsd_rhf.py:1425"), "{msg}");
+
+    assert!(
+        failures.is_empty(),
+        "EOM-KRCCSD roots above the 1e-5 gate: {failures:?}"
+    );
+}

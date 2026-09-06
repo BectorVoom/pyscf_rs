@@ -427,3 +427,549 @@ pub fn cc_wvovo(
     }
     Ok(out)
 }
+
+// ---------------------------------------------------------------------------
+// The EOM intermediates (`kintermediates_rhf.py:229-455`, plan 16-10 Task 1).
+//
+// `eom_kccsd_rhf._IMDS` builds `Loo`/`Lvv`/`cc_Fov` (shared 1e),
+// `Wovov`/`Wovvo` (shared 2e), `Woooo`/`Wooov`/`Wovoo` (IP) and
+// `Wvovv`/`Wvvvv`/`Wvvvo` (EA).
+//
+// `W1ovvo`/`W2ovvo` and `W1ovov`/`W2ovov` are separate upstream because the
+// `1` halves are reused on their own by `Wvvvo` and `Wovoo` (`:382-383`,
+// `:424-426`); building only the sums would mean recomputing them.
+// ---------------------------------------------------------------------------
+
+/// `Wooov` — `kintermediates_rhf.py:229-238`.
+///
+/// # Errors
+/// Propagates the ERI access.
+pub fn wooov(t1: &T1, eris: &KEris) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let mut w = ZArr::zeros(&[nk, nk, nk, nocc, nocc, nocc, nvir]);
+    for kk in 0..nk {
+        for kl in 0..nk {
+            for ki in 0..nk {
+                let mut v = einsum(
+                    "ic,klcd->klid",
+                    &[&t1.slice_leading(&[ki])?, &eris.blk(Blk::Oovv, kk, kl, ki)?],
+                )?;
+                v.add_assign(&eris.blk(Blk::Ooov, kk, kl, ki)?)?;
+                w.set_leading(&[kk, kl, ki], &v)?;
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `Wvovv` — `:240-249`.
+///
+/// # Errors
+/// Propagates the ERI access.
+pub fn wvovv(t1: &T1, eris: &KEris) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let mut w = ZArr::zeros(&[nk, nk, nk, nvir, nocc, nvir, nvir]);
+    for ka in 0..nk {
+        for kl in 0..nk {
+            for kc in 0..nk {
+                let mut v = einsum_scaled(
+                    "ka,klcd->alcd",
+                    &[&t1.slice_leading(&[ka])?, &eris.blk(Blk::Oovv, ka, kl, kc)?],
+                    -1.0,
+                )?;
+                v.add_assign(&eris.blk(Blk::Vovv, ka, kl, kc)?)?;
+                w.set_leading(&[ka, kl, kc], &v)?;
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `W1ovvo` — `:251-266`. The `t2`-only half of `Wovvo`.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn w1ovvo(t2: &T2, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let mut w = ZArr::zeros(&[nk, nk, nk, nocc, nvir, nvir, nocc]);
+    for kk in 0..nk {
+        for ka in 0..nk {
+            for kc in 0..nk {
+                let ki = kconserv.get(kk, kc, ka) as usize;
+                // `:259` — `ovvo[kk,ka,kc,ki]` IS `voov[ka,kk,ki,kc]`
+                // transposed; upstream writes the comment because the two have
+                // the same shape and swapping them is silent.
+                let mut v = eris.blk(Blk::Voov, ka, kk, ki)?.transpose(&[1, 0, 3, 2])?;
+                for kl in 0..nk {
+                    let kd = kconserv.get(ki, ka, kl) as usize;
+                    // `St2 = 2 t2[ki,kl,ka] - t2[kl,ki,ka].transpose(1,0,2,3)`
+                    let mut st2 = t2.slice_leading(&[ki, kl, ka])?;
+                    st2.scale(2.0);
+                    st2.sub_assign(&t2.slice_leading(&[kl, ki, ka])?.transpose(&[1, 0, 2, 3])?)?;
+                    v.add_assign(&einsum(
+                        "klcd,ilad->kaci",
+                        &[&eris.blk(Blk::Oovv, kk, kl, kc)?, &st2],
+                    )?)?;
+                    v.sub_assign(&einsum(
+                        "kldc,ilad->kaci",
+                        &[
+                            &eris.blk(Blk::Oovv, kk, kl, kd)?,
+                            &t2.slice_leading(&[ki, kl, ka])?,
+                        ],
+                    )?)?;
+                }
+                w.set_leading(&[kk, ka, kc], &v)?;
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `W2ovvo` — `:268-279`. The `t1` half.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn w2ovvo(t1: &T1, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let ww = wooov(t1, eris)?;
+    let mut w = ZArr::zeros(&[nk, nk, nk, nocc, nvir, nvir, nocc]);
+    for kk in 0..nk {
+        for ka in 0..nk {
+            for kc in 0..nk {
+                let ki = kconserv.get(kk, kc, ka) as usize;
+                let mut v = einsum_scaled(
+                    "la,lkic->kaci",
+                    &[&t1.slice_leading(&[ka])?, &ww.slice_leading(&[ka, kk, ki])?],
+                    -1.0,
+                )?;
+                v.add_assign(&einsum(
+                    "akdc,id->kaci",
+                    &[&eris.blk(Blk::Vovv, ka, kk, ki)?, &t1.slice_leading(&[ki])?],
+                )?)?;
+                w.set_leading(&[kk, ka, kc], &v)?;
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `Wovvo = W1ovvo + W2ovvo` — `:281-285`.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn wovvo(t1: &T1, t2: &T2, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let mut w = w1ovvo(t2, eris, kconserv)?;
+    w.add_assign(&w2ovvo(t1, eris, kconserv)?)?;
+    Ok(w)
+}
+
+/// `W1ovov` — `:287-301`.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn w1ovov(t2: &T2, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let mut w = ZArr::zeros(&[nk, nk, nk, nocc, nvir, nocc, nvir]);
+    for kk in 0..nk {
+        for kb in 0..nk {
+            for ki in 0..nk {
+                let kd = kconserv.get(kk, ki, kb) as usize;
+                let mut v = eris.blk(Blk::Ovov, kk, kb, ki)?;
+                for kl in 0..nk {
+                    let kc = kconserv.get(kk, kd, kl) as usize;
+                    v.sub_assign(&einsum(
+                        "klcd,ilcb->kbid",
+                        &[
+                            &eris.blk(Blk::Oovv, kk, kl, kc)?,
+                            &t2.slice_leading(&[ki, kl, kc])?,
+                        ],
+                    )?)?;
+                }
+                w.set_leading(&[kk, kb, ki], &v)?;
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `W2ovov` — `:303-314`.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn w2ovov(t1: &T1, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let ww = wooov(t1, eris)?;
+    let mut w = ZArr::zeros(&[nk, nk, nk, nocc, nvir, nocc, nvir]);
+    for kk in 0..nk {
+        for kb in 0..nk {
+            for ki in 0..nk {
+                let kd = kconserv.get(kk, ki, kb) as usize;
+                let mut v = einsum_scaled(
+                    "klid,lb->kbid",
+                    &[&ww.slice_leading(&[kk, kb, ki])?, &t1.slice_leading(&[kb])?],
+                    -1.0,
+                )?;
+                v.add_assign(&einsum(
+                    "bkdc,ic->kbid",
+                    &[&eris.blk(Blk::Vovv, kb, kk, kd)?, &t1.slice_leading(&[ki])?],
+                )?)?;
+                w.set_leading(&[kk, kb, ki], &v)?;
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `Wovov = W1ovov + W2ovov` — `:316-320`.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn wovov(t1: &T1, t2: &T2, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let mut w = w1ovov(t2, eris, kconserv)?;
+    w.add_assign(&w2ovov(t1, eris, kconserv)?)?;
+    Ok(w)
+}
+
+/// `Woooo` — `:322-337`. NOT [`cc_woooo`]: this one carries the `t1·t1`,
+/// `ooov·t1` and full `oovv·t2` terms the ground-state version does not need.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn eom_woooo(t1: &T1, t2: &T2, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let _ = nvir;
+    let mut w = ZArr::zeros(&[nk, nk, nk, nocc, nocc, nocc, nocc]);
+    for kk in 0..nk {
+        for kl in 0..nk {
+            for ki in 0..nk {
+                let kj = kconserv.get(kk, ki, kl) as usize;
+                let mut v = einsum(
+                    "klcd,ic,jd->klij",
+                    &[
+                        &eris.blk(Blk::Oovv, kk, kl, ki)?,
+                        &t1.slice_leading(&[ki])?,
+                        &t1.slice_leading(&[kj])?,
+                    ],
+                )?;
+                v.add_assign(&einsum(
+                    "klid,jd->klij",
+                    &[&eris.blk(Blk::Ooov, kk, kl, ki)?, &t1.slice_leading(&[kj])?],
+                )?)?;
+                v.add_assign(&einsum(
+                    "lkjc,ic->klij",
+                    &[&eris.blk(Blk::Ooov, kl, kk, kj)?, &t1.slice_leading(&[ki])?],
+                )?)?;
+                v.add_assign(&eris.blk(Blk::Oooo, kk, kl, ki)?)?;
+                for kc in 0..nk {
+                    v.add_assign(&einsum(
+                        "klcd,ijcd->klij",
+                        &[
+                            &eris.blk(Blk::Oovv, kk, kl, kc)?,
+                            &t2.slice_leading(&[ki, kj, kc])?,
+                        ],
+                    )?)?;
+                }
+                w.set_leading(&[kk, kl, ki], &v)?;
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `get_Wvvvv(t1, t2, eris, kconserv, ka, kb, kc)` — `:348-369`, the
+/// non-`Lpv` branch.
+///
+/// The `Lpv` branch (`:351-358`) builds `Wvvvv` on the fly from GDF's
+/// three-index tensors. `crate::keris` does not carry `Lpv` — see
+/// `crate::kueris`'s module doc for the same deferral on the unrestricted
+/// side — so the `else` at `:360` is the only route here, and it produces the
+/// same numbers.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn get_wvvvv(
+    t1: &T1,
+    t2: &T2,
+    eris: &KEris,
+    kconserv: &Kconserv,
+    ka: usize,
+    kb: usize,
+    kc: usize,
+) -> Result<ZArr, PbcCcError> {
+    let nk = eris.nkpts;
+    let kd = kconserv.get(ka, kc, kb) as usize;
+    let mut v = einsum(
+        "klcd,ka,lb->abcd",
+        &[
+            &eris.blk(Blk::Oovv, ka, kb, kc)?,
+            &t1.slice_leading(&[ka])?,
+            &t1.slice_leading(&[kb])?,
+        ],
+    )?;
+    v.sub_assign(&einsum(
+        "alcd,lb->abcd",
+        &[&eris.blk(Blk::Vovv, ka, kb, kc)?, &t1.slice_leading(&[kb])?],
+    )?)?;
+    v.sub_assign(&einsum(
+        "bkdc,ka->abcd",
+        &[&eris.blk(Blk::Vovv, kb, ka, kd)?, &t1.slice_leading(&[ka])?],
+    )?)?;
+    v.add_assign(&eris.blk(Blk::Vvvv, ka, kb, kc)?)?;
+    for kk in 0..nk {
+        let kl = kconserv.get(kc, kk, kd) as usize;
+        v.add_assign(&einsum(
+            "klcd,klab->abcd",
+            &[
+                &eris.blk(Blk::Oovv, kk, kl, kc)?,
+                &t2.slice_leading(&[kk, kl, ka])?,
+            ],
+        )?)?;
+    }
+    Ok(v)
+}
+
+/// `Wvvvv` — `:339-346`, every `(ka, kb, kc)` of [`get_wvvvv`].
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn eom_wvvvv(t1: &T1, t2: &T2, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let (nk, nvir) = (eris.nkpts, eris.nvir);
+    let mut w = ZArr::zeros(&[nk, nk, nk, nvir, nvir, nvir, nvir]);
+    for ka in 0..nk {
+        for kb in 0..nk {
+            for kc in 0..nk {
+                w.set_leading(
+                    &[ka, kb, kc],
+                    &get_wvvvv(t1, t2, eris, kconserv, ka, kb, kc)?,
+                )?;
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `Wvvvo` — `:371-419`.
+///
+/// `ww_vvvv` is the caller's `Wvvvv` when it has one (`_IMDS.make_ea` passes
+/// its own at `eom_kccsd_rhf.py:1624`); `None` rebuilds it per k-triple, which
+/// is what upstream does at `:414`.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn wvvvo(
+    t1: &T1,
+    t2: &T2,
+    eris: &KEris,
+    kconserv: &Kconserv,
+    ww_vvvv: Option<&ZArr>,
+) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let w1ov = w1ovov(t2, eris, kconserv)?;
+    let w1vo = w1ovvo(t2, eris, kconserv)?;
+    let ffov = cc_fov(t1, t2, eris)?;
+    let mut w = ZArr::zeros(&[nk, nk, nk, nvir, nvir, nvir, nocc]);
+
+    for ka in 0..nk {
+        for kb in 0..nk {
+            for kc in 0..nk {
+                let kj = kconserv.get(ka, kc, kb) as usize;
+                // `:383` — `Wvovo[ka,kl,kc,kj]` IS `Wovov[kl,ka,kj,kc]`
+                // transposed `(1,0,3,2)`; upstream states it as a comment
+                // because the two have the same shape.
+                let alcj = w1ov
+                    .slice_leading(&[kb, ka, kj])?
+                    .transpose(&[1, 0, 3, 2])?;
+                let mut v =
+                    einsum_scaled("alcj,lb->abcj", &[&alcj, &t1.slice_leading(&[kb])?], -1.0)?;
+                v.sub_assign(&einsum(
+                    "kbcj,ka->abcj",
+                    &[
+                        &w1vo.slice_leading(&[ka, kb, kc])?,
+                        &t1.slice_leading(&[ka])?,
+                    ],
+                )?)?;
+                // `:387` — `vovv[kc,kj,ka].transpose(2,3,0,1).conj()`
+                v.add_assign(
+                    &eris
+                        .blk(Blk::Vovv, kc, kj, ka)?
+                        .transpose(&[2, 3, 0, 1])?
+                        .conj(),
+                )?;
+
+                for kl in 0..nk {
+                    let kd = kconserv.get(ka, kc, kl) as usize;
+                    let mut st2 = t2.slice_leading(&[kl, kj, kd])?;
+                    st2.scale(2.0);
+                    st2.sub_assign(&t2.slice_leading(&[kl, kj, kb])?.transpose(&[0, 1, 3, 2])?)?;
+                    v.add_assign(&einsum(
+                        "alcd,ljdb->abcj",
+                        &[&eris.blk(Blk::Vovv, ka, kl, kc)?, &st2],
+                    )?)?;
+                    v.sub_assign(&einsum(
+                        "aldc,ljdb->abcj",
+                        &[
+                            &eris.blk(Blk::Vovv, ka, kl, kd)?,
+                            &t2.slice_leading(&[kl, kj, kd])?,
+                        ],
+                    )?)?;
+                    let kd = kconserv.get(kb, kc, kl) as usize;
+                    v.sub_assign(&einsum(
+                        "bldc,jlda->abcj",
+                        &[
+                            &eris.blk(Blk::Vovv, kb, kl, kd)?,
+                            &t2.slice_leading(&[kj, kl, kd])?,
+                        ],
+                    )?)?;
+                    let kk = kconserv.get(kb, kl, ka) as usize;
+                    v.add_assign(&einsum(
+                        "lkjc,lkba->abcj",
+                        &[
+                            &eris.blk(Blk::Ooov, kl, kk, kj)?,
+                            &t2.slice_leading(&[kl, kk, kb])?,
+                        ],
+                    )?)?;
+                }
+                v.add_assign(&einsum(
+                    "lkjc,lb,ka->abcj",
+                    &[
+                        &eris.blk(Blk::Ooov, kb, ka, kj)?,
+                        &t1.slice_leading(&[kb])?,
+                        &t1.slice_leading(&[ka])?,
+                    ],
+                )?)?;
+                v.sub_assign(&einsum(
+                    "lc,ljab->abcj",
+                    &[
+                        &ffov.slice_leading(&[kc])?,
+                        &t2.slice_leading(&[kc, kj, ka])?,
+                    ],
+                )?)?;
+                w.set_leading(&[ka, kb, kc], &v)?;
+            }
+        }
+    }
+
+    // `:408-418` — the `Wvvvv·t1` term, skipped entirely when `t1` is zero.
+    // That is upstream's own optimisation with its own comment ("don't make
+    // vvvv if you can avoid it"), and it is a real one: `Wvvvv` is the phase's
+    // largest tensor.
+    let t1_is_zero =
+        t1.data().re.iter().all(|v| *v == 0.0) && t1.data().im.iter().all(|v| *v == 0.0);
+    if !t1_is_zero {
+        for ka in 0..nk {
+            for kb in 0..nk {
+                for kc in 0..nk {
+                    let kj = kconserv.get(ka, kc, kb) as usize;
+                    let wv = match ww_vvvv {
+                        Some(w4) => w4.slice_leading(&[ka, kb, kc])?,
+                        None => get_wvvvv(t1, t2, eris, kconserv, ka, kb, kc)?,
+                    };
+                    let add = einsum("abcd,jd->abcj", &[&wv, &t1.slice_leading(&[kj])?])?;
+                    let mut cur = w.slice_leading(&[ka, kb, kc])?;
+                    cur.add_assign(&add)?;
+                    w.set_leading(&[ka, kb, kc], &cur)?;
+                }
+            }
+        }
+    }
+    Ok(w)
+}
+
+/// `Wovoo` — `:421-455`.
+///
+/// # Errors
+/// As [`cc_foo`].
+pub fn wovoo(t1: &T1, t2: &T2, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let (nk, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let w1ov = w1ovov(t2, eris, kconserv)?;
+    let woooo_ = eom_woooo(t1, t2, eris, kconserv)?;
+    let w1vo = w1ovvo(t2, eris, kconserv)?;
+    let ffov = cc_fov(t1, t2, eris)?;
+    let mut w = ZArr::zeros(&[nk, nk, nk, nocc, nvir, nocc, nocc]);
+
+    for kk in 0..nk {
+        for kb in 0..nk {
+            for ki in 0..nk {
+                let kj = kconserv.get(kk, ki, kb) as usize;
+                let mut v = einsum(
+                    "kbid,jd->kbij",
+                    &[
+                        &w1ov.slice_leading(&[kk, kb, ki])?,
+                        &t1.slice_leading(&[kj])?,
+                    ],
+                )?;
+                v.sub_assign(&einsum(
+                    "klij,lb->kbij",
+                    &[
+                        &woooo_.slice_leading(&[kk, kb, ki])?,
+                        &t1.slice_leading(&[kb])?,
+                    ],
+                )?)?;
+                v.add_assign(&einsum(
+                    "kbcj,ic->kbij",
+                    &[
+                        &w1vo.slice_leading(&[kk, kb, ki])?,
+                        &t1.slice_leading(&[ki])?,
+                    ],
+                )?)?;
+                // `:429` — `ooov[ki,kj,kk].transpose(2,3,0,1).conj()`
+                v.add_assign(
+                    &eris
+                        .blk(Blk::Ooov, ki, kj, kk)?
+                        .transpose(&[2, 3, 0, 1])?
+                        .conj(),
+                )?;
+
+                for kd in 0..nk {
+                    let kl = kconserv.get(ki, kk, kd) as usize;
+                    let mut st2 = t2.slice_leading(&[kl, kj, kd])?;
+                    st2.scale(2.0);
+                    st2.sub_assign(&t2.slice_leading(&[kj, kl, kd])?.transpose(&[1, 0, 2, 3])?)?;
+                    v.add_assign(&einsum(
+                        "klid,ljdb->kbij",
+                        &[&eris.blk(Blk::Ooov, kk, kl, ki)?, &st2],
+                    )?)?;
+                    v.sub_assign(&einsum(
+                        "lkid,ljdb->kbij",
+                        &[
+                            &eris.blk(Blk::Ooov, kl, kk, ki)?,
+                            &t2.slice_leading(&[kl, kj, kd])?,
+                        ],
+                    )?)?;
+                    let kl = kconserv.get(kb, ki, kd) as usize;
+                    v.sub_assign(&einsum(
+                        "lkjd,libd->kbij",
+                        &[
+                            &eris.blk(Blk::Ooov, kl, kk, kj)?,
+                            &t2.slice_leading(&[kl, ki, kb])?,
+                        ],
+                    )?)?;
+                    v.add_assign(&einsum(
+                        "bkdc,jidc->kbij",
+                        &[
+                            &eris.blk(Blk::Vovv, kb, kk, kd)?,
+                            &t2.slice_leading(&[kj, ki, kd])?,
+                        ],
+                    )?)?;
+                }
+                v.add_assign(&einsum(
+                    "bkdc,jd,ic->kbij",
+                    &[
+                        &eris.blk(Blk::Vovv, kb, kk, kj)?,
+                        &t1.slice_leading(&[kj])?,
+                        &t1.slice_leading(&[ki])?,
+                    ],
+                )?)?;
+                v.add_assign(&einsum(
+                    "kc,ijcb->kbij",
+                    &[
+                        &ffov.slice_leading(&[kk])?,
+                        &t2.slice_leading(&[ki, kj, kk])?,
+                    ],
+                )?)?;
+                w.set_leading(&[kk, kb, ki], &v)?;
+            }
+        }
+    }
+    Ok(w)
+}
