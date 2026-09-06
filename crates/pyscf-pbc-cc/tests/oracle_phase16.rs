@@ -1189,3 +1189,126 @@ fn kgccsd_eom_ip_and_ea_match_upstream() {
     }
     assert!(failures.is_empty(), "EOM-EA above the gate: {failures:?}");
 }
+
+/// **16-09 Task 4 — the EOM-IP and EOM-EA ROOTS.**
+///
+/// The matvec gates run on synthetic amplitudes so they measure the equations;
+/// this runs the Davidson on UPSTREAM'S OWN converged `t1`/`t2`, so what is
+/// compared is the eigensolve and not two CCSD convergences.
+///
+/// **The gate is `1e-5`, and that is measured** (`measurements/README.md §1`):
+/// upstream's own spread over `conv_tol` and `nroots` on these roots reaches
+/// `5.1e-7`, and its own test suite asserts EOM roots at 3 decimals
+/// (`test_krccsd.py:359-366`). A tighter gate would fail a correct solver.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn kgccsd_eom_roots_match_upstream() {
+    let Some(out) = emit("kgccsd_eom_ip") else {
+        return;
+    };
+    let f = diamond_scf([1, 1, 2]);
+    let nkpts = scalar(&out, "nkpts") as usize;
+    let nocc = scalar(&out, "nocc") as usize;
+    let nmo = scalar(&out, "nmo") as usize;
+    let nao = scalar(&out, "nao") as usize;
+    let nvir = nmo - nocc;
+    let nroots = scalar(&out, "nroots") as usize;
+
+    let c = cblock(&out, "mo_coeff");
+    let mo_coeff: Vec<MoCoeff> = (0..nkpts)
+        .map(|k| {
+            let off = k * nao * nmo;
+            MoCoeff::new(
+                nao,
+                nmo,
+                CTensor {
+                    re: c.re[off..off + nao * nmo].to_vec(),
+                    im: c.im[off..off + nao * nmo].to_vec(),
+                },
+            )
+        })
+        .collect();
+    let me = block(&out, "mo_energy");
+    let mo_energy: Vec<Vec<f64>> = (0..nkpts)
+        .map(|k| me[k * nmo..(k + 1) * nmo].to_vec())
+        .collect();
+    let fock = ZArr::from_ctensor(&[nkpts, nmo, nmo], cblock(&out, "fock")).expect("fock");
+    let nocc_per_kpt: Vec<usize> = block(&out, "nocc_per_kpt")
+        .iter()
+        .map(|v| *v as usize)
+        .collect();
+    let padded = PaddedMos {
+        mo_coeff: mo_coeff.clone(),
+        mo_energy: mo_energy.clone(),
+        nmo_per_kpt: vec![nmo; nkpts],
+        nocc_per_kpt,
+        nmo,
+        nocc,
+    };
+    let khelper = KptsHelper::without_symm_map(&f.cell.a, PeriodicDf::kpts(&f.df));
+    let eris = pyscf_pbc_cc::kccsd::KgEris::from_parts(
+        &f.df,
+        &khelper,
+        &mo_coeff,
+        fock,
+        mo_energy,
+        nocc,
+        4_000_000_000,
+    )
+    .expect("spin-orbital _ERIS");
+    let kc = &khelper.kconserv;
+
+    // UPSTREAM's converged amplitudes, so the eigenproblem is identical.
+    let t1 = ZArr::from_ctensor(&[nkpts, nocc, nvir], cblock(&out, "t1")).expect("t1");
+    let t2 = ZArr::from_ctensor(
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+        cblock(&out, "t2"),
+    )
+    .expect("t2");
+
+    use pyscf_pbc_cc::eom_kccsd_ghf as eom;
+    let padding = eom::padding_from(&padded).expect("padding");
+    let opts = eom::EomOpts {
+        conv_tol: 1e-8,
+        max_cycle: 100,
+        nroots,
+        ..Default::default()
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    for (kind, tag) in [(eom::Excitation::Ip, "ip"), (eom::Excitation::Ea, "ea")] {
+        let imds = eom::EomImds::make_shared(&t1, &t2, &eris, kc).expect("shared");
+        let imds = match kind {
+            eom::Excitation::Ip => imds.make_ip(kc).expect("IP imds"),
+            eom::Excitation::Ea => imds.make_ea(kc).expect("EA imds"),
+        };
+        for kshift in 0..nkpts {
+            let r =
+                eom::eom_kernel(kind, kshift, &imds, &padding, kc, &opts).expect("EOM Davidson");
+            let want = block(&out, &format!("{tag}_roots_{kshift}"));
+            let want_conv = block(&out, &format!("{tag}_conv_{kshift}"));
+            for (n, (&e, &w)) in r.e.iter().zip(want.iter()).enumerate() {
+                let d = (e - w).abs();
+                println!(
+                    "  {tag} kshift={kshift} root {n}: {e:.12} vs upstream {w:.12}  \
+                     |Δ| {d:e}  conv {} (upstream {})  qpwt {:.4}",
+                    r.conv[n],
+                    want_conv[n] != 0.0,
+                    r.qp_weight[n]
+                );
+                if !(d < 1e-5) {
+                    failures.push(format!("{tag}_{kshift}_{n} {d:e}"));
+                }
+                assert!(
+                    r.conv[n],
+                    "{tag} root {n} at kshift {kshift} did not converge"
+                );
+            }
+            assert_eq!(r.e.len(), want.len(), "{tag}: wrong number of roots");
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "EOM roots above the 1e-5 gate: {failures:?}"
+    );
+}

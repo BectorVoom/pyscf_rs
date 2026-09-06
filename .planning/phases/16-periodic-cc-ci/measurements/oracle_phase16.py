@@ -1230,6 +1230,33 @@ def section_kgccsd_eom_ip(nk=(1, 1, 2)):
         emit("ea_lmatvec_%d" % kshift, _eom.leaccsd_matvec(eom_ea, v, kshift, imds_ea))
         emit("ea_diag_%d" % kshift, _eom.eaccsd_diag(eom_ea, kshift, imds_ea))
 
+    # --- The actual ROOTS, on the CONVERGED amplitudes.
+    #
+    # The matvec gates above run on synthetic amplitudes so they measure the
+    # equations; the roots have to run on converged ones to be a root at all.
+    # `t1`/`t2` are emitted alongside so the Rust side solves the SAME
+    # eigenproblem rather than its own converged approximation to it.
+    ecc, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", ecc)
+    emit("t1", t1)
+    emit("t2", t2)
+    nroots = 2
+    scalar("nroots", nroots)
+    for tag, cls, fn in (("ip", _eom.EOMIP, "ipccsd"), ("ea", _eom.EOMEA, "eaccsd")):
+        e = cls(cc)
+        e.conv_tol = 1e-8
+        e.max_cycle = 100
+        imd = e.make_imds(eris=eris)
+        for kshift in range(nkpts):
+            # `ipccsd`/`eaccsd` return `(e, v)` and stash convergence on the
+            # object (`:620-623`), so the flags come from `e.converged`.
+            evals, evecs = getattr(e, fn)(nroots=nroots, kptlist=[kshift], imds=imd)
+            emit("%s_roots_%d" % (tag, kshift), np.asarray(evals).ravel())
+            emit(
+                "%s_conv_%d" % (tag, kshift),
+                np.asarray(np.real(e.converged), dtype=float).ravel(),
+            )
+
 
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),

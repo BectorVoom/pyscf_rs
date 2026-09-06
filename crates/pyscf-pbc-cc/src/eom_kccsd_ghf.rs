@@ -24,6 +24,7 @@
 //! spelled `Woovv` at every use site, so this port keeps the name and the
 //! aliasing rather than substituting the ERI block silently.
 
+use pyscf_algebra::CTensor;
 use pyscf_pbc_lib::Kconserv;
 
 use crate::error::PbcCcError;
@@ -1224,4 +1225,286 @@ pub fn mask_frozen_ea(
         }
     }
     amplitudes_to_vector_ea(&new_r1, &new_r2, kshift, kconserv)
+}
+
+// ---------------------------------------------------------------------------
+// The Davidson driver (`:40-159`) and the two excitation surfaces
+// ---------------------------------------------------------------------------
+
+/// Which excitation the driver is solving for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Excitation {
+    /// Ionisation potential — `EOMIP` (`:684`).
+    Ip,
+    /// Electron affinity — `EOMEA` (`:1201`).
+    Ea,
+}
+
+/// `EOMIP` / `EOMEA`'s solver knobs (`eom_rccsd.EOM`'s defaults, which
+/// `eom_kccsd_ghf` does not override).
+#[derive(Debug, Clone, Copy)]
+pub struct EomOpts {
+    /// `eom.conv_tol`.
+    pub conv_tol: f64,
+    /// `eom.max_cycle`.
+    pub max_cycle: usize,
+    /// `eom.max_space`. **A real memory knob, not a constant to inline**:
+    /// the Davidson subspace is `2·max_space·nroots` vectors of the full
+    /// amplitude length, which `16-REVIEW.md §7.2` sized at 16 MiB on
+    /// `gth-szv` 2×2×2 but **5.4 GiB** for EA on `gth-dzvp` 3×3×3.
+    pub max_space: usize,
+    /// Roots per k-point.
+    pub nroots: usize,
+    /// `koopmans=True` targets quasiparticle states by overlap with the guess
+    /// rather than by lowest eigenvalue (`:129-136`).
+    pub koopmans: bool,
+    /// Solve for LEFT eigenvectors.
+    pub left: bool,
+}
+
+impl Default for EomOpts {
+    fn default() -> Self {
+        Self {
+            conv_tol: 1e-7,
+            max_cycle: 50,
+            max_space: 20,
+            nroots: 1,
+            koopmans: false,
+            left: false,
+        }
+    }
+}
+
+/// One k-shift's roots.
+#[derive(Debug, Clone)]
+pub struct EomRoots {
+    /// The k-point index this block was solved at.
+    pub kshift: usize,
+    /// Per-root convergence.
+    pub conv: Vec<bool>,
+    /// The excitation energies.
+    pub e: Vec<f64>,
+    /// The eigenvectors, in the packed vector layout.
+    pub v: Vec<ZArr>,
+    /// `‖r1‖²`, upstream's `qp_weight` (`:154`) — the quasiparticle weight,
+    /// printed per root and worth returning because it is how a caller tells a
+    /// physical ionisation from a satellite.
+    pub qp_weight: Vec<f64>,
+}
+
+/// The padded-orbital index sets a masking call needs, as
+/// `get_padding_k_idx` (`:217-222`) returns them.
+pub struct Padding {
+    pub occupied: Vec<Vec<usize>>,
+    pub virtuals: Vec<Vec<usize>>,
+}
+
+/// `get_padding_k_idx(eom, cc)` (`:217-222`) — `padding_k_idx(cc, "split")`.
+///
+/// # Errors
+/// Propagates the padding surface.
+pub fn padding_from(padded: &pyscf_pbc_mp::PaddedMos) -> Result<Padding, PbcCcError> {
+    let (occupied, virtuals) = crate::kccsd_rhf::split_padding(padded)?;
+    Ok(Padding { occupied, virtuals })
+}
+
+/// `kernel(eom, ...)` (`:40-159`) for one `kshift`.
+///
+/// # The guess, the mask and `LARGE_DENOM` are one mechanism
+///
+/// `:106` masks the DIAGONAL with [`crate::kccsd_rhf::LARGE_DENOM`] and
+/// `:713`/`:717` masks each guess vector with `0.0`. Padded orbitals are
+/// therefore pushed far from every root but still present in the vector — the
+/// same "arithmetic, never a skip" rule the amplitude denominators follow
+/// (`16-CONTEXT §3.3`). Dropping them instead would change the vector length
+/// and hence the subspace.
+///
+/// # Errors
+/// Propagates the matvec and the Davidson solve.
+#[allow(clippy::too_many_arguments)]
+pub fn eom_kernel(
+    kind: Excitation,
+    kshift: usize,
+    imds: &EomImds<'_>,
+    padding: &Padding,
+    kconserv: &Kconserv,
+    opts: &EomOpts,
+) -> Result<EomRoots, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let size = match kind {
+        Excitation::Ip => ip_vector_size(nkpts, nocc, nvir),
+        Excitation::Ea => ea_vector_size(nkpts, nocc, nvir, kshift, kconserv),
+    };
+
+    let mask = |v: &ZArr, konst: f64| -> Result<ZArr, PbcCcError> {
+        match kind {
+            Excitation::Ip => mask_frozen_ip(
+                v,
+                kshift,
+                nkpts,
+                nocc,
+                nvir,
+                &padding.occupied,
+                &padding.virtuals,
+                kconserv,
+                konst,
+            ),
+            Excitation::Ea => mask_frozen_ea(
+                v,
+                kshift,
+                nkpts,
+                nocc,
+                nvir,
+                &padding.occupied,
+                &padding.virtuals,
+                kconserv,
+                konst,
+            ),
+        }
+    };
+
+    // `:85-91` — the root count is capped by the number of UNFROZEN entries,
+    // found by masking a zero vector with `const = 1` and counting.
+    let ones = mask(&ZArr::zeros(&[size]), 1.0)?;
+    let nfrozen = ones.data().re.iter().filter(|v| **v == 1.0).count();
+    let nroots = opts.nroots.min(size).min(size - nfrozen).max(1);
+
+    // `:105-106` — the diagonal, masked with LARGE_DENOM.
+    let diag = match kind {
+        Excitation::Ip => ipccsd_diag(kshift, imds, kconserv)?,
+        Excitation::Ea => eaccsd_diag(kshift, imds, kconserv)?,
+    };
+    let diag = mask(&diag, crate::kccsd_rhf::LARGE_DENOM)?;
+
+    // `:108-121` / `:705-724` — the initial guess.
+    let guess = init_guess(kind, kshift, &diag, nroots, opts.koopmans, padding, &mask)?;
+
+    let aop = |xs: &[CTensor]| -> Vec<CTensor> {
+        xs.iter()
+            .map(|x| {
+                let v = ZArr::from_ctensor(&[size], x.clone()).expect("guess shape");
+                let out = match (kind, opts.left) {
+                    (Excitation::Ip, false) => ipccsd_matvec(&v, kshift, imds, kconserv),
+                    (Excitation::Ip, true) => lipccsd_matvec(&v, kshift, imds, kconserv),
+                    (Excitation::Ea, false) => eaccsd_matvec(&v, kshift, imds, kconserv),
+                    (Excitation::Ea, true) => leaccsd_matvec(&v, kshift, imds, kconserv),
+                };
+                out.expect("EOM matvec").into_ctensor()
+            })
+            .collect()
+    };
+
+    // `:126-127` — `precond(r, e0, x0) = r / (e0 - diag + 1e-12)`.
+    let dre: Vec<f64> = diag.data().re.clone();
+    let precond = |r: &CTensor, e0: f64, _x0: &CTensor| -> CTensor {
+        let mut out = r.clone();
+        for i in 0..out.re.len() {
+            let d = e0 - dre[i] + 1e-12;
+            out.re[i] /= d;
+            out.im[i] /= d;
+        }
+        out
+    };
+
+    let dopts = pyscf_algebra::DavidsonOptions {
+        tol: opts.conv_tol,
+        tol_residual: None,
+        max_cycle: opts.max_cycle,
+        max_space: opts.max_space,
+        nroots,
+        left: false,
+        real_dtype: false,
+        ..Default::default()
+    };
+    let res = pyscf_algebra::davidson_nosym1(
+        aop,
+        guess.iter().map(|g| g.data().clone()).collect(),
+        precond,
+        &dopts,
+        pyscf_algebra::pick_real_eigs,
+    )
+    .map_err(|e| PbcCcError::Algebra(format!("EOM Davidson: {e}")))?;
+
+    // `:151-157` — the quasiparticle weight is `‖r1‖²`.
+    let mut v = Vec::with_capacity(res.x.len());
+    let mut qp_weight = Vec::with_capacity(res.x.len());
+    for x in &res.x {
+        let vec = ZArr::from_ctensor(&[size], x.clone())?;
+        let n1 = match kind {
+            Excitation::Ip => nocc,
+            Excitation::Ea => nvir,
+        };
+        let w: f64 = (0..n1)
+            .map(|i| vec.data().re[i] * vec.data().re[i] + vec.data().im[i] * vec.data().im[i])
+            .sum();
+        qp_weight.push(w);
+        v.push(vec);
+    }
+
+    Ok(EomRoots {
+        kshift,
+        conv: res.conv,
+        e: res.e,
+        v,
+        qp_weight,
+    })
+}
+
+/// `EOMIP.get_init_guess` (`:705-724`) and its EA sibling (`:905-...`).
+///
+/// The `koopmans` branch seeds unit vectors on the NON-PADDED orbitals — the
+/// occupied ones in REVERSE order for IP (highest occupied first), the virtual
+/// ones in forward order for EA — and masks each with `const = 0.0`. The other
+/// branch takes the `nroots` smallest diagonal entries.
+fn init_guess(
+    kind: Excitation,
+    kshift: usize,
+    diag: &ZArr,
+    nroots: usize,
+    koopmans: bool,
+    padding: &Padding,
+    mask: &dyn Fn(&ZArr, f64) -> Result<ZArr, PbcCcError>,
+) -> Result<Vec<ZArr>, PbcCcError> {
+    let size = diag.len();
+    let mut guess = Vec::with_capacity(nroots);
+    if koopmans {
+        let seeds: Vec<usize> = match kind {
+            Excitation::Ip => padding.occupied[kshift].iter().rev().copied().collect(),
+            Excitation::Ea => padding.virtuals[kshift].to_vec(),
+        };
+        for &n in seeds.iter().take(nroots) {
+            let mut g = ZArr::zeros(&[size]);
+            if n < size {
+                g.data_mut().re[n] = 1.0;
+            }
+            guess.push(mask(&g, 0.0)?);
+        }
+    } else {
+        // `diag.argsort()[:nroots]`, a STABLE sort on the real part — the
+        // diagonal is real by construction (it is a sum of Fock diagonals and
+        // Hermitian-block diagonals) and upstream sorts the complex array,
+        // which numpy orders by real part then imaginary.
+        let mut idx: Vec<usize> = (0..size).collect();
+        idx.sort_by(|a, b| {
+            diag.data().re[*a]
+                .partial_cmp(&diag.data().re[*b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    diag.data().im[*a]
+                        .partial_cmp(&diag.data().im[*b])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+        for &i in idx.iter().take(nroots) {
+            let mut g = ZArr::zeros(&[size]);
+            g.data_mut().re[i] = 1.0;
+            guess.push(mask(&g, 0.0)?);
+        }
+    }
+    if guess.is_empty() {
+        return Err(PbcCcError::Shape(
+            "EOM produced no initial guess vectors".into(),
+        ));
+    }
+    Ok(guess)
 }
