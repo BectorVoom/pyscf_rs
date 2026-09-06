@@ -2047,3 +2047,1079 @@ pub fn get_wvvvv(
     }
     Ok((vvvv, vv_vv, v4))
 }
+
+/// `Woovo` — `:879-994`.
+///
+/// The `P(ij)` antisymmetriser is written out term by term upstream, and the
+/// two halves contract DIFFERENT k-blocks, so a transpose of the assembled
+/// result is not the same program (the same point [`crate::kintermediates::wovoo`]
+/// makes).
+///
+/// # Errors
+/// As [`cc_foo`].
+#[allow(clippy::too_many_lines)]
+pub fn woovo(t1: &UT1, t2: &UT2, eris: &KuEris, kconserv: &Kconserv) -> Result<UQuad, PbcCcError> {
+    let nk = eris.nkpts;
+    let (oa, ob) = eris.nocc;
+    let (va, vb) = eris.nvir;
+    let mut w_aa = ZArr::zeros(&[nk, nk, nk, oa, oa, va, oa]);
+    let mut w_ab = ZArr::zeros(&[nk, nk, nk, oa, oa, vb, ob]);
+    let mut w_ba = ZArr::zeros(&[nk, nk, nk, ob, ob, va, oa]);
+    let mut w_bb = ZArr::zeros(&[nk, nk, nk, ob, ob, vb, ob]);
+
+    for km in 0..nk {
+        for kb_ in 0..nk {
+            for ki in 0..nk {
+                let kj = kconserv.get(km, ki, kb_) as usize;
+                // `:893-898`
+                let mut aa = eris
+                    .blk(b::ooov, ki, km, kj)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                aa.sub_assign(
+                    &eris
+                        .blk(b::ooov, kj, km, ki)?
+                        .transpose(&[1, 2, 3, 0])?
+                        .conj(),
+                )?;
+                let mut ab = eris
+                    .blk(b::ooOV, ki, km, kj)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                let mut ba = eris
+                    .blk(b::OOov, ki, km, kj)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                let mut bb = eris
+                    .blk(b::OOOV, ki, km, kj)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                bb.sub_assign(
+                    &eris
+                        .blk(b::OOOV, kj, km, ki)?
+                        .transpose(&[1, 2, 3, 0])?
+                        .conj(),
+                )?;
+
+                for kn in 0..nk {
+                    let ke = kconserv.get(km, ki, kn) as usize;
+                    let mut ooov = eris.blk(b::ooov, km, ki, kn)?;
+                    ooov.sub_assign(&eris.blk(b::ooov, kn, ki, km)?.transpose(&[2, 1, 0, 3])?)?;
+                    let mut ooov_b = eris.blk(b::OOOV, km, ki, kn)?;
+                    ooov_b.sub_assign(&eris.blk(b::OOOV, kn, ki, km)?.transpose(&[2, 1, 0, 3])?)?;
+
+                    aa.add_assign(&einsum(
+                        "mine,jnbe->mibj",
+                        &[&ooov, &t2.0.slice_leading(&[kj, kn, kb_])?],
+                    )?)?;
+                    aa.add_assign(&einsum(
+                        "miNE,jNbE->mibj",
+                        &[
+                            &eris.blk(b::ooOV, km, ki, kn)?,
+                            &t2.1.slice_leading(&[kj, kn, kb_])?,
+                        ],
+                    )?)?;
+                    ab.add_assign(&einsum(
+                        "mine,nJeB->miBJ",
+                        &[&ooov, &t2.1.slice_leading(&[kn, kj, ke])?],
+                    )?)?;
+                    ab.add_assign(&einsum(
+                        "miNE,JNBE->miBJ",
+                        &[
+                            &eris.blk(b::ooOV, km, ki, kn)?,
+                            &t2.2.slice_leading(&[kj, kn, kb_])?,
+                        ],
+                    )?)?;
+                    ba.add_assign(&einsum(
+                        "MINE,jNbE->MIbj",
+                        &[&ooov_b, &t2.1.slice_leading(&[kj, kn, kb_])?],
+                    )?)?;
+                    ba.add_assign(&einsum(
+                        "MIne,jnbe->MIbj",
+                        &[
+                            &eris.blk(b::OOov, km, ki, kn)?,
+                            &t2.0.slice_leading(&[kj, kn, kb_])?,
+                        ],
+                    )?)?;
+                    bb.add_assign(&einsum(
+                        "MINE,JNBE->MIBJ",
+                        &[&ooov_b, &t2.2.slice_leading(&[kj, kn, kb_])?],
+                    )?)?;
+                    bb.add_assign(&einsum(
+                        "MIne,nJeB->MIBJ",
+                        &[
+                            &eris.blk(b::OOov, km, ki, kn)?,
+                            &t2.1.slice_leading(&[kn, kj, ke])?,
+                        ],
+                    )?)?;
+
+                    // P(ij) — `:913-925`
+                    let ke = kconserv.get(km, kj, kn) as usize;
+                    let mut ooov = eris.blk(b::ooov, km, kj, kn)?;
+                    ooov.sub_assign(&eris.blk(b::ooov, kn, kj, km)?.transpose(&[2, 1, 0, 3])?)?;
+                    let mut ooov_b = eris.blk(b::OOOV, km, kj, kn)?;
+                    ooov_b.sub_assign(&eris.blk(b::OOOV, kn, kj, km)?.transpose(&[2, 1, 0, 3])?)?;
+
+                    aa.sub_assign(&einsum(
+                        "mjne,inbe->mibj",
+                        &[&ooov, &t2.0.slice_leading(&[ki, kn, kb_])?],
+                    )?)?;
+                    aa.sub_assign(&einsum(
+                        "mjNE,iNbE->mibj",
+                        &[
+                            &eris.blk(b::ooOV, km, kj, kn)?,
+                            &t2.1.slice_leading(&[ki, kn, kb_])?,
+                        ],
+                    )?)?;
+                    ab.sub_assign(&einsum(
+                        "NJme,iNeB->miBJ",
+                        &[
+                            &eris.blk(b::OOov, kn, kj, km)?,
+                            &t2.1.slice_leading(&[ki, kn, ke])?,
+                        ],
+                    )?)?;
+                    ba.sub_assign(&einsum(
+                        "njME,nIbE->MIbj",
+                        &[
+                            &eris.blk(b::ooOV, kn, kj, km)?,
+                            &t2.1.slice_leading(&[kn, ki, kb_])?,
+                        ],
+                    )?)?;
+                    bb.sub_assign(&einsum(
+                        "MJNE,INBE->MIBJ",
+                        &[&ooov_b, &t2.2.slice_leading(&[ki, kn, kb_])?],
+                    )?)?;
+                    bb.sub_assign(&einsum(
+                        "MJne,nIeB->MIBJ",
+                        &[
+                            &eris.blk(b::OOov, km, kj, kn)?,
+                            &t2.1.slice_leading(&[kn, ki, ke])?,
+                        ],
+                    )?)?;
+                }
+
+                // `:927-937`
+                let (t1ai, t1bi) = (t1.0.slice_leading(&[ki])?, t1.1.slice_leading(&[ki])?);
+                let (t1aj, t1bj) = (t1.0.slice_leading(&[kj])?, t1.1.slice_leading(&[kj])?);
+                let mut ovvo = eris
+                    .blk(b::voov, ki, km, kj)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                ovvo.sub_assign(&eris.blk(b::oovv, km, kj, kb_)?.transpose(&[0, 3, 2, 1])?)?;
+                let mut ovvo_b = eris
+                    .blk(b::VOOV, ki, km, kj)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                ovvo_b.sub_assign(&eris.blk(b::OOVV, km, kj, kb_)?.transpose(&[0, 3, 2, 1])?)?;
+                let ov_vo = eris
+                    .blk(b::voOV, ki, km, kj)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                let ovv_o = eris
+                    .blk(b::VOov, ki, km, kj)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                aa.add_assign(&einsum("ie,mebj->mibj", &[&t1ai, &ovvo])?)?;
+                ab.add_assign(&einsum("ie,meBJ->miBJ", &[&t1ai, &ov_vo])?)?;
+                ba.add_assign(&einsum("IE,MEbj->MIbj", &[&t1bi, &ovv_o])?)?;
+                bb.add_assign(&einsum("IE,MEBJ->MIBJ", &[&t1bi, &ovvo_b])?)?;
+
+                // P(ij) — `:939-945`
+                let mut ovvo = eris
+                    .blk(b::voov, kj, km, ki)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                ovvo.sub_assign(&eris.blk(b::oovv, km, ki, kb_)?.transpose(&[0, 3, 2, 1])?)?;
+                let mut ovvo_b = eris
+                    .blk(b::VOOV, kj, km, ki)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                ovvo_b.sub_assign(&eris.blk(b::OOVV, km, ki, kb_)?.transpose(&[0, 3, 2, 1])?)?;
+                aa.sub_assign(&einsum("je,mebi->mibj", &[&t1aj, &ovvo])?)?;
+                // `:942-943` — the DOUBLE negative upstream writes as
+                // `-= -einsum(...)`, kept as an `add` here.
+                ab.add_assign(&einsum(
+                    "JE,miBE->miBJ",
+                    &[&t1bj, &eris.blk(b::ooVV, km, ki, kb_)?],
+                )?)?;
+                ba.add_assign(&einsum(
+                    "je,MIbe->MIbj",
+                    &[&t1aj, &eris.blk(b::OOvv, km, ki, kb_)?],
+                )?)?;
+                bb.sub_assign(&einsum("JE,MEBI->MIBJ", &[&t1bj, &ovvo_b])?)?;
+
+                // `:948-975`
+                for kf in 0..nk {
+                    let kn = kconserv.get(kb_, kj, kf) as usize;
+                    let mut ovov = eris.blk(b::ovov, km, ki, kn)?;
+                    ovov.sub_assign(&eris.blk(b::ovov, km, kf, kn)?.transpose(&[0, 3, 2, 1])?)?;
+                    let mut ovov_b = eris.blk(b::OVOV, km, ki, kn)?;
+                    ovov_b.sub_assign(&eris.blk(b::OVOV, km, kf, kn)?.transpose(&[0, 3, 2, 1])?)?;
+
+                    aa.sub_assign(&einsum(
+                        "ie,njbf,menf->mibj",
+                        &[&t1ai, &t2.0.slice_leading(&[kn, kj, kb_])?, &ovov],
+                    )?)?;
+                    aa.add_assign(&einsum(
+                        "ie,jNbF,meNF->mibj",
+                        &[
+                            &t1ai,
+                            &t2.1.slice_leading(&[kj, kn, kb_])?,
+                            &eris.blk(b::ovOV, km, ki, kn)?,
+                        ],
+                    )?)?;
+                    ab.add_assign(&einsum(
+                        "ie,nJfB,menf->miBJ",
+                        &[&t1ai, &t2.1.slice_leading(&[kn, kj, kf])?, &ovov],
+                    )?)?;
+                    ab.sub_assign(&einsum(
+                        "ie,NJBF,meNF->miBJ",
+                        &[
+                            &t1ai,
+                            &t2.2.slice_leading(&[kn, kj, kb_])?,
+                            &eris.blk(b::ovOV, km, ki, kn)?,
+                        ],
+                    )?)?;
+                    ba.add_assign(&einsum(
+                        "IE,jNbF,MENF->MIbj",
+                        &[&t1bi, &t2.1.slice_leading(&[kj, kn, kb_])?, &ovov_b],
+                    )?)?;
+                    ba.sub_assign(&einsum(
+                        "IE,njbf,MEnf->MIbj",
+                        &[
+                            &t1bi,
+                            &t2.0.slice_leading(&[kn, kj, kb_])?,
+                            &eris.blk(b::OVov, km, ki, kn)?,
+                        ],
+                    )?)?;
+                    bb.sub_assign(&einsum(
+                        "IE,NJBF,MENF->MIBJ",
+                        &[&t1bi, &t2.2.slice_leading(&[kn, kj, kb_])?, &ovov_b],
+                    )?)?;
+                    bb.add_assign(&einsum(
+                        "IE,nJfB,MEnf->MIBJ",
+                        &[
+                            &t1bi,
+                            &t2.1.slice_leading(&[kn, kj, kf])?,
+                            &eris.blk(b::OVov, km, ki, kn)?,
+                        ],
+                    )?)?;
+
+                    // P(ij) — `:967-975`
+                    let kn = kconserv.get(kb_, ki, kf) as usize;
+                    let mut ovov = eris.blk(b::ovov, km, kj, kn)?;
+                    ovov.sub_assign(&eris.blk(b::ovov, km, kf, kn)?.transpose(&[0, 3, 2, 1])?)?;
+                    let mut ovov_b = eris.blk(b::OVOV, km, kj, kn)?;
+                    ovov_b.sub_assign(&eris.blk(b::OVOV, km, kf, kn)?.transpose(&[0, 3, 2, 1])?)?;
+
+                    aa.add_assign(&einsum(
+                        "je,nibf,menf->mibj",
+                        &[&t1aj, &t2.0.slice_leading(&[kn, ki, kb_])?, &ovov],
+                    )?)?;
+                    aa.sub_assign(&einsum(
+                        "je,iNbF,meNF->mibj",
+                        &[
+                            &t1aj,
+                            &t2.1.slice_leading(&[ki, kn, kb_])?,
+                            &eris.blk(b::ovOV, km, kj, kn)?,
+                        ],
+                    )?)?;
+                    ab.sub_assign(&einsum(
+                        "JE,iNfB,mfNE->miBJ",
+                        &[
+                            &t1bj,
+                            &t2.1.slice_leading(&[ki, kn, kf])?,
+                            &eris.blk(b::ovOV, km, kf, kn)?,
+                        ],
+                    )?)?;
+                    ba.sub_assign(&einsum(
+                        "je,nIbF,MFne->MIbj",
+                        &[
+                            &t1aj,
+                            &t2.1.slice_leading(&[kn, ki, kb_])?,
+                            &eris.blk(b::OVov, km, kf, kn)?,
+                        ],
+                    )?)?;
+                    bb.add_assign(&einsum(
+                        "JE,NIBF,MENF->MIBJ",
+                        &[&t1bj, &t2.2.slice_leading(&[kn, ki, kb_])?, &ovov_b],
+                    )?)?;
+                    bb.sub_assign(&einsum(
+                        "JE,nIfB,MEnf->MIBJ",
+                        &[
+                            &t1bj,
+                            &t2.1.slice_leading(&[kn, ki, kf])?,
+                            &eris.blk(b::OVov, km, kj, kn)?,
+                        ],
+                    )?)?;
+                }
+                add_at(&mut w_aa, [km, ki, kb_], &aa, 1.0)?;
+                add_at(&mut w_ab, [km, ki, kb_], &ab, 1.0)?;
+                add_at(&mut w_ba, [km, ki, kb_], &ba, 1.0)?;
+                add_at(&mut w_bb, [km, ki, kb_], &bb, 1.0)?;
+            }
+        }
+    }
+
+    // `:977-991` — a SECOND pass, because `Fov`, `Woooo` and `tau` are built
+    // after the first loop upstream.
+    let (fme, fme_b) = fov(t1, eris)?;
+    let (wminj, wmi_nj, w_minj) = eom_woooo(t1, t2, eris, kconserv)?;
+    let tau = make_tau(t2, t1, t1, 1.0)?;
+    for km in 0..nk {
+        for kb_ in 0..nk {
+            for ki in 0..nk {
+                let kj = kconserv.get(km, ki, kb_) as usize;
+                add_at(
+                    &mut w_aa,
+                    [km, ki, kb_],
+                    &einsum(
+                        "me,ijbe->mibj",
+                        &[
+                            &fme.slice_leading(&[km])?,
+                            &t2.0.slice_leading(&[ki, kj, kb_])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+                // `:980` `-= -einsum(...)`
+                add_at(
+                    &mut w_ab,
+                    [km, ki, kb_],
+                    &einsum(
+                        "me,iJeB->miBJ",
+                        &[
+                            &fme.slice_leading(&[km])?,
+                            &t2.1.slice_leading(&[ki, kj, km])?,
+                        ],
+                    )?,
+                    1.0,
+                )?;
+                add_at(
+                    &mut w_ba,
+                    [km, ki, kb_],
+                    &einsum(
+                        "ME,jIbE->MIbj",
+                        &[
+                            &fme_b.slice_leading(&[km])?,
+                            &t2.1.slice_leading(&[kj, ki, kb_])?,
+                        ],
+                    )?,
+                    1.0,
+                )?;
+                add_at(
+                    &mut w_bb,
+                    [km, ki, kb_],
+                    &einsum(
+                        "ME,IJBE->MIBJ",
+                        &[
+                            &fme_b.slice_leading(&[km])?,
+                            &t2.2.slice_leading(&[ki, kj, kb_])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+
+                add_at(
+                    &mut w_aa,
+                    [km, ki, kb_],
+                    &einsum(
+                        "nb,minj->mibj",
+                        &[
+                            &t1.0.slice_leading(&[kb_])?,
+                            &wminj.slice_leading(&[km, ki, kb_])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+                add_at(
+                    &mut w_ab,
+                    [km, ki, kb_],
+                    &einsum(
+                        "NB,miNJ->miBJ",
+                        &[
+                            &t1.1.slice_leading(&[kb_])?,
+                            &wmi_nj.slice_leading(&[km, ki, kb_])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+                // `:989` — `WmiNJ[kb, kj, km]`, a DIFFERENT k-address from the
+                // line above it.
+                add_at(
+                    &mut w_ba,
+                    [km, ki, kb_],
+                    &einsum(
+                        "nb,njMI->MIbj",
+                        &[
+                            &t1.0.slice_leading(&[kb_])?,
+                            &wmi_nj.slice_leading(&[kb_, kj, km])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+                add_at(
+                    &mut w_bb,
+                    [km, ki, kb_],
+                    &einsum(
+                        "NB,MINJ->MIBJ",
+                        &[
+                            &t1.1.slice_leading(&[kb_])?,
+                            &w_minj.slice_leading(&[km, ki, kb_])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+            }
+        }
+    }
+
+    // `:993-1005`
+    for km in 0..nk {
+        for kb_ in 0..nk {
+            for ki in 0..nk {
+                let kj = kconserv.get(km, ki, kb_) as usize;
+                for ke in 0..nk {
+                    let kf = kconserv.get(km, ke, kb_) as usize;
+                    let mut ovvv = eris
+                        .blk(b::vovv, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    ovvv.sub_assign(
+                        &eris
+                            .blk(b::vovv, kf, km, ke)?
+                            .transpose(&[1, 2, 3, 0])?
+                            .conj(),
+                    )?;
+                    let mut ovvv_b = eris
+                        .blk(b::VOVV, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    ovvv_b.sub_assign(
+                        &eris
+                            .blk(b::VOVV, kf, km, ke)?
+                            .transpose(&[1, 2, 3, 0])?
+                            .conj(),
+                    )?;
+                    let ov_vv = eris
+                        .blk(b::voVV, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    let ovv_v = eris
+                        .blk(b::VOvv, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+
+                    add_at(
+                        &mut w_aa,
+                        [km, ki, kb_],
+                        &einsum(
+                            "mebf,ijef->mibj",
+                            &[&ovvv, &tau.0.slice_leading(&[ki, kj, ke])?],
+                        )?,
+                        0.5,
+                    )?;
+                    add_at(
+                        &mut w_ab,
+                        [km, ki, kb_],
+                        &einsum(
+                            "meBF,iJeF->miBJ",
+                            &[&ov_vv, &tau.1.slice_leading(&[ki, kj, ke])?],
+                        )?,
+                        1.0,
+                    )?;
+                    add_at(
+                        &mut w_ba,
+                        [km, ki, kb_],
+                        &einsum(
+                            "MEbf,jIfE->MIbj",
+                            &[&ovv_v, &tau.1.slice_leading(&[kj, ki, kf])?],
+                        )?,
+                        1.0,
+                    )?;
+                    add_at(
+                        &mut w_bb,
+                        [km, ki, kb_],
+                        &einsum(
+                            "MEBF,IJEF->MIBJ",
+                            &[&ovvv_b, &tau.2.slice_leading(&[ki, kj, ke])?],
+                        )?,
+                        0.5,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok((w_aa, w_ab, w_ba, w_bb))
+}
+
+/// `Wvvvo` — `:647-824`. The phase's densest single intermediate: four spin
+/// blocks, three separate `(ka, ke, kb)` sweeps and two `P(ab)` writes that
+/// land at the MIRRORED `[kb, ke, ka]` address.
+///
+/// # Errors
+/// As [`cc_foo`].
+#[allow(clippy::too_many_lines)]
+pub fn wvvvo(t1: &UT1, t2: &UT2, eris: &KuEris, kconserv: &Kconserv) -> Result<UQuad, PbcCcError> {
+    let nk = eris.nkpts;
+    let (oa, ob) = eris.nocc;
+    let (va, vb) = eris.nvir;
+    let (fova, fovb) = cc_fov(t1, eris)?;
+    let tau = make_tau(t2, t1, t1, 1.0)?;
+
+    let mut w_aa = ZArr::zeros(&[nk, nk, nk, va, va, va, oa]);
+    let mut w_ab = ZArr::zeros(&[nk, nk, nk, va, va, vb, ob]);
+    let mut w_ba = ZArr::zeros(&[nk, nk, nk, vb, vb, va, oa]);
+    let mut w_bb = ZArr::zeros(&[nk, nk, nk, vb, vb, vb, ob]);
+
+    // ---- sweep 1 (`:660-724`)
+    for ka in 0..nk {
+        for ke in 0..nk {
+            for kb_ in 0..nk {
+                let ki = kconserv.get(ka, ke, kb_) as usize;
+                for km in 0..nk {
+                    let kf = kconserv.get(km, ke, kb_) as usize;
+                    let mut ovvv = eris
+                        .blk(b::vovv, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    ovvv.sub_assign(
+                        &eris
+                            .blk(b::vovv, kf, km, ke)?
+                            .transpose(&[1, 2, 3, 0])?
+                            .conj(),
+                    )?;
+                    let ovv_v = eris
+                        .blk(b::VOvv, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    let ov_vv = eris
+                        .blk(b::voVV, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    let mut ovvv_b = eris
+                        .blk(b::VOVV, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    ovvv_b.sub_assign(
+                        &eris
+                            .blk(b::VOVV, kf, km, ke)?
+                            .transpose(&[1, 2, 3, 0])?
+                            .conj(),
+                    )?;
+
+                    let mut aebi = einsum(
+                        "mebf,miaf->aebi",
+                        &[&ovvv, &t2.0.slice_leading(&[km, ki, ka])?],
+                    )?;
+                    aebi.add_assign(&einsum(
+                        "MFbe,iMaF->aebi",
+                        &[
+                            &eris
+                                .blk(b::VOvv, kf, km, ke)?
+                                .transpose(&[1, 0, 3, 2])?
+                                .conj(),
+                            &t2.1.slice_leading(&[ki, km, ka])?,
+                        ],
+                    )?)?;
+                    add_at(&mut w_aa, [ka, ke, kb_], &aebi, -1.0)?;
+                    // P(ab), at the MIRRORED address.
+                    add_at(
+                        &mut w_aa,
+                        [kb_, ke, ka],
+                        &aebi.transpose(&[2, 1, 0, 3])?,
+                        1.0,
+                    )?;
+
+                    add_at(
+                        &mut w_ba,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "MEbf,iMfA->AEbi",
+                            &[&ovv_v, &t2.1.slice_leading(&[ki, km, kf])?],
+                        )?,
+                        -1.0,
+                    )?;
+                    add_at(
+                        &mut w_ab,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "meBF,mIaF->aeBI",
+                            &[&ov_vv, &t2.1.slice_leading(&[km, ki, ka])?],
+                        )?,
+                        -1.0,
+                    )?;
+
+                    let mut aebi_b = einsum(
+                        "MEBF,MIAF->AEBI",
+                        &[&ovvv_b, &t2.2.slice_leading(&[km, ki, ka])?],
+                    )?;
+                    aebi_b.add_assign(&einsum(
+                        "mfBE,mIfA->AEBI",
+                        &[
+                            &eris
+                                .blk(b::voVV, kf, km, ke)?
+                                .transpose(&[1, 0, 3, 2])?
+                                .conj(),
+                            &t2.1.slice_leading(&[km, ki, kf])?,
+                        ],
+                    )?)?;
+                    add_at(&mut w_bb, [ka, ke, kb_], &aebi_b, -1.0)?;
+                    add_at(
+                        &mut w_bb,
+                        [kb_, ke, ka],
+                        &aebi_b.transpose(&[2, 1, 0, 3])?,
+                        1.0,
+                    )?;
+                }
+
+                // `:686-724` — `km = ka`.
+                let km = ka;
+                let mut ovvo = eris
+                    .blk(b::voov, ke, km, ki)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                ovvo.sub_assign(&eris.blk(b::oovv, km, ki, kb_)?.transpose(&[0, 3, 2, 1])?)?;
+                let ovv_o = eris
+                    .blk(b::VOov, ke, km, ki)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                let ov_vo = eris
+                    .blk(b::voOV, ke, km, ki)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                let mut ovvo_b = eris
+                    .blk(b::VOOV, ke, km, ki)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                ovvo_b.sub_assign(&eris.blk(b::OOVV, km, ki, kb_)?.transpose(&[0, 3, 2, 1])?)?;
+
+                let mut t_aa = ZArr::zeros(&[oa, va, va, oa]);
+                let mut t_ab = ZArr::zeros(&[oa, va, vb, ob]);
+                let mut t_ba = ZArr::zeros(&[ob, vb, va, oa]);
+                let mut t_bb = ZArr::zeros(&[ob, vb, vb, ob]);
+                for kn in 0..nk {
+                    let kf = kconserv.get(km, ke, kn) as usize;
+                    let mut ovov = eris.blk(b::ovov, km, ke, kn)?;
+                    ovov.sub_assign(&eris.blk(b::ovov, km, kf, kn)?.transpose(&[0, 3, 2, 1])?)?;
+                    let ov_ov = eris.blk(b::OVov, km, ke, kn)?;
+                    let ovov_x = eris.blk(b::ovOV, km, ke, kn)?;
+                    let mut ovov_b = eris.blk(b::OVOV, km, ke, kn)?;
+                    ovov_b.sub_assign(&eris.blk(b::OVOV, km, kf, kn)?.transpose(&[0, 3, 2, 1])?)?;
+
+                    t_aa.sub_assign(&einsum(
+                        "nibf,menf->mebi",
+                        &[&t2.0.slice_leading(&[kn, ki, kb_])?, &ovov],
+                    )?)?;
+                    t_aa.add_assign(&einsum(
+                        "iNbF,meNF->mebi",
+                        &[&t2.1.slice_leading(&[ki, kn, kb_])?, &ovov_x],
+                    )?)?;
+                    t_ab.add_assign(&einsum(
+                        "nIfB,menf->meBI",
+                        &[&t2.1.slice_leading(&[kn, ki, kf])?, &ovov],
+                    )?)?;
+                    t_ab.sub_assign(&einsum(
+                        "NIBF,meNF->meBI",
+                        &[&t2.2.slice_leading(&[kn, ki, kb_])?, &ovov_x],
+                    )?)?;
+                    t_ba.add_assign(&einsum(
+                        "iNbF,MENF->MEbi",
+                        &[&t2.1.slice_leading(&[ki, kn, kb_])?, &ovov_b],
+                    )?)?;
+                    t_ba.sub_assign(&einsum(
+                        "nibf,MEnf->MEbi",
+                        &[&t2.0.slice_leading(&[kn, ki, kb_])?, &ov_ov],
+                    )?)?;
+                    t_bb.sub_assign(&einsum(
+                        "NIBF,MENF->MEBI",
+                        &[&t2.2.slice_leading(&[kn, ki, kb_])?, &ovov_b],
+                    )?)?;
+                    t_bb.add_assign(&einsum(
+                        "nIfB,MEnf->MEBI",
+                        &[&t2.1.slice_leading(&[kn, ki, kf])?, &ov_ov],
+                    )?)?;
+                }
+                let mut x = ovvo.clone();
+                x.add_assign(&t_aa)?;
+                add_at(
+                    &mut w_aa,
+                    [ka, ke, kb_],
+                    &einsum("ma,mebi->aebi", &[&t1.0.slice_leading(&[km])?, &x])?,
+                    -1.0,
+                )?;
+                let mut x = ovv_o.clone();
+                x.add_assign(&t_ba)?;
+                add_at(
+                    &mut w_ba,
+                    [ka, ke, kb_],
+                    &einsum("MA,MEbi->AEbi", &[&t1.1.slice_leading(&[km])?, &x])?,
+                    -1.0,
+                )?;
+                let mut x = ov_vo.clone();
+                x.add_assign(&t_ab)?;
+                add_at(
+                    &mut w_ab,
+                    [ka, ke, kb_],
+                    &einsum("ma,meBI->aeBI", &[&t1.0.slice_leading(&[km])?, &x])?,
+                    -1.0,
+                )?;
+                let mut x = ovvo_b.clone();
+                x.add_assign(&t_bb)?;
+                add_at(
+                    &mut w_bb,
+                    [ka, ke, kb_],
+                    &einsum("MA,MEBI->AEBI", &[&t1.1.slice_leading(&[km])?, &x])?,
+                    -1.0,
+                )?;
+            }
+        }
+    }
+
+    // ---- sweep 2 (`:727-785`)
+    for ka in 0..nk {
+        for ke in 0..nk {
+            for kb_ in 0..nk {
+                let ki = kconserv.get(ka, ke, kb_) as usize;
+                for km in 0..nk {
+                    let kf = kconserv.get(km, ke, ka) as usize;
+                    let mut ovvv_b = eris
+                        .blk(b::VOVV, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    ovvv_b.sub_assign(
+                        &eris
+                            .blk(b::VOVV, kf, km, ke)?
+                            .transpose(&[1, 2, 3, 0])?
+                            .conj(),
+                    )?;
+                    let mut ovvv = eris
+                        .blk(b::vovv, ke, km, kf)?
+                        .transpose(&[1, 0, 3, 2])?
+                        .conj();
+                    ovvv.sub_assign(
+                        &eris
+                            .blk(b::vovv, kf, km, ke)?
+                            .transpose(&[1, 2, 3, 0])?
+                            .conj(),
+                    )?;
+
+                    add_at(
+                        &mut w_ba,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "mfAE,mibf->AEbi",
+                            &[
+                                &eris
+                                    .blk(b::voVV, kf, km, ke)?
+                                    .transpose(&[1, 0, 3, 2])?
+                                    .conj(),
+                                &t2.0.slice_leading(&[km, ki, kb_])?,
+                            ],
+                        )?,
+                        -1.0,
+                    )?;
+                    add_at(
+                        &mut w_ba,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "MEAF,iMbF->AEbi",
+                            &[&ovvv_b, &t2.1.slice_leading(&[ki, km, kb_])?],
+                        )?,
+                        -1.0,
+                    )?;
+                    add_at(
+                        &mut w_ab,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "MFae,MIBF->aeBI",
+                            &[
+                                &eris
+                                    .blk(b::VOvv, kf, km, ke)?
+                                    .transpose(&[1, 0, 3, 2])?
+                                    .conj(),
+                                &t2.2.slice_leading(&[km, ki, kb_])?,
+                            ],
+                        )?,
+                        -1.0,
+                    )?;
+                    add_at(
+                        &mut w_ab,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "meaf,mIfB->aeBI",
+                            &[&ovvv, &t2.1.slice_leading(&[km, ki, kf])?],
+                        )?,
+                        -1.0,
+                    )?;
+                }
+
+                // `:747-785` — `km = kb`.
+                let km = kb_;
+                let mut ovvo = eris
+                    .blk(b::voov, ke, km, ki)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                ovvo.sub_assign(&eris.blk(b::oovv, km, ki, ka)?.transpose(&[0, 3, 2, 1])?)?;
+                let mut ovvo_b = eris
+                    .blk(b::VOOV, ke, km, ki)?
+                    .transpose(&[1, 0, 3, 2])?
+                    .conj();
+                ovvo_b.sub_assign(&eris.blk(b::OOVV, km, ki, ka)?.transpose(&[0, 3, 2, 1])?)?;
+
+                let mut t_aa = ZArr::zeros(&[oa, va, va, oa]);
+                let mut t_ab = ZArr::zeros(&[ob, va, va, ob]);
+                let mut t_ba = ZArr::zeros(&[oa, vb, vb, oa]);
+                let mut t_bb = ZArr::zeros(&[ob, vb, vb, ob]);
+                for kn in 0..nk {
+                    let kf = kconserv.get(km, ke, kn) as usize;
+                    let mut ovov = eris.blk(b::ovov, km, ke, kn)?;
+                    ovov.sub_assign(&eris.blk(b::ovov, km, kf, kn)?.transpose(&[0, 3, 2, 1])?)?;
+                    let ov_ov = eris.blk(b::OVov, km, ke, kn)?;
+                    let ovov_x = eris.blk(b::ovOV, km, ke, kn)?;
+                    let mut ovov_b = eris.blk(b::OVOV, km, ke, kn)?;
+                    ovov_b.sub_assign(&eris.blk(b::OVOV, km, kf, kn)?.transpose(&[0, 3, 2, 1])?)?;
+
+                    t_aa.sub_assign(&einsum(
+                        "niaf,menf->meai",
+                        &[&t2.0.slice_leading(&[kn, ki, ka])?, &ovov],
+                    )?)?;
+                    t_aa.add_assign(&einsum(
+                        "iNaF,meNF->meai",
+                        &[&t2.1.slice_leading(&[ki, kn, ka])?, &ovov_x],
+                    )?)?;
+                    // `:772` and `:774` read `OVov`/`ovOV` at `kf`, NOT at `ke`.
+                    t_ab.add_assign(&einsum(
+                        "nIaF,MFne->MeaI",
+                        &[
+                            &t2.1.slice_leading(&[kn, ki, ka])?,
+                            &eris.blk(b::OVov, km, kf, kn)?,
+                        ],
+                    )?)?;
+                    t_ba.add_assign(&einsum(
+                        "iNfA,mfNE->mEAi",
+                        &[
+                            &t2.1.slice_leading(&[ki, kn, kf])?,
+                            &eris.blk(b::ovOV, km, kf, kn)?,
+                        ],
+                    )?)?;
+                    t_bb.sub_assign(&einsum(
+                        "NIAF,MENF->MEAI",
+                        &[&t2.2.slice_leading(&[kn, ki, ka])?, &ovov_b],
+                    )?)?;
+                    t_bb.add_assign(&einsum(
+                        "nIfA,MEnf->MEAI",
+                        &[&t2.1.slice_leading(&[kn, ki, kf])?, &ov_ov],
+                    )?)?;
+                }
+                let mut x = ovvo.clone();
+                x.add_assign(&t_aa)?;
+                add_at(
+                    &mut w_aa,
+                    [ka, ke, kb_],
+                    &einsum("mb,meai->aebi", &[&t1.0.slice_leading(&[km])?, &x])?,
+                    1.0,
+                )?;
+                let mut x = eris.blk(b::ooVV, km, ki, ka)?.transpose(&[0, 3, 2, 1])?;
+                x.scale(-1.0);
+                x.add_assign(&t_ba)?;
+                add_at(
+                    &mut w_ba,
+                    [ka, ke, kb_],
+                    &einsum("mb,mEAi->AEbi", &[&t1.0.slice_leading(&[km])?, &x])?,
+                    1.0,
+                )?;
+                let mut x = eris.blk(b::OOvv, km, ki, ka)?.transpose(&[0, 3, 2, 1])?;
+                x.scale(-1.0);
+                x.add_assign(&t_ab)?;
+                add_at(
+                    &mut w_ab,
+                    [ka, ke, kb_],
+                    &einsum("MB,MeaI->aeBI", &[&t1.1.slice_leading(&[km])?, &x])?,
+                    1.0,
+                )?;
+                let mut x = ovvo_b.clone();
+                x.add_assign(&t_bb)?;
+                add_at(
+                    &mut w_bb,
+                    [ka, ke, kb_],
+                    &einsum("MB,MEAI->AEBI", &[&t1.1.slice_leading(&[km])?, &x])?,
+                    1.0,
+                )?;
+            }
+        }
+    }
+
+    // ---- sweep 3, "Remaining terms" (`:787-822`)
+    for ka in 0..nk {
+        for ke in 0..nk {
+            for kb_ in 0..nk {
+                let ki = kconserv.get(ka, ke, kb_) as usize;
+                let kf = ki;
+
+                let mut v = eris.blk(b::vovv, kb_, ki, ka)?.transpose(&[2, 3, 0, 1])?;
+                v.sub_assign(&eris.blk(b::vovv, ka, ki, kb_)?.transpose(&[0, 3, 2, 1])?)?;
+                add_at(&mut w_aa, [ka, ke, kb_], &v, 1.0)?;
+                add_at(
+                    &mut w_ba,
+                    [ka, ke, kb_],
+                    &eris.blk(b::voVV, kb_, ki, ka)?.transpose(&[2, 3, 0, 1])?,
+                    1.0,
+                )?;
+                add_at(
+                    &mut w_ab,
+                    [ka, ke, kb_],
+                    &eris.blk(b::VOvv, kb_, ki, ka)?.transpose(&[2, 3, 0, 1])?,
+                    1.0,
+                )?;
+                let mut v = eris.blk(b::VOVV, kb_, ki, ka)?.transpose(&[2, 3, 0, 1])?;
+                v.sub_assign(&eris.blk(b::VOVV, ka, ki, kb_)?.transpose(&[0, 3, 2, 1])?)?;
+                add_at(&mut w_bb, [ka, ke, kb_], &v, 1.0)?;
+
+                add_at(
+                    &mut w_aa,
+                    [ka, ke, kb_],
+                    &einsum(
+                        "me,miab->aebi",
+                        &[
+                            &fova.slice_leading(&[ke])?,
+                            &t2.0.slice_leading(&[ke, ki, ka])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+                add_at(
+                    &mut w_ba,
+                    [ka, ke, kb_],
+                    &einsum(
+                        "ME,iMbA->AEbi",
+                        &[
+                            &fovb.slice_leading(&[ke])?,
+                            &t2.1.slice_leading(&[ki, ke, kb_])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+                add_at(
+                    &mut w_ab,
+                    [ka, ke, kb_],
+                    &einsum(
+                        "me,mIaB->aeBI",
+                        &[
+                            &fova.slice_leading(&[ke])?,
+                            &t2.1.slice_leading(&[ke, ki, ka])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+                add_at(
+                    &mut w_bb,
+                    [ka, ke, kb_],
+                    &einsum(
+                        "ME,MIAB->AEBI",
+                        &[
+                            &fovb.slice_leading(&[ke])?,
+                            &t2.2.slice_leading(&[ke, ki, ka])?,
+                        ],
+                    )?,
+                    -1.0,
+                )?;
+
+                let (g_aa, g_ab, g_bb) = get_wvvvv(t1, t2, eris, kconserv, ka, kb_, ke)?;
+                add_at(
+                    &mut w_aa,
+                    [ka, ke, kb_],
+                    &einsum("if,aebf->aebi", &[&t1.0.slice_leading(&[ki])?, &g_aa])?,
+                    1.0,
+                )?;
+                // `:812` — a DIFFERENT k-address, `[kb, kf, ka]` with `kf = ki`.
+                add_at(
+                    &mut w_ba,
+                    [kb_, kf, ka],
+                    &einsum("ie,aeBF->BFai", &[&t1.0.slice_leading(&[ke])?, &g_ab])?,
+                    1.0,
+                )?;
+                add_at(
+                    &mut w_ab,
+                    [ka, ke, kb_],
+                    &einsum("IF,aeBF->aeBI", &[&t1.1.slice_leading(&[ki])?, &g_ab])?,
+                    1.0,
+                )?;
+                add_at(
+                    &mut w_bb,
+                    [ka, ke, kb_],
+                    &einsum("IF,AEBF->AEBI", &[&t1.1.slice_leading(&[ki])?, &g_bb])?,
+                    1.0,
+                )?;
+
+                for km in 0..nk {
+                    let kn = kconserv.get(ka, km, kb_) as usize;
+                    let mut ovoo = eris.blk(b::ooov, kn, ki, km)?.transpose(&[2, 3, 0, 1])?;
+                    ovoo.sub_assign(&eris.blk(b::ooov, km, ki, kn)?.transpose(&[0, 3, 2, 1])?)?;
+                    let ov_oo = eris.blk(b::OOov, kn, ki, km)?.transpose(&[2, 3, 0, 1])?;
+                    let oo_ov = eris.blk(b::ooOV, km, ki, kn)?;
+                    let oo_ov_b = eris.blk(b::OOov, km, ki, kn)?;
+                    let ovoo_x = eris.blk(b::ooOV, kn, ki, km)?.transpose(&[2, 3, 0, 1])?;
+                    let mut ovoo_b = eris.blk(b::OOOV, kn, ki, km)?.transpose(&[2, 3, 0, 1])?;
+                    ovoo_b.sub_assign(&eris.blk(b::OOOV, km, ki, kn)?.transpose(&[0, 3, 2, 1])?)?;
+
+                    add_at(
+                        &mut w_aa,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "meni,mnab->aebi",
+                            &[&ovoo, &tau.0.slice_leading(&[km, kn, ka])?],
+                        )?,
+                        0.5,
+                    )?;
+                    add_at(
+                        &mut w_ba,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "MEni,nMbA->AEbi",
+                            &[&ovoo_x, &tau.1.slice_leading(&[kn, km, kb_])?],
+                        )?,
+                        0.5,
+                    )?;
+                    add_at(
+                        &mut w_ba,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "miNE,mNbA->AEbi",
+                            &[&oo_ov, &tau.1.slice_leading(&[km, kn, kb_])?],
+                        )?,
+                        0.5,
+                    )?;
+                    add_at(
+                        &mut w_ab,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "meNI,mNaB->aeBI",
+                            &[&ov_oo, &tau.1.slice_leading(&[km, kn, ka])?],
+                        )?,
+                        0.5,
+                    )?;
+                    add_at(
+                        &mut w_ab,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "MIne,nMaB->aeBI",
+                            &[&oo_ov_b, &tau.1.slice_leading(&[kn, km, ka])?],
+                        )?,
+                        0.5,
+                    )?;
+                    add_at(
+                        &mut w_bb,
+                        [ka, ke, kb_],
+                        &einsum(
+                            "MENI,MNAB->AEBI",
+                            &[&ovoo_b, &tau.2.slice_leading(&[km, kn, ka])?],
+                        )?,
+                        0.5,
+                    )?;
+                }
+            }
+        }
+    }
+    Ok((w_aa, w_ab, w_ba, w_bb))
+}

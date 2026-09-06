@@ -1479,6 +1479,14 @@ def section_kuccsd_eom(nk=(1, 1, 2), mesh=(31, 31, 31)):
     g = _uimd.get_Wvvvv(cc, t1, t2, eris, 0, 1 % nkpts, 1 % nkpts)
     for nm, arr in zip(("u_gvvvv", "u_gvvVV", "u_gVVVV"), g):
         emit(nm, arr)
+    for nm, arr in zip(
+        ("u_Woovo", "u_WooVO", "u_WOOvo", "u_WOOVO"), _uimd.Woovo(cc, t1, t2, eris)
+    ):
+        emit(nm, arr)
+    for nm, arr in zip(
+        ("u_Wvvvo", "u_WvvVO", "u_WVVvo", "u_WVVVO"), _uimd.Wvvvo(cc, t1, t2, eris)
+    ):
+        emit(nm, arr)
 
 
 SECTIONS = {

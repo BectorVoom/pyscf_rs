@@ -1124,6 +1124,26 @@ fn kuccsd_eom_intermediates_match_upstream() {
         check(name, got, &mut failures);
     }
 
+    let q = uimd::woovo(&t1, &t2, &ctx.eris, kc).expect("Woovo");
+    for (got, name) in [
+        (&q.0, "u_Woovo"),
+        (&q.1, "u_WooVO"),
+        (&q.2, "u_WOOvo"),
+        (&q.3, "u_WOOVO"),
+    ] {
+        check(name, got, &mut failures);
+    }
+
+    let q = uimd::wvvvo(&t1, &t2, &ctx.eris, kc).expect("Wvvvo");
+    for (got, name) in [
+        (&q.0, "u_Wvvvo"),
+        (&q.1, "u_WvvVO"),
+        (&q.2, "u_WVVvo"),
+        (&q.3, "u_WVVVO"),
+    ] {
+        check(name, got, &mut failures);
+    }
+
     assert!(
         failures.is_empty(),
         "UHF EOM intermediates above the gate: {failures:?}"
