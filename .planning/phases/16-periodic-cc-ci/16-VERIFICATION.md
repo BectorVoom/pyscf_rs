@@ -262,9 +262,23 @@ the behaviour D-01 asks for.
 ## 8. Workspace state after this phase
 
 ```
-cargo test -p pyscf-runtime -p pyscf-pbc-lib -p pyscf-algebra \
-           -p pyscf-ccsd -p pyscf-pbc-cc            GREEN
-check-orphan-modules   PASS — 359 source files, all reachable
+cargo test --release -p pyscf-runtime -p pyscf-pbc-lib -p pyscf-algebra \
+           -p pyscf-ccsd -p pyscf-pbc-cc -p pyscf-pbc-ci
+    62 suites GREEN, 0 failed
+
+cargo test --release -p pyscf-pbc-cc --test kccsd_rhf -- --ignored
+    5 passed (the oracle-free gates)
+
+PYSCF_ORACLE_VENV=1 cargo test --release -p pyscf-pbc-cc \
+    --test oracle_phase16 -- --ignored        5 passed
+PYSCF_ORACLE_VENV=1 cargo test --release -p pyscf-pbc-ci \
+    --test oracle_kcis   -- --ignored         1 passed
+
+cargo clippy --release -p pyscf-pbc-cc -p pyscf-pbc-ci -p pyscf-runtime \
+             -p pyscf-algebra -p pyscf-ccsd --no-deps --all-targets
+    no lints in this workspace's crates
+
+check-orphan-modules   PASS — 364 source files, all reachable
 check-dependency-wall  PASS — cubecl-* containment intact (ALG-06)
 ```
 
