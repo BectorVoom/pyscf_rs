@@ -96,12 +96,38 @@ These consume no Python and survive an oracle drift.
    `MemoryLimitExceeded { requested: 384, limit: 383 }` and allocates nothing;
    a 384-byte budget succeeds. On a real `_ERIS` the arena charges exactly the
    derived `229 376` bytes. **CONFIRMED.**
-2. **Host rayon loops vs `zgemm_dense`** — **NOT RE-MEASURED.** Every
-   contraction in this phase goes through `ZArr::einsum`, a host loop with
-   `oracle_zsum` accumulators, per clause 2; no `zgemm_dense` call was written,
-   so there is nothing to compare against without writing the alternative
-   first. The clause stands on the standing measurement
-   (`zgemm-dense-loses-to-host-rayon`) and the re-measurement is carried over.
+2. **Host rayon loops vs `zgemm_dense`** — **RE-MEASURED, and the SPEED half of
+   the clause is REFUTED for this phase's shapes.**
+   `crates/pyscf-pbc-cc/tests/zgemm_vs_host.rs` writes the alternative the
+   original note said did not exist, and measures both routes on the phase's own
+   contractions (CPU backend, best-of-5 after warm-up):
+
+   | shape | `zgemm_dense` | host `einsum` | host/zgemm |
+   |---|---|---|---|
+   | `256·256·256` (`Wvvvv` ladder) | `0.0032 s` | `0.0142 s` | **4.46×** |
+   | `256·256·256` (`Woooo` completion) | `0.0023 s` | `0.0161 s` | **7.04×** |
+   | `1024³` (dzvp-scale) | `0.2853 s` | `1.5514 s` | **5.44×** |
+
+   `zgemm_dense` is **5.65× FASTER on average**, and the two agree to
+   **`2.1e-15` relative** — four orders inside the `1e-11` the standing
+   measurement names. The standing note was taken on GRID-LENGTH reductions,
+   which are a different kernel shape; it is now amended to say so rather than
+   generalised.
+
+   **Warm-up is why this was not obvious.** The first `zgemm_dense` call in a
+   process pays ~60 ms of cubecl client and kernel-compilation cost — larger
+   than any contraction here, and enough to invert the result on its own. The
+   first unwarmed run of this very test reported `3.74×` the OTHER way.
+
+   **The clause is NOT thereby overturned, and the port does not change.** Speed
+   is one of its two premises; the other is D-PBC-17, and `ZArr::einsum`
+   accumulates through `oracle_zsum` over a fixed-length buffer, which is what
+   makes `amplitudes_are_bit_identical_across_thread_counts` pass. This
+   measurement does not show a `zgemm_dense` route keeps that property, and it
+   excludes the reshape/transpose every real site needs to reach `(m,k)·(k,n)`
+   form. What is now known is narrower and worth writing down: **the speed
+   argument for the clause does not hold on square dense shapes**, so if
+   determinism is ever satisfied another way, the route is worth ~5×.
 3. **`symm_map`** — **AMENDED, and the amendment is 16-01's.** Measured at
    **2.10× wall clock** (`59.487 s` vs `125.029 s` on diamond `gth-szv` 2×2×2)
    against the review's derived `~4×`, with a count ratio of 2.91 (176
@@ -199,7 +225,7 @@ that plainly rather than claim the plan is unblocked.
 | **cross-thread determinism** | 16-05 test 7 | in-process half only; see §4 | bit-identical |
 | ~~**`KUCCSD`**~~ | 16-06 | **CLOSED** at `6.05e-10`. `kuccsd_rdm` (16-12) is now unblocked. | `1e-7` |
 | **the (T) peak-memory bound** | 16-08 test 6 | needs the `t3`-class allocations routed through `ZWorkspacePool`; the blocking IS ported and its invariance measured at `2.17e-19` | one block's `nocc³·nvir³` |
-| **`zgemm_dense` re-measurement** | 16-14 Task 4.2 | nothing to compare against without writing the alternative | — |
+| ~~**`zgemm_dense` re-measurement**~~ | 16-14 Task 4.2 | **CLOSED.** `zgemm_vs_host.rs` writes the alternative and measures it: `zgemm_dense` is **5.65× FASTER** on this phase's shapes and agrees to `2.1e-15` relative, refuting the SPEED half of D-PBC-29 clause 2 for square dense contractions (the standing note was taken on grid reductions). The clause's determinism half is untouched, so the port does not change — see §5.2. | — |
 | **`cell.precision` ladder** | 16-01 Task 2 | one `[2,2,2]` SCF at the default `[47,47,47]` mesh exceeds the session budget; 17-01 Gate B's "the floor is integral-screening-limited" is carried into this phase UNVERIFIED | — |
 | **`gth-dzvp` at any mesh** | 16-01 Task 5 | the byte counts in `README §6` are DERIVED, not run; `gth-dzvp` 3×3×3's 90 GiB of ERI blocks cannot be built on this machine | — |
 
