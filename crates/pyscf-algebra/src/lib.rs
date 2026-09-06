@@ -99,7 +99,7 @@ pub use axpy::{axpy, axpy_dense};
 pub use complex::CTensor;
 pub use davidson::{
     DAVIDSON_LINDEP, DavidsonOptions, DavidsonResult, Picked, davidson_nosym1, eig_general,
-    pick_real_eigs,
+    pick_real_eigs, zeig_general,
 };
 pub use device_buffer::{download, release, upload};
 pub use df_metric::{DF_METRIC_LINEAR_DEP, df_metric_fit};

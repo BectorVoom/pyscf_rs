@@ -29,11 +29,14 @@
 //!   [`ipccsd_diag_partition`], [`eaccsd_diag_partition`], plus the
 //!   intermediate skips at [`RhfEomImds::make_ip_partition`] /
 //!   [`RhfEomImds::make_ea_partition`].
-//! * `'full'` — REFUSED. `:471-474` reads `if diag is not None: diag =
-//!   eom.get_diag(imds=imds)`, and this module's `get_diag` is
-//!   `ipccsd_diag(eom, kshift, imds, diag)`, so upstream raises `TypeError:
-//!   ipccsd_diag() missing 1 required positional argument: 'kshift'` before
-//!   computing anything. There is nothing to port against.
+//! * `'full'` — REFUSED in the matvecs. `:471-474` reads `if diag is not
+//!   None: diag = eom.get_diag(imds=imds)` — note the inverted guard — and
+//!   then `eom.vector_to_amplitudes(diag, nmo, nocc)`, which here takes at
+//!   most `(self, vector, kshift)`, so upstream raises `TypeError:
+//!   EOMIP.vector_to_amplitudes() takes from 2 to 3 positional arguments but 4
+//!   were given` before any arithmetic. Measured. The DIAGONALS have no
+//!   `'full'` branch at all, so there `'full'` is the `None` diagonal and
+//!   [`ipccsd_diag_partition`] reproduces that rather than refusing.
 //! * `None` — the default, and the only branch the LEFT matvecs admit:
 //!   `lipccsd_matvec`/`leaccsd_matvec` both `assert eom.partition is None`
 //!   (`:109`, `:510`), as do both `*_star_contract` (`:216`, `:619`).
@@ -44,6 +47,32 @@
 //! [`eom_kernel`] refuses, exactly as upstream's does, and the branches are
 //! reachable only through the `*_partition` entry points — which is the same
 //! access upstream gives them (set `eom.partition` and call the matvec).
+
+//! # EE is the SINGLET, and only the singlet
+//!
+//! `eeccsd` (`:831`) and `eeccsd_matvec` (`:965`) are both bare
+//! `raise NotImplementedError`; `EOMEETriplet` (`:1483`) and `EOMEESpinFlip`
+//! (`:1489`) declare nothing but a `vector_size` that returns `None`. The one
+//! EE surface upstream has here is `EOMEESinglet` (`:1425`), driven by
+//! `eomee_ccsd_singlet` (`:838`), and that is what [`eom_kernel`] runs for
+//! [`Excitation::Ee`].
+//!
+//! Three things about it are unlike the IP/EA sides of this module:
+//!
+//! * **the vector size depends on `kshift` and is not a closed form**
+//!   ([`ee_singlet_vector_size`]) — `r2` is packed over the composite index
+//!   `(i k_i a k_a)` and a `(ki,ka,kj)` triple contributes a triangle, a full
+//!   block, or nothing, according to how `ki·nkpts+ka` compares to
+//!   `kj·nkpts+kb`;
+//! * **the initial guess is a CIS diagonalisation** ([`ee_singlet_cis_guess`]),
+//!   not the diagonal's `argsort`: `EOMEESinglet.get_init_guess` is
+//!   `get_init_guess_cis` (`:1429`), which materialises the singles block of
+//!   `Hbar` column by column and solves it densely;
+//! * **there is no left EE.** `EOMEESinglet.gen_matvec` (`:1464`) raises for
+//!   `left=True`, so there is no left matvec and hence no EE-CCSD\*.
+//!
+//! `_IMDS.make_ee` (`:1666-1706`) RENAMES the IP and EA sets rather than
+//! building new ones; [`RhfEomImds::make_ee`] lists the eleven renames.
 
 use pyscf_pbc_lib::{KIdx, Kconserv, get_kconserv3};
 
@@ -231,6 +260,27 @@ impl<'a> RhfEomImds<'a> {
             self.wvvvv = Some(w4);
         }
         Ok(self)
+    }
+
+    /// `_IMDS.make_ee(ee_partition)` (`:1666-1706`).
+    ///
+    /// # It RENAMES rather than rebuilds
+    ///
+    /// Every tensor `make_ee` produces already exists under an IP or EA name:
+    /// `Foo ← Loo`, `Fvv ← Lvv`, `woOvV ← Woovv` (i.e. `eris.oovv`),
+    /// `woVvO ← Wovvo`, `woVoV ← Wovov`, `woOoO ← Woooo`, `woOoV ← Wooov`,
+    /// `woVoO ← Wovoo`, `wvOvV ← Wvovv`, `wvVvV ← Wvvvv`, `wvVvO ← Wvvvo`.
+    /// Upstream builds whichever half is missing (`:1686-1706`); this is
+    /// `make_ip` followed by `make_ea`, which is the union, and the two `if
+    /// self.woooo.is_none()` guards make the overlap free.
+    ///
+    /// `ee_partition` is accepted by upstream's signature and never read — it
+    /// appears in no branch of the body — so it is absent here.
+    ///
+    /// # Errors
+    /// Propagates every intermediate build.
+    pub fn make_ee(self, kconserv: &Kconserv) -> Result<Self, PbcCcError> {
+        self.make_ip(kconserv)?.make_ea(kconserv)
     }
 
     /// `_IMDS.make_t3p2_ip(cc)` (`:1578-1593`) — the `EOMIP_Ta` (`:419-424`)
@@ -1691,20 +1741,25 @@ pub fn eom_kernel(
         return Err(crate::eom_kccsd_ghf::partition_refusal());
     }
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
-    if kind == Excitation::Ee {
-        // `EOMEESinglet` (`:1425`) is a different vector shape and a different
-        // matvec; it is not ported. `EOMEETriplet` (`:1483`) and
-        // `EOMEESpinFlip` (`:1489`) are SHELLS upstream — see `16-CONTEXT §1.5`.
-        return Err(PbcCcError::NotImplementedUpstream {
-            upstream: "pbc/cc/eom_kccsd_rhf.py:1425",
-            what: "EOMEESinglet is not ported; EOMEETriplet and EOMEESpinFlip are shells upstream",
-        });
-    }
+    let kr2 = crate::eom_kccsd_ghf::kconserv_ee_r2(nkpts, kshift, kconserv);
     let size = match kind {
         Excitation::Ip => ip_vector_size(nkpts, nocc, nvir),
         Excitation::Ea => ea_vector_size(nkpts, nocc, nvir),
-        Excitation::Ee => unreachable!(),
+        // `EOMEESinglet` only. `EOMEETriplet` (`:1483`) and `EOMEESpinFlip`
+        // (`:1489`) are SHELLS upstream — their `vector_size` is a bare
+        // `return None` and they declare no matvec — so an EE run here is a
+        // SINGLET run, which is what `eomee_ccsd_singlet` (`:838`) drives.
+        // Upstream's own `eeccsd` (`:831`) is `raise NotImplementedError`.
+        Excitation::Ee => ee_singlet_vector_size(nkpts, nocc, nvir, &kr2),
     };
+    if kind == Excitation::Ee && opts.left {
+        // `EOMEESinglet.gen_matvec` (`:1459-1467`) raises for `left`, with a
+        // `# TODO allow left vectors to be computed`.
+        return Err(PbcCcError::NotImplementedUpstream {
+            upstream: "pbc/cc/eom_kccsd_rhf.py:1464",
+            what: "EOMEESinglet.gen_matvec raises NotImplementedError for left=True",
+        });
+    }
 
     let mask = |v: &ZArr, konst: f64| -> Result<ZArr, PbcCcError> {
         match kind {
@@ -1730,7 +1785,10 @@ pub fn eom_kernel(
                 kconserv,
                 konst,
             ),
-            Excitation::Ee => unreachable!(),
+            // `kernel_ee` (`eom_kccsd_ghf.py:1288-1296`) does NO masking —
+            // its docstring says the `eom.mask_frozen()` parts were removed —
+            // and `EOMEESinglet` declares no `mask_frozen` at all.
+            Excitation::Ee => Ok(v.clone()),
         }
     };
 
@@ -1741,24 +1799,32 @@ pub fn eom_kernel(
     let diag = match kind {
         Excitation::Ip => ipccsd_diag(kshift, imds, kconserv)?,
         Excitation::Ea => eaccsd_diag(kshift, imds, kconserv)?,
-        Excitation::Ee => unreachable!(),
+        Excitation::Ee => eeccsd_diag(kshift, imds, kconserv)?,
     };
     let diag = mask(&diag, crate::kccsd_rhf::LARGE_DENOM)?;
 
-    let mut guess = Vec::with_capacity(nroots);
-    if opts.koopmans {
+    // `EOMEESinglet.get_init_guess` is `get_init_guess_cis` (`:1429`), NOT
+    // the diagonal-argsort guess the IP/EA classes inherit — it diagonalises
+    // the singles block of `Hbar` and pads with zeros.
+    let guess = if kind == Excitation::Ee {
+        ee_singlet_cis_guess(kshift, nroots, imds, kconserv)?
+    } else if opts.koopmans {
         let seeds: Vec<usize> = match kind {
             Excitation::Ip => padding.occupied[kshift].iter().rev().copied().collect(),
             Excitation::Ea => padding.virtuals[kshift].to_vec(),
-            Excitation::Ee => unreachable!(),
+            Excitation::Ee => unreachable!("handled above"),
         };
-        for &n in seeds.iter().take(nroots) {
-            let mut g = ZArr::zeros(&[size]);
-            if n < size {
-                g.data_mut().re[n] = 1.0;
-            }
-            guess.push(mask(&g, 0.0)?);
-        }
+        seeds
+            .iter()
+            .take(nroots)
+            .map(|&n| {
+                let mut g = ZArr::zeros(&[size]);
+                if n < size {
+                    g.data_mut().re[n] = 1.0;
+                }
+                mask(&g, 0.0)
+            })
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         let mut idx: Vec<usize> = (0..size).collect();
         idx.sort_by(|a, b| {
@@ -1766,12 +1832,15 @@ pub fn eom_kernel(
                 .partial_cmp(&diag.data().re[*b])
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        for &i in idx.iter().take(nroots) {
-            let mut g = ZArr::zeros(&[size]);
-            g.data_mut().re[i] = 1.0;
-            guess.push(mask(&g, 0.0)?);
-        }
-    }
+        idx.iter()
+            .take(nroots)
+            .map(|&i| {
+                let mut g = ZArr::zeros(&[size]);
+                g.data_mut().re[i] = 1.0;
+                mask(&g, 0.0)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
 
     let aop = |xs: &[pyscf_algebra::CTensor]| -> Vec<pyscf_algebra::CTensor> {
         xs.iter()
@@ -1783,7 +1852,8 @@ pub fn eom_kernel(
                     (Excitation::Ip, true) => lipccsd_matvec(&v, kshift, imds, kconserv),
                     (Excitation::Ea, false) => eaccsd_matvec(&v, kshift, imds, kconserv),
                     (Excitation::Ea, true) => leaccsd_matvec(&v, kshift, imds, kconserv),
-                    (Excitation::Ee, _) => unreachable!(),
+                    (Excitation::Ee, false) => eeccsd_matvec_singlet(&v, kshift, imds, kconserv),
+                    (Excitation::Ee, true) => unreachable!("refused above"),
                 }
                 .expect("EOM matvec");
                 mask(&out, 0.0).expect("mask out").into_ctensor()
@@ -1824,7 +1894,10 @@ pub fn eom_kernel(
     let n1 = match kind {
         Excitation::Ip => nocc,
         Excitation::Ea => nvir,
-        Excitation::Ee => unreachable!(),
+        // The EE `r1` block is `[nkpts, nocc, nvir]`, so the singles weight is
+        // the whole of it — `kernel_ee` (`eom_kccsd_ghf.py:1367`) takes
+        // `‖r1‖²` over the same block.
+        Excitation::Ee => nkpts * nocc * nvir,
     };
     let mut v = Vec::with_capacity(res.x.len());
     let mut qp_weight = Vec::with_capacity(res.x.len());
@@ -2498,4 +2571,927 @@ pub fn perturbed_ccsd_kernel(
         Excitation::Ea => eaccsd_star_contract(&pairs, kshift, imds, padding, kconserv, lat),
         Excitation::Ee => unreachable!("refused above"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// EOM-EE-CCSD, SINGLET (`:826-1481`)
+// ---------------------------------------------------------------------------
+
+/// `EOMEESinglet.vector_size(kshift)` (`:1432-1458`).
+///
+/// # The size depends on `kshift`, and not by a closed form
+///
+/// `r1` contributes `nkpts·nocc·nvir`. `r2` is packed over the composite index
+/// `(i k_i a k_a)`, and a `(ki,ka,kj)` triple contributes `nov(nov+1)/2` when
+/// `ki·nkpts+ka == kj·nkpts+kb`, `nov²` when it is GREATER, and nothing when
+/// it is smaller — so the count has to be summed over the triples with the
+/// `kconserv_r2` of that shift. `16-REVIEW §5` recorded exactly this: the EE
+/// size "is *not* a closed form".
+#[must_use]
+pub fn ee_singlet_vector_size(
+    nkpts: usize,
+    nocc: usize,
+    nvir: usize,
+    kconserv_r2: &[usize],
+) -> usize {
+    let nov = nocc * nvir;
+    let mut size = nkpts * nov;
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                let kb = kconserv_r2[(ki * nkpts + ka) * nkpts + kj];
+                let (kika, kjkb) = (ki * nkpts + ka, kj * nkpts + kb);
+                if kika == kjkb {
+                    size += nov * (nov + 1) / 2;
+                } else if kika > kjkb {
+                    size += nov * nov;
+                }
+            }
+        }
+    }
+    size
+}
+
+/// The `(kika, kjkb)` classification the singlet packing turns on, and the
+/// `(ki, ka, kj)` ORDER the offsets run in (`:894`, `:927`).
+///
+/// Upstream's two packing functions both iterate `for ki, ka, kj in
+/// loop_kkk(nkpts)` — note the middle index is `ka`, not `kj` — while
+/// `vector_size` iterates `for ki, kj, ka`. The counts agree because the
+/// condition is symmetric under relabelling, but the OFFSETS do not: a port
+/// that used the `vector_size` order would pack the same number of elements
+/// in a different order. This iterator is the packing order.
+fn singlet_pairs(
+    nkpts: usize,
+    kconserv_r2: &[usize],
+) -> impl Iterator<Item = (usize, usize, usize, usize)> + '_ {
+    (0..nkpts).flat_map(move |ki| {
+        (0..nkpts).flat_map(move |ka| {
+            (0..nkpts).map(move |kj| {
+                let kb = kconserv_r2[(ki * nkpts + ka) * nkpts + kj];
+                (ki, ka, kj, kb)
+            })
+        })
+    })
+}
+
+/// `vector_to_amplitudes_singlet(vector, nkpts, nmo, nocc, kconserv)`
+/// (`:849-893`).
+///
+/// Returns `(r1, r2)` with `r1` shaped `[nkpts, nocc, nvir]` and `r2` shaped
+/// `[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir]` indexed
+/// `[ki, kj, ka, i, j, a, b]` — upstream's final layout after its
+/// `reshape(...).transpose(0,2,1,3,5,4,6)` (`:891`), which this builds
+/// directly rather than materialising the intermediate `(ki,ka)`-composite
+/// form.
+///
+/// # Errors
+/// [`PbcCcError::Shape`] if the vector is not [`ee_singlet_vector_size`] long.
+pub fn vector_to_amplitudes_singlet(
+    vector: &ZArr,
+    nkpts: usize,
+    nocc: usize,
+    nvir: usize,
+    kconserv_r2: &[usize],
+) -> Result<(ZArr, ZArr), PbcCcError> {
+    let want = ee_singlet_vector_size(nkpts, nocc, nvir, kconserv_r2);
+    if vector.len() != want {
+        return Err(PbcCcError::Shape(format!(
+            "EE singlet vector of {} elements, expected {want}",
+            vector.len()
+        )));
+    }
+    let nov = nocc * nvir;
+    let n1 = nkpts * nov;
+    let mut r1 = ZArr::zeros(&[nkpts, nocc, nvir]);
+    r1.data_mut().re.copy_from_slice(&vector.data().re[..n1]);
+    r1.data_mut().im.copy_from_slice(&vector.data().im[..n1]);
+
+    let mut r2 = ZArr::zeros(&[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir]);
+    // `r2[ki,kj,ka][i,j,a,b] <- tmp[ia, jb]` and, in the same breath,
+    // `r2[kj,ki,kb][j,i,b,a] <- tmp[ia, jb]` — upstream's paired assignment at
+    // `:882-883` / `:887-888`.
+    let put = |r2: &mut ZArr, ki, kj, ka, kb, ia: usize, jb: usize, v: (f64, f64)| {
+        let (i, a) = (ia / nvir, ia % nvir);
+        let (j, b) = (jb / nvir, jb % nvir);
+        let s1 =
+            ((((ki * nkpts + kj) * nkpts + ka) * nocc + i) * nocc + j) * nvir * nvir + a * nvir + b;
+        r2.data_mut().re[s1] = v.0;
+        r2.data_mut().im[s1] = v.1;
+        let s2 =
+            ((((kj * nkpts + ki) * nkpts + kb) * nocc + j) * nocc + i) * nvir * nvir + b * nvir + a;
+        r2.data_mut().re[s2] = v.0;
+        r2.data_mut().im[s2] = v.1;
+    };
+
+    let mut off = n1;
+    for (ki, ka, kj, kb) in singlet_pairs(nkpts, kconserv_r2) {
+        let (kika, kjkb) = (ki * nkpts + ka, kj * nkpts + kb);
+        if kika == kjkb {
+            // `kika == kjkb` forces `ki == kj` and `ka == kb`, so the two
+            // assignments fill the (p,q) and (q,p) halves of ONE block.
+            for p in 0..nov {
+                for q in 0..=p {
+                    let v = (vector.data().re[off], vector.data().im[off]);
+                    put(&mut r2, ki, kj, ka, kb, p, q, v);
+                    off += 1;
+                }
+            }
+        } else if kika > kjkb {
+            for p in 0..nov {
+                for q in 0..nov {
+                    let v = (vector.data().re[off], vector.data().im[off]);
+                    put(&mut r2, ki, kj, ka, kb, p, q, v);
+                    off += 1;
+                }
+            }
+        }
+    }
+    debug_assert_eq!(off, want);
+    Ok((r1, r2))
+}
+
+/// `amplitudes_to_vector_singlet(r1, r2, kconserv)` (`:897-935`), the inverse
+/// of [`vector_to_amplitudes_singlet`].
+///
+/// # Errors
+/// [`PbcCcError::Shape`] on a rank or extent mismatch.
+pub fn amplitudes_to_vector_singlet(
+    r1: &ZArr,
+    r2: &ZArr,
+    nkpts: usize,
+    nocc: usize,
+    nvir: usize,
+    kconserv_r2: &[usize],
+) -> Result<ZArr, PbcCcError> {
+    let nov = nocc * nvir;
+    let n1 = nkpts * nov;
+    let size = ee_singlet_vector_size(nkpts, nocc, nvir, kconserv_r2);
+    let mut v = ZArr::zeros(&[size]);
+    if r1.len() != n1 {
+        return Err(PbcCcError::Shape(format!(
+            "EE singlet r1 of {} elements, expected {n1}",
+            r1.len()
+        )));
+    }
+    v.data_mut().re[..n1].copy_from_slice(&r1.data().re);
+    v.data_mut().im[..n1].copy_from_slice(&r1.data().im);
+
+    let at = |ki: usize, kj: usize, ka: usize, ia: usize, jb: usize| -> usize {
+        let (i, a) = (ia / nvir, ia % nvir);
+        let (j, b) = (jb / nvir, jb % nvir);
+        ((((ki * nkpts + kj) * nkpts + ka) * nocc + i) * nocc + j) * nvir * nvir + a * nvir + b
+    };
+
+    let mut off = n1;
+    for (ki, ka, kj, kb) in singlet_pairs(nkpts, kconserv_r2) {
+        let (kika, kjkb) = (ki * nkpts + ka, kj * nkpts + kb);
+        if kika == kjkb {
+            for p in 0..nov {
+                for q in 0..=p {
+                    let s = at(ki, kj, ka, p, q);
+                    v.data_mut().re[off] = r2.data().re[s];
+                    v.data_mut().im[off] = r2.data().im[s];
+                    off += 1;
+                }
+            }
+        } else if kika > kjkb {
+            for p in 0..nov {
+                for q in 0..nov {
+                    let s = at(ki, kj, ka, p, q);
+                    v.data_mut().re[off] = r2.data().re[s];
+                    v.data_mut().im[off] = r2.data().im[s];
+                    off += 1;
+                }
+            }
+        }
+    }
+    debug_assert_eq!(off, size);
+    Ok(v)
+}
+
+/// `eeccsd_matvec_singlet(eom, vector, kshift, imds)` (`:969-1222`).
+///
+/// # The intermediate names
+///
+/// `_IMDS.make_ee` (`:1666-1706`) RENAMES the set rather than rebuilding it:
+/// `Foo ← Loo`, `Fvv ← Lvv`, `woOvV ← Woovv` (which is `eris.oovv`),
+/// `woVvO ← Wovvo`, `woVoV ← Wovov`, `woOoO ← Woooo`, `woOoV ← Wooov`,
+/// `woVoO ← Wovoo`, `wvOvV ← Wvovv`, `wvVvV ← Wvvvv`, `wvVvO ← Wvvvo`. This
+/// port keeps the [`RhfEomImds`] field names and quotes the upstream name at
+/// each use, so a reader can follow either.
+///
+/// # The four antisymmetrised tensors
+///
+/// `:993-1027` builds `r2bar`, `woOoV_bar`, `wvOvV_bar` and `woVvO_bar` up
+/// front. Only `woVvO_bar` mixes two DIFFERENT intermediates — it is
+/// `2·woVvO − woVoV` transposed, not `2·X − X` — which is the one place a
+/// transcription can go wrong silently.
+///
+/// # Errors
+/// Propagates every intermediate access and shape check.
+#[allow(clippy::too_many_lines)]
+pub fn eeccsd_matvec_singlet(
+    vector: &ZArr,
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let kr1 = crate::eom_kccsd_ghf::kconserv_ee_r1(nkpts, kshift, kconserv);
+    let kr2 = crate::eom_kccsd_ghf::kconserv_ee_r2(nkpts, kshift, kconserv);
+    let k2 = |ki: usize, ka: usize, kj: usize| kr2[(ki * nkpts + ka) * nkpts + kj];
+
+    let (r1, r2) = vector_to_amplitudes_singlet(vector, nkpts, nocc, nvir, &kr2)?;
+
+    let woooo = imds.need(&imds.woooo, "woOoO")?;
+    let wooov = imds.need(&imds.wooov, "woOoV")?;
+    let wovoo = imds.need(&imds.wovoo, "woVoO")?;
+    let wvovv = imds.need(&imds.wvovv, "wvOvV")?;
+    let wvvvv = imds.need(&imds.wvvvv, "wvVvV")?;
+    let wvvvo = imds.need(&imds.wvvvo, "wvVvO")?;
+    let wovvo = imds.wovvo()?;
+    let wovov = imds.wovov()?;
+
+    // `:993-1027` — the four antisymmetrised tensors.
+    let mut r2bar = ZArr::zeros(r2.shape());
+    let mut wooov_bar = ZArr::zeros(wooov.shape());
+    let mut wvovv_bar = ZArr::zeros(wvovv.shape());
+    let mut wovvo_bar = ZArr::zeros(wovvo.shape());
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                // `:1002-1004` — `rbar_ijab = 2 r_ijab − r_ijba`.
+                let kb = k2(ki, ka, kj);
+                let mut b = r2.slice_leading(&[ki, kj, ka])?;
+                b.scale(2.0);
+                b.sub_assign(&r2.slice_leading(&[ki, kj, kb])?.transpose(&[0, 1, 3, 2])?)?;
+                r2bar.set_leading(&[ki, kj, ka], &b)?;
+
+                // `:1013` — `wbar_nmie = 2 W_nmie − W_mnie^T`, at
+                // `(wkn, wkm, wki) = (ki, kj, ka)`.
+                let mut b = wooov.slice_leading(&[ki, kj, ka])?;
+                b.scale(2.0);
+                b.sub_assign(
+                    &wooov
+                        .slice_leading(&[kj, ki, ka])?
+                        .transpose(&[1, 0, 2, 3])?,
+                )?;
+                wooov_bar.set_leading(&[ki, kj, ka], &b)?;
+
+                // `:1021` — `wbar_amfe = 2 W_amfe − W_amef`, at
+                // `(wka, wkm, wkf) = (ki, kj, ka)` and `wke = kconserv[wka, wkf, wkm]`.
+                let wke = kconserv.get(ki, ka, kj) as usize;
+                let mut b = wvovv.slice_leading(&[ki, kj, ka])?;
+                b.scale(2.0);
+                b.sub_assign(
+                    &wvovv
+                        .slice_leading(&[ki, kj, wke])?
+                        .transpose(&[0, 1, 3, 2])?,
+                )?;
+                wvovv_bar.set_leading(&[ki, kj, ka], &b)?;
+
+                // `:1027` — `wbar_mbej = 2 W_mbej − W_mbje`, and the second
+                // term comes from `woVoV`, NOT from `woVvO`. At
+                // `(wkm, wkb, wke) = (ki, kj, ka)`, `wkj = kconserv[wkm, wke, wkb]`.
+                let wkj = kconserv.get(ki, ka, kj) as usize;
+                let mut b = wovvo.slice_leading(&[ki, kj, ka])?;
+                b.scale(2.0);
+                b.sub_assign(
+                    &wovov
+                        .slice_leading(&[ki, kj, wkj])?
+                        .transpose(&[0, 1, 3, 2])?,
+                )?;
+                wovvo_bar.set_leading(&[ki, kj, ka], &b)?;
+            }
+        }
+    }
+
+    // `:1029-1060` — `Hr1`.
+    let mut hr1 = ZArr::zeros(&[nkpts, nocc, nvir]);
+    for ki in 0..nkpts {
+        let ka = kr1[ki];
+        let mut acc = ZArr::zeros(&[nocc, nvir]);
+        acc.sub_assign(&einsum(
+            "mi,ma->ia",
+            &[&imds.loo.slice_leading(&[ki])?, &r1.slice_leading(&[ki])?],
+        )?)?;
+        acc.add_assign(&einsum(
+            "ac,ic->ia",
+            &[&imds.lvv.slice_leading(&[ka])?, &r1.slice_leading(&[ki])?],
+        )?)?;
+        for (km, &ke) in kr1.iter().enumerate() {
+            acc.add_assign(&einsum_scaled(
+                "maei,me->ia",
+                &[
+                    &wovvo.slice_leading(&[km, ka, ke])?,
+                    &r1.slice_leading(&[km])?,
+                ],
+                2.0,
+            )?)?;
+            acc.sub_assign(&einsum(
+                "maie,me->ia",
+                &[
+                    &wovov.slice_leading(&[km, ka, ki])?,
+                    &r1.slice_leading(&[km])?,
+                ],
+            )?)?;
+            acc.add_assign(&einsum_scaled(
+                "me,imae->ia",
+                &[
+                    &imds.fov.slice_leading(&[km])?,
+                    &r2.slice_leading(&[ki, km, ka])?,
+                ],
+                2.0,
+            )?)?;
+            acc.sub_assign(&einsum(
+                "me,miae->ia",
+                &[
+                    &imds.fov.slice_leading(&[km])?,
+                    &r2.slice_leading(&[km, ki, ka])?,
+                ],
+            )?)?;
+            for ke in 0..nkpts {
+                acc.add_assign(&einsum_scaled(
+                    "amef,imef->ia",
+                    &[
+                        &wvovv.slice_leading(&[ka, km, ke])?,
+                        &r2.slice_leading(&[ki, km, ke])?,
+                    ],
+                    2.0,
+                )?)?;
+                let kf = kconserv.get(ka, ke, km) as usize;
+                acc.sub_assign(&einsum(
+                    "amfe,imef->ia",
+                    &[
+                        &wvovv.slice_leading(&[ka, km, kf])?,
+                        &r2.slice_leading(&[ki, km, ke])?,
+                    ],
+                )?)?;
+                // `:1057-1059` — the dummy `ke` is renamed `kn` here.
+                let kn = ke;
+                acc.add_assign(&einsum_scaled(
+                    "mnie,mnae->ia",
+                    &[
+                        &wooov.slice_leading(&[km, kn, ki])?,
+                        &r2.slice_leading(&[km, kn, ka])?,
+                    ],
+                    -2.0,
+                )?)?;
+                acc.add_assign(&einsum(
+                    "mnie,nmae->ia",
+                    &[
+                        &wooov.slice_leading(&[km, kn, ki])?,
+                        &r2.slice_leading(&[kn, km, ka])?,
+                    ],
+                )?)?;
+            }
+        }
+        hr1.set_leading(&[ki], &acc)?;
+    }
+
+    // `:1062-1129` — `Hr2`.
+    let mut hr2 = ZArr::zeros(r2.shape());
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                let kb = k2(ki, ka, kj);
+                let mut acc = hr2.slice_leading(&[ki, kj, ka])?;
+                acc.sub_assign(&einsum(
+                    "mj,imab->ijab",
+                    &[
+                        &imds.loo.slice_leading(&[kj])?,
+                        &r2.slice_leading(&[ki, kj, ka])?,
+                    ],
+                )?)?;
+                acc.sub_assign(&einsum(
+                    "mi,jmba->ijab",
+                    &[
+                        &imds.loo.slice_leading(&[ki])?,
+                        &r2.slice_leading(&[kj, ki, kb])?,
+                    ],
+                )?)?;
+                acc.add_assign(&einsum(
+                    "be,ijae->ijab",
+                    &[
+                        &imds.lvv.slice_leading(&[kb])?,
+                        &r2.slice_leading(&[ki, kj, ka])?,
+                    ],
+                )?)?;
+                acc.add_assign(&einsum(
+                    "ae,jibe->ijab",
+                    &[
+                        &imds.lvv.slice_leading(&[ka])?,
+                        &r2.slice_leading(&[kj, ki, kb])?,
+                    ],
+                )?)?;
+
+                let ke = kr1[ki];
+                acc.add_assign(&einsum(
+                    "abej,ie->ijab",
+                    &[
+                        &wvvvo.slice_leading(&[ka, kb, ke])?,
+                        &r1.slice_leading(&[ki])?,
+                    ],
+                )?)?;
+                let ke = kr1[kj];
+                acc.add_assign(&einsum(
+                    "baei,je->ijab",
+                    &[
+                        &wvvvo.slice_leading(&[kb, ka, ke])?,
+                        &r1.slice_leading(&[kj])?,
+                    ],
+                )?)?;
+                let km = kconserv.get(ki, kb, kj) as usize;
+                acc.sub_assign(&einsum(
+                    "mbij,ma->ijab",
+                    &[
+                        &wovoo.slice_leading(&[km, kb, ki])?,
+                        &r1.slice_leading(&[km])?,
+                    ],
+                )?)?;
+                let km = kconserv.get(ki, ka, kj) as usize;
+                acc.sub_assign(&einsum(
+                    "maji,mb->ijab",
+                    &[
+                        &wovoo.slice_leading(&[km, ka, kj])?,
+                        &r1.slice_leading(&[km])?,
+                    ],
+                )?)?;
+                hr2.set_leading(&[ki, kj, ka], &acc)?;
+
+                // `:1096-1112` — `tmp`, then the SAME `tmp` transposed into
+                // the `[kj, ki, kb]` slot. That second write is why `Hr2` is
+                // accumulated globally rather than per block.
+                let mut tmp = ZArr::zeros(&[nocc, nocc, nvir, nvir]);
+                for km in 0..nkpts {
+                    let ke = kconserv.get(km, kj, kb) as usize;
+                    tmp.add_assign(&einsum(
+                        "mbej,imae->ijab",
+                        &[
+                            &wovvo_bar.slice_leading(&[km, kb, ke])?,
+                            &r2.slice_leading(&[ki, km, ka])?,
+                        ],
+                    )?)?;
+                    tmp.sub_assign(&einsum(
+                        "mbej,imea->ijab",
+                        &[
+                            &wovvo.slice_leading(&[km, kb, ke])?,
+                            &r2.slice_leading(&[ki, km, ke])?,
+                        ],
+                    )?)?;
+                    let ke = kconserv.get(km, kj, ka) as usize;
+                    tmp.sub_assign(&einsum(
+                        "maje,imeb->ijab",
+                        &[
+                            &wovov.slice_leading(&[km, ka, kj])?,
+                            &r2.slice_leading(&[ki, km, ke])?,
+                        ],
+                    )?)?;
+                }
+                let mut acc = hr2.slice_leading(&[ki, kj, ka])?;
+                acc.add_assign(&tmp)?;
+                hr2.set_leading(&[ki, kj, ka], &acc)?;
+                let mut acc = hr2.slice_leading(&[kj, ki, kb])?;
+                acc.add_assign(&tmp.transpose(&[1, 0, 3, 2])?)?;
+                hr2.set_leading(&[kj, ki, kb], &acc)?;
+
+                // `:1114-1122` — the two four-index ladders. The loop variable
+                // is `km` upstream and renamed `ke` inside the first term.
+                let mut acc = hr2.slice_leading(&[ki, kj, ka])?;
+                for km in 0..nkpts {
+                    let ke = km;
+                    acc.add_assign(&einsum(
+                        "abef,ijef->ijab",
+                        &[
+                            &wvvvv.slice_leading(&[ka, kb, ke])?,
+                            &r2.slice_leading(&[ki, kj, ke])?,
+                        ],
+                    )?)?;
+                    let kn = kconserv.get(ki, km, kj) as usize;
+                    acc.add_assign(&einsum(
+                        "mnij,mnab->ijab",
+                        &[
+                            &woooo.slice_leading(&[km, kn, ki])?,
+                            &r2.slice_leading(&[km, kn, ka])?,
+                        ],
+                    )?)?;
+                }
+                hr2.set_leading(&[ki, kj, ka], &acc)?;
+            }
+        }
+    }
+
+    // `:1131-1180` — the four `M = W·r` intermediates.
+    //
+    // Upstream writes these with a FREE k-axis inside the einsum
+    // (`imds.woOvV[km]`, `imds.woOvV[:, :, ke]`, `woOoV_bar[kn, :, ki]`), and
+    // `16-VERIFICATION` records that free k-axis gathers are shape-silent —
+    // `oovv[:,km,ke]` and `oovv[km,:,ke]` have the same shape. They are
+    // written here as explicit k loops instead.
+    let mut wr2_oo = ZArr::zeros(&[nkpts, nocc, nocc]);
+    let mut wr2_vv = ZArr::zeros(&[nkpts, nvir, nvir]);
+    let mut wr1_oo = ZArr::zeros(&[nkpts, nocc, nocc]);
+    let mut wr1_vv = ZArr::zeros(&[nkpts, nvir, nvir]);
+    for kx in 0..nkpts {
+        // `:1141-1146` — `Wr2_jm = W_mnef rbar_jnef`, `km = kconserv_r1[kj]`.
+        let kj = kx;
+        let km = kr1[kj];
+        let mut acc = ZArr::zeros(&[nocc, nocc]);
+        for kn in 0..nkpts {
+            for ke in 0..nkpts {
+                acc.add_assign(&einsum(
+                    "mnef,jnef->jm",
+                    &[
+                        &imds.eris.blk(Blk::Oovv, km, kn, ke)?,
+                        &r2bar.slice_leading(&[kj, kn, ke])?,
+                    ],
+                )?)?;
+            }
+        }
+        wr2_oo.set_leading(&[kj], &acc)?;
+
+        // `:1148-1156` — `Wr2_eb = W_mnef rbar_mnbf`, `kb = kconserv_r1[ke]`.
+        let ke = kx;
+        let kb = kr1[ke];
+        let mut acc = ZArr::zeros(&[nvir, nvir]);
+        for km in 0..nkpts {
+            for kn in 0..nkpts {
+                acc.add_assign(&einsum(
+                    "mnef,mnbf->eb",
+                    &[
+                        &imds.eris.blk(Blk::Oovv, km, kn, ke)?,
+                        &r2bar.slice_leading(&[km, kn, kb])?,
+                    ],
+                )?)?;
+            }
+        }
+        wr2_vv.set_leading(&[ke], &acc)?;
+
+        // `:1158-1166` — `Wr1_in = wbar_nmie r_me`, `kn = kconserv_r1[ki]`.
+        let ki = kx;
+        let kn = kr1[ki];
+        let mut acc = ZArr::zeros(&[nocc, nocc]);
+        for km in 0..nkpts {
+            acc.add_assign(&einsum(
+                "nmie,me->in",
+                &[
+                    &wooov_bar.slice_leading(&[kn, km, ki])?,
+                    &r1.slice_leading(&[km])?,
+                ],
+            )?)?;
+        }
+        wr1_oo.set_leading(&[ki], &acc)?;
+
+        // `:1168-1176` — `Wr1_fa = wbar_amfe r_me`, `ka = kconserv_r1[kf]`.
+        let kf = kx;
+        let ka = kr1[kf];
+        let mut acc = ZArr::zeros(&[nvir, nvir]);
+        for km in 0..nkpts {
+            acc.add_assign(&einsum(
+                "amfe,me->fa",
+                &[
+                    &wvovv_bar.slice_leading(&[ka, km, kf])?,
+                    &r1.slice_leading(&[km])?,
+                ],
+            )?)?;
+        }
+        wr1_vv.set_leading(&[kf], &acc)?;
+    }
+
+    // `:1180-1216` — the eight contractions against `t2`.
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                let kb = k2(ki, ka, kj);
+                let mut acc = hr2.slice_leading(&[ki, kj, ka])?;
+                let km = kr1[kj];
+                acc.sub_assign(&einsum(
+                    "jm,imab->ijab",
+                    &[
+                        &wr2_oo.slice_leading(&[kj])?,
+                        &imds.t2.slice_leading(&[ki, km, ka])?,
+                    ],
+                )?)?;
+                let km = kr1[ki];
+                acc.sub_assign(&einsum(
+                    "im,jmba->ijab",
+                    &[
+                        &wr2_oo.slice_leading(&[ki])?,
+                        &imds.t2.slice_leading(&[kj, km, kb])?,
+                    ],
+                )?)?;
+                let ke = kconserv.get(ki, ka, kj) as usize;
+                acc.sub_assign(&einsum(
+                    "eb,ijae->ijab",
+                    &[
+                        &wr2_vv.slice_leading(&[ke])?,
+                        &imds.t2.slice_leading(&[ki, kj, ka])?,
+                    ],
+                )?)?;
+                let ke = kconserv.get(kj, kb, ki) as usize;
+                acc.sub_assign(&einsum(
+                    "ea,jibe->ijab",
+                    &[
+                        &wr2_vv.slice_leading(&[ke])?,
+                        &imds.t2.slice_leading(&[kj, ki, kb])?,
+                    ],
+                )?)?;
+
+                let kn = kr1[ki];
+                acc.sub_assign(&einsum(
+                    "in,jnba->ijab",
+                    &[
+                        &wr1_oo.slice_leading(&[ki])?,
+                        &imds.t2.slice_leading(&[kj, kn, kb])?,
+                    ],
+                )?)?;
+                let kn = kr1[kj];
+                acc.sub_assign(&einsum(
+                    "jn,inab->ijab",
+                    &[
+                        &wr1_oo.slice_leading(&[kj])?,
+                        &imds.t2.slice_leading(&[ki, kn, ka])?,
+                    ],
+                )?)?;
+                let kf = kconserv.get(kj, kb, ki) as usize;
+                acc.add_assign(&einsum(
+                    "fa,jibf->ijab",
+                    &[
+                        &wr1_vv.slice_leading(&[kf])?,
+                        &imds.t2.slice_leading(&[kj, ki, kb])?,
+                    ],
+                )?)?;
+                let kf = kconserv.get(ki, ka, kj) as usize;
+                acc.add_assign(&einsum(
+                    "fb,ijaf->ijab",
+                    &[
+                        &wr1_vv.slice_leading(&[kf])?,
+                        &imds.t2.slice_leading(&[ki, kj, ka])?,
+                    ],
+                )?)?;
+                hr2.set_leading(&[ki, kj, ka], &acc)?;
+            }
+        }
+    }
+
+    amplitudes_to_vector_singlet(&hr1, &hr2, nkpts, nocc, nvir, &kr2)
+}
+
+/// `eeccsd_diag(eom, kshift, imds)` (`:1225-1280`).
+///
+/// `partition == 'mp'` is REFUSED — upstream's own branch is a bare
+/// `raise NotImplementedError` behind a `# TODO Allow partition='mp'`
+/// (`:1243-1244`).
+///
+/// # Errors
+/// As [`eeccsd_matvec_singlet`].
+#[allow(clippy::too_many_lines)]
+pub fn eeccsd_diag(
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let kr1 = crate::eom_kccsd_ghf::kconserv_ee_r1(nkpts, kshift, kconserv);
+    let kr2 = crate::eom_kccsd_ghf::kconserv_ee_r2(nkpts, kshift, kconserv);
+    let woooo = imds.need(&imds.woooo, "woOoO")?;
+    let wvvvv = imds.need(&imds.wvvvv, "wvVvV")?;
+    let wovvo = imds.wovvo()?;
+    let wovov = imds.wovov()?;
+
+    let mut hr1 = ZArr::zeros(&[nkpts, nocc, nvir]);
+    for (ki, &ka) in kr1.iter().enumerate() {
+        let f_oo = imds.loo.slice_leading(&[ki])?;
+        let f_vv = imds.lvv.slice_leading(&[ka])?;
+        let wo = wovvo.slice_leading(&[ki, ka, ka])?;
+        let wv = wovov.slice_leading(&[ki, ka, ki])?;
+        let mut blk = ZArr::zeros(&[nocc, nvir]);
+        for i in 0..nocc {
+            for a in 0..nvir {
+                let f = i * nvir + a;
+                let (r, m) = f_oo.at(&[i, i])?;
+                blk.data_mut().re[f] -= r;
+                blk.data_mut().im[f] -= m;
+                let (r, m) = f_vv.at(&[a, a])?;
+                blk.data_mut().re[f] += r;
+                blk.data_mut().im[f] += m;
+                let (r, m) = wo.at(&[i, a, a, i])?;
+                blk.data_mut().re[f] += r;
+                blk.data_mut().im[f] += m;
+                let (r, m) = wv.at(&[i, a, i, a])?;
+                blk.data_mut().re[f] -= r;
+                blk.data_mut().im[f] -= m;
+            }
+        }
+        hr1.set_leading(&[ki], &blk)?;
+    }
+
+    let mut hr2 = ZArr::zeros(&[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir]);
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                let kb = kr2[(ki * nkpts + ka) * nkpts + kj];
+                let fi = imds.loo.slice_leading(&[ki])?;
+                let fj = imds.loo.slice_leading(&[kj])?;
+                let fa = imds.lvv.slice_leading(&[ka])?;
+                let fb = imds.lvv.slice_leading(&[kb])?;
+                let w_jbbj = wovvo.slice_leading(&[kj, kb, kb])?;
+                let w_jbjb = wovov.slice_leading(&[kj, kb, kj])?;
+                let w_jaja = wovov.slice_leading(&[kj, ka, kj])?;
+                let w_ibib = wovov.slice_leading(&[ki, kb, ki])?;
+                let w_iaai = wovvo.slice_leading(&[ki, ka, ka])?;
+                let w_iaia = wovov.slice_leading(&[ki, ka, ki])?;
+                let w_abab = wvvvv.slice_leading(&[ka, kb, ka])?;
+                let w_ijij = woooo.slice_leading(&[ki, kj, ki])?;
+
+                // `:1268-1279` — the four `Woovv·t2` traces. Each contracts a
+                // DIFFERENT pair of k-indices; the `km`/`ke` above each is
+                // upstream's own derivation of it.
+                let km1 = kconserv.get(ka, ki, kb) as usize;
+                let a1 = imds.eris.blk(Blk::Oovv, ki, km1, ka)?;
+                let b1 = imds.t2.slice_leading(&[ki, km1, ka])?;
+                let km2 = kconserv.get(ka, kj, kb) as usize;
+                let a2 = imds.eris.blk(Blk::Oovv, km2, kj, ka)?;
+                let b2 = imds.t2.slice_leading(&[km2, kj, ka])?;
+                let a3 = imds.eris.blk(Blk::Oovv, ki, kj, ka)?;
+                let b3 = imds.t2.slice_leading(&[ki, kj, ka])?;
+                let ke4 = kconserv.get(ki, kb, kj) as usize;
+                let a4 = imds.eris.blk(Blk::Oovv, ki, kj, ke4)?;
+                let b4 = imds.t2.slice_leading(&[ki, kj, ke4])?;
+                // `iab`, `jab`, `ija`, `ijb` — each summed over the axis the
+                // trace leaves free.
+                let t1_iab = einsum("imab,imab->iab", &[&a1, &b1])?;
+                let t2_jab = einsum("mjab,mjab->jab", &[&a2, &b2])?;
+                let t3_ija = einsum("ijae,ijae->ija", &[&a3, &b3])?;
+                let t4_ijb = einsum("ijeb,ijeb->ijb", &[&a4, &b4])?;
+
+                let mut blk = ZArr::zeros(&[nocc, nocc, nvir, nvir]);
+                let mut f = 0;
+                for i in 0..nocc {
+                    for j in 0..nocc {
+                        for a in 0..nvir {
+                            for b in 0..nvir {
+                                let mut re = 0.0;
+                                let mut im = 0.0;
+                                let mut add = |v: (f64, f64), s: f64| {
+                                    re += s * v.0;
+                                    im += s * v.1;
+                                };
+                                add(fi.at(&[i, i])?, -1.0);
+                                add(fj.at(&[j, j])?, -1.0);
+                                add(fa.at(&[a, a])?, 1.0);
+                                add(fb.at(&[b, b])?, 1.0);
+                                add(w_jbbj.at(&[j, b, b, j])?, 1.0);
+                                add(w_jbjb.at(&[j, b, j, b])?, -1.0);
+                                add(w_jaja.at(&[j, a, j, a])?, -1.0);
+                                add(w_ibib.at(&[i, b, i, b])?, -1.0);
+                                add(w_iaai.at(&[i, a, a, i])?, 1.0);
+                                add(w_iaia.at(&[i, a, i, a])?, -1.0);
+                                add(w_abab.at(&[a, b, a, b])?, 1.0);
+                                add(w_ijij.at(&[i, j, i, j])?, 1.0);
+                                add(t1_iab.at(&[i, a, b])?, -1.0);
+                                add(t2_jab.at(&[j, a, b])?, -1.0);
+                                add(t3_ija.at(&[i, j, a])?, -1.0);
+                                add(t4_ijb.at(&[i, j, b])?, -1.0);
+                                blk.data_mut().re[f] = re;
+                                blk.data_mut().im[f] = im;
+                                f += 1;
+                            }
+                        }
+                    }
+                }
+                hr2.set_leading(&[ki, kj, ka], &blk)?;
+            }
+        }
+    }
+
+    amplitudes_to_vector_singlet(&hr1, &hr2, nkpts, nocc, nvir, &kr2)
+}
+
+/// `eeccsd_matvec_singlet_Hr1(eom, vector, kshift, imds)` (`:1282-1314`) —
+/// `Hbar·r1` alone, the block [`ee_singlet_cis_guess`] diagonalises.
+///
+/// # Errors
+/// [`PbcCcError::Shape`] if the vector is not `nkpts·nocc·nvir` long.
+pub fn eeccsd_matvec_singlet_hr1(
+    vector: &ZArr,
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let n1 = nkpts * nocc * nvir;
+    if vector.len() != n1 {
+        return Err(PbcCcError::Shape(format!(
+            "EE singlet r1 vector of {} elements, expected {n1}",
+            vector.len()
+        )));
+    }
+    let kr1 = crate::eom_kccsd_ghf::kconserv_ee_r1(nkpts, kshift, kconserv);
+    let r1 = vector.reshape(&[nkpts, nocc, nvir])?;
+    let wovvo = imds.wovvo()?;
+    let wovov = imds.wovov()?;
+
+    let mut hr1 = ZArr::zeros(&[nkpts, nocc, nvir]);
+    for ki in 0..nkpts {
+        let ka = kr1[ki];
+        let mut acc = ZArr::zeros(&[nocc, nvir]);
+        acc.sub_assign(&einsum(
+            "mi,ma->ia",
+            &[&imds.loo.slice_leading(&[ki])?, &r1.slice_leading(&[ki])?],
+        )?)?;
+        acc.add_assign(&einsum(
+            "ac,ic->ia",
+            &[&imds.lvv.slice_leading(&[ka])?, &r1.slice_leading(&[ki])?],
+        )?)?;
+        for (km, &ke) in kr1.iter().enumerate() {
+            acc.add_assign(&einsum_scaled(
+                "maei,me->ia",
+                &[
+                    &wovvo.slice_leading(&[km, ka, ke])?,
+                    &r1.slice_leading(&[km])?,
+                ],
+                2.0,
+            )?)?;
+            acc.sub_assign(&einsum(
+                "maie,me->ia",
+                &[
+                    &wovov.slice_leading(&[km, ka, ki])?,
+                    &r1.slice_leading(&[km])?,
+                ],
+            )?)?;
+        }
+        hr1.set_leading(&[ki], &acc)?;
+    }
+    hr1.reshape(&[n1])
+}
+
+/// `get_init_guess_cis(eom, kshift, nroots, imds)` (`:1351-1369`), built on
+/// `eeccsd_cis_approx_slow` (`:1317-1348`).
+///
+/// # This is not the IP/EA guess
+///
+/// `EOMEESinglet` overrides `get_init_guess` (`:1429`) with a CIS-like one:
+/// it materialises the `r1`-block of `Hbar` COLUMN BY COLUMN — `nkpts·nocc·
+/// nvir` matvecs of the singles-only [`eeccsd_matvec_singlet_hr1`] — and
+/// diagonalises it. Upstream's own docstring explains why: "such evaluation
+/// has N³ cost, but error free (because matvec() has been proven correct)".
+/// The lowest `nroots` eigenvectors are then padded with zeros in the doubles
+/// block.
+///
+/// Note this is a NON-Hermitian dense eigenproblem, sorted by the eigenvalue's
+/// `argsort` (`:1339`), which for a complex array sorts by real part then
+/// imaginary — numpy's lexicographic complex ordering, reproduced here.
+///
+/// # Errors
+/// Propagates the matvecs and the dense eigensolve.
+pub fn ee_singlet_cis_guess(
+    kshift: usize,
+    nroots: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<Vec<ZArr>, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let kr2 = crate::eom_kccsd_ghf::kconserv_ee_r2(nkpts, kshift, kconserv);
+    let n1 = nkpts * nocc * nvir;
+    let size = ee_singlet_vector_size(nkpts, nocc, nvir, &kr2);
+
+    // `:1327-1331` — one matvec per column, stored COLUMN-major for the
+    // eigensolver: `h[col*n1 + row]` is `H1[row, col]`.
+    let mut h = pyscf_algebra::CTensor {
+        re: vec![0.0; n1 * n1],
+        im: vec![0.0; n1 * n1],
+    };
+    for col in 0..n1 {
+        let mut e = ZArr::zeros(&[n1]);
+        e.data_mut().re[col] = 1.0;
+        let c = eeccsd_matvec_singlet_hr1(&e, kshift, imds, kconserv)?;
+        for row in 0..n1 {
+            h.re[col * n1 + row] = c.data().re[row];
+            h.im[col * n1 + row] = c.data().im[row];
+        }
+    }
+
+    let (evals, evecs) = pyscf_algebra::zeig_general(&h, n1)
+        .map_err(|e| PbcCcError::Algebra(format!("EE CIS guess eigensolve: {e}")))?;
+    // `:1333-1336` — `eigval.argsort()[:nroots]`, numpy's complex ordering
+    // (real part first, imaginary part as the tie-break).
+    let mut idx: Vec<usize> = (0..n1).collect();
+    idx.sort_by(|&x, &y| {
+        (evals.re[x], evals.im[x])
+            .partial_cmp(&(evals.re[y], evals.im[y]))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut guess = Vec::with_capacity(nroots.min(n1));
+    for &i in idx.iter().take(nroots.min(n1)) {
+        let mut g = ZArr::zeros(&[size]);
+        for row in 0..n1 {
+            g.data_mut().re[row] = evecs.re[i * n1 + row];
+            g.data_mut().im[row] = evecs.im[i * n1 + row];
+        }
+        guess.push(g);
+    }
+    Ok(guess)
 }

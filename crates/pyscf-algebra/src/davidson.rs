@@ -186,7 +186,13 @@ pub struct Picked {
 /// `w` is the spectrum; `v` is `space × space` column-major; `real_dtype`
 /// is upstream's `envs.get('dtype') == numpy.double` test (`:610`), which
 /// decides whether the eigenvectors are collapsed to their real parts.
-pub fn pick_real_eigs(w: &[c64], v: &[c64], space: usize, nroots: usize, real_dtype: bool) -> Picked {
+pub fn pick_real_eigs(
+    w: &[c64],
+    v: &[c64],
+    space: usize,
+    nroots: usize,
+    real_dtype: bool,
+) -> Picked {
     let abs_imag: Vec<f64> = w.iter().map(|c| c.im.abs()).collect();
     // max_imag_tol = max(threshold, sort(abs_imag)[min(w.size, nroots) - 1])
     let mut sorted = abs_imag.clone();
@@ -243,6 +249,37 @@ pub fn pick_real_eigs(w: &[c64], v: &[c64], space: usize, nroots: usize, real_dt
     }
 }
 
+/// [`eig_general`] over PLANAR complex (`CTensor`) operands — the form the
+/// `pyscf-pbc-*` crates speak, so a caller there does not have to name
+/// `faer`'s `c64`.
+///
+/// `a` is COLUMN-MAJOR `n × n` (`a[j*n + i]` is row `i`, column `j`), and the
+/// returned eigenvector tensor is column-major too: column `j` is the right
+/// eigenvector of eigenvalue `j`.
+///
+/// # Errors
+/// As [`eig_general`], plus a shape check on `a`.
+pub fn zeig_general(a: &CTensor, n: usize) -> Result<(CTensor, CTensor), AlgebraError> {
+    if a.re.len() != n * n || a.im.len() != n * n {
+        return Err(AlgebraError::ShapeMismatch {
+            expected: format!("zeig_general: {n}x{n} = {} elements", n * n),
+            actual: format!("{} elements", a.re.len()),
+        });
+    }
+    let packed: Vec<c64> = (0..n * n).map(|i| c64::new(a.re[i], a.im[i])).collect();
+    let (w, v) = eig_general(&packed, n)?;
+    Ok((
+        CTensor::from_planes(
+            w.iter().map(|z| z.re).collect(),
+            w.iter().map(|z| z.im).collect(),
+        ),
+        CTensor::from_planes(
+            v.iter().map(|z| z.re).collect(),
+            v.iter().map(|z| z.im).collect(),
+        ),
+    ))
+}
+
 /// Dense general (non-Hermitian) complex eigendecomposition of a column-major
 /// `n × n` matrix. `scipy.linalg.eig`'s role at `linalg_helper.py:822`.
 ///
@@ -259,9 +296,11 @@ pub fn eig_general(a: &[c64], n: usize) -> Result<(Vec<c64>, Vec<c64>), AlgebraE
         });
     }
     let mat = faer::Mat::<c64>::from_fn(n, n, |i, j| a[j * n + i]);
-    let eigen = mat
-        .eigen()
-        .map_err(|e| AlgebraError::CubeclRuntime(format!("eig_general: faer eigendecomposition failed: {e:?}")))?;
+    let eigen = mat.eigen().map_err(|e| {
+        AlgebraError::CubeclRuntime(format!(
+            "eig_general: faer eigendecomposition failed: {e:?}"
+        ))
+    })?;
     let s = eigen.S();
     let u = eigen.U();
     let w: Vec<c64> = (0..n).map(|i| s[i]).collect();

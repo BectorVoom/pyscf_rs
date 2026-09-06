@@ -2007,6 +2007,91 @@ def section_t3p2_rhf(nk=(1, 1, 2)):
                  np.asarray(np.real(e.converged), dtype=float).ravel())
 
 
+def section_ee_singlet(nk=(1, 1, 2)):
+    """`EOMEESinglet` — the packing, the matvec, the diagonal, the CIS guess
+    and the roots.
+
+    The matvec and diagonal run on FIXED synthetic amplitudes so they measure
+    the equations; the roots run on converged ones.
+    """
+    from pyscf.pbc.cc import eom_kccsd_rhf as _eomr
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+
+    cell, kpts, mf, cc = build(list(nk))
+    eris = cc.ao2mo(cc.mo_coeff)
+    nkpts, nocc, nmo = len(kpts), cc.nocc, cc.nmo
+    nvir = nmo - nocc
+    scalar("e_hf", mf.e_tot)
+    scalar("nkpts", nkpts)
+    scalar("nocc", nocc)
+    scalar("nmo", nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", eris.fock)
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+
+    st1, st2 = synthetic_amps(
+        (nkpts, nocc, nvir), (nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir)
+    )
+    cc.t1, cc.t2 = st1, st2
+    eom = _eomr.EOMEESinglet(cc)
+    imds = eom.make_imds(eris=eris)
+
+    # The renamed `make_ee` set, so a mismatch is located before the matvec.
+    for name in ("Foo", "Fvv", "Fov", "woOvV", "woVvO", "woVoV",
+                 "woOoO", "woOoV", "woVoO", "wvOvV", "wvVvV", "wvVvO"):
+        emit("ee_%s" % name, np.asarray(getattr(imds, name)))
+
+    for kshift in range(nkpts):
+        size = eom.vector_size(kshift)
+        scalar("ee_vector_size_%d" % kshift, size)
+        emit("ee_kconserv_r1_%d" % kshift,
+             np.asarray(eom.get_kconserv_ee_r1(kshift), dtype=float).ravel())
+        emit("ee_kconserv_r2_%d" % kshift,
+             np.asarray(eom.get_kconserv_ee_r2(kshift), dtype=float).ravel())
+        r = SplitMix64(20260913 + kshift)
+        v = np.array([complex(r.unit(), r.unit()) for _ in range(int(size))])
+        emit("ee_vec_%d" % kshift, v)
+        # The packing round trip, so a packing defect is separated from an
+        # equation defect.
+        kcr2 = eom.get_kconserv_ee_r2(kshift)
+        r1, r2 = _eomr.vector_to_amplitudes_singlet(v, nkpts, nmo, nocc, kcr2)
+        emit("ee_r1_%d" % kshift, r1)
+        emit("ee_r2_%d" % kshift, r2)
+        emit("ee_roundtrip_%d" % kshift,
+             _eomr.amplitudes_to_vector_singlet(r1, r2, kcr2))
+        emit("ee_matvec_%d" % kshift,
+             _eomr.eeccsd_matvec_singlet(eom, v, kshift, imds))
+        emit("ee_diag_%d" % kshift, _eomr.eeccsd_diag(eom, kshift, imds))
+        # `Hbar.r1` alone, and the CIS guess built from it.
+        r1_size = nkpts * nocc * nvir
+        r = SplitMix64(20260914 + kshift)
+        v1 = np.array([complex(r.unit(), r.unit()) for _ in range(r1_size)])
+        emit("ee_vec1_%d" % kshift, v1)
+        emit("ee_hr1_%d" % kshift,
+             _eomr.eeccsd_matvec_singlet_Hr1(eom, v1, kshift, imds))
+        eigval, _ = _eomr.eeccsd_cis_approx_slow(eom, kshift, r1_size, imds)
+        emit("ee_cis_evals_%d" % kshift, np.asarray(eigval).ravel())
+
+    # Roots, on the CONVERGED amplitudes.
+    ecc, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", ecc)
+    emit("t1", t1)
+    emit("t2", t2)
+    nroots = 2
+    scalar("nroots", nroots)
+    eom2 = _eomr.EOMEESinglet(cc)
+    eom2.conv_tol = 1e-8
+    eom2.max_cycle = 100
+    imds2 = eom2.make_imds(eris=eris)
+    for kshift in range(nkpts):
+        evals, evecs = eom2.eomee_ccsd_singlet(nroots=nroots, kptlist=[kshift], imds=imds2)
+        emit("ee_roots_%d" % kshift, np.asarray(evals).ravel())
+        emit("ee_conv_%d" % kshift,
+             np.asarray(np.real(eom2.converged), dtype=float).ravel())
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
@@ -2018,6 +2103,7 @@ SECTIONS = {
     "star_ghf": lambda: section_star_ghf((1, 1, 2)),
     "t3p2_ghf": lambda: section_t3p2_ghf((1, 1, 2)),
     "t3p2_rhf": lambda: section_t3p2_rhf((1, 1, 2)),
+    "ee_singlet": lambda: section_ee_singlet((1, 1, 2)),
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
     "kuccsd_eom": lambda: section_kuccsd_eom((1, 1, 2)),
