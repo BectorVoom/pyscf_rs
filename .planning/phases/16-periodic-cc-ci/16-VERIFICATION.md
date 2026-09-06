@@ -61,7 +61,7 @@ cargo test --release -p pyscf-pbc-cc --test kccsd_rhf -- --ignored --nocapture
 | G2 | `KRCCSD e_corr`, GDF / RSDF route | — | `1e-7` | **NOT RUN** (§6) |
 | G3 | `KUCCSD e_corr` | — | `1e-8` | **NOT RUN** (§6 — 16-06 did not start) |
 | G6 | EOM roots | — | `1e-5` | **NOT RUN** (§6) |
-| G9 | supercell equivalence | — | `1e-7` | **NOT RUN** (§6) |
+| G9 | supercell equivalence | `1.426e-11` | `1e-7` | PASS (`kccsd_rhf.rs::krccsd_matches_the_supercell_at_gamma`, `--ignored --release`) |
 
 ---
 
@@ -194,7 +194,7 @@ that plainly rather than claim the plan is unblocked.
 | item | plan | why | the number it would be held to |
 |---|---|---|---|
 | **G2 — the GDF / RSDF / MDF routes** | 16-05 | only FFTDF was run end to end. The route split is `9.22e-4 Ha` (§4 of the README), so this is not a formality | `1e-7` per route |
-| **G9 — supercell equivalence** | 16-05 test 1 | needs a `super_cell(cell, nk) -> Cell` builder; `pyscf-pbc-tools` has `scale_lattice` and `super_cell_translations` but no cell builder | `1e-7` (upstream's own two routes differ by `2.97e-8`) |
+| ~~**G9 — supercell equivalence**~~ | 16-05 test 1 | **CLOSED.** `pyscf_pbc_gto::super_cell` already existed (it is in `pyscf-pbc-gto`, not `pyscf-pbc-tools` — that is what the original survey missed). `e_corr/nkpts` agrees to `1.426e-11`; the two mean fields to `2.057e-10`. | `1e-7` (upstream's own two routes differ by `2.97e-8`) |
 | **Γ reduction vs molecular RCCSD** | 16-05 test 2, 16-04 test 1 | needs 16-12's Γ-point `pbc/cc/ccsd.py` shim | `1e-12` |
 | **cross-thread determinism** | 16-05 test 7 | in-process half only; see §4 | bit-identical |
 | **`KUCCSD`, and with it `kuccsd_rdm`** | 16-06, 16-12 | not reached | `1e-8` |

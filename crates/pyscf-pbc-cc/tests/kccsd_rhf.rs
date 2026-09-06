@@ -277,3 +277,69 @@ fn eris_charges_exactly_what_it_allocates() {
     println!("7 blocks: {derived} bytes, exactly");
     let _ = Arc::new(ZWorkspacePool::new(0));
 }
+
+/// **G9 / 16-05 test 1 — SUPERCELL EQUIVALENCE, oracle-free.**
+///
+/// `KRCCSD` on a `[1,1,2]` k-mesh must equal `KRCCSD` on the `1×1×2` supercell
+/// at Γ, divided by 2. Upstream asserts this at 4 decimals
+/// (`test_krccsd.py:478`) and its own two routes differ by `2.97e-8`
+/// (`measurements/README.md §2`), which is where **G9 = `1e-7`** comes from.
+///
+/// **It alone catches a wrong `kconserv` argument order, a transposed `t2`
+/// index order and a misplaced `1/nkpts`** — and it needs no PySCF, which is
+/// why the plan calls it test 1.
+///
+/// `exxdiv = None` on both sides: with the Ewald correction the two are NOT
+/// equal, because the Madelung constant of a cell and of its supercell differ.
+#[test]
+#[ignore = "converges two SCFs, one of them a 4-atom supercell; run with --release"]
+fn krccsd_matches_the_supercell_at_gamma() {
+    // --- the k-mesh side
+    let cell = common::diamond([15, 15, 15]);
+    let kpts = cell.make_kpts([1, 1, 2]).expect("kpts");
+    let nk = kpts.len();
+    let mut mf = Krhf::from_df(Box::new(Fftdf::new(cell.clone(), &kpts).expect("fftdf")));
+    mf.exxdiv = None;
+    let mut cfg = KScfConfig::for_cell(&cell);
+    cfg.conv_tol = 1e-10;
+    let scf = mf.kernel(&cfg).expect("KRHF converges");
+    assert!(scf.converged);
+    let df = Fftdf::new(cell.clone(), &kpts).expect("fftdf");
+    let mut cc = Krccsd::new(&scf, &df).expect("KRCCSD builds");
+    let eris = cc.ao2mo().expect("_ERIS");
+    let kres = cc.kernel_with(&eris).expect("KRCCSD kernel");
+    assert!(kres.converged, "the k-mesh KRCCSD must converge");
+
+    // --- the supercell side, at Γ
+    let sup = pyscf_pbc_gto::super_cell(&cell, [1, 1, 2], false).expect("supercell");
+    let gamma = sup.make_kpts([1, 1, 1]).expect("gamma");
+    let mut smf = Krhf::from_df(Box::new(Fftdf::new(sup.clone(), &gamma).expect("fftdf")));
+    smf.exxdiv = None;
+    let mut scfg = KScfConfig::for_cell(&sup);
+    scfg.conv_tol = 1e-10;
+    let sscf = smf.kernel(&scfg).expect("supercell KRHF converges");
+    assert!(sscf.converged);
+    println!(
+        "mean fields: k-mesh {} vs supercell/2 {}  |Δ| {:e}",
+        scf.e_tot,
+        sscf.e_tot / nk as f64,
+        (scf.e_tot - sscf.e_tot / nk as f64).abs()
+    );
+    let sdf = Fftdf::new(sup.clone(), &gamma).expect("fftdf");
+    let mut scc = Krccsd::new(&sscf, &sdf).expect("supercell KRCCSD builds");
+    let seris = scc.ao2mo().expect("supercell _ERIS");
+    let sres = scc.kernel_with(&seris).expect("supercell KRCCSD kernel");
+    assert!(sres.converged, "the supercell KRCCSD must converge");
+
+    let per_cell = sres.e_corr / nk as f64;
+    let d = (kres.e_corr - per_cell).abs();
+    println!(
+        "e_corr: k-mesh {} ({} cycles) vs supercell/nk {} ({} cycles)  |Δ| {d:e}  (G9 = 1e-7)",
+        kres.e_corr, kres.cycles, per_cell, sres.cycles
+    );
+    assert!(
+        d < 1e-7,
+        "supercell equivalence broken by {d:e}: this is where a wrong kconserv \
+         argument order, a transposed t2 or a misplaced 1/nkpts shows up"
+    );
+}
