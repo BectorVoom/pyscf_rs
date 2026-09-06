@@ -20,7 +20,8 @@ gate is restated with the evidence — five times, listed in §5.
 | **16-13** `KCIS` | **COMPLETE** | Davidson roots `5.48e-10`; both solver paths |
 | 16-06 `KUCCSD` | **SHIPPED** | `16-06-SUMMARY.md` |
 | 16-09 EOM-KCCSD (GHF) | **SHIPPED** — IP, EA and EE, all three gated to their roots | `16-09-SUMMARY.md` |
-| 16-10/11 EOM RHF/UHF | **NOT STARTED** | §6 — both inherit from 16-09, which now ships |
+| 16-10 EOM-KRCCSD (RHF) | **SHIPPED** — IP and EA gated to their roots; EE not ported (upstream's triplet/spin-flip are shells) | `16-10-SUMMARY.md` |
+| 16-11 EOM-KUCCSD (UHF) | **NOT STARTED** | §6 |
 | 16-12 `kuccsd_rdm` + Γ shim | **NOT STARTED** | §6 |
 | **16-14** verification | **this file** | |
 
@@ -202,7 +203,8 @@ phase inherited from 17-09 is: defer explicitly, never guess.
 |---|---|---|---|
 | ~~**16-06** `KUCCSD`~~ | `kintermediates_uhf` (1225 l) + `kccsd_uhf` (1116 l) | **CLOSED.** `kccsd_uhf.py` and `kintermediates_uhf.py:26-588` ship; `:590-1225` is EOM-KUCCSD's and stays with 16-11. Found and fixed THREE latent defects in the already-shipped complex arena — see `16-06-SUMMARY.md`. | — |
 | ~~**16-09** EOM-KCCSD GHF~~ | 2011 l | **CLOSED for IP, EA and EE.** The ten EOM intermediates, all three vector packings, matvecs, left matvecs, diagonals, `mask_frozen`, and the Davidson driver — gated at the equation level on synthetic amplitudes AND at the root level on upstream's own converged amplitudes. Still out of scope and recorded in `16-09-SUMMARY.md`: the CCSD\* corrections, the `*_Ta` variants, and the `partition='mp'` diagonal branch nothing selects. | — |
-| **16-10/11** EOM-KCCSD RHF/UHF | 1874 + 1275 l | not reached. `16-CONTEXT §4` designates these the phase's **droppable half** — excited-state properties nothing in Phases 17-20 needs for correctness. Both `import eom_kccsd_ghf` and inherit its `EOMIP`/`EOMEA`/`EOMEE`, which now ship and are gated, so the remaining work is the spin-adaptation and the two modules' own matvecs. | — |
+| ~~**16-10** EOM-KCCSD RHF~~ | 1716 l | **CLOSED for IP and EA.** Twelve spin-adapted EOM intermediates, both packings, matvecs, left matvecs, diagonals and the driver — sixteen block gates plus eight roots at `6.86e-11 … 1.40e-9`. EE is NOT ported: `EOMEESinglet` is a separate 250-line matvec, and `EOMEETriplet`/`EOMEESpinFlip` are SHELLS upstream. | — |
+| **16-11** EOM-KCCSD UHF | 1275 l + `kintermediates_uhf:590-1225` | not reached. `16-CONTEXT §4` designates the EOM set the phase's **droppable half**. Its prerequisites all ship: 16-03's Davidson, 16-06's `KUCCSD`, and 16-09's `EOMIP`/`EOMEA` which it inherits. The remaining work is ~13 four-spin-block intermediates and two ~200-line matvecs. `eom_kccsd_uhf` declares **no `EOMEE` at all** (`16-CONTEXT §1.5`), so IP and EA are the whole surface. | — |
 | **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | **`kuccsd_rdm` SHIPS** — `6.94e-18` against upstream on fixed synthetic amplitudes, exactly Hermitian, with the converged comparison gated from the measured `2.41e-9` amplitude spread rather than from the RDM. The Γ shim is still blocked and NOT by 16-06: it needs the molecular complex-capable `rccsd.RCCSD` this port does not have (`16-CONTEXT §1.2`), which is a phase, not a task. | molecular `RCCSD` |
 
 **`scf.kghf.KGHF.CCSD` (`kccsd.py:805`), the surface Phase 19 reads, still does

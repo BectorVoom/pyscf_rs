@@ -30,8 +30,8 @@ of 2026-09-05**.
 
 **Phase 16 IN PROGRESS, 2026-09-06.** `.planning/phases/16-periodic-cc-ci/16-VERIFICATION.md`
 is the authority. **Nine plans complete and measured** (16-01, 16-02, 16-03,
-16-04, 16-05, 16-06, 16-07, 16-08, 16-09, 16-12's `kuccsd_rdm`, 16-13 and
-this verification), two not started (16-10/11), each recorded with its
+16-04, 16-05, 16-06, 16-07, 16-08, 16-09, 16-10, 16-12's `kuccsd_rdm`, 16-13
+and this verification), one not started (16-11), recorded with its
 reason and its unblocking
 work rather than silently dropped.
 
