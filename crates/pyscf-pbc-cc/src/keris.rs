@@ -286,7 +286,11 @@ impl KEris {
                     blk.data_mut().im[p * nmo + q] = im;
                 }
             }
-            mo_energy.push((0..nmo).map(|p| blk.at(&[p, p]).map(|v| v.0)).collect::<Result<_, _>>()?);
+            mo_energy.push(
+                (0..nmo)
+                    .map(|p| blk.at(&[p, p]).map(|v| v.0))
+                    .collect::<Result<_, _>>()?,
+            );
             fock.set_leading(&[k], &blk)?;
         }
 
@@ -340,7 +344,7 @@ impl KEris {
 
         // ---- the seven blocks
         let pool = Arc::new(ZWorkspacePool::new(
-            (opts.max_memory * 1e6).max(0.0) as usize,
+            (opts.max_memory * 1e6).max(0.0) as usize
         ));
         khelper.build_symm_map(None); // `:783` — LAZY, built here, not in `new`
         let symm: Vec<([usize; 3], Vec<[usize; 3]>)> = if opts.use_symm_map {
@@ -355,9 +359,8 @@ impl KEris {
             // all-triples build, for the equivalence test only.
             (0..nkpts)
                 .flat_map(|p| {
-                    (0..nkpts).flat_map(move |q| {
-                        (0..nkpts).map(move |r| ([p, q, r], vec![[p, q, r]]))
-                    })
+                    (0..nkpts)
+                        .flat_map(move |q| (0..nkpts).map(move |r| ([p, q, r], vec![[p, q, r]])))
                 })
                 .collect()
         };
@@ -427,12 +430,7 @@ impl KEris {
             let iks = khelper.kconserv.get(ikp, ikq, ikr) as usize;
             let eri = with_df
                 .ao2mo(
-                    [
-                        mo_refs[ikp],
-                        mo_refs[ikq],
-                        mo_refs[ikr],
-                        mo_refs[iks],
-                    ],
+                    [mo_refs[ikp], mo_refs[ikq], mo_refs[ikr], mo_refs[iks]],
                     [ikp, ikq, ikr, iks],
                     false,
                 )

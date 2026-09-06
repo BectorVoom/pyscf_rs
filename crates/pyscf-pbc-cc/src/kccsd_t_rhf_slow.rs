@@ -139,11 +139,8 @@ impl Ctx<'_> {
         kc: usize,
         blk: VirBlock,
     ) -> Result<ZArr, PbcCcError> {
-        let p = |x: (usize, usize), y: (usize, usize), z: (usize, usize)| VirBlock {
-            a: x,
-            b: y,
-            c: z,
-        };
+        let p =
+            |x: (usize, usize), y: (usize, usize), z: (usize, usize)| VirBlock { a: x, b: y, c: z };
         let mut out = self.get_w(ki, kj, kk, ka, kb, kc, p(blk.a, blk.b, blk.c))?;
         out.add_assign(
             &self
@@ -280,11 +277,8 @@ impl Ctx<'_> {
         kc: usize,
         blk: VirBlock,
     ) -> Result<ZArr, PbcCcError> {
-        let p = |x: (usize, usize), y: (usize, usize), z: (usize, usize)| VirBlock {
-            a: x,
-            b: y,
-            c: z,
-        };
+        let p =
+            |x: (usize, usize), y: (usize, usize), z: (usize, usize)| VirBlock { a: x, b: y, c: z };
         let mut out = self.get_v(ki, kj, kk, ka, kb, kc, p(blk.a, blk.b, blk.c), kk == kc)?;
         out.add_assign(
             &self
@@ -335,15 +329,20 @@ pub fn kernel(
     let (nkpts, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
     let mo_e_o: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
     let mo_e_v: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
-    let fov: Vec<ZArr> = (0..nkpts)
-        .map(|k| eris.fov(k))
-        .collect::<Result<_, _>>()?;
-    let (nz_o, nz_v) =
-        match padding_k_idx(&padded.nmo_per_kpt, &padded.nocc_per_kpt, PaddingKind::Split) {
-            Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
-            Ok(_) => return Err(PbcCcError::Shape("padding_k_idx returned a joint set".into())),
-            Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
-        };
+    let fov: Vec<ZArr> = (0..nkpts).map(|k| eris.fov(k)).collect::<Result<_, _>>()?;
+    let (nz_o, nz_v) = match padding_k_idx(
+        &padded.nmo_per_kpt,
+        &padded.nocc_per_kpt,
+        PaddingKind::Split,
+    ) {
+        Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
+        Ok(_) => {
+            return Err(PbcCcError::Shape(
+                "padding_k_idx returned a joint set".into(),
+            ));
+        }
+        Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
+    };
 
     let ctx = Ctx {
         eris,
@@ -416,11 +415,8 @@ pub fn kernel(
                         }
 
                         for &blk in &task_list {
-                            let (na, nb, nc) = (
-                                blk.a.1 - blk.a.0,
-                                blk.b.1 - blk.b.0,
-                                blk.c.1 - blk.c.0,
-                            );
+                            let (na, nb, nc) =
+                                (blk.a.1 - blk.a.0, blk.b.1 - blk.b.0, blk.c.1 - blk.c.0);
                             let mut pwijk = ctx.get_permuted_w(ki, kj, kk, ka, kb, kc, blk)?;
                             let mut v = ctx.get_permuted_v(ki, kj, kk, ka, kb, kc, blk)?;
                             v.scale(0.5);

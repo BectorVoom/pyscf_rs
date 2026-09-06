@@ -1488,6 +1488,20 @@ def section_kuccsd_eom(nk=(1, 1, 2), mesh=(31, 31, 31)):
     ):
         emit(nm, arr)
 
+    # --- EOM-IP on a FIXED synthetic trial vector, per kshift.
+    from pyscf.pbc.cc import eom_kccsd_uhf as _eomu
+    cc.t1, cc.t2 = t1, t2
+    e = _eomu.EOMIP(cc)
+    imd = e.make_imds(eris=eris)
+    size = e.vector_size()
+    scalar("uip_vector_size", size)
+    rv = SplitMix64(20260911)
+    v = np.array([complex(rv.unit(), rv.unit()) for _ in range(int(size))])
+    emit("uip_vec", v)
+    for kshift in range(nkpts):
+        emit("uip_matvec_%d" % kshift, _eomu.ipccsd_matvec(e, v, kshift, imd))
+        emit("uip_diag_%d" % kshift, _eomu.ipccsd_diag(e, kshift, imd))
+
 
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),

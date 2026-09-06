@@ -30,6 +30,8 @@ pub mod kccsd_t;
 pub mod eom_kccsd_ghf;
 /// EOM-CCSD over spin-adapted k-point orbitals (16-10).
 pub mod eom_kccsd_rhf;
+/// EOM-CCSD over unrestricted k-point orbitals (16-11).
+pub mod eom_kccsd_uhf;
 pub mod kccsd_t_rhf;
 /// Unrestricted k-point CCSD (16-06 Tasks 3-5).
 pub mod kccsd_uhf;

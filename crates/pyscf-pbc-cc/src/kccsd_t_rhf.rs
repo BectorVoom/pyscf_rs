@@ -286,7 +286,10 @@ impl Fast<'_> {
         if kk != kc {
             return Ok(out);
         }
-        let mut t1k = self.t1t.slice_leading(&[kk])?.slice_axes(&[blk.c, (0, nocc)])?;
+        let mut t1k = self
+            .t1t
+            .slice_leading(&[kk])?
+            .slice_axes(&[blk.c, (0, nocc)])?;
         t1k.scale(0.5);
         let vvop = self.vvop.slice_leading(&[kb, ka, kj])?.slice_axes(&[
             blk.b,
@@ -296,7 +299,10 @@ impl Fast<'_> {
         ])?;
         out.add_assign(&einsum("ck,baji->abcijk", &[&t1k, &vvop])?)?;
 
-        let mut f = self.fvo.slice_leading(&[kk])?.slice_axes(&[blk.c, (0, nocc)])?;
+        let mut f = self
+            .fvo
+            .slice_leading(&[kk])?
+            .slice_axes(&[blk.c, (0, nocc)])?;
         f.scale(0.5);
         let t2t = self.t2t.slice_leading(&[kb, ka, ki])?.slice_axes(&[
             blk.b,
@@ -396,12 +402,19 @@ pub fn kernel_with_stats(
     let (nkpts, nocc, nvir, nmo) = (eris.nkpts, eris.nocc, eris.nvir, eris.nmo);
     let mo_e_o: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
     let mo_e_v: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
-    let (nz_o, nz_v) =
-        match padding_k_idx(&padded.nmo_per_kpt, &padded.nocc_per_kpt, PaddingKind::Split) {
-            Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
-            Ok(_) => return Err(PbcCcError::Shape("padding_k_idx returned a joint set".into())),
-            Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
-        };
+    let (nz_o, nz_v) = match padding_k_idx(
+        &padded.nmo_per_kpt,
+        &padded.nocc_per_kpt,
+        PaddingKind::Split,
+    ) {
+        Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
+        Ok(_) => {
+            return Err(PbcCcError::Shape(
+                "padding_k_idx returned a joint set".into(),
+            ));
+        }
+        Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
+    };
 
     // `:104` create_t3_eris — the transposed arrays, built once.
     let t2t = transpose_t2(t2, nkpts, nocc, nvir, kconserv)?;
@@ -434,11 +447,7 @@ pub fn kernel_with_stats(
     for ka in 0..nkpts {
         for kb in 0..=ka {
             for &blk in &task_list {
-                let (na, nb, nc) = (
-                    blk.a.1 - blk.a.0,
-                    blk.b.1 - blk.b.0,
-                    blk.c.1 - blk.c.0,
-                );
+                let (na, nb, nc) = (blk.a.1 - blk.a.0, blk.b.1 - blk.b.0, blk.c.1 - blk.c.0);
                 let bshape = [na, nb, nc, nocc, nocc, nocc];
                 // `:281-296` — cache `w` and `v` over the whole (ki,kj,kk)
                 // loop. THIS is the fast path's saving: the `R` combination
@@ -453,9 +462,8 @@ pub fn kernel_with_stats(
                 let mut vc: Vec<Option<ZArr>> = vec![None; nkpts * nkpts * nkpts];
                 // The peak this block's cache CAN reach: two caches of
                 // `nkpts³` blocks of `na·nb·nc·nocc³` complex elements.
-                peak_cache_bytes = peak_cache_bytes.max(
-                    2 * nkpts.pow(3) * na * nb * nc * nocc.pow(3) * 16,
-                );
+                peak_cache_bytes =
+                    peak_cache_bytes.max(2 * nkpts.pow(3) * na * nb * nc * nocc.pow(3) * 16);
                 let at = |x: usize, y: usize, z: usize| (x * nkpts + y) * nkpts + z;
 
                 for ki in 0..nkpts {
@@ -503,11 +511,12 @@ pub fn kernel_with_stats(
                             // `:325-330` — the R combination over cached W's.
                             let mut rwijk = w.clone();
                             rwijk.scale(4.0);
-                            let take = |x: usize, y: usize, z: usize| -> Result<&ZArr, PbcCcError> {
-                                wc[at(x, y, z)]
-                                    .as_ref()
-                                    .ok_or_else(|| PbcCcError::Shape("missing cached w".into()))
-                            };
+                            let take =
+                                |x: usize, y: usize, z: usize| -> Result<&ZArr, PbcCcError> {
+                                    wc[at(x, y, z)]
+                                        .as_ref()
+                                        .ok_or_else(|| PbcCcError::Shape("missing cached w".into()))
+                                };
                             rwijk.zip_assign(
                                 &take(kj, kk, ki)?.transpose(&[0, 1, 2, 5, 3, 4])?,
                                 1.0,

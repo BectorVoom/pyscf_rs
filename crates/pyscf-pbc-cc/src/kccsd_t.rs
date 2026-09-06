@@ -82,12 +82,19 @@ pub fn kernel(
     let mo_e_o: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
     let mo_e_v: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
     let fov: Vec<ZArr> = (0..nkpts).map(|k| eris.fov(k)).collect::<Result<_, _>>()?;
-    let (nz_o, nz_v) =
-        match padding_k_idx(&padded.nmo_per_kpt, &padded.nocc_per_kpt, PaddingKind::Split) {
-            Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
-            Ok(_) => return Err(PbcCcError::Shape("padding_k_idx returned a joint set".into())),
-            Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
-        };
+    let (nz_o, nz_v) = match padding_k_idx(
+        &padded.nmo_per_kpt,
+        &padded.nocc_per_kpt,
+        PaddingKind::Split,
+    ) {
+        Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
+        Ok(_) => {
+            return Err(PbcCcError::Shape(
+                "padding_k_idx returned a joint set".into(),
+            ));
+        }
+        Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
+    };
 
     let mut terms_re: Vec<f64> = Vec::new();
     let mut terms_im: Vec<f64> = Vec::new();
@@ -105,12 +112,7 @@ pub fn kernel(
             .reshape(&[nocc, nocc, nvir])
     };
     // `-eris.ovvv[kx,ky,kz][:, :, p, q].conj()` — 'ie'.
-    let movvv = |kx: usize,
-                 ky: usize,
-                 kz: usize,
-                 p: usize,
-                 q: usize|
-     -> Result<ZArr, PbcCcError> {
+    let movvv = |kx: usize, ky: usize, kz: usize, p: usize, q: usize| -> Result<ZArr, PbcCcError> {
         let mut b = eris
             .blk(GBlk::Ovvv, kx, ky, kz)?
             .slice_axes(&[(0, nocc), (0, nvir), (p, p + 1), (q, q + 1)])?
@@ -356,10 +358,7 @@ pub fn kernel(
                                     sign,
                                 )?;
                                 t3d.zip_assign(
-                                    &einsum(
-                                        spec,
-                                        &[&mfov(ko, orb)?, &t2oo(kx, ky, kz, p, q)?],
-                                    )?,
+                                    &einsum(spec, &[&mfov(ko, orb)?, &t2oo(kx, ky, kz, p, q)?])?,
                                     sign,
                                 )?;
                             }
@@ -373,8 +372,7 @@ pub fn kernel(
                                 t3cd.data_mut().re[f] /= d;
                                 t3cd.data_mut().im[f] /= d;
                             }
-                            let (re, im) =
-                                einsum("ijk,ijk->", &[&t3c, &t3cd.conj()])?.at(&[])?;
+                            let (re, im) = einsum("ijk,ijk->", &[&t3c, &t3cd.conj()])?.at(&[])?;
                             let w = symm_abc_kpt * symm_ijk * symm_abc;
                             terms_re.push(w * re);
                             terms_im.push(w * im);

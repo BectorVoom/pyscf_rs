@@ -109,10 +109,18 @@ pub struct KrccsdResult {
 /// The split occupied/virtual padding index sets — Phase 15's
 /// `padding_k_idx(kind="split")`. **This port does NOT reimplement them**
 /// (`16-CONTEXT §1.1`).
-pub(crate) fn split_padding(padded: &PaddedMos) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>), PbcCcError> {
-    match padding_k_idx(&padded.nmo_per_kpt, &padded.nocc_per_kpt, PaddingKind::Split) {
+pub(crate) fn split_padding(
+    padded: &PaddedMos,
+) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>), PbcCcError> {
+    match padding_k_idx(
+        &padded.nmo_per_kpt,
+        &padded.nocc_per_kpt,
+        PaddingKind::Split,
+    ) {
         Ok(PaddingIdx::Split { occupied, virtuals }) => Ok((occupied, virtuals)),
-        Ok(_) => Err(PbcCcError::Shape("padding_k_idx returned a joint set".into())),
+        Ok(_) => Err(PbcCcError::Shape(
+            "padding_k_idx returned a joint set".into(),
+        )),
         Err(e) => Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
     }
 }
@@ -248,8 +256,7 @@ pub fn init_amps(
                 touched[at(ki, kj, ka)] = true;
 
                 if ka != kb {
-                    let t_kb =
-                        divide_by_eijab(&eris_ijba.conj(), &eia, &ejb, nocc, nvir, true)?;
+                    let t_kb = divide_by_eijab(&eris_ijba.conj(), &eia, &ejb, nocc, nvir, true)?;
                     let mut woovv = eris_ijba.clone();
                     woovv.scale(2.0);
                     woovv.sub_assign(&eris_ijab.transpose(&[0, 1, 3, 2])?)?;
@@ -383,10 +390,7 @@ pub fn update_amps(
                 svovv.sub_assign(&eris.blk(Blk::Vovv, ka, kk, kd)?.transpose(&[0, 1, 3, 2])?)?;
                 let mut tau1 = t2.slice_leading(&[ki, kk, kc])?;
                 if ki == kc && kk == kd {
-                    tau1.add_assign(&einsum(
-                        "ic,kd->ikcd",
-                        &[&t1i, &t1.slice_leading(&[kk])?],
-                    )?)?;
+                    tau1.add_assign(&einsum("ic,kd->ikcd", &[&t1i, &t1.slice_leading(&[kk])?])?)?;
                 }
                 acc.add_assign(&einsum("akcd,ikcd->ia", &[&svovv, &tau1])?)?;
 
@@ -396,10 +400,7 @@ pub fn update_amps(
                 sooov.sub_assign(&eris.blk(Blk::Ooov, kl, kk, ki)?.transpose(&[1, 0, 2, 3])?)?;
                 let mut tau1 = t2.slice_leading(&[kk, kl, ka])?;
                 if kk == ka && kl == kc {
-                    tau1.add_assign(&einsum(
-                        "ka,lc->klac",
-                        &[&t1a, &t1.slice_leading(&[kc])?],
-                    )?)?;
+                    tau1.add_assign(&einsum("ka,lc->klac", &[&t1a, &t1.slice_leading(&[kc])?])?)?;
                 }
                 acc.sub_assign(&einsum("klic,klac->ia", &[&sooov, &tau1])?)?;
             }
@@ -413,10 +414,7 @@ pub fn update_amps(
     for ki in 0..nkpts {
         for kj in 0..nkpts {
             for ka in 0..nkpts {
-                t2new.set_leading(
-                    &[ki, kj, ka],
-                    &eris.blk(Blk::Oovv, ki, kj, ka)?.conj(),
-                )?;
+                t2new.set_leading(&[ki, kj, ka], &eris.blk(Blk::Oovv, ki, kj, ka)?.conj())?;
             }
         }
     }
@@ -545,10 +543,7 @@ pub fn update_amps(
 
                         tmp.sub_assign(&einsum(
                             "akic,kjbc->ijab",
-                            &[
-                                &wvoov.get([ka, kk, ki])?,
-                                &t2.slice_leading(&[kk, kj, kb])?,
-                            ],
+                            &[&wvoov.get([ka, kk, ki])?, &t2.slice_leading(&[kk, kj, kb])?],
                         )?)?;
 
                         let kc2 = kconserv.get(kk, ka, kj) as usize;
@@ -714,8 +709,7 @@ pub fn kernel(
 
     for istep in 0..opts.max_cycle {
         cycles = istep + 1;
-        let (mut t1new, mut t2new) =
-            update_amps(pool, &t1, &t2, eris, padded, kconserv, opts)?;
+        let (mut t1new, mut t2new) = update_amps(pool, &t1, &t2, eris, padded, kconserv, opts)?;
 
         // `ccsd.py:74-76` normt = ||vector(new) - vector(old)||, through
         // `oracle_dot` so it is thread-count invariant.
@@ -875,9 +869,15 @@ impl<'a> Krccsd<'a> {
     /// Propagates the kernel.
     pub fn kernel_with(&self, eris: &KEris) -> Result<KrccsdResult, PbcCcError> {
         let pool = Arc::new(ZWorkspacePool::new(
-            (self.opts.max_memory * 1e6).max(0.0) as usize,
+            (self.opts.max_memory * 1e6).max(0.0) as usize
         ));
-        kernel(&pool, eris, &self.padded, &self.khelper.kconserv, &self.opts)
+        kernel(
+            &pool,
+            eris,
+            &self.padded,
+            &self.khelper.kconserv,
+            &self.opts,
+        )
     }
 
     /// The mean-field total energy the correlation energy adds to.

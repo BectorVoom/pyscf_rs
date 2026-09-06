@@ -185,11 +185,7 @@ impl KgEris {
                         (&mo_b, &mo_a),
                     ] {
                         let e = with_df
-                            .ao2mo(
-                                [&a[kp], &a[kq], &b[kr], &b[ks]],
-                                [kp, kq, kr, ks],
-                                false,
-                            )
+                            .ao2mo([&a[kp], &a[kq], &b[kr], &b[ks]], [kp, kq, kr, ks], false)
                             .map_err(|e| PbcCcError::Shape(format!("ao2mo: {e}")))?
                             .restore_s1();
                         acc.add_assign(&ZArr::from_ctensor(&[nmo; 4], e.data)?)?;
@@ -230,8 +226,7 @@ impl KgEris {
                                             if sp[3] { nocc + i3 } else { i3 },
                                         ];
                                         let (re, im) = full.at(&s)?;
-                                        let f =
-                                            ((i0 * d[1] + i1) * d[2] + i2) * d[3] + i3;
+                                        let f = ((i0 * d[1] + i1) * d[2] + i2) * d[3] + i3;
                                         out.data_mut().re[f] = re * inv;
                                         out.data_mut().im[f] = im * inv;
                                     }
@@ -377,11 +372,7 @@ pub fn energy(t1: &ZArr, t2: &ZArr, eris: &KgEris) -> Result<f64, PbcCcError> {
     let mut re: Vec<f64> = Vec::new();
     let mut im: Vec<f64> = Vec::new();
     for ki in 0..nk {
-        let (a, b) = einsum(
-            "ia,ia->",
-            &[&eris.fov(ki)?, &t1.slice_leading(&[ki])?],
-        )?
-        .at(&[])?;
+        let (a, b) = einsum("ia,ia->", &[&eris.fov(ki)?, &t1.slice_leading(&[ki])?])?.at(&[])?;
         re.push(a);
         im.push(b);
     }
@@ -453,12 +444,19 @@ pub fn update_amps(
         .iter()
         .map(|e| e[nocc..].iter().map(|x| x + level_shift).collect())
         .collect();
-    let (nz_o, nz_v) =
-        match padding_k_idx(&padded.nmo_per_kpt, &padded.nocc_per_kpt, PaddingKind::Split) {
-            Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
-            Ok(_) => return Err(PbcCcError::Shape("padding_k_idx returned a joint set".into())),
-            Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
-        };
+    let (nz_o, nz_v) = match padding_k_idx(
+        &padded.nmo_per_kpt,
+        &padded.nocc_per_kpt,
+        PaddingKind::Split,
+    ) {
+        Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
+        Ok(_) => {
+            return Err(PbcCcError::Shape(
+                "padding_k_idx returned a joint set".into(),
+            ));
+        }
+        Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
+    };
 
     let tau = imdk::make_tau(t2, t1, t1, kconserv, nk, nocc, nvir, 1.0)?;
     let mut fvv = imdk::cc_fvv(t1, t2, eris, kconserv)?;
@@ -549,10 +547,7 @@ pub fn update_amps(
     for ki in 0..nk {
         for kj in 0..nk {
             for ka in 0..nk {
-                t2new.set_leading(
-                    &[ki, kj, ka],
-                    &eris.blk(GBlk::Oovv, ki, kj, ka)?.conj(),
-                )?;
+                t2new.set_leading(&[ki, kj, ka], &eris.blk(GBlk::Oovv, ki, kj, ka)?.conj())?;
             }
         }
     }
@@ -875,8 +870,16 @@ pub fn spin2spatial_t1(
     let mut t1b = ZArr::zeros(&[nk, ob0, vb0]);
     for k in 0..nk {
         for (dst, o, v) in [
-            (&mut t1a, spin_idx(&orbspin[k][..nocc], 0), spin_idx(&orbspin[k][nocc..], 0)),
-            (&mut t1b, spin_idx(&orbspin[k][..nocc], 1), spin_idx(&orbspin[k][nocc..], 1)),
+            (
+                &mut t1a,
+                spin_idx(&orbspin[k][..nocc], 0),
+                spin_idx(&orbspin[k][nocc..], 0),
+            ),
+            (
+                &mut t1b,
+                spin_idx(&orbspin[k][..nocc], 1),
+                spin_idx(&orbspin[k][nocc..], 1),
+            ),
         ] {
             for (i, &oi) in o.iter().enumerate() {
                 for (a, &ai) in v.iter().enumerate() {
@@ -907,12 +910,19 @@ pub fn init_amps(
     let mut t2 = ZArr::zeros(&[nk, nk, nk, nocc, nocc, nvir, nvir]);
     let mo_e_o: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
     let mo_e_v: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
-    let (nz_o, nz_v) =
-        match padding_k_idx(&padded.nmo_per_kpt, &padded.nocc_per_kpt, PaddingKind::Split) {
-            Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
-            Ok(_) => return Err(PbcCcError::Shape("padding_k_idx returned a joint set".into())),
-            Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
-        };
+    let (nz_o, nz_v) = match padding_k_idx(
+        &padded.nmo_per_kpt,
+        &padded.nocc_per_kpt,
+        PaddingKind::Split,
+    ) {
+        Ok(PaddingIdx::Split { occupied, virtuals }) => (occupied, virtuals),
+        Ok(_) => {
+            return Err(PbcCcError::Shape(
+                "padding_k_idx returned a joint set".into(),
+            ));
+        }
+        Err(e) => return Err(PbcCcError::Shape(format!("padding_k_idx: {e}"))),
+    };
     let mut terms: Vec<f64> = Vec::new();
     for ki in 0..nk {
         for kj in 0..nk {
@@ -1090,9 +1100,8 @@ impl Kgccsd {
             .collect();
         let raw = raw.map_err(|e| PbcCcError::Shape(format!("mo_coeff_from_kscf: {e}")))?;
         let frozen = pyscf_pbc_mp::FrozenK::default();
-        let padded =
-            pyscf_pbc_mp::add_padding(&raw, &scf.mo_energy, &scf.mo_occ, &frozen)
-                .map_err(|e| PbcCcError::Shape(format!("add_padding: {e}")))?;
+        let padded = pyscf_pbc_mp::add_padding(&raw, &scf.mo_energy, &scf.mo_occ, &frozen)
+            .map_err(|e| PbcCcError::Shape(format!("add_padding: {e}")))?;
         let (nocc, nmo) = (padded.nocc, padded.nmo);
 
         // `kccsd.py:517-521` — with no `orbspin` tag on the coefficients,
@@ -1109,8 +1118,11 @@ impl Kgccsd {
 
         // `:538-546` — the density from the mean field's OWN orbitals, and the
         // Fock rebuilt with `exxdiv` suppressed. `lib.temporary_env`, in Rust.
-        let dm: pyscf_pbc_scf::types::KDms =
-            vec![pyscf_pbc_scf::krdm::make_rdm1(&scf.mo_coeff, &scf.mo_occ, nso)];
+        let dm: pyscf_pbc_scf::types::KDms = vec![pyscf_pbc_scf::krdm::make_rdm1(
+            &scf.mo_coeff,
+            &scf.mo_occ,
+            nso,
+        )];
         let saved = mf.exxdiv;
         let keep_exxdiv = false;
         if !keep_exxdiv {
@@ -1274,17 +1286,83 @@ pub fn spatial2spin_t2(
                 let sbb = t2bb.slice_leading(&[ki, kj, ka])?;
 
                 // `:277-282` — aa, bb and ab straight in at [ki,kj,ka].
-                place(&mut out, &saa, [ki, kj, ka], &oa_i, &oa_j, &va_ka, &va_kb, 1.0, false, false)?;
-                place(&mut out, &sbb, [ki, kj, ka], &ob_i, &ob_j, &vb_ka, &vb_kb, 1.0, false, false)?;
-                place(&mut out, &sab, [ki, kj, ka], &oa_i, &ob_j, &va_ka, &vb_kb, 1.0, false, false)?;
+                place(
+                    &mut out,
+                    &saa,
+                    [ki, kj, ka],
+                    &oa_i,
+                    &oa_j,
+                    &va_ka,
+                    &va_kb,
+                    1.0,
+                    false,
+                    false,
+                )?;
+                place(
+                    &mut out,
+                    &sbb,
+                    [ki, kj, ka],
+                    &ob_i,
+                    &ob_j,
+                    &vb_ka,
+                    &vb_kb,
+                    1.0,
+                    false,
+                    false,
+                )?;
+                place(
+                    &mut out,
+                    &sab,
+                    [ki, kj, ka],
+                    &oa_i,
+                    &ob_j,
+                    &va_ka,
+                    &vb_kb,
+                    1.0,
+                    false,
+                    false,
+                )?;
                 // `:281` `idxoba.T` / `idxvba.T` — BOTH pairs transposed.
-                place(&mut out, &sab, [kj, ki, kb], &ob_j, &oa_i, &vb_kb, &va_ka, 1.0, true, true)?;
+                place(
+                    &mut out,
+                    &sab,
+                    [kj, ki, kb],
+                    &ob_j,
+                    &oa_i,
+                    &vb_kb,
+                    &va_ka,
+                    1.0,
+                    true,
+                    true,
+                )?;
                 // `:283-286` — the two NEGATED `abba` blocks. **The first
                 // transposes only the VIRTUALS and the second only the
                 // OCCUPIEDS**; treating them as one "swap" is the silent
                 // off-by-one this packing is famous for.
-                place(&mut out, &sab, [ki, kj, kb], &oa_i, &ob_j, &vb_kb, &va_ka, -1.0, false, true)?;
-                place(&mut out, &sab, [kj, ki, ka], &ob_j, &oa_i, &va_ka, &vb_kb, -1.0, true, false)?;
+                place(
+                    &mut out,
+                    &sab,
+                    [ki, kj, kb],
+                    &oa_i,
+                    &ob_j,
+                    &vb_kb,
+                    &va_ka,
+                    -1.0,
+                    false,
+                    true,
+                )?;
+                place(
+                    &mut out,
+                    &sab,
+                    [kj, ki, ka],
+                    &ob_j,
+                    &oa_i,
+                    &va_ka,
+                    &vb_kb,
+                    -1.0,
+                    true,
+                    false,
+                )?;
             }
         }
     }

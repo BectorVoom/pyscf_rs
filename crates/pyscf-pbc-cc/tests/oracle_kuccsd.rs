@@ -80,6 +80,21 @@ const AMPS_BLOCK: f64 = 1e-9;
 /// for G1 (`KRCCSD e_corr` vs upstream, FFTDF).
 const E_CORR: f64 = 1e-7;
 
+/// The EOM matvecs, which are NOT gated at [`AMPS_BLOCK`] and should not be.
+///
+/// An EOM matvec is a linear combination of roughly forty intermediate blocks,
+/// each of which this suite measures at up to `8.17e-10` — so its residual is
+/// an accumulation of theirs and is expected to sit a small multiple above.
+/// MEASURED: `9.66e-10` (diagonal) and `1.25e-9` (matvec). `1e-8` is an order
+/// above the largest, and still seven orders below anything a transcription
+/// error would produce: a wrong index or a dropped term in one of these is
+/// `O(1)` against amplitudes of order `0.05`.
+///
+/// The spin-orbital module makes the same accumulation visible the other way
+/// round — there the blocks sit at `4.7e-7` and the matvecs at `2.7e-7`,
+/// BELOW the block floor, because that fixture's mesh leaves far more room.
+const EOM_MATVEC: f64 = 1e-8;
+
 /// `emp2` from `init_amps`. `1e-9`, as the restricted `emp2` gate is — both
 /// sides are limited by the SCF's own `conv_tol`.
 const EMP2: f64 = 1e-9;
@@ -1147,5 +1162,73 @@ fn kuccsd_eom_intermediates_match_upstream() {
     assert!(
         failures.is_empty(),
         "UHF EOM intermediates above the gate: {failures:?}"
+    );
+}
+
+/// **16-11 Task 2 — EOM-IP-KUCCSD's matvec and diagonal.**
+///
+/// On a FIXED synthetic trial vector, for every `kshift`. The `r2` packing is
+/// FOUR blocks — two same-spin ones stored as strict lower triangles over the
+/// composite `(k, occ)` index, two mixed ones stored whole — so the round trip
+/// is asserted exactly before anything is contracted.
+#[test]
+#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+fn kuccsd_eom_ip_matches_upstream() {
+    let Some(ctx) = build("kuccsd_eom") else {
+        return;
+    };
+    let nk = ctx.eris.nkpts;
+    let (oa, ob) = ctx.eris.nocc;
+    let (va, vb) = ctx.eris.nvir;
+    let mut r = SplitMix64(20260906);
+    let t1: UT1 = (r.draw(&[nk, oa, va]), r.draw(&[nk, ob, vb]));
+    let t2: UT2 = (
+        r.draw(&[nk, nk, nk, oa, oa, va, va]),
+        r.draw(&[nk, nk, nk, oa, ob, va, vb]),
+        r.draw(&[nk, nk, nk, ob, ob, vb, vb]),
+    );
+    let kc = &ctx.khelper.kconserv;
+    let pool = Arc::new(ZWorkspacePool::new(4_000_000_000));
+
+    use pyscf_pbc_cc::eom_kccsd_uhf as eomu;
+    let size = eomu::ip_vector_size(nk, (oa, ob), (va, vb));
+    let want_size = scalar(&ctx.out, "uip_vector_size") as usize;
+    println!("uip_vector_size {size} vs upstream {want_size}");
+    assert_eq!(size, want_size, "the UHF IP vector length disagrees");
+
+    let v = ZArr::from_ctensor(&[size], cblock(&ctx.out, "uip_vec")).expect("uip_vec");
+    let (r1, r2) = eomu::vector_to_amplitudes_ip(&v, nk, (oa, ob), (va, vb)).expect("unpack");
+    let back = eomu::amplitudes_to_vector_ip(&r1, &r2, nk).expect("pack");
+    let d = maxdiff(&back, &cblock(&ctx.out, "uip_vec"), "uip_vec");
+    println!("UHF IP vector round trip: max|Δ| {d:e}");
+    assert!(d == 0.0, "the UHF IP vector round trip is not exact: {d:e}");
+
+    let imds = eomu::UhfEomImds::make_shared(&pool, 4_000_000_000, &t1, &t2, &ctx.eris, kc)
+        .expect("shared")
+        .make_ip(kc)
+        .expect("IP imds");
+
+    let mut failures: Vec<String> = Vec::new();
+    for kshift in 0..nk {
+        for (got, name) in [
+            (
+                eomu::ipccsd_matvec(&v, kshift, &imds, kc).expect("matvec"),
+                format!("uip_matvec_{kshift}"),
+            ),
+            (
+                eomu::ipccsd_diag(kshift, &imds, kc).expect("diag"),
+                format!("uip_diag_{kshift}"),
+            ),
+        ] {
+            let d = maxdiff(&got, &cblock(&ctx.out, &name), &name);
+            println!("  {name:18} max|Δ| {d:e}  (gate {EOM_MATVEC:e})");
+            if !(d < EOM_MATVEC) {
+                failures.push(format!("{name} {d:e}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "EOM-IP-KUCCSD above the gate: {failures:?}"
     );
 }
