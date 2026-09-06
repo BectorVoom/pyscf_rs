@@ -21,3 +21,9 @@ pyscf-pbc-mp     = { path = "../pyscf-pbc-mp" }
 pyscf-pbc-cc     = { path = "../pyscf-pbc-cc" }
 thiserror        = { workspace = true }
 tracing          = { workspace = true }
+# The dense CIS fallback (`kcis_rhf.py:113`'s `np.linalg.eig`) goes through
+# `pyscf_algebra::eig_general`, whose eigenvalues are `faer::c64`.
+faer             = { workspace = true }
+
+[dev-dependencies]
+pyscf-gto = { path = "../pyscf-gto" }

@@ -273,7 +273,44 @@ def section_kgccsd(nk=(1, 1, 2)):
     scalar("et_spinorb", _kccsd_t.kernel(cc, eris, t1, t2))
 
 
+def section_kcis(nk=(1, 1, 2)):
+    """KCIS roots, plus the `_ERIS` inputs so the Rust side rebuilds them."""
+    from pyscf.pbc.ci import kcis_rhf as _kcis
+
+    cell, kpts, mf, cc = build(list(nk))
+    cis = _kcis.KCIS(mf)
+    cis.conv_tol = 1e-9
+    eris = cis.ao2mo()
+
+    scalar("e_hf", mf.e_tot)
+    scalar("nkpts", len(kpts))
+    scalar("nocc", cis.nocc)
+    scalar("nmo", cis.nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", np.asarray(eris.fock))
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cis, per_kpoint=True), dtype=float))
+
+    emit("epsilons", np.asarray([eris.fock[k].diagonal().real for k in range(len(kpts))]))
+    nroots = 3
+    for kshift in range(len(kpts)):
+        # `cis_diag` returns a COMPLEX array (dtype = eris.dtype), so this
+        # block is INTERLEAVED; the Rust side must read it with `cblock`.
+        emit("diag_%d" % kshift, _kcis.cis_diag(cis, kshift, eris))
+        evals, _ = cis.kernel(nroots=nroots, eris=eris, kptlist=[kshift])
+        emit("roots_%d" % kshift, np.asarray(evals[0]).real)
+        # The DENSE fallback on the same fixture, so the Rust side can gate its
+        # own Davidson-vs-dense agreement against upstream's.
+        cis.davidson = False
+        evals_d, _ = cis.kernel(nroots=nroots, eris=eris, kptlist=[kshift])
+        emit("dense_%d" % kshift, np.asarray(evals_d[0]).real)
+        cis.davidson = True
+
+
 SECTIONS = {
+    "kcis": lambda: section_kcis((1, 1, 2)),
     "kgccsd": lambda: section_kgccsd((1, 1, 2)),
     "eris": lambda: section_eris((1, 1, 2)),
     "eris222": lambda: section_eris((2, 2, 2)),
