@@ -5835,8 +5835,10 @@ dependencies = [
 name = "pyscf-pbc-ci"
 version = "0.1.0"
 dependencies = [
+ "faer",
  "pyscf-algebra",
  "pyscf-core",
+ "pyscf-gto",
  "pyscf-pbc-ao2mo",
  "pyscf-pbc-cc",
  "pyscf-pbc-df",
