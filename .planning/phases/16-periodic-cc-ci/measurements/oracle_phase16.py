@@ -1376,6 +1376,111 @@ def section_krccsd_eom(nk=(1, 1, 2)):
             )
 
 
+def section_kuccsd_eom(nk=(1, 1, 2), mesh=(31, 31, 31)):
+    """The UHF EOM intermediates on FIXED synthetic amplitudes, on the same
+    open-shell H3 fixture `section_kuccsd` uses."""
+    from pyscf.pbc.cc import kccsd_uhf as _kuhf
+    from pyscf.pbc.cc import kintermediates_uhf as _uimd
+
+    cell = h3_openshell(nk, mesh)
+    kpts = cell.make_kpts(list(nk))
+    kpts -= kpts[0]
+    kmf = pbcscf.KUHF(cell, kpts, exxdiv=None)
+    kmf.conv_tol = 1e-11
+    kmf.kernel()
+    cc = _kuhf.KUCCSD(kmf)
+    eris = cc.ao2mo(cc.mo_coeff)
+
+    nkpts = len(kpts)
+    nocca, noccb = cc.nocc
+    nmoa, nmob = cc.nmo
+    nvira, nvirb = nmoa - nocca, nmob - noccb
+    scalar("nkpts", nkpts)
+    scalar("nocca", nocca)
+    scalar("noccb", noccb)
+    scalar("nmoa", nmoa)
+    scalar("nmob", nmob)
+    scalar("nao", np.asarray(eris.mo_coeff[0])[0].shape[0])
+    from pyscf.pbc import tools as _pbctools
+    scalar("madelung", _pbctools.madelung(cell, kpts))
+    emit("kpts", np.asarray(kpts))
+    emit("mesh", np.asarray(cell.mesh, dtype=float))
+    emit("focka", np.asarray(eris.fock[0]))
+    emit("fockb", np.asarray(eris.fock[1]))
+    emit("mo_energy_a", np.asarray(eris.mo_energy[0]))
+    emit("mo_energy_b", np.asarray(eris.mo_energy[1]))
+    emit("mo_coeff_a", np.asarray(eris.mo_coeff[0]))
+    emit("mo_coeff_b", np.asarray(eris.mo_coeff[1]))
+    emit(
+        "nocc_per_kpt_a",
+        np.asarray([int(np.count_nonzero(o > 0)) for o in kmf.mo_occ[0]], dtype=float),
+    )
+    emit(
+        "nocc_per_kpt_b",
+        np.asarray([int(np.count_nonzero(o > 0)) for o in kmf.mo_occ[1]], dtype=float),
+    )
+
+    r = SplitMix64(20260906)
+
+    def draw(shape):
+        n = int(np.prod(shape))
+        return np.array(
+            [complex(0.05 * r.unit(), 0.05 * r.unit()) for _ in range(n)]
+        ).reshape(shape)
+
+    t1 = (draw((nkpts, nocca, nvira)), draw((nkpts, noccb, nvirb)))
+    t2 = (
+        draw((nkpts, nkpts, nkpts, nocca, nocca, nvira, nvira)),
+        draw((nkpts, nkpts, nkpts, nocca, noccb, nvira, nvirb)),
+        draw((nkpts, nkpts, nkpts, noccb, noccb, nvirb, nvirb)),
+    )
+    kcon = cc.khelper.kconserv
+
+    for nm, arr in zip(("u_Foo", "u_FOO"), _uimd.Foo(cc, t1, t2, eris)):
+        emit(nm, arr)
+    for nm, arr in zip(("u_Fvv", "u_FVV"), _uimd.Fvv(cc, t1, t2, eris)):
+        emit(nm, arr)
+    for nm, arr in zip(("u_Fov", "u_FOV"), _uimd.Fov(cc, t1, t2, eris)):
+        emit(nm, arr)
+    for nm, arr in zip(
+        ("u_Wooov", "u_WooOV", "u_WOOov", "u_WOOOV"),
+        _uimd.Wooov(cc, t1, t2, eris, kcon),
+    ):
+        emit(nm, arr)
+    for nm, arr in zip(
+        ("u_Wovvo", "u_WovVO", "u_WOVvo", "u_WOVVO"), _uimd.Wovvo(cc, t1, t2, eris)
+    ):
+        emit(nm, arr)
+    for nm, arr in zip(
+        ("u_W1oovv", "u_W1ooVV", "u_W1OOvv", "u_W1OOVV"), _uimd.W1oovv(cc, t1, t2, eris)
+    ):
+        emit(nm, arr)
+    for nm, arr in zip(
+        ("u_W2oovv", "u_W2ooVV", "u_W2OOvv", "u_W2OOVV"), _uimd.W2oovv(cc, t1, t2, eris)
+    ):
+        emit(nm, arr)
+    for nm, arr in zip(
+        ("u_Woovv", "u_WooVV", "u_WOOvv", "u_WOOVV"), _uimd.Woovv(cc, t1, t2, eris)
+    ):
+        emit(nm, arr)
+    woooo = _uimd.Woooo(cc, t1, t2, eris)
+    for nm, arr in zip(("u_Woooo", "u_WooOO", "u_WOOOO"), (woooo[0], woooo[1], woooo[3])):
+        emit(nm, arr)
+    for nm, arr in zip(
+        ("u_Wvvvv", "u_WvvVV", "u_WVVVV"), _uimd.Wvvvv(cc, t1, t2, eris)
+    ):
+        emit(nm, arr)
+    for nm, arr in zip(
+        ("u_Wvvov", "u_WvvOV", "u_WVVov", "u_WVVOV"), _uimd.Wvvov(cc, t1, t2, eris)
+    ):
+        emit(nm, arr)
+    # `get_Wvvvv` at ONE k-triple — the per-triple route `eaccsd_matvec` uses
+    # (`eom_kccsd_uhf.py:1123`), which is a different function from `Wvvvv`.
+    g = _uimd.get_Wvvvv(cc, t1, t2, eris, 0, 1 % nkpts, 1 % nkpts)
+    for nm, arr in zip(("u_gvvvv", "u_gvvVV", "u_gVVVV"), g):
+        emit(nm, arr)
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
@@ -1384,6 +1489,7 @@ SECTIONS = {
     "krccsd_eom": lambda: section_krccsd_eom((1, 1, 2)),
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
+    "kuccsd_eom": lambda: section_kuccsd_eom((1, 1, 2)),
     "kuccsd_imds": lambda: section_kuccsd_imds((1, 1, 2)),
     "kuccsd_wovvo": lambda: section_kuccsd_wovvo((1, 1, 2)),
     "kuccsd_woooo": lambda: section_kuccsd_woooo((1, 1, 2)),

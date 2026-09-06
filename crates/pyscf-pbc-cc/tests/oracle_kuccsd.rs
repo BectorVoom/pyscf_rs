@@ -1001,3 +1001,131 @@ fn rdm1_frozen_core_refuses_and_says_where() {
     assert!(msg.contains("kuccsd_rdm.py:137"), "{msg}");
     assert!(msg.contains("NotImplementedError"), "{msg}");
 }
+
+/// **16-11 Task 1 — the UHF EOM intermediates.**
+///
+/// `eom_kccsd_uhf._IMDS` builds `Foo`/`Fvv`/`Fov`, `Wovvo`, `Woovv` (shared),
+/// `Woooo`/`Wooov`/`Woovo` (IP) and `Wvvov`/`Wvvvv`/`Wvvvo` (EA). Every one
+/// returns THREE or FOUR spin blocks that are NOT related by any symmetry —
+/// `WooVO` and `WOOvo` have different shapes, not transposes of one another —
+/// so each block is compared on its own.
+///
+/// `W1oovv` and `W2oovv` are gated separately from their sum for the reason
+/// 16-10 gives about `W1ovvo`/`W2ovvo`: upstream builds the halves.
+#[test]
+#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+fn kuccsd_eom_intermediates_match_upstream() {
+    let Some(ctx) = build("kuccsd_eom") else {
+        return;
+    };
+    let nk = ctx.eris.nkpts;
+    let (oa, ob) = ctx.eris.nocc;
+    let (va, vb) = ctx.eris.nvir;
+    let mut r = SplitMix64(20260906);
+    let t1: UT1 = (r.draw(&[nk, oa, va]), r.draw(&[nk, ob, vb]));
+    let t2: UT2 = (
+        r.draw(&[nk, nk, nk, oa, oa, va, va]),
+        r.draw(&[nk, nk, nk, oa, ob, va, vb]),
+        r.draw(&[nk, nk, nk, ob, ob, vb, vb]),
+    );
+    let kc = &ctx.khelper.kconserv;
+    let pool = Arc::new(ZWorkspacePool::new(4_000_000_000));
+    let budget = 4_000_000_000_usize;
+
+    let mut failures: Vec<String> = Vec::new();
+    let check = |name: &str, got: &ZArr, failures: &mut Vec<String>| {
+        let d = maxdiff(got, &cblock(&ctx.out, name), name);
+        println!("  {name:12} max|Δ| {d:e}");
+        if !(d < AMPS_BLOCK) {
+            failures.push(format!("{name} {d:e}"));
+        }
+    };
+
+    use pyscf_pbc_cc::kintermediates_uhf as uimd;
+    let (a, b) = uimd::foo(&t1, &t2, &ctx.eris, kc).expect("Foo");
+    check("u_Foo", &a, &mut failures);
+    check("u_FOO", &b, &mut failures);
+    let (a, b) = uimd::fvv(&t1, &t2, &ctx.eris, kc).expect("Fvv");
+    check("u_Fvv", &a, &mut failures);
+    check("u_FVV", &b, &mut failures);
+    let (a, b) = uimd::fov(&t1, &ctx.eris).expect("Fov");
+    check("u_Fov", &a, &mut failures);
+    check("u_FOV", &b, &mut failures);
+
+    let q = uimd::wooov(&t1, &ctx.eris).expect("Wooov");
+    for (got, name) in [
+        (&q.0, "u_Wooov"),
+        (&q.1, "u_WooOV"),
+        (&q.2, "u_WOOov"),
+        (&q.3, "u_WOOOV"),
+    ] {
+        check(name, got, &mut failures);
+    }
+    let q = uimd::wovvo(&pool, budget, &t1, &t2, &ctx.eris, kc).expect("Wovvo");
+    for (got, name) in [
+        (&q.0, "u_Wovvo"),
+        (&q.1, "u_WovVO"),
+        (&q.2, "u_WOVvo"),
+        (&q.3, "u_WOVVO"),
+    ] {
+        check(name, got, &mut failures);
+    }
+    let q = uimd::w1oovv(&t2, &ctx.eris, kc).expect("W1oovv");
+    for (got, name) in [
+        (&q.0, "u_W1oovv"),
+        (&q.1, "u_W1ooVV"),
+        (&q.2, "u_W1OOvv"),
+        (&q.3, "u_W1OOVV"),
+    ] {
+        check(name, got, &mut failures);
+    }
+    let q = uimd::w2oovv(&t1, &ctx.eris, kc).expect("W2oovv");
+    for (got, name) in [
+        (&q.0, "u_W2oovv"),
+        (&q.1, "u_W2ooVV"),
+        (&q.2, "u_W2OOvv"),
+        (&q.3, "u_W2OOVV"),
+    ] {
+        check(name, got, &mut failures);
+    }
+    let q = uimd::woovv(&t1, &t2, &ctx.eris, kc).expect("Woovv");
+    for (got, name) in [
+        (&q.0, "u_Woovv"),
+        (&q.1, "u_WooVV"),
+        (&q.2, "u_WOOvv"),
+        (&q.3, "u_WOOVV"),
+    ] {
+        check(name, got, &mut failures);
+    }
+    let t = uimd::eom_woooo(&t1, &t2, &ctx.eris, kc).expect("Woooo");
+    for (got, name) in [(&t.0, "u_Woooo"), (&t.1, "u_WooOO"), (&t.2, "u_WOOOO")] {
+        check(name, got, &mut failures);
+    }
+    let t = uimd::eom_wvvvv(&pool, budget, &t1, &t2, &ctx.eris, kc).expect("Wvvvv");
+    for (got, name) in [(&t.0, "u_Wvvvv"), (&t.1, "u_WvvVV"), (&t.2, "u_WVVVV")] {
+        check(name, got, &mut failures);
+    }
+
+    let q = uimd::wvvov(&t1, &ctx.eris, kc).expect("Wvvov");
+    for (got, name) in [
+        (&q.0, "u_Wvvov"),
+        (&q.1, "u_WvvOV"),
+        (&q.2, "u_WVVov"),
+        (&q.3, "u_WVVOV"),
+    ] {
+        check(name, got, &mut failures);
+    }
+
+    // `get_Wvvvv` at one k-triple — a DIFFERENT function from `Wvvvv`, and the
+    // one `eaccsd_matvec` calls per triple (`eom_kccsd_uhf.py:1123`).
+    let kb_ = 1 % nk;
+    let t = uimd::get_wvvvv(&t1, &t2, &ctx.eris, kc, 0, kb_, kb_).expect("get_Wvvvv");
+    for (got, name) in [(&t.0, "u_gvvvv"), (&t.1, "u_gvvVV"), (&t.2, "u_gVVVV")] {
+        check(name, got, &mut failures);
+    }
+
+    assert!(
+        failures.is_empty(),
+        "UHF EOM intermediates above the gate: {failures:?}"
+    );
+}
