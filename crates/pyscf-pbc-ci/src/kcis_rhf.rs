@@ -174,7 +174,9 @@ pub fn cis_matvec(
         // plausible wrong number no shape check catches — the defect 16-07's
         // `cc_Wovvo` actually shipped for one cycle.
         for kj in 0..nk {
-            let kb = kr[kj];
+            // `kb = kr[kj]` is NOT needed: `voov[ka,kj,ki]` and `ovov[kj,ka,ki]`
+            // already fix the fourth k-point, and `b` ranges over the block's
+            // own last axis. Upstream carries the same dead binding.
             let voov = eris
                 .blk(Blk::Voov, ka, kj, ki)
                 .map_err(|e| PbcCiError::Shape(e.to_string()))?;
@@ -324,7 +326,11 @@ pub fn kernel_at_kshift(
 /// `nroots` smallest diagonal elements.
 pub fn get_init_guess(diag: &[f64], nroots: usize, size: usize) -> Vec<CTensor> {
     let mut idx: Vec<usize> = (0..diag.len()).collect();
-    idx.sort_by(|&a, &b| diag[a].partial_cmp(&diag[b]).unwrap_or(std::cmp::Ordering::Equal));
+    idx.sort_by(|&a, &b| {
+        diag[a]
+            .partial_cmp(&diag[b])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     idx.into_iter()
         .take(nroots.min(size))
         .map(|i| {

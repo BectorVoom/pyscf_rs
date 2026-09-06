@@ -16,12 +16,11 @@ use std::process::Command;
 use pyscf_algebra::CTensor;
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
-use pyscf_pbc_cc::keris::{KEris, KErisOpts};
 use pyscf_pbc_cc::ZArr;
+use pyscf_pbc_cc::keris::{KEris, KErisOpts};
 use pyscf_pbc_ci::kcis_rhf::{KcisOpts, cis_diag, kernel_at_kshift};
 use pyscf_pbc_df::{Fftdf, MoCoeff, PeriodicDf};
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs};
-use pyscf_pbc_gto::LowDimFtType as _LowDimFtType;
 use pyscf_pbc_lib::KptsHelper;
 use pyscf_pbc_mp::PaddedMos;
 
@@ -105,10 +104,7 @@ fn diamond(mesh: [usize; 3]) -> Cell {
     let q = a0 / 4.0;
     Cell::build(CellBuildArgs {
         mole: MoleBuildArgs {
-            atom: AtomInput::Tuples(vec![
-                ("C".into(), [0.0, 0.0, 0.0]),
-                ("C".into(), [q, q, q]),
-            ]),
+            atom: AtomInput::Tuples(vec![("C".into(), [0.0, 0.0, 0.0]), ("C".into(), [q, q, q])]),
             basis: BasisInput::Name("gth-szv".into()),
             unit: Unit::Ang,
             ..Default::default()
@@ -233,9 +229,7 @@ fn kcis_roots_match_upstream() {
             .zip(want_dense.iter())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0_f64, f64::max);
-        println!(
-            "kshift {kshift}: dense {dense:?} vs upstream {want_dense:?}  max|Δ| {dd:e}"
-        );
+        println!("kshift {kshift}: dense {dense:?} vs upstream {want_dense:?}  max|Δ| {dd:e}");
         assert!(dd < 1e-6, "the dense CIS roots differ by {dd:e}");
 
         let dav = kernel_at_kshift(
@@ -257,10 +251,11 @@ fn kcis_roots_match_upstream() {
             .zip(want_dav.iter())
             .map(|(a, b)| (a - b).abs())
             .fold(0.0_f64, f64::max);
-        println!(
-            "kshift {kshift}: davidson {dav:?} vs upstream {want_dav:?}  max|Δ| {dd2:e}"
+        println!("kshift {kshift}: davidson {dav:?} vs upstream {want_dav:?}  max|Δ| {dd2:e}");
+        assert!(
+            dd2 < 1e-5,
+            "the Davidson CIS roots differ by {dd2:e}, above G7 1e-5"
         );
-        assert!(dd2 < 1e-5, "the Davidson CIS roots differ by {dd2:e}, above G7 1e-5");
 
         // The Davidson-vs-dense SPREAD, on both sides. At `kshift = 0` on this
         // fixture UPSTREAM's own two paths differ by `2.51e-3` on the third
