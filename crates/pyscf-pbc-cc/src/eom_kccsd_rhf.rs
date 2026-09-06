@@ -45,9 +45,11 @@
 //! reachable only through the `*_partition` entry points — which is the same
 //! access upstream gives them (set `eom.partition` and call the matvec).
 
-use pyscf_pbc_lib::Kconserv;
+use pyscf_pbc_lib::{KIdx, Kconserv, get_kconserv3};
 
-use crate::eom_kccsd_ghf::Partition;
+use crate::eom_kccsd_ghf::{
+    EomOpts, Excitation, Padding, Partition, StarLattice, StarPair, StarRoot,
+};
 use crate::error::PbcCcError;
 use crate::keris::{Blk, KEris};
 use crate::kintermediates_rhf as imd;
@@ -1745,4 +1747,727 @@ pub fn eom_kernel(
         v,
         qp_weight,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The CCSD* corrections (`:214-375`, `:617-774`)
+// ---------------------------------------------------------------------------
+
+/// The `1/2` prefactor both spin-adapted corrections end with (`:369`,
+/// `:769`) — NOT the spin-orbital module's `1/12` (`eom_kccsd_ghf.py:603`).
+const STAR_PREFACTOR: f64 = 0.5;
+
+/// Upstream warns below this left-right overlap (`:325`, `:722`).
+const STAR_SMALL_OVERLAP: f64 = 1e-7;
+
+/// `<L|R> = l1·r1 + l2·r2` (`:311`), UNCONJUGATED and with NO `½` — the
+/// spin-orbital module's `:519` carries a `0.5` on the doubles term and this
+/// one does not, because the packings differ.
+fn ldotr(l1: &ZArr, l2: &ZArr, r1: &ZArr, r2: &ZArr) -> (f64, f64) {
+    let mut re = 0.0;
+    let mut im = 0.0;
+    for i in 0..l1.len() {
+        re += l1.data().re[i] * r1.data().re[i] - l1.data().im[i] * r1.data().im[i];
+        im += l1.data().re[i] * r1.data().im[i] + l1.data().im[i] * r1.data().re[i];
+    }
+    for i in 0..l2.len() {
+        re += l2.data().re[i] * r2.data().re[i] - l2.data().im[i] * r2.data().im[i];
+        im += l2.data().re[i] * r2.data().im[i] + l2.data().im[i] * r2.data().re[i];
+    }
+    (re, im)
+}
+
+fn scale_by_inverse(x: &mut ZArr, (re, im): (f64, f64)) {
+    let d = re * re + im * im;
+    x.scale_complex(re / d, -im / d);
+}
+
+/// `get_kconserv3(cell, kpts, [p, q, kshift, range(nkpts), range(nkpts)])`.
+fn kklist(lat: &StarLattice<'_>, p: usize, q: usize, kshift: usize, nkpts: usize) -> Vec<usize> {
+    let all: Vec<usize> = (0..nkpts).collect();
+    get_kconserv3(
+        lat.a,
+        lat.kpts,
+        &[
+            KIdx::One(p),
+            KIdx::One(q),
+            KIdx::One(kshift),
+            KIdx::Many(all.clone()),
+            KIdx::Many(all),
+        ],
+    )
+    .data
+    .iter()
+    .map(|v| *v as usize)
+    .collect()
+}
+
+fn split_mo_energy(eris: &KEris, nocc: usize) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+    let o = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
+    let v = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
+    (o, v)
+}
+
+/// `contract_l3p(l1, l2, [ki,kj,kk,ka,kb])` (`:230-249`) — one perturbed left
+/// 3h2p block, before the `P(ia|jb)` symmetrisation.
+fn ip_l3p(
+    l1: &ZArr,
+    l2: &ZArr,
+    kv: [usize; 5],
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (eris, nocc, nvir) = (imds.eris, imds.eris.nocc, imds.eris.nvir);
+    let [ki, kj, kk, ka, kb] = kv;
+    let mut out = ZArr::zeros(&[nocc, nocc, nocc, nvir, nvir]);
+    // `:236-237` — note the `0.5`, which the spin-orbital form does not have.
+    if kk == kshift && kj == kconserv.get(ka, ki, kb) as usize {
+        out.add_assign(&einsum_scaled(
+            "ijab,k->ijkab",
+            &[&eris.blk(Blk::Oovv, ki, kj, ka)?, l1],
+            0.5,
+        )?)?;
+    }
+    // `:238-239`
+    let ke = kconserv.get(kb, ki, ka) as usize;
+    out.add_assign(&einsum(
+        "eiba,jke->ijkab",
+        &[
+            &eris.blk(Blk::Vovv, ke, ki, kb)?,
+            &l2.slice_leading(&[kj, kk])?,
+        ],
+    )?)?;
+    // `:240-241`
+    let km = kconserv.get(kshift, ki, ka) as usize;
+    out.sub_assign(&einsum(
+        "kjmb,ima->ijkab",
+        &[
+            &eris.blk(Blk::Ooov, kk, kj, km)?,
+            &l2.slice_leading(&[ki, km])?,
+        ],
+    )?)?;
+    // `:242-243`
+    let km = kconserv.get(ki, kb, kj) as usize;
+    out.sub_assign(&einsum(
+        "ijmb,mka->ijkab",
+        &[
+            &eris.blk(Blk::Ooov, ki, kj, km)?,
+            &l2.slice_leading(&[km, kk])?,
+        ],
+    )?)?;
+    Ok(out)
+}
+
+/// `contract_r3p(r1, r2, [ki,kj,kk,ka,kb])` (`:258-281`).
+fn ip_r3p(
+    r1: &ZArr,
+    r2: &ZArr,
+    kv: [usize; 5],
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (eris, t2, nocc, nvir) = (imds.eris, &imds.t2, imds.eris.nocc, imds.eris.nvir);
+    let [ki, kj, kk, ka, kb] = kv;
+    let mut out = ZArr::zeros(&[nocc, nocc, nocc, nvir, nvir]);
+    // `:264-265`
+    let tmp = einsum("mbke,m->bke", &[&eris.blk(Blk::Ovov, kshift, kb, kk)?, r1])?;
+    out.sub_assign(&einsum(
+        "bke,ijae->ijkab",
+        &[&tmp, &t2.slice_leading(&[ki, kj, ka])?],
+    )?)?;
+    // `:266-268` — `ke` is computed and never used; upstream's own dead line.
+    let _ke = kconserv.get(kb, kshift, kj) as usize;
+    let tmp = einsum("bmje,m->bej", &[&eris.blk(Blk::Voov, kb, kshift, kj)?, r1])?;
+    out.sub_assign(&einsum(
+        "bej,ikae->ijkab",
+        &[&tmp, &t2.slice_leading(&[ki, kk, ka])?],
+    )?)?;
+    // `:269-271`
+    let km = kconserv.get(ka, ki, kb) as usize;
+    let tmp = einsum("mnjk,n->mjk", &[&eris.blk(Blk::Oooo, km, kshift, kj)?, r1])?;
+    out.add_assign(&einsum(
+        "mjk,imab->ijkab",
+        &[&tmp, &t2.slice_leading(&[ki, km, ka])?],
+    )?)?;
+    // `:272-273`
+    let ke = kconserv.get(kk, kshift, kj) as usize;
+    out.add_assign(&einsum(
+        "eiba,kje->ijkab",
+        &[
+            &eris.blk(Blk::Vovv, ke, ki, kb)?.conj(),
+            &r2.slice_leading(&[kk, kj])?,
+        ],
+    )?)?;
+    // `:274-275`
+    let km = kconserv.get(kk, kb, kj) as usize;
+    out.sub_assign(&einsum(
+        "kjmb,mia->ijkab",
+        &[
+            &eris.blk(Blk::Ooov, kk, kj, km)?.conj(),
+            &r2.slice_leading(&[km, ki])?,
+        ],
+    )?)?;
+    // `:276-277`
+    let km = kconserv.get(ki, kb, kj) as usize;
+    out.sub_assign(&einsum(
+        "ijmb,kma->ijkab",
+        &[
+            &eris.blk(Blk::Ooov, ki, kj, km)?.conj(),
+            &r2.slice_leading(&[kk, km])?,
+        ],
+    )?)?;
+    Ok(out)
+}
+
+/// `ipccsd_star_contract` (`:214-375`) — the SPIN-ADAPTED IP-CCSD\*.
+///
+/// # Three things separate this from the spin-orbital form
+///
+/// * **`l2` is symmetrised first** (`:315-320`): `l2 ← (l2 + 2·l2ᵀ)/3` with
+///   `l2ᵀ[ki,kj] = l2[kj,ki].transpose(1,0,2)`. `r2` is NOT touched.
+/// * **`P(ijk)` carries spin-adapted weights** (`:352-358`): `4, 1, 1, −2,
+///   −2, −2` over the six index permutations, where the spin-orbital form has
+///   three terms with weight `1`.
+/// * **Only the LEFT side is permuted.** `:365` contracts `Plijkab` with the
+///   BARE `rijkab`; the spin-orbital `:601` permutes both.
+///
+/// The prefactor is `½`, not `1/12`.
+///
+/// # Errors
+/// Propagates every block access and shape check.
+#[allow(clippy::too_many_lines)]
+pub fn ipccsd_star_contract(
+    pairs: &[StarPair<'_>],
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    padding: &Padding,
+    kconserv: &Kconserv,
+    lat: &StarLattice<'_>,
+) -> Result<Vec<StarRoot>, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let (mo_e_o, mo_e_v) = split_mo_energy(imds.eris, nocc);
+    let mut out = Vec::with_capacity(pairs.len());
+
+    for pair in pairs {
+        let (mut l1, l2) = vector_to_amplitudes_ip(pair.l, nkpts, nocc, nvir)?;
+        let (r1, r2) = vector_to_amplitudes_ip(pair.r, nkpts, nocc, nvir)?;
+
+        // `:311` — the overlap is taken on the UNSYMMETRISED `l2`.
+        let dot = ldotr(&l1, &l2, &r1, &r2);
+        let small = dot.0.hypot(dot.1) < STAR_SMALL_OVERLAP;
+
+        // `:314-320` — `l2 ← (l2 + 2·l2ᵀ)/3`.
+        let mut l2s = ZArr::zeros(l2.shape());
+        for ki in 0..nkpts {
+            for kj in 0..nkpts {
+                let mut blk = l2.slice_leading(&[ki, kj])?;
+                blk.zip_assign(&l2.slice_leading(&[kj, ki])?.transpose(&[1, 0, 2])?, 2.0)?;
+                blk.scale(1.0 / 3.0);
+                l2s.set_leading(&[ki, kj], &blk)?;
+            }
+        }
+        let mut l2 = l2s;
+
+        scale_by_inverse(&mut l1, dot);
+        scale_by_inverse(&mut l2, dot);
+
+        let mut delta_re = 0.0_f64;
+        let mut delta_im = 0.0_f64;
+
+        for ka in 0..nkpts {
+            for kb in 0..nkpts {
+                let kk_of = kklist(lat, ka, kb, kshift, nkpts);
+                let shape = [nkpts, nkpts, nocc, nocc, nocc, nvir, nvir];
+                let mut lijkab = ZArr::zeros(&shape);
+                let mut rijkab = ZArr::zeros(&shape);
+
+                for ki in 0..nkpts {
+                    for kj in 0..nkpts {
+                        let kk = kk_of[ki * nkpts + kj];
+                        // `contract_pl3p` (`:251-256`) — `X + P(ia|jb) X`,
+                        // where `P(ia|jb)` swaps `(i,a)` with `(j,b)`: the
+                        // k-vector is permuted `[1,0,2,4,3]` and the RESULT is
+                        // transposed the same way.
+                        let mut l = ip_l3p(
+                            &l1,
+                            &l2,
+                            [ki, kj, kk, ka, kb],
+                            kshift,
+                            imds,
+                            kconserv,
+                            
+                        )?;
+                        l.add_assign(
+                            &ip_l3p(
+                                &l1,
+                                &l2,
+                                [kj, ki, kk, kb, ka],
+                                kshift,
+                                imds,
+                                kconserv,
+                                
+                            )?
+                            .transpose(&[1, 0, 2, 4, 3])?,
+                        )?;
+                        lijkab.set_leading(&[ki, kj], &l)?;
+
+                        let mut r = ip_r3p(
+                            &r1,
+                            &r2,
+                            
+                            [ki, kj, kk, ka, kb],
+                            kshift,
+                            imds,
+                            kconserv,
+                            
+                        )?;
+                        r.add_assign(
+                            &ip_r3p(
+                                &r1,
+                                &r2,
+                                
+                                [kj, ki, kk, kb, ka],
+                                kshift,
+                                imds,
+                                kconserv,
+                                
+                            )?
+                            .transpose(&[1, 0, 2, 4, 3])?,
+                        )?;
+                        rijkab.set_leading(&[ki, kj], &r)?;
+                    }
+                }
+
+                // `:349-367`
+                let eab = crate::kccsd_t::epq2(&mo_e_v, &padding.virtuals, ka, kb, nvir, -1.0);
+                for ki in 0..nkpts {
+                    for kj in 0..nkpts {
+                        let kk = kk_of[ki * nkpts + kj];
+                        // `:352-358` — the spin-adapted `P(ijk)` weights.
+                        let mut pl = lijkab.slice_leading(&[ki, kj])?;
+                        pl.scale(4.0);
+                        pl.zip_assign(
+                            &lijkab
+                                .slice_leading(&[kj, kk])?
+                                .transpose(&[2, 0, 1, 3, 4])?,
+                            1.0,
+                        )?;
+                        pl.zip_assign(
+                            &lijkab
+                                .slice_leading(&[kk, ki])?
+                                .transpose(&[1, 2, 0, 3, 4])?,
+                            1.0,
+                        )?;
+                        pl.zip_assign(
+                            &lijkab
+                                .slice_leading(&[ki, kk])?
+                                .transpose(&[0, 2, 1, 3, 4])?,
+                            -2.0,
+                        )?;
+                        pl.zip_assign(
+                            &lijkab
+                                .slice_leading(&[kk, kj])?
+                                .transpose(&[2, 1, 0, 3, 4])?,
+                            -2.0,
+                        )?;
+                        pl.zip_assign(
+                            &lijkab
+                                .slice_leading(&[kj, ki])?
+                                .transpose(&[1, 0, 2, 3, 4])?,
+                            -2.0,
+                        )?;
+                        // `:365` — the BARE `rijkab`, not a permuted one.
+                        let pr = rijkab.slice_leading(&[ki, kj])?;
+
+                        let eijk = crate::kccsd_t::epqr3(
+                            &mo_e_o,
+                            &padding.occupied,
+                            ki,
+                            kj,
+                            kk,
+                            nocc,
+                            1.0,
+                        );
+                        let mut f = 0;
+                        for &e_ijk in &eijk {
+                            for &e_ab in &eab {
+                                let denom = e_ijk + e_ab + pair.eval;
+                                let (lr, li) = (pl.data().re[f], pl.data().im[f]);
+                                let (rr, ri) = (pr.data().re[f], pr.data().im[f]);
+                                delta_re += (lr * rr - li * ri) / denom;
+                                delta_im += (lr * ri + li * rr) / denom;
+                                f += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let delta_e = delta_re * STAR_PREFACTOR;
+        out.push(StarRoot {
+            e_star: pair.eval + delta_e,
+            delta_e,
+            delta_e_imag: delta_im * STAR_PREFACTOR,
+            ldotr: dot,
+            small_overlap: small,
+        });
+    }
+    Ok(out)
+}
+
+/// `contract_l3p(l1, l2, [ki,kj,ka,kb,kc])` (`:633-651`).
+fn ea_l3p(
+    l1: &ZArr,
+    l2: &ZArr,
+    kv: [usize; 5],
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (eris, nocc, nvir) = (imds.eris, imds.eris.nocc, imds.eris.nvir);
+    let [ki, kj, ka, kb, kc] = kv;
+    let mut out = ZArr::zeros(&[nocc, nocc, nvir, nvir, nvir]);
+    // `:641-642`
+    if kc == kshift && kb == kconserv.get(ki, ka, kj) as usize {
+        out.sub_assign(&einsum_scaled(
+            "ijab,c->ijabc",
+            &[&eris.blk(Blk::Oovv, ki, kj, ka)?, l1],
+            0.5,
+        )?)?;
+    }
+    // `:643-644`
+    let km = kconserv.get(ki, ka, kj) as usize;
+    out.add_assign(&einsum(
+        "jima,mbc->ijabc",
+        &[
+            &eris.blk(Blk::Ooov, kj, ki, km)?,
+            &l2.slice_leading(&[km, kb])?,
+        ],
+    )?)?;
+    // `:645-646`
+    let ke = kconserv.get(kshift, ka, ki) as usize;
+    out.sub_assign(&einsum(
+        "ejcb,iae->ijabc",
+        &[
+            &eris.blk(Blk::Vovv, ke, kj, kc)?,
+            &l2.slice_leading(&[ki, ka])?,
+        ],
+    )?)?;
+    // `:647-648`
+    let ke = kconserv.get(kshift, kc, ki) as usize;
+    out.sub_assign(&einsum(
+        "ejab,iec->ijabc",
+        &[
+            &eris.blk(Blk::Vovv, ke, kj, ka)?,
+            &l2.slice_leading(&[ki, ke])?,
+        ],
+    )?)?;
+    Ok(out)
+}
+
+/// `contract_r3p(r1, r2, [ki,kj,ka,kb,kc])` (`:665-689`).
+fn ea_r3p(
+    r1: &ZArr,
+    r2: &ZArr,
+    kv: [usize; 5],
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (eris, t2, nocc, nvir) = (imds.eris, &imds.t2, imds.eris.nocc, imds.eris.nvir);
+    let [ki, kj, ka, kb, kc] = kv;
+    let mut out = ZArr::zeros(&[nocc, nocc, nvir, nvir, nvir]);
+    // `:673-676`
+    let ke = kconserv.get(ki, ka, kj) as usize;
+    let tmp = einsum("bcef,f->bce", &[&eris.blk(Blk::Vvvv, kb, kc, ke)?, r1])?;
+    out.sub_assign(&einsum(
+        "bce,ijae->ijabc",
+        &[&tmp, &t2.slice_leading(&[ki, kj, ka])?],
+    )?)?;
+    // `:677-679`
+    let km = kconserv.get(kshift, kc, kj) as usize;
+    let tmp = einsum("mcje,e->mcj", &[&eris.blk(Blk::Ovov, km, kc, kj)?, r1])?;
+    out.add_assign(&einsum(
+        "mcj,imab->ijabc",
+        &[&tmp, &t2.slice_leading(&[ki, km, ka])?],
+    )?)?;
+    // `:680-682` — `voov[kb,km,kj]` with `km = kconserv[kc,ki,ka]`.
+    let km = kconserv.get(kc, ki, ka) as usize;
+    let tmp = einsum("bmje,e->mbj", &[&eris.blk(Blk::Voov, kb, km, kj)?, r1])?;
+    out.add_assign(&einsum(
+        "mbj,imac->ijabc",
+        &[&tmp, &t2.slice_leading(&[ki, km, ka])?],
+    )?)?;
+    // `:683-684`
+    let km = kconserv.get(ki, ka, kj) as usize;
+    out.add_assign(&einsum(
+        "jima,mcb->ijabc",
+        &[
+            &eris.blk(Blk::Ooov, kj, ki, km)?.conj(),
+            &r2.slice_leading(&[km, kc])?,
+        ],
+    )?)?;
+    // `:685-686`
+    let ke = kconserv.get(kshift, ka, ki) as usize;
+    out.sub_assign(&einsum(
+        "ejcb,iea->ijabc",
+        &[
+            &eris.blk(Blk::Vovv, ke, kj, kc)?.conj(),
+            &r2.slice_leading(&[ki, ke])?,
+        ],
+    )?)?;
+    // `:687-688`
+    let ke = kconserv.get(kshift, kc, kj) as usize;
+    out.sub_assign(&einsum(
+        "eiba,jce->ijabc",
+        &[
+            &eris.blk(Blk::Vovv, ke, ki, kb)?.conj(),
+            &r2.slice_leading(&[kj, kc])?,
+        ],
+    )?)?;
+    Ok(out)
+}
+
+/// `eaccsd_star_contract` (`:617-774`) — the SPIN-ADAPTED EA-CCSD\*.
+///
+/// The same three departures from the spin-orbital form as
+/// [`ipccsd_star_contract`], with EA's own index pattern: `l2ᵀ[kj,kb] =
+/// l2[kj,ka].transpose(0,2,1)` where `kb = kconserv[kj,ka,kshift]` (`:716-720`)
+/// — a k-index REMAP, not just an axis swap, which the IP transposition is
+/// not.
+///
+/// # Errors
+/// As [`ipccsd_star_contract`].
+#[allow(clippy::too_many_lines)]
+pub fn eaccsd_star_contract(
+    pairs: &[StarPair<'_>],
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    padding: &Padding,
+    kconserv: &Kconserv,
+    lat: &StarLattice<'_>,
+) -> Result<Vec<StarRoot>, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let (mo_e_o, mo_e_v) = split_mo_energy(imds.eris, nocc);
+    let mut out = Vec::with_capacity(pairs.len());
+
+    for pair in pairs {
+        let (mut l1, l2) = vector_to_amplitudes_ea(pair.l, nkpts, nocc, nvir)?;
+        let (r1, r2) = vector_to_amplitudes_ea(pair.r, nkpts, nocc, nvir)?;
+
+        let dot = ldotr(&l1, &l2, &r1, &r2);
+        let small = dot.0.hypot(dot.1) < STAR_SMALL_OVERLAP;
+
+        // `:716-720` — `l2T[kj,kb] = l2[kj,ka].transpose(0,2,1)`.
+        let mut l2t = ZArr::zeros(l2.shape());
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                let kb = kconserv.get(kj, ka, kshift) as usize;
+                l2t.set_leading(
+                    &[kj, kb],
+                    &l2.slice_leading(&[kj, ka])?.transpose(&[0, 2, 1])?,
+                )?;
+            }
+        }
+        let mut l2 = l2;
+        l2.zip_assign(&l2t, 2.0)?;
+        l2.scale(1.0 / 3.0);
+
+        scale_by_inverse(&mut l1, dot);
+        scale_by_inverse(&mut l2, dot);
+
+        let mut delta_re = 0.0_f64;
+        let mut delta_im = 0.0_f64;
+
+        for ki in 0..nkpts {
+            for kj in 0..nkpts {
+                let kc_of = kklist(lat, ki, kj, kshift, nkpts);
+                let shape = [nkpts, nkpts, nocc, nocc, nvir, nvir, nvir];
+                let mut lijabc = ZArr::zeros(&shape);
+                let mut rijabc = ZArr::zeros(&shape);
+
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of[ka * nkpts + kb];
+                        // `contract_pl3p` (`:653-663`): the k-vector permutes
+                        // `[1,0,3,2,4]` and the result transposes the same.
+                        let mut l = ea_l3p(
+                            &l1,
+                            &l2,
+                            [ki, kj, ka, kb, kc],
+                            kshift,
+                            imds,
+                            kconserv,
+                            
+                        )?;
+                        l.add_assign(
+                            &ea_l3p(
+                                &l1,
+                                &l2,
+                                [kj, ki, kb, ka, kc],
+                                kshift,
+                                imds,
+                                kconserv,
+                                
+                            )?
+                            .transpose(&[1, 0, 3, 2, 4])?,
+                        )?;
+                        lijabc.set_leading(&[ka, kb], &l)?;
+
+                        let mut r = ea_r3p(
+                            &r1,
+                            &r2,
+                            
+                            [ki, kj, ka, kb, kc],
+                            kshift,
+                            imds,
+                            kconserv,
+                            
+                        )?;
+                        r.add_assign(
+                            &ea_r3p(
+                                &r1,
+                                &r2,
+                                
+                                [kj, ki, kb, ka, kc],
+                                kshift,
+                                imds,
+                                kconserv,
+                                
+                            )?
+                            .transpose(&[1, 0, 3, 2, 4])?,
+                        )?;
+                        rijabc.set_leading(&[ka, kb], &r)?;
+                    }
+                }
+
+                // `:743-766`
+                let eij = crate::kccsd_t::epq2(&mo_e_o, &padding.occupied, ki, kj, nocc, 1.0);
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of[ka * nkpts + kb];
+                        let mut pl = lijabc.slice_leading(&[ka, kb])?;
+                        pl.scale(4.0);
+                        pl.zip_assign(
+                            &lijabc
+                                .slice_leading(&[kb, kc])?
+                                .transpose(&[0, 1, 4, 2, 3])?,
+                            1.0,
+                        )?;
+                        pl.zip_assign(
+                            &lijabc
+                                .slice_leading(&[kc, ka])?
+                                .transpose(&[0, 1, 3, 4, 2])?,
+                            1.0,
+                        )?;
+                        pl.zip_assign(
+                            &lijabc
+                                .slice_leading(&[ka, kc])?
+                                .transpose(&[0, 1, 2, 4, 3])?,
+                            -2.0,
+                        )?;
+                        pl.zip_assign(
+                            &lijabc
+                                .slice_leading(&[kc, kb])?
+                                .transpose(&[0, 1, 4, 3, 2])?,
+                            -2.0,
+                        )?;
+                        pl.zip_assign(
+                            &lijabc
+                                .slice_leading(&[kb, ka])?
+                                .transpose(&[0, 1, 3, 2, 4])?,
+                            -2.0,
+                        )?;
+                        let pr = rijabc.slice_leading(&[ka, kb])?;
+
+                        let eabc = crate::kccsd_t::epqr3(
+                            &mo_e_v,
+                            &padding.virtuals,
+                            ka,
+                            kb,
+                            kc,
+                            nvir,
+                            -1.0,
+                        );
+                        let mut f = 0;
+                        for &e_ij in &eij {
+                            for &e_abc in &eabc {
+                                let denom = e_ij + e_abc + pair.eval;
+                                let (lr, li) = (pl.data().re[f], pl.data().im[f]);
+                                let (rr, ri) = (pr.data().re[f], pr.data().im[f]);
+                                delta_re += (lr * rr - li * ri) / denom;
+                                delta_im += (lr * ri + li * rr) / denom;
+                                f += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let delta_e = delta_re * STAR_PREFACTOR;
+        out.push(StarRoot {
+            e_star: pair.eval + delta_e,
+            delta_e,
+            delta_e_imag: delta_im * STAR_PREFACTOR,
+            ldotr: dot,
+            small_overlap: small,
+        });
+    }
+    Ok(out)
+}
+
+/// `perturbed_ccsd_kernel` (`eom_kccsd_ghf.py:625-648`) with this module's
+/// matvecs — `EOMIP`/`EOMEA` here inherit `ipccsd_star`/`eaccsd_star` from the
+/// spin-orbital module and override only `ccsd_star_contract` (`:382`,
+/// `:781`).
+///
+/// # Errors
+/// Propagates both Davidson solves and the contraction.
+pub fn perturbed_ccsd_kernel(
+    kind: Excitation,
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    padding: &Padding,
+    kconserv: &Kconserv,
+    lat: &StarLattice<'_>,
+    opts: &EomOpts,
+) -> Result<Vec<StarRoot>, PbcCcError> {
+    if kind == Excitation::Ee {
+        return Err(PbcCcError::NotImplementedUpstream {
+            upstream: "pbc/cc/eom_kccsd_rhf.py:1406",
+            what: "EOMEE declares no ccsd_star_contract; there is no EE-CCSD* correction",
+        });
+    }
+    let right = eom_kernel(
+        kind,
+        kshift,
+        imds,
+        padding,
+        kconserv,
+        &EomOpts {
+            left: false,
+            ..*opts
+        },
+    )?;
+    let left = eom_kernel(
+        kind,
+        kshift,
+        imds,
+        padding,
+        kconserv,
+        &EomOpts {
+            left: true,
+            ..*opts
+        },
+    )?;
+    let pairs = crate::eom_kccsd_ghf::sort_left_right_eigensystem(&right, &left, 1e-6);
+    match kind {
+        Excitation::Ip => ipccsd_star_contract(&pairs, kshift, imds, padding, kconserv, lat),
+        Excitation::Ea => eaccsd_star_contract(&pairs, kshift, imds, padding, kconserv, lat),
+        Excitation::Ee => unreachable!("refused above"),
+    }
 }

@@ -394,9 +394,36 @@ pub fn kernel(
     Ok(re)
 }
 
+/// `_get_epq(pindices, qindices, fac)` — `kccsd_rhf.py:236-269` — over two
+/// indices of ONE space with a uniform factor. Padded orbitals carry
+/// [`LARGE_DENOM`], and because the factor is uniform two padded indices ADD
+/// their `LARGE_DENOM` rather than cancelling (the `:123` note).
+pub(crate) fn epq2(
+    mo_e: &[Vec<f64>],
+    nz: &[Vec<usize>],
+    kp: usize,
+    kq: usize,
+    n: usize,
+    fac: f64,
+) -> Vec<f64> {
+    let mut out = vec![LARGE_DENOM; n * n];
+    for &i in &nz[kp] {
+        if i >= n {
+            continue;
+        }
+        for &j in &nz[kq] {
+            if j >= n {
+                continue;
+            }
+            out[i * n + j] = fac * (mo_e[kp][i] + mo_e[kq][j]);
+        }
+    }
+    out
+}
+
 /// `_get_epqr` over three indices of one space, with a uniform factor.
 /// Padded orbitals carry [`LARGE_DENOM`].
-fn epqr3(
+pub(crate) fn epqr3(
     mo_e: &[Vec<f64>],
     nz: &[Vec<usize>],
     kp: usize,

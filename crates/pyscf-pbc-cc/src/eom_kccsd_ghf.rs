@@ -25,7 +25,7 @@
 //! aliasing rather than substituting the ERI block silently.
 
 use pyscf_algebra::CTensor;
-use pyscf_pbc_lib::Kconserv;
+use pyscf_pbc_lib::{KIdx, Kconserv, get_kconserv3};
 
 use crate::error::PbcCcError;
 use crate::kccsd::{GBlk, KgEris};
@@ -2454,4 +2454,656 @@ pub fn eaccsd_diag_mp(
         }
     }
     amplitudes_to_vector_ea(&hr1, &hr2, kshift, kconserv)
+}
+
+// ---------------------------------------------------------------------------
+// The CCSD* corrections (`:478-608`, `:1038-1166`)
+// ---------------------------------------------------------------------------
+
+/// One `(right, left)` eigenpair with its EOM eigenvalue, the input a CCSD\*
+/// correction consumes.
+///
+/// Upstream takes three parallel sequences — `evals`, `evecs`, `levecs` — and
+/// `zip`s them (`:514`, `:1071`). This bundles one element of that zip so a
+/// caller cannot silently pair a right vector with the wrong left one, which
+/// is exactly the class of defect `16-VERIFICATION` records for free k-axis
+/// gathers.
+pub struct StarPair<'a> {
+    /// The converged EOM-CCSD eigenvalue this root is corrected from.
+    pub eval: f64,
+    /// The RIGHT eigenvector, packed as the matvec packs it.
+    pub r: &'a ZArr,
+    /// The LEFT eigenvector, from `left = true`.
+    pub l: &'a ZArr,
+}
+
+/// Everything `get_kconserv3` needs that a [`Kconserv`] does not carry.
+///
+/// `ipccsd_star_contract:539` calls `kpts_helper.get_kconserv3(eom._cc._scf.cell,
+/// eom._cc.kpts, …)`, so the lattice and the k-mesh have to reach the
+/// correction. [`crate::kccsd_t`] passes the same pair for the same reason.
+pub struct StarLattice<'a> {
+    /// `cell.lattice_vectors()`.
+    pub a: &'a [[f64; 3]; 3],
+    /// `cc.kpts`.
+    pub kpts: &'a [[f64; 3]],
+}
+
+/// The `1/12` prefactor both corrections end with (`:603`, `:1161`).
+const STAR_PREFACTOR: f64 = 1.0 / 12.0;
+
+/// Upstream warns below this left-right overlap (`:521-524`, `:1081-1084`).
+const STAR_SMALL_OVERLAP: f64 = 1e-7;
+
+/// One corrected root, plus the diagnostics upstream logs on the way.
+#[derive(Debug, Clone, Copy)]
+pub struct StarRoot {
+    /// `ip_eval + deltaE` — the CCSD\* energy (`:607`, `:1165`).
+    pub e_star: f64,
+    /// `deltaE` alone, the perturbative correction.
+    pub delta_e: f64,
+    /// The IMAGINARY part `:604`'s `deltaE.real` throws away, kept as a
+    /// diagnostic: it is zero only when the left and right vectors really are
+    /// a biorthogonal pair, so a caller that wants upstream's silent discard
+    /// can ignore it and one that wants a check has it.
+    pub delta_e_imag: f64,
+    /// `<L|R>` BEFORE the normalisation, real and imaginary
+    /// (`:520`, `:1080`). Upstream logs it and warns when `|<L|R>| < 1e-7`;
+    /// this returns it so a caller can apply its own judgement.
+    pub ldotr: (f64, f64),
+    /// Whether `|<L|R>|` fell below [`STAR_SMALL_OVERLAP`] — upstream's
+    /// "Results may be inaccurate" warning, as data rather than a log line.
+    pub small_overlap: bool,
+}
+
+/// `<L|R> = l1·r1 + ½ l2·r2` (`:519`), UNCONJUGATED — upstream uses `np.dot`
+/// on the raw amplitudes, not a Hermitian inner product.
+fn ldotr(l1: &ZArr, l2: &ZArr, r1: &ZArr, r2: &ZArr) -> (f64, f64) {
+    let mut re = 0.0;
+    let mut im = 0.0;
+    for i in 0..l1.len() {
+        re += l1.data().re[i] * r1.data().re[i] - l1.data().im[i] * r1.data().im[i];
+        im += l1.data().re[i] * r1.data().im[i] + l1.data().im[i] * r1.data().re[i];
+    }
+    for i in 0..l2.len() {
+        re += 0.5 * (l2.data().re[i] * r2.data().re[i] - l2.data().im[i] * r2.data().im[i]);
+        im += 0.5 * (l2.data().re[i] * r2.data().im[i] + l2.data().im[i] * r2.data().re[i]);
+    }
+    (re, im)
+}
+
+/// `l /= ldotr` for a complex scalar.
+fn scale_by_inverse(x: &mut ZArr, (re, im): (f64, f64)) {
+    let d = re * re + im * im;
+    x.scale_complex(re / d, -im / d);
+}
+
+/// `get_kconserv3(cell, kpts, [p, q, kshift, range(nkpts), range(nkpts)])`,
+/// returned as a `[nkpts, nkpts]` row-major table.
+fn kklist(lat: &StarLattice<'_>, p: usize, q: usize, kshift: usize, nkpts: usize) -> Vec<usize> {
+    let all: Vec<usize> = (0..nkpts).collect();
+    get_kconserv3(
+        lat.a,
+        lat.kpts,
+        &[
+            KIdx::One(p),
+            KIdx::One(q),
+            KIdx::One(kshift),
+            KIdx::Many(all.clone()),
+            KIdx::Many(all),
+        ],
+    )
+    .data
+    .iter()
+    .map(|v| *v as usize)
+    .collect()
+}
+
+/// The occupied and virtual orbital energies `eris.mo_energy` splits into
+/// (`:504-508`, `:1062-1066`).
+fn split_mo_energy(eris: &KgEris, nocc: usize) -> (Vec<Vec<f64>>, Vec<Vec<f64>>) {
+    let o = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
+    let v = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
+    (o, v)
+}
+
+/// `ipccsd_star_contract(eom, evals, evecs, levecs, kshift, imds)` (`:478-608`)
+/// — the IP-CCSD\* correction of Saeh and Stanton, JCP **111**, 8275 (1999).
+///
+/// # The 2h1p right amplitudes are `s^{a}_{ij}`
+///
+/// Upstream's docstring says so at `:489`: the `(ia)` indices are coupled.
+/// That is the packing [`vector_to_amplitudes_ip`] already produces, so the
+/// vectors handed in here are exactly the Davidson's.
+///
+/// # `partition` must be `None`
+///
+/// `:494` asserts it, and there is no `'mp'` form of this correction — see
+/// [`Partition`].
+///
+/// # The three-body arrays are the cost
+///
+/// `lijkab` and `rijkab` are `[nkpts, nkpts, nocc³, nvir²]` EACH, and `P(ijk)`
+/// makes a second copy of both, so the peak is four of them at once —
+/// upstream's own shape (`:531-532`, `:582-583`), reproduced rather than
+/// blocked, because a blocked form would change the summation order and this
+/// is the first port of the equation.
+///
+/// # Errors
+/// Propagates every block access; [`PbcCcError::Shape`] if a vector is not
+/// [`ip_vector_size`] long.
+#[allow(clippy::too_many_lines)]
+pub fn ipccsd_star_contract(
+    pairs: &[StarPair<'_>],
+    kshift: usize,
+    imds: &EomImds<'_>,
+    padding: &Padding,
+    kconserv: &Kconserv,
+    lat: &StarLattice<'_>,
+) -> Result<Vec<StarRoot>, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let (mo_e_o, mo_e_v) = split_mo_energy(imds.eris, nocc);
+    let t2 = &imds.t2;
+    let mut out = Vec::with_capacity(pairs.len());
+
+    for pair in pairs {
+        // `:517-518` — both vectors unpacked with the SAME kshift.
+        let (l1, mut l2) = vector_to_amplitudes_ip(pair.l, nkpts, nocc, nvir)?;
+        let (r1, r2) = vector_to_amplitudes_ip(pair.r, nkpts, nocc, nvir)?;
+        let mut l1 = l1;
+
+        // `:519-528` — enforce `<L|R> = 1` by scaling the LEFT vector only.
+        let dot = ldotr(&l1, &l2, &r1, &r2);
+        let small = dot.0.hypot(dot.1) < STAR_SMALL_OVERLAP;
+        scale_by_inverse(&mut l1, dot);
+        scale_by_inverse(&mut l2, dot);
+
+        let mut delta_re = 0.0_f64;
+        let mut delta_im = 0.0_f64;
+
+        for ka in 0..nkpts {
+            for kb in 0..nkpts {
+                let kk_of = kklist(lat, ka, kb, kshift, nkpts);
+                let shape = [nkpts, nkpts, nocc, nocc, nocc, nvir, nvir];
+                let mut lijkab = ZArr::zeros(&shape);
+                let mut rijkab = ZArr::zeros(&shape);
+
+                for ki in 0..nkpts {
+                    for kj in 0..nkpts {
+                        let kk = kk_of[ki * nkpts + kj];
+                        let mut lblk = ZArr::zeros(&[nocc, nocc, nocc, nvir, nvir]);
+                        let mut rblk = ZArr::zeros(&[nocc, nocc, nocc, nvir, nvir]);
+
+                        // --- `lijkab` (`:545-561`)
+                        // `:547-548`
+                        if kk == kshift && kb == kconserv.get(ki, ka, kj) as usize {
+                            lblk.add_assign(&einsum(
+                                "ijab,k->ijkab",
+                                &[&imds.eris.blk(GBlk::Oovv, ki, kj, ka)?, &l1],
+                            )?)?;
+                        }
+                        // `:550-554` — `-tmp + tmpT`, the `a`/`b` exchange.
+                        let km = kconserv.get(kj, ka, ki) as usize;
+                        lblk.sub_assign(&einsum(
+                            "jima,mkb->ijkab",
+                            &[
+                                &imds.eris.blk(GBlk::Ooov, kj, ki, km)?,
+                                &l2.slice_leading(&[km, kk])?,
+                            ],
+                        )?)?;
+                        let km = kconserv.get(kj, kb, ki) as usize;
+                        lblk.add_assign(&einsum(
+                            "jimb,mka->ijkab",
+                            &[
+                                &imds.eris.blk(GBlk::Ooov, kj, ki, km)?,
+                                &l2.slice_leading(&[km, kk])?,
+                            ],
+                        )?)?;
+                        // `:556-557`
+                        let ke = kconserv.get(ka, ki, kb) as usize;
+                        lblk.add_assign(&einsum(
+                            "ieab,jke->ijkab",
+                            &[
+                                &imds.eris.blk(GBlk::Ovvv, ki, ke, ka)?,
+                                &l2.slice_leading(&[kj, kk])?,
+                            ],
+                        )?)?;
+
+                        // --- `rijkab` (`:559-577`)
+                        // `:560-564` — `-(tmp - tmpT)`.
+                        let tmp = einsum(
+                            "mbke,m->bke",
+                            &[&imds.eris.blk(GBlk::Ovov, kshift, kb, kk)?, &r1],
+                        )?;
+                        rblk.sub_assign(&einsum(
+                            "bke,ijae->ijkab",
+                            &[&tmp, &t2.slice_leading(&[ki, kj, ka])?],
+                        )?)?;
+                        let tmpt = einsum(
+                            "make,m->ake",
+                            &[&imds.eris.blk(GBlk::Ovov, kshift, ka, kk)?, &r1],
+                        )?;
+                        rblk.add_assign(&einsum(
+                            "ake,ijbe->ijkab",
+                            &[&tmpt, &t2.slice_leading(&[ki, kj, kb])?],
+                        )?)?;
+                        // `:566-569`
+                        let km = kconserv.get(kj, kshift, kk) as usize;
+                        let tmp = einsum(
+                            "mnjk,n->mjk",
+                            &[&imds.eris.blk(GBlk::Oooo, km, kshift, kj)?, &r1],
+                        )?;
+                        rblk.add_assign(&einsum(
+                            "mjk,imab->ijkab",
+                            &[&tmp, &t2.slice_leading(&[ki, km, ka])?],
+                        )?)?;
+                        // `:571-575` — note the `.conj()` upstream applies to
+                        // the eris here and NOT in the `lijkab` block above.
+                        let km = kconserv.get(kj, ka, ki) as usize;
+                        rblk.sub_assign(&einsum(
+                            "jima,mkb->ijkab",
+                            &[
+                                &imds.eris.blk(GBlk::Ooov, kj, ki, km)?.conj(),
+                                &r2.slice_leading(&[km, kk])?,
+                            ],
+                        )?)?;
+                        let km = kconserv.get(kj, kb, ki) as usize;
+                        rblk.add_assign(&einsum(
+                            "jimb,mka->ijkab",
+                            &[
+                                &imds.eris.blk(GBlk::Ooov, kj, ki, km)?.conj(),
+                                &r2.slice_leading(&[km, kk])?,
+                            ],
+                        )?)?;
+                        // `:577`
+                        let ke = kconserv.get(ka, ki, kb) as usize;
+                        rblk.add_assign(&einsum(
+                            "ieab,jke->ijkab",
+                            &[
+                                &imds.eris.blk(GBlk::Ovvv, ki, ke, ka)?.conj(),
+                                &r2.slice_leading(&[kj, kk])?,
+                            ],
+                        )?)?;
+
+                        lijkab.set_leading(&[ki, kj], &lblk)?;
+                        rijkab.set_leading(&[ki, kj], &rblk)?;
+                    }
+                }
+
+                // `:583-597` — `P(ijk)`, the denominator, and the contraction.
+                let eab = crate::kccsd_t::epq2(&mo_e_v, &padding.virtuals, ka, kb, nvir, -1.0);
+                for ki in 0..nkpts {
+                    for kj in 0..nkpts {
+                        let kk = kk_of[ki * nkpts + kj];
+                        let mut pl = lijkab.slice_leading(&[ki, kj])?;
+                        pl.add_assign(
+                            &lijkab
+                                .slice_leading(&[kj, kk])?
+                                .transpose(&[2, 0, 1, 3, 4])?,
+                        )?;
+                        pl.add_assign(
+                            &lijkab
+                                .slice_leading(&[kk, ki])?
+                                .transpose(&[1, 2, 0, 3, 4])?,
+                        )?;
+                        let mut pr = rijkab.slice_leading(&[ki, kj])?;
+                        pr.add_assign(
+                            &rijkab
+                                .slice_leading(&[kj, kk])?
+                                .transpose(&[2, 0, 1, 3, 4])?,
+                        )?;
+                        pr.add_assign(
+                            &rijkab
+                                .slice_leading(&[kk, ki])?
+                                .transpose(&[1, 2, 0, 3, 4])?,
+                        )?;
+
+                        let eijk = crate::kccsd_t::epqr3(
+                            &mo_e_o,
+                            &padding.occupied,
+                            ki,
+                            kj,
+                            kk,
+                            nocc,
+                            1.0,
+                        );
+                        // `:601` — `Σ Pl · Pr / (eijkab + ip_eval)`, summed
+                        // over every free index at once.
+                        let mut f = 0;
+                        for &e_ijk in &eijk {
+                            for &e_ab in &eab {
+                                let denom = e_ijk + e_ab + pair.eval;
+                                let (lr, li) = (pl.data().re[f], pl.data().im[f]);
+                                let (rr, ri) = (pr.data().re[f], pr.data().im[f]);
+                                delta_re += (lr * rr - li * ri) / denom;
+                                delta_im += (lr * ri + li * rr) / denom;
+                                f += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // `:603-604` — the `1/12`, then the REAL part.
+        let delta_e = delta_re * STAR_PREFACTOR;
+        out.push(StarRoot {
+            e_star: pair.eval + delta_e,
+            delta_e,
+            delta_e_imag: delta_im * STAR_PREFACTOR,
+            ldotr: dot,
+            small_overlap: small,
+        });
+    }
+    Ok(out)
+}
+
+/// `eaccsd_star_contract(eom, evals, evecs, levecs, kshift, imds)`
+/// (`:1038-1166`) — the EA-CCSD\* correction, same reference.
+///
+/// # This is NOT [`ipccsd_star_contract`] with the spaces swapped
+///
+/// The outer loop is over `(ki, kj)` rather than `(ka, kb)` (`:1088`), the
+/// three-body arrays are `[nocc², nvir³]`, `P(abc)` permutes the LAST three
+/// axes (`:1143-1148`), and the `l1` term enters with a MINUS (`:1103`) where
+/// the IP one enters with a plus (`:548`). Each is transcribed from the line
+/// above it.
+///
+/// # Errors
+/// As [`ipccsd_star_contract`].
+#[allow(clippy::too_many_lines)]
+pub fn eaccsd_star_contract(
+    pairs: &[StarPair<'_>],
+    kshift: usize,
+    imds: &EomImds<'_>,
+    padding: &Padding,
+    kconserv: &Kconserv,
+    lat: &StarLattice<'_>,
+) -> Result<Vec<StarRoot>, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let (mo_e_o, mo_e_v) = split_mo_energy(imds.eris, nocc);
+    let t2 = &imds.t2;
+    let mut out = Vec::with_capacity(pairs.len());
+
+    for pair in pairs {
+        let (l1, mut l2) = vector_to_amplitudes_ea(pair.l, kshift, nkpts, nocc, nvir, kconserv)?;
+        let (r1, r2) = vector_to_amplitudes_ea(pair.r, kshift, nkpts, nocc, nvir, kconserv)?;
+        let mut l1 = l1;
+
+        let dot = ldotr(&l1, &l2, &r1, &r2);
+        let small = dot.0.hypot(dot.1) < STAR_SMALL_OVERLAP;
+        scale_by_inverse(&mut l1, dot);
+        scale_by_inverse(&mut l2, dot);
+
+        let mut delta_re = 0.0_f64;
+        let mut delta_im = 0.0_f64;
+
+        for ki in 0..nkpts {
+            for kj in 0..nkpts {
+                let kc_of = kklist(lat, ki, kj, kshift, nkpts);
+                let shape = [nkpts, nkpts, nocc, nocc, nvir, nvir, nvir];
+                let mut lijabc = ZArr::zeros(&shape);
+                let mut rijabc = ZArr::zeros(&shape);
+
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of[ka * nkpts + kb];
+                        let mut lblk = ZArr::zeros(&[nocc, nocc, nvir, nvir, nvir]);
+                        let mut rblk = ZArr::zeros(&[nocc, nocc, nvir, nvir, nvir]);
+
+                        // --- `lijabc` (`:1101-1116`)
+                        // `:1102-1103` — a MINUS, unlike the IP `l1` term.
+                        if kc == kshift && kb == kconserv.get(ki, ka, kj) as usize {
+                            lblk.sub_assign(&einsum(
+                                "ijab,c->ijabc",
+                                &[&imds.eris.blk(GBlk::Oovv, ki, kj, ka)?, &l1],
+                            )?)?;
+                        }
+                        // `:1105-1106`
+                        let km = kconserv.get(kj, ka, ki) as usize;
+                        lblk.sub_assign(&einsum(
+                            "jima,mbc->ijabc",
+                            &[
+                                &imds.eris.blk(GBlk::Ooov, kj, ki, km)?,
+                                &l2.slice_leading(&[km, kb])?,
+                            ],
+                        )?)?;
+                        // `:1108-1112` — `-(tmp - tmpT)`.
+                        let ke = kconserv.get(ka, ki, kb) as usize;
+                        lblk.sub_assign(&einsum(
+                            "ieab,jce->ijabc",
+                            &[
+                                &imds.eris.blk(GBlk::Ovvv, ki, ke, ka)?,
+                                &l2.slice_leading(&[kj, kc])?,
+                            ],
+                        )?)?;
+                        let ke = kconserv.get(ka, kj, kb) as usize;
+                        lblk.add_assign(&einsum(
+                            "jeab,ice->ijabc",
+                            &[
+                                &imds.eris.blk(GBlk::Ovvv, kj, ke, ka)?,
+                                &l2.slice_leading(&[ki, kc])?,
+                            ],
+                        )?)?;
+
+                        // --- `rijabc` (`:1114-1132`)
+                        // `:1115-1118`
+                        let ke = kconserv.get(kb, kshift, kc) as usize;
+                        let tmp = einsum(
+                            "bcef,f->bce",
+                            &[&imds.eris.blk(GBlk::Vvvv, kb, kc, ke)?, &r1],
+                        )?;
+                        rblk.sub_assign(&einsum(
+                            "bce,ijae->ijabc",
+                            &[&tmp, &t2.slice_leading(&[ki, kj, ka])?],
+                        )?)?;
+                        // `:1120-1126` — `+(tmp - tmpT)`, the `i`/`j` exchange.
+                        let km = kconserv.get(kj, kc, kshift) as usize;
+                        let tmp = einsum(
+                            "mcje,e->mcj",
+                            &[&imds.eris.blk(GBlk::Ovov, km, kc, kj)?, &r1],
+                        )?;
+                        rblk.add_assign(&einsum(
+                            "mcj,imab->ijabc",
+                            &[&tmp, &t2.slice_leading(&[ki, km, ka])?],
+                        )?)?;
+                        let km = kconserv.get(ki, kc, kshift) as usize;
+                        let tmpt = einsum(
+                            "mcie,e->mci",
+                            &[&imds.eris.blk(GBlk::Ovov, km, kc, ki)?, &r1],
+                        )?;
+                        rblk.sub_assign(&einsum(
+                            "mci,jmab->ijabc",
+                            &[&tmpt, &t2.slice_leading(&[kj, km, ka])?],
+                        )?)?;
+                        // `:1128-1129`
+                        let km = kconserv.get(kj, ka, ki) as usize;
+                        rblk.add_assign(&einsum(
+                            "jima,mcb->ijabc",
+                            &[
+                                &imds.eris.blk(GBlk::Ooov, kj, ki, km)?.conj(),
+                                &r2.slice_leading(&[km, kc])?,
+                            ],
+                        )?)?;
+                        // `:1131-1135`
+                        let ke = kconserv.get(ka, ki, kb) as usize;
+                        rblk.sub_assign(&einsum(
+                            "ieab,jce->ijabc",
+                            &[
+                                &imds.eris.blk(GBlk::Ovvv, ki, ke, ka)?.conj(),
+                                &r2.slice_leading(&[kj, kc])?,
+                            ],
+                        )?)?;
+                        let ke = kconserv.get(ka, kj, kb) as usize;
+                        rblk.add_assign(&einsum(
+                            "jeab,ice->ijabc",
+                            &[
+                                &imds.eris.blk(GBlk::Ovvv, kj, ke, ka)?.conj(),
+                                &r2.slice_leading(&[ki, kc])?,
+                            ],
+                        )?)?;
+
+                        lijabc.set_leading(&[ka, kb], &lblk)?;
+                        rijabc.set_leading(&[ka, kb], &rblk)?;
+                    }
+                }
+
+                // `:1143-1158` — `P(abc)` on the LAST three axes.
+                let eij = crate::kccsd_t::epq2(&mo_e_o, &padding.occupied, ki, kj, nocc, 1.0);
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of[ka * nkpts + kb];
+                        let mut pl = lijabc.slice_leading(&[ka, kb])?;
+                        pl.add_assign(
+                            &lijabc
+                                .slice_leading(&[kb, kc])?
+                                .transpose(&[0, 1, 4, 2, 3])?,
+                        )?;
+                        pl.add_assign(
+                            &lijabc
+                                .slice_leading(&[kc, ka])?
+                                .transpose(&[0, 1, 3, 4, 2])?,
+                        )?;
+                        let mut pr = rijabc.slice_leading(&[ka, kb])?;
+                        pr.add_assign(
+                            &rijabc
+                                .slice_leading(&[kb, kc])?
+                                .transpose(&[0, 1, 4, 2, 3])?,
+                        )?;
+                        pr.add_assign(
+                            &rijabc
+                                .slice_leading(&[kc, ka])?
+                                .transpose(&[0, 1, 3, 4, 2])?,
+                        )?;
+
+                        let eabc = crate::kccsd_t::epqr3(
+                            &mo_e_v,
+                            &padding.virtuals,
+                            ka,
+                            kb,
+                            kc,
+                            nvir,
+                            -1.0,
+                        );
+                        let mut f = 0;
+                        for &e_ij in &eij {
+                            for &e_abc in &eabc {
+                                let denom = e_ij + e_abc + pair.eval;
+                                let (lr, li) = (pl.data().re[f], pl.data().im[f]);
+                                let (rr, ri) = (pr.data().re[f], pr.data().im[f]);
+                                delta_re += (lr * rr - li * ri) / denom;
+                                delta_im += (lr * ri + li * rr) / denom;
+                                f += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let delta_e = delta_re * STAR_PREFACTOR;
+        out.push(StarRoot {
+            e_star: pair.eval + delta_e,
+            delta_e,
+            delta_e_imag: delta_im * STAR_PREFACTOR,
+            ldotr: dot,
+            small_overlap: small,
+        });
+    }
+    Ok(out)
+}
+
+/// `_sort_left_right_eigensystem(eom, …)` — `pyscf/cc/eom_rccsd.py:144-206`.
+///
+/// Pairs each CONVERGED right root with the first as-yet-unclaimed converged
+/// left root whose eigenvalue is within `tol`. A right root with no partner is
+/// DROPPED — upstream logs "Will not perform perturbation on this state"
+/// (`:198`) and simply omits it, so the returned list can be shorter than
+/// either input.
+///
+/// The `tol` is upstream's default `1e-6` (`:145`).
+#[must_use]
+pub fn sort_left_right_eigensystem<'a>(
+    right: &'a EomRoots,
+    left: &'a EomRoots,
+    tol: f64,
+) -> Vec<StarPair<'a>> {
+    let mut left_idx: Vec<usize> = (0..left.e.len()).filter(|i| left.conv[*i]).collect();
+    let right_idx: Vec<usize> = (0..right.e.len()).filter(|i| right.conv[*i]).collect();
+    let mut out = Vec::new();
+    for ir in right_idx {
+        if let Some(pos) = left_idx
+            .iter()
+            .position(|il| (right.e[ir] - left.e[*il]).abs() < tol)
+        {
+            let il = left_idx.remove(pos);
+            out.push(StarPair {
+                eval: right.e[ir],
+                r: &right.v[ir],
+                l: &left.v[il],
+            });
+        }
+    }
+    out
+}
+
+/// `perturbed_ccsd_kernel` (`:625-648`) for ONE `kshift` — solve the right
+/// eigenproblem, solve the left one, pair them, contract.
+///
+/// `ipccsd_star` and `eaccsd_star` (`:652-661`, `:1169-1178`) are this with a
+/// `partition` refusal in front, and [`eom_kernel`] already carries that
+/// refusal, so there is one function here where upstream has three.
+///
+/// **Upstream passes `right_guess` to BOTH solves** (`:637` and `:642` both
+/// read `guess=right_guess`; `left_guess` is accepted and never used). This
+/// port has no guess parameter at all — [`eom_kernel`] builds its guess from
+/// the diagonal — so the divergence cannot arise.
+///
+/// # Errors
+/// Propagates both Davidson solves and the contraction.
+pub fn perturbed_ccsd_kernel(
+    kind: Excitation,
+    kshift: usize,
+    imds: &EomImds<'_>,
+    padding: &Padding,
+    kconserv: &Kconserv,
+    lat: &StarLattice<'_>,
+    opts: &EomOpts,
+) -> Result<Vec<StarRoot>, PbcCcError> {
+    if kind == Excitation::Ee {
+        // `EOMEE` declares no `ccsd_star_contract` and no `*_star` driver
+        // (`:1701-1704`): there is no EE-CCSD* upstream.
+        return Err(PbcCcError::NotImplementedUpstream {
+            upstream: "pbc/cc/eom_kccsd_ghf.py:1701",
+            what: "EOMEE declares no ccsd_star_contract; there is no EE-CCSD* correction",
+        });
+    }
+    let right = eom_kernel(
+        kind,
+        kshift,
+        imds,
+        padding,
+        kconserv,
+        &EomOpts {
+            left: false,
+            ..*opts
+        },
+    )?;
+    let left = eom_kernel(
+        kind,
+        kshift,
+        imds,
+        padding,
+        kconserv,
+        &EomOpts {
+            left: true,
+            ..*opts
+        },
+    )?;
+    let pairs = sort_left_right_eigensystem(&right, &left, 1e-6);
+    match kind {
+        Excitation::Ip => ipccsd_star_contract(&pairs, kshift, imds, padding, kconserv, lat),
+        Excitation::Ea => eaccsd_star_contract(&pairs, kshift, imds, padding, kconserv, lat),
+        Excitation::Ee => unreachable!("refused above"),
+    }
 }

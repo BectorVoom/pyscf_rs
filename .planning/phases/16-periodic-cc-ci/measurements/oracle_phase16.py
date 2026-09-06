@@ -1776,6 +1776,109 @@ def section_partition(nk=(1, 1, 2)):
            raises(Exception, lambda: _eomu.eaccsd_diag(u_ea, 0, u_imd_ea)))
 
 
+def _star_common(eom_mod, cls_ip, cls_ea, cc, eris, nkpts, prefix, nroots=2):
+    """Run the right and left EOM solves, pair them the way
+    `perturbed_ccsd_kernel` does, and emit the pair AND the CCSD* energies.
+
+    The pairing is emitted rather than re-derived so the Rust gate contracts
+    UPSTREAM's own eigenvectors: a Davidson root is fixed only up to a phase,
+    and a gate on `e_star` alone would silently absorb a phase convention.
+    """
+    from pyscf.cc.eom_rccsd import _sort_left_right_eigensystem
+
+    for tag, cls in (("ip", cls_ip), ("ea", cls_ea)):
+        e = cls(cc)
+        e.conv_tol = 1e-8
+        e.max_cycle = 100
+        imd = e.make_imds(eris=eris)
+        size = e.vector_size()
+        scalar("%s_%s_vector_size" % (prefix, tag), size)
+        for kshift in range(nkpts):
+            rc, re_, rv = eom_mod.kernel(
+                e, nroots, koopmans=False, guess=None, left=False,
+                eris=eris, imds=imd, partition=None, kptlist=[kshift], dtype=None)
+            lc, le_, lv = eom_mod.kernel(
+                e, nroots, koopmans=False, guess=None, left=True,
+                eris=eris, imds=imd, partition=None, kptlist=[kshift], dtype=None)
+            ek, r_vk, l_vk = _sort_left_right_eigensystem(
+                e, rc[0], re_[0], rv[0], lc[0], le_[0], lv[0])
+            ek = np.atleast_1d(ek)
+            r_vk = np.atleast_2d(r_vk)
+            l_vk = np.atleast_2d(l_vk)
+            scalar("%s_%s_npair_%d" % (prefix, tag, kshift), len(ek))
+            emit("%s_%s_evals_%d" % (prefix, tag, kshift), ek)
+            emit("%s_%s_revecs_%d" % (prefix, tag, kshift), np.asarray(r_vk).ravel())
+            emit("%s_%s_levecs_%d" % (prefix, tag, kshift), np.asarray(l_vk).ravel())
+            e_star = e.ccsd_star_contract(ek, r_vk, l_vk, kshift, imds=imd)
+            emit("%s_%s_estar_%d" % (prefix, tag, kshift), np.asarray(e_star, dtype=float))
+
+
+def section_star_rhf(nk=(1, 1, 2)):
+    """The SPIN-ADAPTED IP/EA-CCSD* corrections on CONVERGED amplitudes."""
+    from pyscf.pbc.cc import eom_kccsd_ghf as _eomg
+    from pyscf.pbc.cc import eom_kccsd_rhf as _eomr
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+
+    cell, kpts, mf, cc = build(list(nk))
+    eris = cc.ao2mo(cc.mo_coeff)
+    nkpts, nocc, nmo = len(kpts), cc.nocc, cc.nmo
+    scalar("e_hf", mf.e_tot)
+    scalar("nkpts", nkpts)
+    scalar("nocc", nocc)
+    scalar("nmo", nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", eris.fock)
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+    emit("kpts", np.asarray(kpts).ravel())
+    emit("lattice", np.asarray(cell.lattice_vectors()).ravel())
+
+    ecc, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", ecc)
+    emit("t1", t1)
+    emit("t2", t2)
+    scalar("nroots", 2)
+    _star_common(_eomg, _eomr.EOMIP, _eomr.EOMEA, cc, eris, nkpts, "rhf")
+
+
+def section_star_ghf(nk=(1, 1, 2)):
+    """The SPIN-ORBITAL IP/EA-CCSD* corrections on CONVERGED amplitudes."""
+    from pyscf.pbc import scf as _pbcscf
+    from pyscf.pbc.cc import eom_kccsd_ghf as _eomg
+    from pyscf.pbc.cc import kccsd as _kccsd
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+
+    cell = diamond()
+    kpts = cell.make_kpts(list(nk))
+    kmf = _pbcscf.KGHF(cell, kpts, exxdiv=None)
+    kmf.conv_tol = 1e-10
+    kmf.kernel()
+    cc = _kccsd.KGCCSD(kmf)
+    cc.conv_tol = 1e-9
+    cc.conv_tol_normt = 1e-7
+    eris = cc.ao2mo(cc.mo_coeff)
+    nkpts, nocc, nmo = len(kpts), cc.nocc, cc.nmo
+    scalar("e_hf", kmf.e_tot)
+    scalar("nkpts", nkpts)
+    scalar("nocc", nocc)
+    scalar("nmo", nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", np.asarray(eris.fock))
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+    emit("kpts", np.asarray(kpts).ravel())
+    emit("lattice", np.asarray(cell.lattice_vectors()).ravel())
+
+    ecc, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", ecc)
+    emit("t1", t1)
+    emit("t2", t2)
+    scalar("nroots", 2)
+    _star_common(_eomg, _eomg.EOMIP, _eomg.EOMEA, cc, eris, nkpts, "ghf")
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
@@ -1783,6 +1886,8 @@ SECTIONS = {
     "kgccsd_eom_ip": lambda: section_kgccsd_eom_ip((1, 1, 2)),
     "krccsd_eom": lambda: section_krccsd_eom((1, 1, 2)),
     "partition": lambda: section_partition((1, 1, 2)),
+    "star_rhf": lambda: section_star_rhf((1, 1, 2)),
+    "star_ghf": lambda: section_star_ghf((1, 1, 2)),
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
     "kuccsd_eom": lambda: section_kuccsd_eom((1, 1, 2)),
