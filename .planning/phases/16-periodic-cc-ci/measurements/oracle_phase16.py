@@ -1502,6 +1502,41 @@ def section_kuccsd_eom(nk=(1, 1, 2), mesh=(31, 31, 31)):
         emit("uip_matvec_%d" % kshift, _eomu.ipccsd_matvec(e, v, kshift, imd))
         emit("uip_diag_%d" % kshift, _eomu.ipccsd_diag(e, kshift, imd))
 
+    # --- EA. The vector length depends on kshift (the pair list does).
+    e = _eomu.EOMEA(cc)
+    imd = e.make_imds(eris=eris)
+    size = e.vector_size()
+    scalar("uea_vector_size", size)
+    for kshift in range(nkpts):
+        rv = SplitMix64(20260912 + kshift)
+        v = np.array([complex(rv.unit(), rv.unit()) for _ in range(int(size))])
+        emit("uea_vec_%d" % kshift, v)
+        emit("uea_matvec_%d" % kshift, _eomu.eaccsd_matvec(e, v, kshift, imd))
+        emit("uea_diag_%d" % kshift, _eomu.eaccsd_diag(e, kshift, imd))
+
+    # --- ROOTS, on the CONVERGED amplitudes.
+    ecc, tc1, tc2 = cc.kernel(eris=eris)
+    scalar("e_corr", ecc)
+    emit("ct1a", tc1[0])
+    emit("ct1b", tc1[1])
+    emit("ct2aa", tc2[0])
+    emit("ct2ab", tc2[1])
+    emit("ct2bb", tc2[2])
+    nroots = 2
+    scalar("nroots", nroots)
+    for tag, cls, fn in (("uip", _eomu.EOMIP, "ipccsd"), ("uea", _eomu.EOMEA, "eaccsd")):
+        e = cls(cc)
+        e.conv_tol = 1e-8
+        e.max_cycle = 100
+        imd = e.make_imds(eris=eris)
+        for kshift in range(nkpts):
+            evals, evecs = getattr(e, fn)(nroots=nroots, kptlist=[kshift], imds=imd)
+            emit("%s_roots_%d" % (tag, kshift), np.asarray(evals).ravel())
+            emit(
+                "%s_conv_%d" % (tag, kshift),
+                np.asarray(np.real(e.converged), dtype=float).ravel(),
+            )
+
 
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),

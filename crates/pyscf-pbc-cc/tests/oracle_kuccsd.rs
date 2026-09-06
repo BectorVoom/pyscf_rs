@@ -1232,3 +1232,161 @@ fn kuccsd_eom_ip_matches_upstream() {
         "EOM-IP-KUCCSD above the gate: {failures:?}"
     );
 }
+
+/// **16-11 Task 3 — EOM-EA-KUCCSD's matvec and diagonal.**
+///
+/// The EA `r2` packing depends on `kshift` — the virtual-pair list is chosen
+/// per `(kj, ka)` from whether `ka < kb`, exactly as the spin-orbital module's
+/// does — so the trial vector and the round trip are per shift.
+#[test]
+#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+fn kuccsd_eom_ea_matches_upstream() {
+    let Some(ctx) = build("kuccsd_eom") else {
+        return;
+    };
+    let nk = ctx.eris.nkpts;
+    let (oa, ob) = ctx.eris.nocc;
+    let (va, vb) = ctx.eris.nvir;
+    let mut r = SplitMix64(20260906);
+    let t1: UT1 = (r.draw(&[nk, oa, va]), r.draw(&[nk, ob, vb]));
+    let t2: UT2 = (
+        r.draw(&[nk, nk, nk, oa, oa, va, va]),
+        r.draw(&[nk, nk, nk, oa, ob, va, vb]),
+        r.draw(&[nk, nk, nk, ob, ob, vb, vb]),
+    );
+    let kc = &ctx.khelper.kconserv;
+    let pool = Arc::new(ZWorkspacePool::new(4_000_000_000));
+
+    use pyscf_pbc_cc::eom_kccsd_uhf as eomu;
+    let want_size = scalar(&ctx.out, "uea_vector_size") as usize;
+    let imds = eomu::UhfEomImds::make_shared(&pool, 4_000_000_000, &t1, &t2, &ctx.eris, kc)
+        .expect("shared")
+        .make_ea(&pool, 4_000_000_000, kc)
+        .expect("EA imds");
+
+    let mut failures: Vec<String> = Vec::new();
+    for kshift in 0..nk {
+        let size = eomu::ea_vector_size(nk, (oa, ob), (va, vb), kshift, kc);
+        println!("uea_vector_size[kshift={kshift}] {size} vs upstream {want_size}");
+        assert_eq!(
+            size, want_size,
+            "the EA packing writes {size} elements at kshift {kshift}, but \
+             upstream's closed form allocates {want_size}"
+        );
+
+        let name = format!("uea_vec_{kshift}");
+        let v = ZArr::from_ctensor(&[size], cblock(&ctx.out, &name)).expect("uea_vec");
+        let (r1, r2) =
+            eomu::vector_to_amplitudes_ea(&v, kshift, nk, (oa, ob), (va, vb), kc).expect("unpack");
+        let back = eomu::amplitudes_to_vector_ea(&r1, &r2, kshift, nk, kc).expect("pack");
+        let d = maxdiff(&back, &cblock(&ctx.out, &name), &name);
+        println!("UHF EA vector round trip[kshift={kshift}]: max|Δ| {d:e}");
+        assert!(d == 0.0, "the UHF EA vector round trip is not exact: {d:e}");
+
+        for (got, name) in [
+            (
+                eomu::eaccsd_matvec(&v, kshift, &imds, kc).expect("matvec"),
+                format!("uea_matvec_{kshift}"),
+            ),
+            (
+                eomu::eaccsd_diag(kshift, &imds, kc).expect("diag"),
+                format!("uea_diag_{kshift}"),
+            ),
+        ] {
+            let d = maxdiff(&got, &cblock(&ctx.out, &name), &name);
+            println!("  {name:18} max|Δ| {d:e}  (gate {EOM_MATVEC:e})");
+            if !(d < EOM_MATVEC) {
+                failures.push(format!("{name} {d:e}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "EOM-EA-KUCCSD above the gate: {failures:?}"
+    );
+}
+
+/// **16-11 Task 4 — the EOM-IP and EOM-EA-KUCCSD ROOTS.**
+///
+/// On UPSTREAM's own converged `t1`/`t2`, so the comparison is the eigensolve
+/// and not two CCSD convergences. Gate `1e-5`, as for the other two EOM ports.
+#[test]
+#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+fn kuccsd_eom_roots_match_upstream() {
+    let Some(ctx) = build("kuccsd_eom") else {
+        return;
+    };
+    let nk = ctx.eris.nkpts;
+    let (oa, ob) = ctx.eris.nocc;
+    let (va, vb) = ctx.eris.nvir;
+    let nroots = scalar(&ctx.out, "nroots") as usize;
+    let kc = &ctx.khelper.kconserv;
+    let pool = Arc::new(ZWorkspacePool::new(4_000_000_000));
+
+    let t1: UT1 = (
+        ZArr::from_ctensor(&[nk, oa, va], cblock(&ctx.out, "ct1a")).expect("t1a"),
+        ZArr::from_ctensor(&[nk, ob, vb], cblock(&ctx.out, "ct1b")).expect("t1b"),
+    );
+    let t2: UT2 = (
+        ZArr::from_ctensor(&[nk, nk, nk, oa, oa, va, va], cblock(&ctx.out, "ct2aa")).expect("t2aa"),
+        ZArr::from_ctensor(&[nk, nk, nk, oa, ob, va, vb], cblock(&ctx.out, "ct2ab")).expect("t2ab"),
+        ZArr::from_ctensor(&[nk, nk, nk, ob, ob, vb, vb], cblock(&ctx.out, "ct2bb")).expect("t2bb"),
+    );
+
+    use pyscf_pbc_cc::eom_kccsd_ghf as eom;
+    use pyscf_pbc_cc::eom_kccsd_uhf as eomu;
+    let padding = eomu::UPadding::from_padded(&ctx.pa, &ctx.pb).expect("padding");
+    let opts = eom::EomOpts {
+        conv_tol: 1e-8,
+        max_cycle: 100,
+        nroots,
+        ..Default::default()
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    for (kind, tag) in [(eom::Excitation::Ip, "uip"), (eom::Excitation::Ea, "uea")] {
+        let imds = eomu::UhfEomImds::make_shared(&pool, 4_000_000_000, &t1, &t2, &ctx.eris, kc)
+            .expect("shared");
+        let imds = match kind {
+            eom::Excitation::Ip => imds.make_ip(kc).expect("IP imds"),
+            _ => imds.make_ea(&pool, 4_000_000_000, kc).expect("EA imds"),
+        };
+        for kshift in 0..nk {
+            let r =
+                eomu::eom_kernel(kind, kshift, &imds, &padding, kc, &opts).expect("EOM Davidson");
+            let want = block(&ctx.out, &format!("{tag}_roots_{kshift}"));
+            let want_conv = block(&ctx.out, &format!("{tag}_conv_{kshift}"));
+            for (n, (&e, &w)) in r.e.iter().zip(want.iter()).enumerate() {
+                let d = (e - w).abs();
+                println!(
+                    "  {tag} kshift={kshift} root {n}: {e:.12} vs upstream {w:.12}  \
+                     |Δ| {d:e}  conv {} (upstream {})  qpwt {:.4}",
+                    r.conv[n],
+                    want_conv[n] != 0.0,
+                    r.qp_weight[n]
+                );
+                if !(d < 1e-5) {
+                    failures.push(format!("{tag}_{kshift}_{n} {d:e}"));
+                }
+                assert!(
+                    r.conv[n],
+                    "{tag} root {n} at kshift {kshift} did not converge"
+                );
+            }
+        }
+    }
+
+    // `eom_kccsd_uhf` declares no `EOMEE`; the refusal must name that.
+    let imds = eomu::UhfEomImds::make_shared(&pool, 4_000_000_000, &t1, &t2, &ctx.eris, kc)
+        .expect("shared")
+        .make_ip(kc)
+        .expect("IP imds");
+    let e = eomu::eom_kernel(eom::Excitation::Ee, 0, &imds, &padding, kc, &opts)
+        .expect_err("EE must refuse");
+    assert!(e.to_string().contains("eom_kccsd_uhf.py:1120"), "{e}");
+
+    assert!(
+        failures.is_empty(),
+        "EOM-KUCCSD roots above the 1e-5 gate: {failures:?}"
+    );
+}
