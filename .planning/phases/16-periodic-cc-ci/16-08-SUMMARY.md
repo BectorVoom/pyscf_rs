@@ -1,4 +1,4 @@
-# 16-08 — `KCCSD(T)`, RHF. PARTIAL 2026-09-06. **fast vs slow: 8.36e-13 relative.**
+# 16-08 — `KCCSD(T)`. COMPLETE 2026-09-06. **fast vs slow: 8.36e-13 relative; spin-orbital 3.46e-11 from upstream.**
 
 `crates/pyscf-pbc-cc/src/{kccsd_t_rhf_slow,kccsd_t_rhf}.rs`, gated by
 `tests/oracle_phase16.rs::ccsd_t_fast_equals_slow_and_matches_upstream`.
@@ -48,13 +48,36 @@ a plan). G4 is `1e-12`; the measured `8.36e-13` sits inside it and is ~3×
 upstream's own, which is what a second independent implementation of the same
 formula looks like.
 
+## Task 3 — `kccsd_t.py`, the spin-orbital (T) — SHIPPED
+
+`crates/pyscf-pbc-cc/src/kccsd_t.rs`, on 16-07's `KGCCSD` amplitudes.
+
+| quantity | measured |
+|---|---|
+| spin-orbital (T) vs upstream | **`3.459e-11`** |
+| **G5** — spin-orbital vs RHF (T), this port | **`6.9e-12`** (`-0.0011113059474` vs `-0.0011113059543`) |
+
+For scale, 16-01 measured upstream's OWN two routes at `2.86e-10` — this port's
+two agree **40× tighter than upstream's do**. G5's gate is `1e-9`.
+
+`tril_product` is ported with its enumeration ORDER, not just its set
+(`kccsd_t.py:139-149`): the `(a,b,c)` loop is `a >= b >= c` when `ka == kc`,
+`a >= b` when `ka == kb`, `b >= c` when `kb == kc`, and the full product
+otherwise, each with its own multiplicity — and §9.3 gates bit-identity, which
+is about the accumulation order.
+
+`eabc` carries `fac = [-1,-1,-1]` so the two `LARGE_DENOM`s ADD rather than
+cancel; upstream's own comment at `:123` says exactly that, and it is the kind
+of sign that would otherwise look like a tidy-up.
+
+**One trap avoided by writing it out.** The `t3d` block (`:224-262`) has nine
+terms whose `t1`/`fov` factor carries `a`, `b` or `c`. The first draft inferred
+that index from the accompanying `oovv` slice; the index is now carried
+EXPLICITLY, because the inference breaks the moment two of `a`, `b`, `c`
+coincide — which the `tril_product` loops make common rather than rare.
+
 ## Not shipped
 
-* **Task 3 — `kccsd_t.py`, the spin-orbital (T)** — needs 16-07's `KGCCSD`
-  amplitudes, which did not ship. Deferred with 16-07.
-* **Test 2 (spin-orbital == RHF, G5 `1e-9`)** — same dependency. 16-01
-  measured upstream's own two routes at `2.86e-10`, so the target is recorded
-  for whoever lands it.
 * **Test 6 (the peak-memory bound)** — the blocking IS ported and its
   invariance is gated (`2.17e-19`), but the literal peak-live-bytes assertion
   needs the `t3`-class allocations to go through `ZWorkspacePool` rather than

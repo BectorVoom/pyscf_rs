@@ -715,4 +715,31 @@ fn kgccsd_matches_upstream() {
     assert!(res.converged, "KGCCSD did not converge");
     // G3 = 1e-8 (measured: upstream's own KGCCSD and KRCCSD differ by 4.95e-9).
     assert!(d < 1e-8, "KGCCSD e_corr differs by {d:e}, above G3 1e-8");
+
+    // 16-08 Task 3 — the SPIN-ORBITAL (T), on UPSTREAM's own converged
+    // amplitudes so the (T) code is isolated from the CC iteration.
+    let ut1 = ZArr::from_ctensor(&[nkpts, nocc, nvir], cblock(&out, "t1")).expect("t1");
+    let ut2 = ZArr::from_ctensor(
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+        cblock(&out, "t2"),
+    )
+    .expect("t2");
+    let kpts = PeriodicDf::kpts(&f.df).to_vec();
+    let et = pyscf_pbc_cc::kccsd_t::kernel(
+        &eris,
+        &padded,
+        &ut1,
+        &ut2,
+        &khelper.kconserv,
+        &f.cell.a,
+        &kpts,
+    )
+    .expect("spin-orbital (T)");
+    let want_et = scalar(&out, "et_spinorb");
+    let de = (et - want_et).abs();
+    println!("spin-orbital (T) {et} vs upstream {want_et}  |Δ| {de:e}");
+    assert!(
+        de < ERI_BLOCK,
+        "the spin-orbital (T) differs from upstream by {de:e}"
+    );
 }

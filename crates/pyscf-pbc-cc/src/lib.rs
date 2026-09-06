@@ -23,6 +23,8 @@ pub mod kccsd_rhf;
 pub mod kccsd;
 pub mod kintermediates;
 pub mod kccsd_t_rhf_slow;
+// Plan 16-08 Task 3 — the SPIN-ORBITAL (T), on 16-07's KGCCSD amplitudes.
+pub mod kccsd_t;
 // Plan 16-08 Task 2 — the BLOCKED (T), replacing kccsd_t_rhf.py:236's C kernel.
 pub mod kccsd_t_rhf;
 

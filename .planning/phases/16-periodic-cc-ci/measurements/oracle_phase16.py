@@ -267,6 +267,10 @@ def section_kgccsd(nk=(1, 1, 2)):
 
     e_corr, t1, t2 = cc.kernel(eris=eris)
     scalar("e_corr", e_corr)
+    emit("t1", t1)
+    emit("t2", t2)
+    from pyscf.pbc.cc import kccsd_t as _kccsd_t
+    scalar("et_spinorb", _kccsd_t.kernel(cc, eris, t1, t2))
 
 
 SECTIONS = {
