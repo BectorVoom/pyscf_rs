@@ -99,7 +99,10 @@ fn block_roundtrip_is_bit_identical_on_both_tiers() {
                 assert_eq!(incore.block(&mem, &k).unwrap(), want);
                 assert_eq!(outcore.block(&spl, &k).unwrap(), want);
                 // The tier-equivalence assertion, bitwise.
-                assert_eq!(incore.block(&mem, &k).unwrap(), outcore.block(&spl, &k).unwrap());
+                assert_eq!(
+                    incore.block(&mem, &k).unwrap(),
+                    outcore.block(&spl, &k).unwrap()
+                );
             }
         }
     }
@@ -113,7 +116,11 @@ fn block_roundtrip_is_bit_identical_on_both_tiers() {
     // A bad k-address is an error, not a wrong block.
     assert!(incore.block(&mem, &[0, 0]).is_err());
     assert!(incore.block(&mem, &[0, 0, nkpts]).is_err());
-    assert!(KTensor::absent(nkpts, KRank::Three, &block).block(&mem, &[0, 0, 0]).is_err());
+    assert!(
+        KTensor::absent(nkpts, KRank::Three, &block)
+            .block(&mem, &[0, 0, 0])
+            .is_err()
+    );
 }
 
 /// Test 12 — two threads writing two DIFFERENT blocks make concurrent
@@ -155,8 +162,14 @@ fn two_threads_write_two_blocks_concurrently() {
         h.join().expect("both writers must finish");
     }
 
-    assert_eq!(t.block(&pool, &[0, 0, 0]).unwrap().re, vec![1.0, 2.0, 3.0, 4.0]);
-    assert_eq!(t.block(&pool, &[1, 1, 1]).unwrap().re, vec![2.0, 4.0, 6.0, 8.0]);
+    assert_eq!(
+        t.block(&pool, &[0, 0, 0]).unwrap().re,
+        vec![1.0, 2.0, 3.0, 4.0]
+    );
+    assert_eq!(
+        t.block(&pool, &[1, 1, 1]).unwrap().re,
+        vec![2.0, 4.0, 6.0, 8.0]
+    );
     assert_eq!(t.block(&pool, &[0, 1, 0]).unwrap().re, vec![0.0; 4]);
 }
 
@@ -175,4 +188,84 @@ fn releasing_a_tensor_returns_its_blocks_to_the_free_list() {
         n,
         "the second tensor must reuse the first's buffers"
     );
+}
+
+/// **A recycled buffer is bigger than the block that reuses it, and a read must
+/// not see the tail.**
+///
+/// [`ZWorkspacePool::reserve`] reuses any free-listed buffer "of sufficient
+/// capacity", so after a large tensor is released a small one lands in the
+/// large one's storage. Before 16-06, [`KTensor::block`] returned the whole
+/// buffer, so the small tensor read the large one's leftovers: here a `[4,4,4]`
+/// block would come back with 256 elements instead of 64, carrying `7.0`s that
+/// belong to nothing.
+///
+/// This never fired on the restricted fixture because diamond `gth-szv` has
+/// `nocc == nvir == 4`, making `Woooo`'s `nocc⁴` and `Wvvvv`'s `nvir⁴` both
+/// 256 — the recycled buffer was accidentally exactly the right size. The
+/// unrestricted fixture (`nocca 2`, `noccb 1`, `nvira 4`, `nvirb 5`) has four
+/// distinct extents and failed on the first read.
+#[test]
+fn a_recycled_buffer_is_truncated_to_the_new_block_shape() {
+    let pool = ZWorkspacePool::new(ZWorkspacePool::DEFAULT_BUDGET_BYTES);
+
+    // A 256-element block, filled so a leak is recognisable.
+    let big = KTensor::zeros(&pool, 1, KRank::Three, &[4, 4, 4, 4], false).unwrap();
+    big.set_block(
+        &pool,
+        &[0, 0, 0],
+        &CTensor {
+            re: vec![7.0; 256],
+            im: vec![-7.0; 256],
+        },
+    )
+    .unwrap();
+    big.release(&pool);
+    let allocations = pool.allocation_count();
+
+    // A 64-element block, which must land in the released 256-element buffer.
+    let small = KTensor::zeros(&pool, 1, KRank::Three, &[4, 4, 4], false).unwrap();
+    assert_eq!(
+        pool.allocation_count(),
+        allocations,
+        "the small tensor must reuse the big one's buffer or this proves nothing"
+    );
+    assert_eq!(small.block_len(), 64);
+
+    let got = small.block(&pool, &[0, 0, 0]).unwrap();
+    assert_eq!(
+        got.re.len(),
+        64,
+        "the read must be the BLOCK, not the buffer"
+    );
+    assert_eq!(got.im.len(), 64);
+
+    small
+        .set_block(
+            &pool,
+            &[0, 0, 0],
+            &CTensor {
+                re: (0..64).map(|i| i as f64).collect(),
+                im: vec![0.0; 64],
+            },
+        )
+        .unwrap();
+    let got = small.block(&pool, &[0, 0, 0]).unwrap();
+    assert_eq!(got.re, (0..64).map(|i| i as f64).collect::<Vec<_>>());
+    assert!(
+        got.im.iter().all(|v| *v == 0.0),
+        "the previous tenant's imaginary part leaked through"
+    );
+
+    // The borrowing path must agree with the copying one.
+    let n = small
+        .with_block(&pool, &[0, 0, 0], |re, im| (re.len(), im.len()))
+        .unwrap();
+    assert_eq!(n, (64, 64));
+    small
+        .with_block_mut(&pool, &[0, 0, 0], |re, im| {
+            assert_eq!(re.len(), 64);
+            assert_eq!(im.len(), 64);
+        })
+        .unwrap();
 }

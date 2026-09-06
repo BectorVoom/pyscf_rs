@@ -109,7 +109,7 @@ pub struct KrccsdResult {
 /// The split occupied/virtual padding index sets — Phase 15's
 /// `padding_k_idx(kind="split")`. **This port does NOT reimplement them**
 /// (`16-CONTEXT §1.1`).
-fn split_padding(padded: &PaddedMos) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>), PbcCcError> {
+pub(crate) fn split_padding(padded: &PaddedMos) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>), PbcCcError> {
     match padding_k_idx(&padded.nmo_per_kpt, &padded.nocc_per_kpt, PaddingKind::Split) {
         Ok(PaddingIdx::Split { occupied, virtuals }) => Ok((occupied, virtuals)),
         Ok(_) => Err(PbcCcError::Shape("padding_k_idx returned a joint set".into())),
@@ -120,7 +120,7 @@ fn split_padding(padded: &PaddedMos) -> Result<(Vec<Vec<usize>>, Vec<Vec<usize>>
 /// `_get_epq` (`kccsd_rhf.py:263-297`) for the `(occ, vir)` case:
 /// `e[kp, :nocc] - e[kq, nocc:]`, with PADDED entries set to
 /// [`LARGE_DENOM`] rather than skipped.
-fn get_eia(
+pub(crate) fn get_eia(
     mo_e_o: &[Vec<f64>],
     mo_e_v: &[Vec<f64>],
     kp: usize,

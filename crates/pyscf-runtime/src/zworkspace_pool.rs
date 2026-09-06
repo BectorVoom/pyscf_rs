@@ -50,7 +50,7 @@
 //! existing real cubecl primitives. The byte accounting is unaffected: a
 //! complex element is 16 bytes either way.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::error::BackendError;
@@ -143,11 +143,20 @@ impl ZSpillHandle {
     const IM: &'static str = "im";
 
     fn create(len: usize, uid: u64) -> Result<Self, BackendError> {
+        // `uid` is the buffer id, which restarts at 0 for every
+        // `ZWorkspacePool`. Two pools in one process — two `#[test]`s on two
+        // threads, or two `KEris` builds in one driver — therefore both ask for
+        // `..._<pid>_0.h5`, and HDF5 refuses the second with "unable to
+        // truncate a file which is already open". `uid` stays in the name for
+        // diagnostics; the PROCESS-GLOBAL counter is what makes it unique.
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let mut path = std::env::temp_dir();
         path.push(format!(
-            "pyscf_kcc_zspill_{}_{}.h5",
+            "pyscf_kcc_zspill_{}_{}_{}.h5",
             std::process::id(),
-            uid
+            uid,
+            seq
         ));
         let file = hdf5::File::create(&path).map_err(|e| BackendError::ProbeFailed {
             backend: "hdf5-zspill",
@@ -172,17 +181,20 @@ impl ZSpillHandle {
     }
 
     fn read_plane(&self, name: &str) -> Result<Vec<f64>, BackendError> {
-        let file = self.file.as_ref().ok_or_else(|| BackendError::ProbeFailed {
-            backend: "hdf5-zspill",
-            reason: "spill file already closed".to_string(),
-        })?;
-        let arr: ndarray::Array1<f64> = file
-            .dataset(name)
-            .and_then(|ds| ds.read_1d())
-            .map_err(|e| BackendError::ProbeFailed {
+        let file = self
+            .file
+            .as_ref()
+            .ok_or_else(|| BackendError::ProbeFailed {
                 backend: "hdf5-zspill",
-                reason: format!("read spill dataset {name}: {e}"),
+                reason: "spill file already closed".to_string(),
             })?;
+        let arr: ndarray::Array1<f64> =
+            file.dataset(name)
+                .and_then(|ds| ds.read_1d())
+                .map_err(|e| BackendError::ProbeFailed {
+                    backend: "hdf5-zspill",
+                    reason: format!("read spill dataset {name}: {e}"),
+                })?;
         Ok(arr.to_vec())
     }
 
@@ -197,10 +209,13 @@ impl ZSpillHandle {
                 ),
             });
         }
-        let file = self.file.as_ref().ok_or_else(|| BackendError::ProbeFailed {
-            backend: "hdf5-zspill",
-            reason: "spill file already closed".to_string(),
-        })?;
+        let file = self
+            .file
+            .as_ref()
+            .ok_or_else(|| BackendError::ProbeFailed {
+                backend: "hdf5-zspill",
+                reason: "spill file already closed".to_string(),
+            })?;
         let arr = ndarray::Array1::from_vec(data.to_vec());
         file.dataset(name)
             .and_then(|ds| ds.write(&arr))
@@ -328,6 +343,7 @@ impl ZWorkspacePool {
         // 1. Free-list scan — capacity is read from the allocation record, not
         //    from behind the backend lock, so a buffer being written by another
         //    thread does not stall the scan.
+        let mut reused: Option<ZBufferId> = None;
         {
             let pool = self
                 .pool
@@ -348,8 +364,30 @@ impl ZWorkspacePool {
             }
             if let Some(idx) = best {
                 pool[idx].in_use.store(true, Ordering::Release);
-                return Ok(pool[idx].id);
+                reused = Some(pool[idx].id);
             }
+        }
+
+        // A recycled buffer still holds the PREVIOUS tenant's data, and
+        // `fresh` hands back `ZBuffer::zeros`. Handing out one of each under
+        // the same call is how a caller that accumulates — `+=` into what it
+        // was told is a zeroed tensor — silently inherits whatever was
+        // released before it.
+        //
+        // 16-06 hit exactly that: `update_amps` builds `cc_Woooo`, releases it,
+        // builds `cc_Wvvvv_half`, releases it, then builds `cc_Wovvo`, which
+        // accumulates. `Wovvo` came back carrying `Wvvvv`, and every doubles
+        // amplitude was ~1e-2 wrong while all five stages were individually
+        // exact against upstream. The restricted path never saw it because
+        // `kintermediates_rhf` happens to `set` every block it fills rather
+        // than accumulating.
+        //
+        // Zeroing on reuse costs one memset — the same write the fresh
+        // allocation it replaces would have done — so the allocate-once
+        // guarantee is untouched.
+        if let Some(id) = reused {
+            self.zero(&id)?;
+            return Ok(id);
         }
 
         self.fresh(need_elems, need_bytes, allow_spill)
@@ -387,7 +425,10 @@ impl ZWorkspacePool {
                     .map_err(|_| Self::poisoned("live-bytes"))?;
                 *live = live.saturating_add(need_bytes);
             }
-            (ZTensorBackend::InMemory(ZBuffer::zeros(need_elems)), need_bytes)
+            (
+                ZTensorBackend::InMemory(ZBuffer::zeros(need_elems)),
+                need_bytes,
+            )
         } else {
             (
                 ZTensorBackend::Spilled(ZSpillHandle::create(need_elems, id.0)?),
@@ -503,12 +544,7 @@ impl ZWorkspacePool {
     /// # Errors
     /// [`BackendError::ProbeFailed`] for an unknown id, a plane-length
     /// mismatch, an over-capacity write, or a spill write failure.
-    pub fn write_planes(
-        &self,
-        id: &ZBufferId,
-        re: &[f64],
-        im: &[f64],
-    ) -> Result<(), BackendError> {
+    pub fn write_planes(&self, id: &ZBufferId, re: &[f64], im: &[f64]) -> Result<(), BackendError> {
         if re.len() != im.len() {
             return Err(BackendError::ProbeFailed {
                 backend: "zworkspace-pool",
@@ -542,6 +578,17 @@ impl ZWorkspacePool {
                 Ok(())
             }
         }
+    }
+
+    /// Zero a reserved buffer's planes in place.
+    ///
+    /// # Errors
+    /// As [`ZWorkspacePool::with_mut_slices`].
+    pub fn zero(&self, id: &ZBufferId) -> Result<(), BackendError> {
+        self.with_mut_slices(id, |re, im| {
+            re.fill(0.0);
+            im.fill(0.0);
+        })
     }
 
     /// Read a reserved buffer into owned planes. Prefer

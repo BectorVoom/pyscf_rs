@@ -251,9 +251,22 @@ impl KTensor {
 
     /// Borrow one block's `(re, im)` planes. **Does not copy the tensor.**
     ///
+    /// # The planes are truncated to [`KTensor::block_len`], and that is load-bearing
+    ///
+    /// [`ZWorkspacePool::reserve`] documents that it reuses a free-listed
+    /// buffer "of sufficient capacity", so the buffer backing a block is
+    /// `>= block_len` and is EQUAL only by luck. Handing the caller the whole
+    /// buffer therefore leaks the previous tenant's tail into every read.
+    ///
+    /// This was invisible until 16-06: the restricted fixture is diamond
+    /// `gth-szv`, where `nocc == nvir == 4`, so `Woooo`'s `nocc⁴` and `Wvvvv`'s
+    /// `nvir⁴` are both 256 and the recycled buffer always happened to be
+    /// exactly the right size. The first fixture with four distinct extents
+    /// (`nocca 2`, `noccb 1`, `nvira 4`, `nvirb 5`) failed on the first read.
+    ///
     /// # Errors
     /// [`BackendError::ProbeFailed`] for a bad k-address, a `Tier::Absent`
-    /// tensor, or a spill read failure.
+    /// tensor, a spill read failure, or a buffer shorter than `block_len`.
     pub fn with_block<R>(
         &self,
         pool: &ZWorkspacePool,
@@ -261,7 +274,19 @@ impl KTensor {
         f: impl FnOnce(&[f64], &[f64]) -> R,
     ) -> Result<R, BackendError> {
         let id = self.buffer(k)?;
-        pool.with_slices(&id, f)
+        let n = self.block_len;
+        pool.with_slices(&id, |re, im| {
+            if re.len() < n || im.len() < n {
+                return Err(BackendError::ProbeFailed {
+                    backend: "ktensor",
+                    reason: format!(
+                        "buffer holds {} elements, block needs {n}",
+                        re.len().min(im.len())
+                    ),
+                });
+            }
+            Ok(f(&re[..n], &im[..n]))
+        })?
     }
 
     /// Mutably borrow one block's planes. Only THIS block's lock is taken, so
@@ -277,7 +302,19 @@ impl KTensor {
         f: impl FnOnce(&mut [f64], &mut [f64]) -> R,
     ) -> Result<R, BackendError> {
         let id = self.buffer(k)?;
-        pool.with_mut_slices(&id, f)
+        let n = self.block_len;
+        pool.with_mut_slices(&id, |re, im| {
+            if re.len() < n || im.len() < n {
+                return Err(BackendError::ProbeFailed {
+                    backend: "ktensor",
+                    reason: format!(
+                        "buffer holds {} elements, block needs {n}",
+                        re.len().min(im.len())
+                    ),
+                });
+            }
+            Ok(f(&mut re[..n], &mut im[..n]))
+        })?
     }
 
     /// Overwrite one block from a [`CTensor`].

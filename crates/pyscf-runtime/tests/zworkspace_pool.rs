@@ -87,7 +87,10 @@ fn spilled_complex_buffer_roundtrips_bit_identically() {
     let id = pool
         .reserve(&[50], true)
         .expect("spill permitted over the in-memory budget");
-    assert!(pool.is_spilled(&id).unwrap(), "must have chosen the spill tier");
+    assert!(
+        pool.is_spilled(&id).unwrap(),
+        "must have chosen the spill tier"
+    );
     assert_eq!(
         pool.charged_bytes(&id).unwrap(),
         0,
@@ -143,4 +146,50 @@ fn plane_length_mismatch_is_refused() {
     let id = pool.reserve(&[4], false).unwrap();
     assert!(pool.write_planes(&id, &[1.0, 2.0], &[1.0]).is_err());
     assert!(pool.write_planes(&id, &[0.0; 5], &[0.0; 5]).is_err());
+}
+
+/// **A recycled buffer comes back ZEROED.**
+///
+/// `reserve` reuses a free-listed buffer of sufficient capacity instead of
+/// allocating, which is the arena's whole point. Before 16-06 it handed the new
+/// tenant the old one's bytes, so any caller that ACCUMULATES into what it was
+/// told is a fresh allocation inherited them.
+///
+/// That is not a hypothetical: `kccsd_uhf::update_amps` builds `cc_Woooo`,
+/// releases it, builds `cc_Wvvvv_half`, releases it, then builds `cc_Wovvo`,
+/// which accumulates from many scattered k-addresses. `Wovvo` came back
+/// carrying `Wvvvv`, and every doubles amplitude was ~1e-2 wrong while each of
+/// the five equation stages was independently exact against upstream to 1e-11.
+#[test]
+fn a_recycled_buffer_comes_back_zeroed() {
+    let pool = ZWorkspacePool::new(ZWorkspacePool::DEFAULT_BUDGET_BYTES);
+    let a = pool.reserve(&[4, 4], false).expect("reserve");
+    pool.write_planes(&a, &[3.0; 16], &[-3.0; 16])
+        .expect("write");
+    let n = pool.allocation_count();
+    pool.release(a);
+
+    // Same shape: must be the same storage, and must be zero.
+    let b = pool.reserve(&[4, 4], false).expect("reserve");
+    assert_eq!(
+        pool.allocation_count(),
+        n,
+        "the second reserve must reuse, or this proves nothing"
+    );
+    let (re, im) = pool.read_planes(&b).expect("read");
+    assert!(
+        re.iter().all(|v| *v == 0.0) && im.iter().all(|v| *v == 0.0),
+        "a reused buffer handed back the previous tenant's data"
+    );
+    pool.release(b);
+
+    // Smaller shape into a larger buffer: the whole capacity is cleared, so a
+    // later over-length read cannot see the tail either.
+    let c = pool.reserve(&[2, 2], false).expect("reserve");
+    assert_eq!(pool.allocation_count(), n, "must still reuse");
+    let (re, im) = pool.read_planes(&c).expect("read");
+    assert!(
+        re.iter().all(|v| *v == 0.0) && im.iter().all(|v| *v == 0.0),
+        "the tail beyond the new shape was left dirty"
+    );
 }

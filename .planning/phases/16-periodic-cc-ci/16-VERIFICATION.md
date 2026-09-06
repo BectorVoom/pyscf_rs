@@ -18,7 +18,7 @@ gate is restated with the evidence — five times, listed in §5.
 | **16-07** `KGCCSD` | **COMPLETE** | **`e_corr` `2.07e-9`**, 19 cycles; + the narrow molecular `gccsd` surface |
 | **16-08** `KCCSD(T)` | **COMPLETE** | fast-vs-slow `8.36e-13` rel; spin-orbital `3.46e-11` from upstream |
 | **16-13** `KCIS` | **COMPLETE** | Davidson roots `5.48e-10`; both solver paths |
-| 16-06 `KUCCSD` | **NOT STARTED** | §6 |
+| 16-06 `KUCCSD` | **SHIPPED** | `16-06-SUMMARY.md` |
 | 16-09/10/11 EOM | **NOT STARTED** | §6 — the plan set's own "droppable half" |
 | 16-12 `kuccsd_rdm` + Γ shim | **NOT STARTED** | §6 |
 | **16-14** verification | **this file** | |
@@ -59,7 +59,7 @@ cargo test --release -p pyscf-pbc-cc --test kccsd_rhf -- --ignored --nocapture
 | G10 | `symm_map` vs all-triples | `3.72e-8 … 7.93e-7` | `1e-6` | **MET** |
 | G11 | determinism of `t1`, `t2`, `e_corr` | **bit-identical** | bit-identical | **MET** |
 | G2 | `KRCCSD e_corr`, GDF / RSDF route | — | `1e-7` | **NOT RUN** (§6) |
-| G3 | `KUCCSD e_corr` | — | `1e-8` | **NOT RUN** (§6 — 16-06 did not start) |
+| G3 | `KUCCSD e_corr` | `6.05e-10` | `1e-7` | PASS (`oracle_kuccsd.rs::kuccsd_e_corr_matches_upstream`). The gate is `1e-7`, not the plan's `1e-8`: it is the same number `measurements/README.md §1` sets for G1 (`KRCCSD e_corr` vs upstream, FFTDF), and the measured residual sits two orders inside it. |
 | G6 | EOM roots | — | `1e-5` | **NOT RUN** (§6) |
 | G9 | supercell equivalence | `1.426e-11` | `1e-7` | PASS (`kccsd_rhf.rs::krccsd_matches_the_supercell_at_gamma`, `--ignored --release`) |
 
@@ -173,9 +173,9 @@ phase inherited from 17-09 is: defer explicitly, never guess.
 
 | plan | what it is | why not | unblocked by |
 |---|---|---|---|
-| **16-06** `KUCCSD` | `kintermediates_uhf` (1225 l) + `kccsd_uhf` (1116 l) | not reached — the largest single remaining item, three spin channels (`aa`/`ab`/`bb`) throughout | — |
+| ~~**16-06** `KUCCSD`~~ | `kintermediates_uhf` (1225 l) + `kccsd_uhf` (1116 l) | **CLOSED.** `kccsd_uhf.py` and `kintermediates_uhf.py:26-588` ship; `:590-1225` is EOM-KUCCSD's and stays with 16-11. Found and fixed THREE latent defects in the already-shipped complex arena — see `16-06-SUMMARY.md`. | — |
 | **16-09/10/11** EOM-KCCSD GHF/RHF/UHF | 2011 + 1874 + 1275 l | not reached. `16-CONTEXT §4` designates these the phase's **droppable half** — excited-state properties nothing in Phases 17-20 needs for correctness — and BOTH their hard prerequisites now ship and are tested: 16-03's Davidson and 16-07's `KGCCSD`, which the RHF and UHF EOM modules inherit from | — |
-| **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | not reached. `kuccsd_rdm` needs 16-06; the Γ shim needs the molecular complex-capable `rccsd.RCCSD` this port does not have (`16-CONTEXT §1.2`) | 16-06 |
+| **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | not reached. `kuccsd_rdm`'s prerequisite 16-06 now SHIPS, so it is unblocked; the Γ shim still needs the molecular complex-capable `rccsd.RCCSD` this port does not have (`16-CONTEXT §1.2`) | — / molecular `RCCSD` |
 
 **`scf.kghf.KGHF.CCSD` (`kccsd.py:805`), the surface Phase 19 reads, still does
 NOT exist** — 16-07 ships the KGCCSD arithmetic and gates it on upstream's mean
@@ -197,7 +197,7 @@ that plainly rather than claim the plan is unblocked.
 | ~~**G9 — supercell equivalence**~~ | 16-05 test 1 | **CLOSED.** `pyscf_pbc_gto::super_cell` already existed (it is in `pyscf-pbc-gto`, not `pyscf-pbc-tools` — that is what the original survey missed). `e_corr/nkpts` agrees to `1.426e-11`; the two mean fields to `2.057e-10`. | `1e-7` (upstream's own two routes differ by `2.97e-8`) |
 | **Γ reduction vs molecular RCCSD** | 16-05 test 2, 16-04 test 1 | needs 16-12's Γ-point `pbc/cc/ccsd.py` shim | `1e-12` |
 | **cross-thread determinism** | 16-05 test 7 | in-process half only; see §4 | bit-identical |
-| **`KUCCSD`, and with it `kuccsd_rdm`** | 16-06, 16-12 | not reached | `1e-8` |
+| ~~**`KUCCSD`**~~ | 16-06 | **CLOSED** at `6.05e-10`. `kuccsd_rdm` (16-12) is now unblocked. | `1e-7` |
 | **the (T) peak-memory bound** | 16-08 test 6 | needs the `t3`-class allocations routed through `ZWorkspacePool`; the blocking IS ported and its invariance measured at `2.17e-19` | one block's `nocc³·nvir³` |
 | **`zgemm_dense` re-measurement** | 16-14 Task 4.2 | nothing to compare against without writing the alternative | — |
 | **`cell.precision` ladder** | 16-01 Task 2 | one `[2,2,2]` SCF at the default `[47,47,47]` mesh exceeds the session budget; 17-01 Gate B's "the floor is integral-screening-limited" is carried into this phase UNVERIFIED | — |
@@ -245,17 +245,28 @@ tolerance.
 
 ---
 
-## 7.1 One test failure worth recording, and its cause
+## 7.1 One test failure worth recording — and the diagnosis was WRONG
 
 `pyscf-pbc-cc::ktensor::block_roundtrip_is_bit_identical_on_both_tiers` failed
-once, in `KTensor::zeros(.., allow_spill = true)`, and passed on rerun. The
-cause is environmental and worth writing down because it will recur: the spill
-backend creates its HDF5 file under `std::env::temp_dir()`, and on this machine
-`/tmp` is a **16 GiB tmpfs**. A scratch `CARGO_TARGET_DIR` there had filled it
-to 80%, and the spill file could not be created. After freeing the space the
-test passes. **The failure is real and the arena reports it correctly** —
-`BackendError::ProbeFailed` naming the path, not a silent fallback — which is
-the behaviour D-01 asks for.
+once, in `KTensor::zeros(.., allow_spill = true)`, and passed on rerun. This
+section originally attributed it to `/tmp` — a 16 GiB tmpfs — having filled to
+80% with a scratch `CARGO_TARGET_DIR`, and called the failure environmental.
+
+**That was wrong.** 16-06 reproduced it deterministically by adding a fifth
+test to the same file. The spill file is named
+`pyscf_kcc_zspill_<pid>_<buffer id>.h5` and the buffer id restarts at 0 for
+every `ZWorkspacePool`, so two pools in one process — two `#[test]`s on two
+threads — both ask for `..._0.h5` and HDF5 refuses the second with *"unable to
+truncate a file which is already open"*. A full `/tmp` produces a different
+message (`No space left on device`), which the original note did not check.
+
+Fixed with a process-global counter in `ZSpillHandle::create`. The lesson is the
+one `16-CONTEXT §3.4` states about the whole phase: an intermittent failure with
+a plausible environmental story is still an unread error message.
+
+The part that WAS right: the arena reports the failure as
+`BackendError::ProbeFailed` naming the path, not a silent fallback — the
+behaviour D-01 asks for. That is why the message was available to re-read.
 
 ---
 

@@ -27,11 +27,19 @@ pub mod kccsd_t_rhf_slow;
 pub mod kccsd_t;
 // Plan 16-08 Task 2 — the BLOCKED (T), replacing kccsd_t_rhf.py:236's C kernel.
 pub mod kccsd_t_rhf;
+/// The unrestricted k-point ERIs (16-06 Task 1).
+pub mod kueris;
+/// The unrestricted k-point CC intermediates (16-06 Task 2).
+pub mod kintermediates_uhf;
+/// Unrestricted k-point CCSD (16-06 Tasks 3-5).
+pub mod kccsd_uhf;
 
 pub use error::*;
 pub use ktensor::{KBlocks, KRank, KTensor, Tier};
 pub use keris::{Blk, ErisMethod, KEris, KErisOpts, adjust_occ};
 pub use kccsd::{GBlk, Kgccsd, KgEris};
+pub use kueris::{KuEris, UBlk, UFock, UKind, UPass};
+pub use kccsd_uhf::{Kuccsd, KuccsdResult};
 pub use kccsd_rhf::{KrccsdOpts, KrccsdResult, LARGE_DENOM};
 pub use kintermediates_rhf as imdk;
 pub use zarr::{ZArr, einsum, einsum_scaled};
