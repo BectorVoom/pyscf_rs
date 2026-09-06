@@ -21,6 +21,7 @@ use pyscf_pbc_cc::ZArr;
 use pyscf_pbc_ci::kcis_rhf::{KcisOpts, cis_diag, kernel_at_kshift};
 use pyscf_pbc_df::{Fftdf, MoCoeff, PeriodicDf};
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs};
+use pyscf_pbc_gto::LowDimFtType as _LowDimFtType;
 use pyscf_pbc_lib::KptsHelper;
 use pyscf_pbc_mp::PaddedMos;
 
@@ -288,6 +289,69 @@ fn kcis_roots_match_upstream() {
             "this port's Davidson-vs-dense spread ({sd:e}) and upstream's ({us:e}) \
              disagree by {:e}: the two solvers are finding DIFFERENT states",
             (sd - us).abs()
+        );
+    }
+}
+
+/// Plan 16-13 Task 4 test 5 — the `dimension == 2` refusal, on the `§9.2`
+/// reference cell that reaches it.
+///
+/// `kcis_rhf.py:630-637` refuses the direct-DF CIS path at `cell.dimension ==
+/// 2` because 2-D ERIs are not positive definite: the 3-index tensor is stored
+/// as a positive and a negative part and the negative part is not handled.
+/// `graphene` IS a `§9.2` reference cell, so this refusal is reachable rather
+/// than theoretical — which is exactly why it must carry the upstream line and
+/// be tested rather than assumed.
+///
+/// Oracle-free: it asserts THIS PORT refuses, and names the upstream line the
+/// refusal quotes. The companion oracle-gated half — that upstream still
+/// raises there — is recorded in `16-13-SUMMARY.md` as not run, because this
+/// port does not ship the `cis.direct = True` branch the refusal guards.
+#[test]
+fn direct_df_cis_refuses_at_dimension_two() {
+    // graphene: C2 hexagonal with 20 A of vacuum, `dimension = 2`.
+    let a0 = 2.46_f64;
+    let c = 20.0_f64;
+    let cell = Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![
+                ("C".into(), [0.0, 0.0, 0.0]),
+                ("C".into(), [a0 / 2.0, a0 / (2.0 * 3.0_f64.sqrt()), 0.0]),
+            ]),
+            basis: BasisInput::Name("gth-szv".into()),
+            unit: Unit::Ang,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([
+            [a0, 0.0, 0.0],
+            [-a0 / 2.0, a0 * 3.0_f64.sqrt() / 2.0, 0.0],
+            [0.0, 0.0, c],
+        ]),
+        pseudo: Some("gth-pade".into()),
+        dimension: 2,
+        low_dim_ft_type: pyscf_pbc_gto::LowDimFtType::None,
+        ..Default::default()
+    })
+    .expect("graphene builds");
+    assert_eq!(cell.dimension, 2, "the fixture must actually be 2-D");
+
+    let err = pyscf_pbc_ci::kcis_rhf::check_dimension_for_direct_df(cell.dimension)
+        .expect_err("dimension 2 must refuse");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("kcis_rhf.py:637"),
+        "the refusal must name its upstream line, got: {msg}"
+    );
+    assert!(
+        msg.contains("positive definite"),
+        "the refusal must carry upstream's own reason, got: {msg}"
+    );
+
+    // Every other dimension passes, so the guard is not a blanket refusal.
+    for d in [0_u8, 1, 3] {
+        assert!(
+            pyscf_pbc_ci::kcis_rhf::check_dimension_for_direct_df(d).is_ok(),
+            "dimension {d} must NOT be refused"
         );
     }
 }

@@ -743,3 +743,85 @@ fn kgccsd_matches_upstream() {
         "the spin-orbital (T) differs from upstream by {de:e}"
     );
 }
+
+/// **G2 — the GDF route.** `KRCCSD e_corr` and the seven `_ERIS` blocks on a
+/// **Gaussian** density-fitting mean field, stated separately from FFTDF.
+///
+/// `kccsd_rhf.py:37` imports `GDF, RSGDF` and branches the whole `_ERIS` build
+/// on the mean field's DF class, and 16-01 measured the plane-wave/Gaussian
+/// split at **`9.22e-4 Ha`** on this cell (`measurements/README.md §4`) —
+/// three orders worse than the standing memory records at SCF level. A gate
+/// that does not name its route is untestable, which is why this one exists
+/// rather than a single "matches upstream" number.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn krccsd_e_corr_matches_upstream_gdf() {
+    let Some(out) = emit("eris_gdf") else { return };
+    let cell = common::diamond([15, 15, 15]);
+    let kpts = cell.make_kpts([1, 1, 2]).expect("kpts");
+    let df = pyscf_pbc_df::Gdf::new(cell.clone(), &kpts);
+
+    let up = upstream_mos(&out);
+    let mut khelper = KptsHelper::without_symm_map(&cell.a, &kpts);
+    let eris = pyscf_pbc_cc::KEris::from_parts(
+        &df,
+        &mut khelper,
+        &up.padded,
+        up.fock.clone(),
+        up.mo_energy.clone(),
+        0.0,
+        pyscf_pbc_cc::KErisOpts::default(),
+    )
+    .expect("_ERIS on the GDF route");
+
+    let mut worst: Vec<(&str, f64)> = Vec::new();
+    for (b, name) in [
+        (Blk::Oooo, "oooo"),
+        (Blk::Ooov, "ooov"),
+        (Blk::Oovv, "oovv"),
+        (Blk::Ovov, "ovov"),
+        (Blk::Voov, "voov"),
+        (Blk::Vovv, "vovv"),
+        (Blk::Vvvv, "vvvv"),
+    ] {
+        let want = cblock(&out, name);
+        let dims = b.dims(up.nocc, up.nmo - up.nocc);
+        let nk = up.nkpts;
+        let mut shape = vec![nk, nk, nk];
+        shape.extend_from_slice(&dims);
+        let mut got = ZArr::zeros(&shape);
+        for k0 in 0..nk {
+            for k1 in 0..nk {
+                for k2 in 0..nk {
+                    got.set_leading(&[k0, k1, k2], &eris.blk(b, k0, k1, k2).expect("block"))
+                        .expect("shape");
+                }
+            }
+        }
+        let d = maxdiff(&got, &want, name);
+        println!("GDF: max|{name} - upstream| = {d:e}");
+        worst.push((name, d));
+    }
+    // The GDF fitting residual is its own floor and is NOT the FFT one; the
+    // gate is reported per block so the two routes' floors stay separable.
+    let bad: Vec<&(&str, f64)> = worst.iter().filter(|(_, d)| *d >= ERI_BLOCK).collect();
+    assert!(bad.is_empty(), "GDF blocks above {ERI_BLOCK:e}: {bad:?} (all: {worst:?})");
+
+    let opts = pyscf_pbc_cc::KrccsdOpts::default();
+    let (emp2, _, _) = init_amps(&eris, &up.padded, &khelper.kconserv).expect("init_amps");
+    let want_emp2 = scalar(&out, "emp2");
+    println!("GDF: emp2 {emp2} vs upstream {want_emp2}  |Δ| {:e}", (emp2 - want_emp2).abs());
+    assert!((emp2 - want_emp2).abs() < G1_E_CORR, "GDF emp2 differs");
+
+    let pool = Arc::new(ZWorkspacePool::new(ZWorkspacePool::DEFAULT_BUDGET_BYTES));
+    let res = pyscf_pbc_cc::kccsd_rhf::kernel(&pool, &eris, &up.padded, &khelper.kconserv, &opts)
+        .expect("KRCCSD kernel, GDF route");
+    assert!(res.converged, "KRCCSD did not converge on the GDF route");
+    let want = scalar(&out, "e_corr");
+    let d = (res.e_corr - want).abs();
+    println!(
+        "GDF: e_corr {} vs upstream {want}  |Δ| {d:e}  (G2 = {G1_E_CORR:e})",
+        res.e_corr
+    );
+    assert!(d < G1_E_CORR, "GDF e_corr differs by {d:e}, above G2 {G1_E_CORR:e}");
+}

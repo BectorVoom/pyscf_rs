@@ -366,6 +366,33 @@ pub fn kernel(
     kpts: &[[f64; 3]],
     vir_blksize: Option<usize>,
 ) -> Result<f64, PbcCcError> {
+    kernel_with_stats(eris, padded, t1, t2, kconserv, a, kpts, vir_blksize).map(|(e, _)| e)
+}
+
+/// [`kernel`], additionally returning the PEAK LIVE bytes of the `t3`-class
+/// `w`/`v` cache.
+///
+/// **This is what makes `16-REVIEW.md §4.2`'s claim testable rather than
+/// aspirational** (16-08 test 6). The cache is allocated per `(ka, kb, block)`
+/// and dropped at the end of that block, so the peak is
+/// `2 · nkpts³ · na·nb·nc · nocc³ · 16` — bounded by ONE virtual block, never
+/// by `nkpts³ · nvir³ · nocc³`. Blocking the virtuals reduces it by
+/// `(blksize/nvir)³`, and the test asserts exactly that ratio against a
+/// literal.
+///
+/// # Errors
+/// As [`kernel`].
+#[allow(clippy::too_many_arguments)]
+pub fn kernel_with_stats(
+    eris: &KEris,
+    padded: &PaddedMos,
+    t1: &ZArr,
+    t2: &ZArr,
+    kconserv: &Kconserv,
+    a: &[[f64; 3]; 3],
+    kpts: &[[f64; 3]],
+    vir_blksize: Option<usize>,
+) -> Result<(f64, usize), PbcCcError> {
     let (nkpts, nocc, nvir, nmo) = (eris.nkpts, eris.nocc, eris.nvir, eris.nmo);
     let mo_e_o: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
     let mo_e_v: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
@@ -402,6 +429,7 @@ pub fn kernel(
     let task_list = tasks(nvir, vir_blksize.unwrap_or(nvir));
     let mut terms_re: Vec<f64> = Vec::new();
     let mut terms_im: Vec<f64> = Vec::new();
+    let mut peak_cache_bytes = 0_usize;
 
     for ka in 0..nkpts {
         for kb in 0..=ka {
@@ -423,6 +451,11 @@ pub fn kernel(
                 // (`16-REVIEW.md §4.2`).
                 let mut wc: Vec<Option<ZArr>> = vec![None; nkpts * nkpts * nkpts];
                 let mut vc: Vec<Option<ZArr>> = vec![None; nkpts * nkpts * nkpts];
+                // The peak this block's cache CAN reach: two caches of
+                // `nkpts³` blocks of `na·nb·nc·nocc³` complex elements.
+                peak_cache_bytes = peak_cache_bytes.max(
+                    2 * nkpts.pow(3) * na * nb * nc * nocc.pow(3) * 16,
+                );
                 let at = |x: usize, y: usize, z: usize| (x * nkpts + y) * nkpts + z;
 
                 for ki in 0..nkpts {
@@ -545,7 +578,7 @@ pub fn kernel(
             "non-zero imaginary part of the CCSD(T) energy (kccsd_t_rhf.py:335)"
         );
     }
-    Ok(re)
+    Ok((re, peak_cache_bytes))
 }
 
 fn kconserv3(

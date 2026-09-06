@@ -309,7 +309,46 @@ def section_kcis(nk=(1, 1, 2)):
         cis.davidson = True
 
 
+def section_eris_gdf(nk=(1, 1, 2)):
+    """The seven `_ERIS` blocks on a **GDF** mean field — gate G2.
+
+    `kccsd_rhf.py:37` imports `GDF, RSGDF` and branches the whole `_ERIS` build
+    on the mean field's DF class, and 16-01 measured the plane-wave/Gaussian
+    route split at `9.22e-4 Ha` on this cell. A gate that does not name its
+    route is untestable, so the Gaussian route gets its own.
+    """
+    from pyscf.pbc import df as _pbcdf
+
+    cell = diamond()
+    kpts = cell.make_kpts(list(nk))
+    mf = pbcscf.KRHF(cell, kpts, exxdiv=None)
+    mf.with_df = _pbcdf.GDF(cell, kpts)
+    mf.conv_tol = 1e-10
+    mf.kernel()
+    cc = pbcc.KRCCSD(mf)
+    cc.conv_tol = 1e-9
+    eris = cc.ao2mo(cc.mo_coeff)
+
+    scalar("e_hf", mf.e_tot)
+    scalar("nkpts", len(kpts))
+    scalar("nocc", cc.nocc)
+    scalar("nmo", cc.nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", eris.fock)
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+    for name in ("oooo", "ooov", "oovv", "ovov", "voov", "vovv", "vvvv"):
+        emit(name, np.asarray(getattr(eris, name)))
+    emp2, t1, t2 = cc.init_amps(eris)
+    scalar("emp2", emp2)
+    e_corr, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", e_corr)
+
+
 SECTIONS = {
+    "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
     "kgccsd": lambda: section_kgccsd((1, 1, 2)),
     "eris": lambda: section_eris((1, 1, 2)),

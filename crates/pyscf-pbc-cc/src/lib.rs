@@ -31,6 +31,7 @@ pub mod kccsd_t_rhf;
 pub use error::*;
 pub use ktensor::{KBlocks, KRank, KTensor, Tier};
 pub use keris::{Blk, ErisMethod, KEris, KErisOpts, adjust_occ};
+pub use kccsd::{GBlk, Kgccsd, KgEris};
 pub use kccsd_rhf::{KrccsdOpts, KrccsdResult, LARGE_DENOM};
 pub use kintermediates_rhf as imdk;
 pub use zarr::{ZArr, einsum, einsum_scaled};

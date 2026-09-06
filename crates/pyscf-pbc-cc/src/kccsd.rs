@@ -1013,6 +1013,413 @@ pub fn kernel(
     })
 }
 
+/// `KGCCSD` — the object `kccsd.py:332` declares, tying a converged
+/// spin-orbital k-point mean field to the amplitude iteration.
+///
+/// # The Fock rebuild, and why `new` takes `&mut Kghf`
+///
+/// `_make_eris_incore` (`kccsd.py:538-546`) rebuilds the Fock matrix with
+/// `exxdiv` suppressed:
+///
+/// ```python
+/// with lib.temporary_env(cc._scf, exxdiv=None):
+///     vhf = cc._scf.get_veff(cell, dm)
+/// ```
+///
+/// `lib.temporary_env` MUTATES the mean field and restores it. This port does
+/// the same thing for the same reason — the alternative is duplicating
+/// `Kghf::get_veff`'s three-spin-block J/K assembly (`kghf.rs:186-247`), and a
+/// second copy of that is how the two drift apart. The mutation is confined to
+/// [`Kgccsd::new`] and the original `exxdiv` is restored before it returns,
+/// including on the error paths.
+///
+/// # `scf.kghf.KGHF.CCSD` (`kccsd.py:805`)
+///
+/// That upstream line registers `GCCSD` as a METHOD on the mean-field class.
+/// This port has no method registration on `Kghf`; [`Kgccsd::new`] taking a
+/// `&mut Kghf` IS that surface, and it is what Phase 19 should call.
+#[derive(Debug)]
+pub struct Kgccsd {
+    /// The padded spin-orbital MO coefficients, `(2·nao) × nmo` per k-point.
+    pub mo_coeff: Vec<MoCoeff>,
+    /// The MO-basis Fock matrix, `exxdiv`-suppressed unless `keep_exxdiv`.
+    pub fock: ZArr,
+    /// Orbital energies, Madelung-adjusted unless `keep_exxdiv`.
+    pub mo_energy: Vec<Vec<f64>>,
+    /// `orbspin[k][p]` — 0 for an alpha spin-orbital, 1 for a beta one.
+    pub orbspin: Vec<Vec<u8>>,
+    /// The padding surface Phase 15 owns.
+    pub padded: PaddedMos,
+    pub nocc: usize,
+    pub nmo: usize,
+    pub opts: crate::kccsd_rhf::KrccsdOpts,
+    /// `cc.keep_exxdiv` — `false` is upstream's default.
+    pub keep_exxdiv: bool,
+    e_hf: f64,
+    converged: bool,
+}
+
+impl Kgccsd {
+    /// Build from a converged `KGHF`.
+    ///
+    /// # Errors
+    /// [`PbcCcError::Shape`] if the SCF is not a single GHF channel over the
+    /// mean field's k-points; otherwise propagates the integrals and the
+    /// padding surface.
+    pub fn new(
+        scf: &pyscf_pbc_scf::KScfResult,
+        mf: &mut pyscf_pbc_scf::Kghf,
+    ) -> Result<Self, PbcCcError> {
+        use pyscf_pbc_scf::KOverrideHooks;
+
+        let kpts = mf.kpts().to_vec();
+        if scf.nset != 1 || scf.nkpts != kpts.len() {
+            return Err(PbcCcError::Shape(
+                "KGCCSD needs one GHF SCF channel over the mean field's k-points".into(),
+            ));
+        }
+        let cell = mf.cell().clone();
+        let nso = 2 * cell.mol.nao_nr;
+        let nkpts = kpts.len();
+
+        let raw: Result<Vec<MoCoeff>, _> = scf
+            .mo_coeff
+            .iter()
+            .zip(scf.mo_occ.iter())
+            .map(|(c, occ)| pyscf_pbc_mp::mo_coeff_from_kscf(c, nso, occ.len()))
+            .collect();
+        let raw = raw.map_err(|e| PbcCcError::Shape(format!("mo_coeff_from_kscf: {e}")))?;
+        let frozen = pyscf_pbc_mp::FrozenK::default();
+        let padded =
+            pyscf_pbc_mp::add_padding(&raw, &scf.mo_energy, &scf.mo_occ, &frozen)
+                .map_err(|e| PbcCcError::Shape(format!("add_padding: {e}")))?;
+        let (nocc, nmo) = (padded.nocc, padded.nmo);
+
+        // `kccsd.py:517-521` — with no `orbspin` tag on the coefficients,
+        // upstream GUESSES the spin pattern and asserts an even count:
+        // `orbspin[1::2] = 1`, i.e. alternating alpha/beta.
+        if nmo % 2 != 0 {
+            return Err(PbcCcError::Shape(format!(
+                "KGCCSD guesses orbspin as alternating alpha/beta (kccsd.py:519-521)                  and needs an even nmo, got {nmo}"
+            )));
+        }
+        let orbspin: Vec<Vec<u8>> = (0..nkpts)
+            .map(|_| (0..nmo).map(|p| (p % 2) as u8).collect())
+            .collect();
+
+        // `:538-546` — the density from the mean field's OWN orbitals, and the
+        // Fock rebuilt with `exxdiv` suppressed. `lib.temporary_env`, in Rust.
+        let dm: pyscf_pbc_scf::types::KDms =
+            vec![pyscf_pbc_scf::krdm::make_rdm1(&scf.mo_coeff, &scf.mo_occ, nso)];
+        let saved = mf.exxdiv;
+        let keep_exxdiv = false;
+        if !keep_exxdiv {
+            mf.exxdiv = None;
+        }
+        let built = (|| -> Result<(Vec<pyscf_algebra::CTensor>, Vec<pyscf_algebra::CTensor>), PbcCcError> {
+            let h = mf
+                .get_hcore()
+                .map_err(|e| PbcCcError::Shape(format!("KGHF get_hcore: {e}")))?;
+            let v = mf
+                .get_veff(&dm)
+                .map_err(|e| PbcCcError::Shape(format!("KGHF get_veff: {e}")))?;
+            Ok((h, v.into_iter().next().unwrap_or_default()))
+        })();
+        mf.exxdiv = saved;
+        let (hcore, veff) = built?;
+
+        let mut fock = ZArr::zeros(&[nkpts, nmo, nmo]);
+        let mut mo_energy: Vec<Vec<f64>> = Vec::with_capacity(nkpts);
+        for k in 0..nkpts {
+            let mut fao = pyscf_algebra::CTensor::zeros(nso * nso);
+            for i in 0..nso * nso {
+                fao.re[i] = hcore[k].re[i] + veff[k].re[i];
+                fao.im[i] = hcore[k].im[i] + veff[k].im[i];
+            }
+            let c = &padded.mo_coeff[k];
+            let mut blk = ZArr::zeros(&[nmo, nmo]);
+            for p in 0..nmo {
+                for q in 0..nmo {
+                    let (mut re, mut im) = (0.0_f64, 0.0_f64);
+                    for a in 0..nso {
+                        let (cr, ci) = (c.c.re[a * nmo + p], -c.c.im[a * nmo + p]);
+                        for b in 0..nso {
+                            let (fr, fi) = (fao.re[a * nso + b], fao.im[a * nso + b]);
+                            let (dr, di) = (c.c.re[b * nmo + q], c.c.im[b * nmo + q]);
+                            let (tr, ti) = (fr * dr - fi * di, fr * di + fi * dr);
+                            re += cr * tr - ci * ti;
+                            im += cr * ti + ci * tr;
+                        }
+                    }
+                    blk.data_mut().re[p * nmo + q] = re;
+                    blk.data_mut().im[p * nmo + q] = im;
+                }
+            }
+            mo_energy.push(
+                (0..nmo)
+                    .map(|p| blk.at(&[p, p]).map(|v| v.0))
+                    .collect::<Result<_, _>>()?,
+            );
+            fock.set_leading(&[k], &blk)?;
+        }
+
+        // `:552-555` — the Madelung re-add, the second half of `§3.5`.
+        if !keep_exxdiv {
+            let madelung = pyscf_pbc_gto::madelung(&cell, &kpts, None)
+                .map_err(|e| PbcCcError::Shape(format!("madelung: {e}")))?;
+            mo_energy = mo_energy
+                .iter()
+                .map(|e| crate::keris::adjust_occ(e, nocc, -madelung))
+                .collect();
+        }
+
+        Ok(Self {
+            mo_coeff: padded.mo_coeff.clone(),
+            fock,
+            mo_energy,
+            orbspin,
+            padded,
+            nocc,
+            nmo,
+            opts: crate::kccsd_rhf::KrccsdOpts::default(),
+            keep_exxdiv,
+            e_hf: scf.e_tot,
+            converged: scf.converged,
+        })
+    }
+
+    /// `cc.ao2mo()` — the seven antisymmetrised `<pq||rs>` blocks.
+    ///
+    /// # Errors
+    /// Propagates the density-fitting builder and the complex arena.
+    pub fn ao2mo(
+        &self,
+        with_df: &dyn PeriodicDf,
+        khelper: &KptsHelper,
+    ) -> Result<KgEris, PbcCcError> {
+        KgEris::from_parts(
+            with_df,
+            khelper,
+            &self.mo_coeff,
+            self.fock.clone(),
+            self.mo_energy.clone(),
+            self.nocc,
+            (self.opts.max_memory * 1e6).max(1.0) as usize,
+        )
+    }
+
+    /// Run the amplitude iteration.
+    ///
+    /// # Errors
+    /// [`PbcCcError::NotConverged`] if the reference SCF did not converge.
+    pub fn kernel(
+        &self,
+        eris: &KgEris,
+        kconserv: &Kconserv,
+    ) -> Result<crate::kccsd_rhf::KrccsdResult, PbcCcError> {
+        if !self.converged {
+            return Err(PbcCcError::NotConverged {
+                what: "the reference KGHF",
+                detail: "KGCCSD refuses an unconverged mean field".into(),
+            });
+        }
+        kernel(eris, &self.padded, kconserv, &self.opts)
+    }
+
+    /// The mean-field total energy the correlation energy adds to.
+    pub fn e_hf(&self) -> f64 {
+        self.e_hf
+    }
+}
+
+/// `spatial2spin` for `t2` — `kccsd.py:237-287`.
+///
+/// Takes the three spin blocks `(t2aa, t2ab, t2bb)` and folds them into the
+/// spin-orbital `t2`. For a RESTRICTED `t2` upstream first forms
+/// `t2aa[ki,kj,ka] = t2[ki,kj,ka] - t2[ki,kj,kb].transpose(0,1,3,2)` (`:231-236`)
+/// and then calls this with `(t2aa, t2, t2aa)` — which is what makes a KRCCSD
+/// result liftable into the spin-orbital basis, and hence what makes
+/// `KGCCSD.e_corr == KRCCSD.e_corr` checkable.
+///
+/// **The packing is where an off-by-one is silent.** Upstream writes it as
+/// four `takebak_2d` calls on a `(nocc², nvir²)` view with TRANSPOSED index
+/// products for the `ba` block (`:277-286`); it is written out here index by
+/// index instead, and gated by a round-trip against [`spin2spatial_t2`].
+///
+/// # Errors
+/// [`PbcCcError::Shape`] on a size or `orbspin` inconsistency.
+pub fn spatial2spin_t2(
+    t2aa: &ZArr,
+    t2ab: &ZArr,
+    t2bb: &ZArr,
+    orbspin: &[Vec<u8>],
+    kconserv: &Kconserv,
+    nocc: usize,
+    nvir: usize,
+) -> Result<ZArr, PbcCcError> {
+    let nk = t2ab.shape()[0];
+    let mut out = ZArr::zeros(&[nk, nk, nk, nocc, nocc, nvir, nvir]);
+    let occ = |k: usize, spin: u8| spin_idx(&orbspin[k][..nocc], spin);
+    let vir = |k: usize, spin: u8| spin_idx(&orbspin[k][nocc..], spin);
+    for ki in 0..nk {
+        for kj in 0..nk {
+            for ka in 0..nk {
+                let kb = kconserv.get(ki, ka, kj) as usize;
+                let (oa_i, ob_i) = (occ(ki, 0), occ(ki, 1));
+                let (oa_j, ob_j) = (occ(kj, 0), occ(kj, 1));
+                let (va_ka, vb_ka) = (vir(ka, 0), vir(ka, 1));
+                let (va_kb, vb_kb) = (vir(kb, 0), vir(kb, 1));
+                let saa = t2aa.slice_leading(&[ki, kj, ka])?;
+                let sab = t2ab.slice_leading(&[ki, kj, ka])?;
+                let sbb = t2bb.slice_leading(&[ki, kj, ka])?;
+
+                // `:277-282` — aa, bb and ab straight in at [ki,kj,ka].
+                place(&mut out, &saa, [ki, kj, ka], &oa_i, &oa_j, &va_ka, &va_kb, 1.0, false, false)?;
+                place(&mut out, &sbb, [ki, kj, ka], &ob_i, &ob_j, &vb_ka, &vb_kb, 1.0, false, false)?;
+                place(&mut out, &sab, [ki, kj, ka], &oa_i, &ob_j, &va_ka, &vb_kb, 1.0, false, false)?;
+                // `:281` `idxoba.T` / `idxvba.T` — BOTH pairs transposed.
+                place(&mut out, &sab, [kj, ki, kb], &ob_j, &oa_i, &vb_kb, &va_ka, 1.0, true, true)?;
+                // `:283-286` — the two NEGATED `abba` blocks. **The first
+                // transposes only the VIRTUALS and the second only the
+                // OCCUPIEDS**; treating them as one "swap" is the silent
+                // off-by-one this packing is famous for.
+                place(&mut out, &sab, [ki, kj, kb], &oa_i, &ob_j, &vb_kb, &va_ka, -1.0, false, true)?;
+                place(&mut out, &sab, [kj, ki, ka], &ob_j, &oa_i, &va_ka, &vb_kb, -1.0, true, false)?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// One `takebak_2d` of [`spatial2spin_t2`], written index by index.
+///
+/// `swap_occ` / `swap_vir` transpose the SOURCE's occupied and virtual pairs
+/// INDEPENDENTLY — `kccsd.py:281` transposes both, `:284` only the virtuals
+/// and `:286` only the occupieds.
+#[allow(clippy::too_many_arguments)]
+fn place(
+    out: &mut ZArr,
+    src: &ZArr,
+    k: [usize; 3],
+    oi: &[usize],
+    oj: &[usize],
+    va: &[usize],
+    vb: &[usize],
+    factor: f64,
+    swap_occ: bool,
+    swap_vir: bool,
+) -> Result<(), PbcCcError> {
+    let mut blk = out.slice_leading(&k)?;
+    let (no, nv) = (blk.shape()[0], blk.shape()[2]);
+    for (i, &di) in oi.iter().enumerate() {
+        for (j, &dj) in oj.iter().enumerate() {
+            for (a, &da) in va.iter().enumerate() {
+                for (b, &db) in vb.iter().enumerate() {
+                    let (si, sj) = if swap_occ { (j, i) } else { (i, j) };
+                    let (sa, sb) = if swap_vir { (b, a) } else { (a, b) };
+                    let (re, im) = src.at(&[si, sj, sa, sb])?;
+                    let f = ((di * no + dj) * nv + da) * nv + db;
+                    blk.data_mut().re[f] += factor * re;
+                    blk.data_mut().im[f] += factor * im;
+                }
+            }
+        }
+    }
+    out.set_leading(&k, &blk)
+}
+
+/// `spin2spatial` for `t2` — `kccsd.py:317-329`. The inverse of
+/// [`spatial2spin_t2`] on the `aa`, `ab` and `bb` blocks.
+///
+/// # Errors
+/// [`PbcCcError::Shape`] on a size inconsistency.
+pub fn spin2spatial_t2(
+    t2: &ZArr,
+    orbspin: &[Vec<u8>],
+    kconserv: &Kconserv,
+    nocc: usize,
+) -> Result<(ZArr, ZArr, ZArr), PbcCcError> {
+    let nk = t2.shape()[0];
+    let nvir = t2.shape()[5];
+    let na_o = spin_idx(&orbspin[0][..nocc], 0).len();
+    let nb_o = spin_idx(&orbspin[0][..nocc], 1).len();
+    let na_v = spin_idx(&orbspin[0][nocc..], 0).len();
+    let nb_v = spin_idx(&orbspin[0][nocc..], 1).len();
+    let mut t2aa = ZArr::zeros(&[nk, nk, nk, na_o, na_o, na_v, na_v]);
+    let mut t2ab = ZArr::zeros(&[nk, nk, nk, na_o, nb_o, na_v, nb_v]);
+    let mut t2bb = ZArr::zeros(&[nk, nk, nk, nb_o, nb_o, nb_v, nb_v]);
+    for ki in 0..nk {
+        for kj in 0..nk {
+            for ka in 0..nk {
+                let kb = kconserv.get(ki, ka, kj) as usize;
+                let blk = t2.slice_leading(&[ki, kj, ka])?;
+                let oai = spin_idx(&orbspin[ki][..nocc], 0);
+                let obi = spin_idx(&orbspin[ki][..nocc], 1);
+                let oaj = spin_idx(&orbspin[kj][..nocc], 0);
+                let obj = spin_idx(&orbspin[kj][..nocc], 1);
+                let vaa = spin_idx(&orbspin[ka][nocc..], 0);
+                let vba = spin_idx(&orbspin[ka][nocc..], 1);
+                let vab = spin_idx(&orbspin[kb][nocc..], 0);
+                let vbb = spin_idx(&orbspin[kb][nocc..], 1);
+                take(&mut t2aa, &blk, [ki, kj, ka], &oai, &oaj, &vaa, &vab, nvir)?;
+                take(&mut t2ab, &blk, [ki, kj, ka], &oai, &obj, &vaa, &vbb, nvir)?;
+                take(&mut t2bb, &blk, [ki, kj, ka], &obi, &obj, &vba, &vbb, nvir)?;
+            }
+        }
+    }
+    Ok((t2aa, t2ab, t2bb))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn take(
+    dst: &mut ZArr,
+    src: &ZArr,
+    k: [usize; 3],
+    oi: &[usize],
+    oj: &[usize],
+    va: &[usize],
+    vb: &[usize],
+    _nvir: usize,
+) -> Result<(), PbcCcError> {
+    let mut blk = dst.slice_leading(&k)?;
+    let (no2, nv1, nv2) = (blk.shape()[1], blk.shape()[2], blk.shape()[3]);
+    for (i, &si) in oi.iter().enumerate() {
+        for (j, &sj) in oj.iter().enumerate() {
+            for (a, &sa) in va.iter().enumerate() {
+                for (b, &sb) in vb.iter().enumerate() {
+                    let (re, im) = src.at(&[si, sj, sa, sb])?;
+                    let f = ((i * no2 + j) * nv1 + a) * nv2 + b;
+                    blk.data_mut().re[f] = re;
+                    blk.data_mut().im[f] = im;
+                }
+            }
+        }
+    }
+    dst.set_leading(&k, &blk)
+}
+
+/// `t2aa[ki,kj,ka] = t2[ki,kj,ka] - t2[ki,kj,kb].transpose(0,1,3,2)` —
+/// `kccsd.py:231-236`, the antisymmetrised same-spin block a RESTRICTED `t2`
+/// implies.
+///
+/// # Errors
+/// [`PbcCcError::Shape`] on a size inconsistency.
+pub fn restricted_t2_to_aa(t2: &ZArr, kconserv: &Kconserv) -> Result<ZArr, PbcCcError> {
+    let nk = t2.shape()[0];
+    let mut out = ZArr::zeros(t2.shape());
+    for ki in 0..nk {
+        for kj in 0..nk {
+            for ka in 0..nk {
+                let kb = kconserv.get(ki, ka, kj) as usize;
+                let mut b = t2.slice_leading(&[ki, kj, ka])?;
+                b.sub_assign(&t2.slice_leading(&[ki, kj, kb])?.transpose(&[0, 1, 3, 2])?)?;
+                out.set_leading(&[ki, kj, ka], &b)?;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// `kccsd.py:414` — the one LIVE refusal in this module.
 ///
 /// `:486` is commented out upstream (`#    raise NotImplementedError('Different
