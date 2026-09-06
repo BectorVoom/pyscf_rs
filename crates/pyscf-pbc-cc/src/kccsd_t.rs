@@ -421,6 +421,40 @@ pub(crate) fn epq2(
     out
 }
 
+/// `_get_epq` across the occupied AND virtual spaces with `fac = [1, -1]` —
+/// `e_o[kp][i] - e_v[kq][a]`, the `eia` every `t3p2` denominator is built from
+/// (`kintermediates.py:485-487`).
+///
+/// Padded entries are [`LARGE_DENOM`] and are NOT summed: upstream fills the
+/// whole array with `large_num` and then overwrites only the non-padded outer
+/// product, so a padded `i` with a non-padded `a` is `LARGE_DENOM`, not
+/// `LARGE_DENOM - e_v[a]`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn epq_ov(
+    mo_e_o: &[Vec<f64>],
+    nz_o: &[Vec<usize>],
+    kp: usize,
+    mo_e_v: &[Vec<f64>],
+    nz_v: &[Vec<usize>],
+    kq: usize,
+    nocc: usize,
+    nvir: usize,
+) -> Vec<f64> {
+    let mut out = vec![LARGE_DENOM; nocc * nvir];
+    for &i in &nz_o[kp] {
+        if i >= nocc {
+            continue;
+        }
+        for &a in &nz_v[kq] {
+            if a >= nvir {
+                continue;
+            }
+            out[i * nvir + a] = mo_e_o[kp][i] - mo_e_v[kq][a];
+        }
+    }
+    out
+}
+
 /// `_get_epqr` over three indices of one space, with a uniform factor.
 /// Padded orbitals carry [`LARGE_DENOM`].
 pub(crate) fn epqr3(

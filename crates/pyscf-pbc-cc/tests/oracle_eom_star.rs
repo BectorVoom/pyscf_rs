@@ -30,7 +30,7 @@ use common::{block, cblock, diamond_scf, emit, eris_on_upstream_mf, scalar, upst
 
 use pyscf_algebra::CTensor;
 use pyscf_pbc_cc::ZArr;
-use pyscf_pbc_cc::eom_kccsd_ghf::{self as eomg, StarLattice, StarPair};
+use pyscf_pbc_cc::eom_kccsd_ghf::{self as eomg, KLattice, StarPair};
 use pyscf_pbc_cc::eom_kccsd_rhf as eomr;
 use pyscf_pbc_df::{MoCoeff, PeriodicDf};
 use pyscf_pbc_lib::KptsHelper;
@@ -119,7 +119,7 @@ fn rhf_ccsd_star_matches_upstream() {
     let kc = &khelper.kconserv;
     let (nkpts, nocc, nvir) = (up.nkpts, up.nocc, up.nmo - up.nocc);
     let (lat_a, kpts) = lattice(&out);
-    let lat = StarLattice {
+    let lat = KLattice {
         a: &lat_a,
         kpts: &kpts,
     };
@@ -244,7 +244,7 @@ fn ghf_ccsd_star_matches_upstream() {
     let kc = &khelper.kconserv;
     let padding = eomg::padding_from(&padded).expect("padding");
     let (lat_a, kpts) = lattice(&out);
-    let lat = StarLattice {
+    let lat = KLattice {
         a: &lat_a,
         kpts: &kpts,
     };

@@ -34,9 +34,10 @@
 
 use std::sync::Arc;
 
-use pyscf_pbc_lib::Kconserv;
+use pyscf_pbc_lib::{KIdx, Kconserv, get_kconserv3};
 use pyscf_runtime::ZWorkspacePool;
 
+use crate::eom_kccsd_ghf::{KLattice, Padding};
 use crate::error::PbcCcError;
 use crate::keris::{Blk, KEris};
 use crate::ktensor::KBlocks;
@@ -972,4 +973,450 @@ pub fn wovoo(t1: &T1, t2: &T2, eris: &KEris, kconserv: &Kconserv) -> Result<ZArr
         }
     }
     Ok(w)
+}
+
+// ---------------------------------------------------------------------------
+// T3[2] — the (T)a intermediates `EOMIP_Ta` / `EOMEA_Ta` are built on
+// (`:465-655`)
+// ---------------------------------------------------------------------------
+
+/// The full spin-adapted `T3[2]` array, one `[nocc³, nvir³]` block per
+/// `(ki,kj,kk,ka,kb)` — upstream's rank-11 `tmp_t3` (`:499`).
+pub struct T3p2 {
+    nkpts: usize,
+    blocks: Vec<ZArr>,
+}
+
+impl T3p2 {
+    fn flat(&self, k: [usize; 5]) -> usize {
+        let n = self.nkpts;
+        ((((k[0] * n + k[1]) * n + k[2]) * n + k[3]) * n) + k[4]
+    }
+
+    /// `tmp_t3[ki,kj,kk,ka,kb]`.
+    #[must_use]
+    pub fn get(&self, k: [usize; 5]) -> &ZArr {
+        &self.blocks[self.flat(k)]
+    }
+}
+
+/// What `get_t3p2_imds_slow` returns (`:655`).
+pub struct T3p2Imds {
+    /// `energy(pt1, pt2) − energy(t1, t2)`.
+    pub delta_ccsd_energy: f64,
+    /// The perturbatively corrected `t1`.
+    pub pt1: ZArr,
+    /// The perturbatively corrected `t2`.
+    pub pt2: ZArr,
+    /// `Wmcik` — the `[nkpts³, nocc, nvir, nocc, nocc]` addition to `Wovoo`.
+    pub wovoo: ZArr,
+    /// `Wacek` — the `[nkpts³, nvir, nvir, nvir, nocc]` addition to `Wvvvo`.
+    pub wvvvo: ZArr,
+}
+
+/// `get_t3p2_imds_slow(cc, t1, t2, eris)` (`:465-655`) — the SPIN-ADAPTED
+/// `T1[2]`/`T2[2]` corrections and the two `(T)a` intermediates.
+///
+/// # Why the `_slow` form and not `get_t3p2_imds`
+///
+/// Upstream has two: this loop-explicit one and a blocked `get_t3p2_imds`
+/// (`:703-925`) that `_IMDS.make_t3p2_ip` actually calls. **They do not agree
+/// to machine precision** — measured on diamond `gth-szv` `[1,1,2]` at the
+/// pinned mesh, upstream's own two implementations differ by `1.3e-9` on
+/// `pt1`, `6.1e-10` on `pt2` and `9.4e-10` on both `W` intermediates, against
+/// magnitudes of `9.9e-3`, `0.106` and `6.2e-4`. So neither can be gated
+/// against the other more tightly than that, and this port takes the
+/// loop-explicit one for the same reason `16-08` took the loop-explicit `(T)`
+/// first: it is the form a transcription can be checked against line by line.
+/// The oracle emits both and reports the gap.
+///
+/// # Errors
+/// Propagates every block access and shape check.
+#[allow(clippy::too_many_lines)]
+pub fn get_t3p2_imds_slow(
+    t1: &ZArr,
+    t2: &ZArr,
+    eris: &KEris,
+    kconserv: &Kconserv,
+    padding: &Padding,
+    lat: &KLattice<'_>,
+) -> Result<T3p2Imds, PbcCcError> {
+    let (nz_o, nz_v) = (&padding.occupied, &padding.virtuals);
+    let (a_lat, kpts) = (lat.a, lat.kpts);
+    let (nkpts, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let mo_e_o: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
+    let mo_e_v: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
+    let ccsd_energy = crate::kccsd_rhf::energy(t1, t2, eris, kconserv)?;
+
+    let kc_of = |ki: usize, kj: usize, kk: usize, ka: usize, kb: usize| -> usize {
+        get_kconserv3(
+            a_lat,
+            kpts,
+            &[
+                KIdx::One(ki),
+                KIdx::One(kj),
+                KIdx::One(kk),
+                KIdx::One(ka),
+                KIdx::One(kb),
+            ],
+        )
+        .data[0] as usize
+    };
+
+    /// `get_w(ki,kj,kk,ka,kb,kc)` (`:501-506`). `kc` is unused in the body,
+    /// exactly as upstream leaves it.
+    #[allow(clippy::too_many_arguments)]
+    fn w(
+        t2: &ZArr,
+        eris: &KEris,
+        kconserv: &Kconserv,
+        ki: usize,
+        kj: usize,
+        kk: usize,
+        ka: usize,
+        kb: usize,
+    ) -> Result<ZArr, PbcCcError> {
+        let kf = kconserv.get(ka, ki, kb) as usize;
+        let kc = kconserv.get(kk, kf, kj) as usize;
+        let mut ret = einsum(
+            "fiba,kjcf->ijkabc",
+            &[
+                &eris.blk(Blk::Vovv, kf, ki, kb)?.conj(),
+                &t2.slice_leading(&[kk, kj, kc])?,
+            ],
+        )?;
+        let km = kconserv.get(kc, kk, kb) as usize;
+        ret.sub_assign(&einsum(
+            "jima,mkbc->ijkabc",
+            &[
+                &eris.blk(Blk::Ooov, kj, ki, km)?.conj(),
+                &t2.slice_leading(&[km, kk, kb])?,
+            ],
+        )?)?;
+        Ok(ret)
+    }
+
+    // `:508-528` — six permutations, then the denominator.
+    let n5 = nkpts.pow(5);
+    let mut t3 = T3p2 {
+        nkpts,
+        blocks: vec![ZArr::zeros(&[0]); n5],
+    };
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for kk in 0..nkpts {
+                let eijk = crate::kccsd_t::epqr3(&mo_e_o, nz_o, ki, kj, kk, nocc, 1.0);
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of(ki, kj, kk, ka, kb);
+                        let mut blk = w(t2, eris, kconserv, ki, kj, kk, ka, kb)?;
+                        blk.add_assign(
+                            &w(t2, eris, kconserv, ki, kk, kj, ka, kc)?
+                                .transpose(&[0, 2, 1, 3, 5, 4])?,
+                        )?;
+                        blk.add_assign(
+                            &w(t2, eris, kconserv, kj, ki, kk, kb, ka)?
+                                .transpose(&[1, 0, 2, 4, 3, 5])?,
+                        )?;
+                        blk.add_assign(
+                            &w(t2, eris, kconserv, kj, kk, ki, kb, kc)?
+                                .transpose(&[2, 0, 1, 5, 3, 4])?,
+                        )?;
+                        blk.add_assign(
+                            &w(t2, eris, kconserv, kk, ki, kj, kc, ka)?
+                                .transpose(&[1, 2, 0, 4, 5, 3])?,
+                        )?;
+                        blk.add_assign(
+                            &w(t2, eris, kconserv, kk, kj, ki, kc, kb)?
+                                .transpose(&[2, 1, 0, 5, 4, 3])?,
+                        )?;
+                        let eabc = crate::kccsd_t::epqr3(&mo_e_v, nz_v, ka, kb, kc, nvir, -1.0);
+                        let mut f = 0;
+                        for &e_ijk in &eijk {
+                            for &e_abc in &eabc {
+                                let d = e_ijk + e_abc;
+                                blk.data_mut().re[f] /= d;
+                                blk.data_mut().im[f] /= d;
+                                f += 1;
+                            }
+                        }
+                        let i = t3.flat([ki, kj, kk, ka, kb]);
+                        t3.blocks[i] = blk;
+                    }
+                }
+            }
+        }
+    }
+
+    // `:530-538` — `pt1`, through the spin-adapted `2·oovv − oovvᵀ` and the
+    // antisymmetrised `St3`.
+    let mut pt1 = ZArr::zeros(&[nkpts, nocc, nvir]);
+    for ki in 0..nkpts {
+        let mut acc = ZArr::zeros(&[nocc, nvir]);
+        for km in 0..nkpts {
+            for kn in 0..nkpts {
+                for ke in 0..nkpts {
+                    let kf = kconserv.get(km, ke, kn) as usize;
+                    let mut soovv = eris.blk(Blk::Oovv, km, kn, ke)?;
+                    soovv.scale(2.0);
+                    soovv
+                        .sub_assign(&eris.blk(Blk::Oovv, km, kn, kf)?.transpose(&[0, 1, 3, 2])?)?;
+                    let mut st3 = t3.get([ki, km, kn, ki, ke]).clone();
+                    st3.sub_assign(
+                        &t3.get([ki, km, kn, ke, ki])
+                            .transpose(&[0, 1, 2, 4, 3, 5])?,
+                    )?;
+                    acc.add_assign(&einsum("mnef,imnaef->ia", &[&soovv, &st3])?)?;
+                }
+            }
+        }
+        pt1.set_leading(&[ki], &acc)?;
+    }
+
+    // `:540-608` — `pt2`.
+    let mut pt2 = ZArr::zeros(&[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir]);
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                let kb = kconserv.get(ki, ka, kj) as usize;
+                let mut acc = ZArr::zeros(&[nocc, nocc, nvir, nvir]);
+                for km in 0..nkpts {
+                    for kn in 0..nkpts {
+                        // `:545-556` — `(ia,jb) -> (ia,jb)`.
+                        let ke = kconserv.get(km, kj, kn) as usize;
+                        acc.add_assign(&einsum_scaled(
+                            "imnabe,mnje->ijab",
+                            &[
+                                t3.get([ki, km, kn, ka, kb]),
+                                &eris.blk(Blk::Ooov, km, kn, kj)?,
+                            ],
+                            -2.0,
+                        )?)?;
+                        acc.add_assign(&einsum(
+                            "imnabe,nmje->ijab",
+                            &[
+                                t3.get([ki, km, kn, ka, kb]),
+                                &eris.blk(Blk::Ooov, kn, km, kj)?,
+                            ],
+                        )?)?;
+                        acc.add_assign(&einsum(
+                            "inmeab,mnje->ijab",
+                            &[
+                                t3.get([ki, kn, km, ke, ka]),
+                                &eris.blk(Blk::Ooov, km, kn, kj)?,
+                            ],
+                        )?)?;
+                        // `:558-566` — `(ia,jb) -> (jb,ia)`.
+                        let ke = kconserv.get(km, ki, kn) as usize;
+                        acc.add_assign(&einsum_scaled(
+                            "jmnbae,mnie->ijab",
+                            &[
+                                t3.get([kj, km, kn, kb, ka]),
+                                &eris.blk(Blk::Ooov, km, kn, ki)?,
+                            ],
+                            -2.0,
+                        )?)?;
+                        acc.add_assign(&einsum(
+                            "jmnbae,nmie->ijab",
+                            &[
+                                t3.get([kj, km, kn, kb, ka]),
+                                &eris.blk(Blk::Ooov, kn, km, ki)?,
+                            ],
+                        )?)?;
+                        acc.add_assign(&einsum(
+                            "jnmeba,mnie->ijab",
+                            &[
+                                t3.get([kj, kn, km, ke, kb]),
+                                &eris.blk(Blk::Ooov, km, kn, ki)?,
+                            ],
+                        )?)?;
+                    }
+
+                    // `:568-582` — the `fov` terms. Note `t3[…,ka,km]` and
+                    // `t3[…,kb,km]`: the LAST k-index is `km`, not a
+                    // conserved one, which is upstream as written.
+                    acc.add_assign(&einsum(
+                        "ijmabe,me->ijab",
+                        &[t3.get([ki, kj, km, ka, kb]), &eris.fov(km)?],
+                    )?)?;
+                    acc.sub_assign(&einsum(
+                        "ijmaeb,me->ijab",
+                        &[t3.get([ki, kj, km, ka, km]), &eris.fov(km)?],
+                    )?)?;
+                    acc.add_assign(&einsum(
+                        "jimbae,me->ijab",
+                        &[t3.get([kj, ki, km, kb, ka]), &eris.fov(km)?],
+                    )?)?;
+                    acc.sub_assign(&einsum(
+                        "jimbea,me->ijab",
+                        &[t3.get([kj, ki, km, kb, km]), &eris.fov(km)?],
+                    )?)?;
+
+                    for ke in 0..nkpts {
+                        // `:584-596` — `(ia,jb) -> (ia,jb)`.
+                        let kf = kconserv.get(km, ke, kb) as usize;
+                        acc.add_assign(&einsum_scaled(
+                            "ijmaef,bmef->ijab",
+                            &[
+                                t3.get([ki, kj, km, ka, ke]),
+                                &eris.blk(Blk::Vovv, kb, km, ke)?,
+                            ],
+                            2.0,
+                        )?)?;
+                        acc.sub_assign(&einsum(
+                            "ijmaef,bmfe->ijab",
+                            &[
+                                t3.get([ki, kj, km, ka, ke]),
+                                &eris.blk(Blk::Vovv, kb, km, kf)?,
+                            ],
+                        )?)?;
+                        acc.sub_assign(&einsum(
+                            "imjfae,bmef->ijab",
+                            &[
+                                t3.get([ki, km, kj, kf, ka]),
+                                &eris.blk(Blk::Vovv, kb, km, ke)?,
+                            ],
+                        )?)?;
+                        // `:598-608` — `(ia,jb) -> (jb,ia)`.
+                        let kf = kconserv.get(km, ke, ka) as usize;
+                        acc.add_assign(&einsum_scaled(
+                            "jimbef,amef->ijab",
+                            &[
+                                t3.get([kj, ki, km, kb, ke]),
+                                &eris.blk(Blk::Vovv, ka, km, ke)?,
+                            ],
+                            2.0,
+                        )?)?;
+                        acc.sub_assign(&einsum(
+                            "jimbef,amfe->ijab",
+                            &[
+                                t3.get([kj, ki, km, kb, ke]),
+                                &eris.blk(Blk::Vovv, ka, km, kf)?,
+                            ],
+                        )?)?;
+                        acc.sub_assign(&einsum(
+                            "jmifbe,amef->ijab",
+                            &[
+                                t3.get([kj, km, ki, kf, kb]),
+                                &eris.blk(Blk::Vovv, ka, km, ke)?,
+                            ],
+                        )?)?;
+                    }
+                }
+                pt2.set_leading(&[ki, kj, ka], &acc)?;
+            }
+        }
+    }
+
+    // `:610-616` — `pt1 /= eia`, at `ka == ki`.
+    for ki in 0..nkpts {
+        let eia = crate::kccsd_t::epq_ov(&mo_e_o, nz_o, ki, &mo_e_v, nz_v, ki, nocc, nvir);
+        let mut blk = pt1.slice_leading(&[ki])?;
+        for (f, d) in eia.iter().enumerate() {
+            blk.data_mut().re[f] /= d;
+            blk.data_mut().im[f] /= d;
+        }
+        pt1.set_leading(&[ki], &blk)?;
+    }
+
+    // `:618-628` — `pt2 /= eijab`.
+    for ki in 0..nkpts {
+        for ka in 0..nkpts {
+            let eia = crate::kccsd_t::epq_ov(&mo_e_o, nz_o, ki, &mo_e_v, nz_v, ka, nocc, nvir);
+            for kj in 0..nkpts {
+                let kb = kconserv.get(ki, ka, kj) as usize;
+                let ejb = crate::kccsd_t::epq_ov(&mo_e_o, nz_o, kj, &mo_e_v, nz_v, kb, nocc, nvir);
+                let mut blk = pt2.slice_leading(&[ki, kj, ka])?;
+                let mut f = 0;
+                for i in 0..nocc {
+                    for j in 0..nocc {
+                        for a in 0..nvir {
+                            for b in 0..nvir {
+                                let d = eia[i * nvir + a] + ejb[j * nvir + b];
+                                blk.data_mut().re[f] /= d;
+                                blk.data_mut().im[f] /= d;
+                                f += 1;
+                            }
+                        }
+                    }
+                }
+                pt2.set_leading(&[ki, kj, ka], &blk)?;
+            }
+        }
+    }
+
+    // `:630-631`
+    pt1.add_assign(t1)?;
+    pt2.add_assign(t2)?;
+
+    // `:633-641` — `Wmcik`, the spin-adapted `2·ijk − jik − kji`.
+    let mut wovoo = ZArr::zeros(&[nkpts, nkpts, nkpts, nocc, nvir, nocc, nocc]);
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for kk in 0..nkpts {
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of(ki, kj, kk, ka, kb);
+                        let km = kconserv.get(kc, ki, ka) as usize;
+                        let oovv = eris.blk(Blk::Oovv, km, ki, kc)?;
+                        let mut w = wovoo.slice_leading(&[km, kb, kk])?;
+                        w.add_assign(&einsum_scaled(
+                            "ijkabc,mica->mbkj",
+                            &[t3.get([ki, kj, kk, ka, kb]), &oovv],
+                            2.0,
+                        )?)?;
+                        w.sub_assign(&einsum(
+                            "jikabc,mica->mbkj",
+                            &[t3.get([kj, ki, kk, ka, kb]), &oovv],
+                        )?)?;
+                        w.sub_assign(&einsum(
+                            "kjiabc,mica->mbkj",
+                            &[t3.get([kk, kj, ki, ka, kb]), &oovv],
+                        )?)?;
+                        wovoo.set_leading(&[km, kb, kk], &w)?;
+                    }
+                }
+            }
+        }
+    }
+
+    // `:643-651` — `Wacek`.
+    let mut wvvvo = ZArr::zeros(&[nkpts, nkpts, nkpts, nvir, nvir, nvir, nocc]);
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for kk in 0..nkpts {
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of(ki, kj, kk, ka, kb);
+                        let ke = kconserv.get(ki, ka, kk) as usize;
+                        let oovv = eris.blk(Blk::Oovv, ki, kk, ka)?;
+                        let mut w = wvvvo.slice_leading(&[kc, kb, ke])?;
+                        w.add_assign(&einsum_scaled(
+                            "ijkabc,ikae->cbej",
+                            &[t3.get([ki, kj, kk, ka, kb]), &oovv],
+                            -2.0,
+                        )?)?;
+                        w.add_assign(&einsum(
+                            "jikabc,ikae->cbej",
+                            &[t3.get([kj, ki, kk, ka, kb]), &oovv],
+                        )?)?;
+                        w.add_assign(&einsum(
+                            "kjiabc,ikae->cbej",
+                            &[t3.get([kk, kj, ki, ka, kb]), &oovv],
+                        )?)?;
+                        wvvvo.set_leading(&[kc, kb, ke], &w)?;
+                    }
+                }
+            }
+        }
+    }
+
+    let delta_ccsd_energy = crate::kccsd_rhf::energy(&pt1, &pt2, eris, kconserv)? - ccsd_energy;
+    Ok(T3p2Imds {
+        delta_ccsd_energy,
+        pt1,
+        pt2,
+        wovoo,
+        wvvvo,
+    })
 }

@@ -47,13 +47,29 @@
 
 use pyscf_pbc_lib::{KIdx, Kconserv, get_kconserv3};
 
-use crate::eom_kccsd_ghf::{
-    EomOpts, Excitation, Padding, Partition, StarLattice, StarPair, StarRoot,
-};
+use crate::eom_kccsd_ghf::{EomOpts, Excitation, KLattice, Padding, Partition, StarPair, StarRoot};
 use crate::error::PbcCcError;
 use crate::keris::{Blk, KEris};
 use crate::kintermediates_rhf as imd;
 use crate::zarr::{ZArr, einsum, einsum_scaled};
+
+/// `imd.get_t3p2_imds(cc, t1, t2, eris)` as the three `make_t3p2_*` call it.
+///
+/// **This port calls the LOOP-EXPLICIT `get_t3p2_imds_slow`**, not the blocked
+/// `get_t3p2_imds` upstream's `_IMDS` reaches for. Upstream's own two
+/// implementations do not agree to machine precision — see
+/// [`crate::kintermediates_rhf::get_t3p2_imds_slow`] for the measured gap and
+/// why the loop-explicit one is the porting target.
+fn t3p2(
+    t1: &ZArr,
+    t2: &ZArr,
+    eris: &KEris,
+    kconserv: &Kconserv,
+    padding: &Padding,
+    lat: &KLattice<'_>,
+) -> Result<imd::T3p2Imds, PbcCcError> {
+    imd::get_t3p2_imds_slow(t1, t2, eris, kconserv, padding, lat)
+}
 
 /// The intermediates `eom_kccsd_rhf._IMDS` caches (`:1497-1716`).
 pub struct RhfEomImds<'a> {
@@ -215,6 +231,86 @@ impl<'a> RhfEomImds<'a> {
             self.wvvvv = Some(w4);
         }
         Ok(self)
+    }
+
+    /// `_IMDS.make_t3p2_ip(cc)` (`:1578-1593`) — the `EOMIP_Ta` (`:419-424`)
+    /// intermediates.
+    ///
+    /// `t1`/`t2` are REPLACED by `pt1`/`pt2` and the entire set is rebuilt
+    /// from them (`:1587`'s `self._made_shared_2e = False  # Force update`,
+    /// and `_make_shared_1e` runs unconditionally inside `make_ip`), so
+    /// `Loo`, `Lvv`, `Fov`, `Wovov`, `Wovvo`, `Woooo`, `Wooov` and `Wovoo` are
+    /// all the PERTURBED ones. Only then is `Wmcik` added to `Wovoo`.
+    ///
+    /// Returns the intermediates and `delta_ccsd_energy`.
+    ///
+    /// # Errors
+    /// Propagates the `T3[2]` build and every intermediate.
+    pub fn make_t3p2_ip(
+        t1: &ZArr,
+        t2: &ZArr,
+        eris: &'a KEris,
+        kconserv: &Kconserv,
+        padding: &Padding,
+        lat: &KLattice<'_>,
+    ) -> Result<(Self, f64), PbcCcError> {
+        let p = t3p2(t1, t2, eris, kconserv, padding, lat)?;
+        let mut imds = Self::make_shared(&p.pt1, &p.pt2, eris, kconserv)?.make_ip(kconserv)?;
+        let mut w = imds.need(&imds.wovoo, "Wovoo")?.clone();
+        w.add_assign(&p.wovoo)?;
+        imds.wovoo = Some(w);
+        Ok((imds, p.delta_ccsd_energy))
+    }
+
+    /// `_IMDS.make_t3p2_ea(cc)` (`:1629-1644`) — the `EOMEA_Ta` (`:819-824`)
+    /// intermediates. As [`RhfEomImds::make_t3p2_ip`], with `Wacek` added to
+    /// the rebuilt `Wvvvo`.
+    ///
+    /// # Errors
+    /// As [`RhfEomImds::make_t3p2_ip`].
+    pub fn make_t3p2_ea(
+        t1: &ZArr,
+        t2: &ZArr,
+        eris: &'a KEris,
+        kconserv: &Kconserv,
+        padding: &Padding,
+        lat: &KLattice<'_>,
+    ) -> Result<(Self, f64), PbcCcError> {
+        let p = t3p2(t1, t2, eris, kconserv, padding, lat)?;
+        let mut imds = Self::make_shared(&p.pt1, &p.pt2, eris, kconserv)?.make_ea(kconserv)?;
+        let mut w = imds.need(&imds.wvvvo, "Wvvvo")?.clone();
+        w.add_assign(&p.wvvvo)?;
+        imds.wvvvo = Some(w);
+        Ok((imds, p.delta_ccsd_energy))
+    }
+
+    /// `_IMDS.make_t3p2_ip_ea(cc)` (`:1646-1664`) — BOTH sets from ONE
+    /// `T3[2]` build.
+    ///
+    /// This module has it and the spin-orbital one does not; it exists so a
+    /// caller wanting both `EOMIP_Ta` and `EOMEA_Ta` pays for `T3[2]` once.
+    ///
+    /// # Errors
+    /// As [`RhfEomImds::make_t3p2_ip`].
+    pub fn make_t3p2_ip_ea(
+        t1: &ZArr,
+        t2: &ZArr,
+        eris: &'a KEris,
+        kconserv: &Kconserv,
+        padding: &Padding,
+        lat: &KLattice<'_>,
+    ) -> Result<(Self, f64), PbcCcError> {
+        let p = t3p2(t1, t2, eris, kconserv, padding, lat)?;
+        let mut imds = Self::make_shared(&p.pt1, &p.pt2, eris, kconserv)?
+            .make_ip(kconserv)?
+            .make_ea(kconserv)?;
+        let mut w = imds.need(&imds.wovoo, "Wovoo")?.clone();
+        w.add_assign(&p.wovoo)?;
+        imds.wovoo = Some(w);
+        let mut w = imds.need(&imds.wvvvo, "Wvvvo")?.clone();
+        w.add_assign(&p.wvvvo)?;
+        imds.wvvvo = Some(w);
+        Ok((imds, p.delta_ccsd_energy))
     }
 
     /// `Wovov` — present unless the caller built an `'mp'` set.
@@ -1783,7 +1879,7 @@ fn scale_by_inverse(x: &mut ZArr, (re, im): (f64, f64)) {
 }
 
 /// `get_kconserv3(cell, kpts, [p, q, kshift, range(nkpts), range(nkpts)])`.
-fn kklist(lat: &StarLattice<'_>, p: usize, q: usize, kshift: usize, nkpts: usize) -> Vec<usize> {
+fn kklist(lat: &KLattice<'_>, p: usize, q: usize, kshift: usize, nkpts: usize) -> Vec<usize> {
     let all: Vec<usize> = (0..nkpts).collect();
     get_kconserv3(
         lat.a,
@@ -1944,7 +2040,7 @@ pub fn ipccsd_star_contract(
     imds: &RhfEomImds<'_>,
     padding: &Padding,
     kconserv: &Kconserv,
-    lat: &StarLattice<'_>,
+    lat: &KLattice<'_>,
 ) -> Result<Vec<StarRoot>, PbcCcError> {
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
     let (mo_e_o, mo_e_v) = split_mo_energy(imds.eris, nocc);
@@ -1990,51 +2086,17 @@ pub fn ipccsd_star_contract(
                         // where `P(ia|jb)` swaps `(i,a)` with `(j,b)`: the
                         // k-vector is permuted `[1,0,2,4,3]` and the RESULT is
                         // transposed the same way.
-                        let mut l = ip_l3p(
-                            &l1,
-                            &l2,
-                            [ki, kj, kk, ka, kb],
-                            kshift,
-                            imds,
-                            kconserv,
-                            
-                        )?;
+                        let mut l = ip_l3p(&l1, &l2, [ki, kj, kk, ka, kb], kshift, imds, kconserv)?;
                         l.add_assign(
-                            &ip_l3p(
-                                &l1,
-                                &l2,
-                                [kj, ki, kk, kb, ka],
-                                kshift,
-                                imds,
-                                kconserv,
-                                
-                            )?
-                            .transpose(&[1, 0, 2, 4, 3])?,
+                            &ip_l3p(&l1, &l2, [kj, ki, kk, kb, ka], kshift, imds, kconserv)?
+                                .transpose(&[1, 0, 2, 4, 3])?,
                         )?;
                         lijkab.set_leading(&[ki, kj], &l)?;
 
-                        let mut r = ip_r3p(
-                            &r1,
-                            &r2,
-                            
-                            [ki, kj, kk, ka, kb],
-                            kshift,
-                            imds,
-                            kconserv,
-                            
-                        )?;
+                        let mut r = ip_r3p(&r1, &r2, [ki, kj, kk, ka, kb], kshift, imds, kconserv)?;
                         r.add_assign(
-                            &ip_r3p(
-                                &r1,
-                                &r2,
-                                
-                                [kj, ki, kk, kb, ka],
-                                kshift,
-                                imds,
-                                kconserv,
-                                
-                            )?
-                            .transpose(&[1, 0, 2, 4, 3])?,
+                            &ip_r3p(&r1, &r2, [kj, ki, kk, kb, ka], kshift, imds, kconserv)?
+                                .transpose(&[1, 0, 2, 4, 3])?,
                         )?;
                         rijkab.set_leading(&[ki, kj], &r)?;
                     }
@@ -2248,7 +2310,7 @@ pub fn eaccsd_star_contract(
     imds: &RhfEomImds<'_>,
     padding: &Padding,
     kconserv: &Kconserv,
-    lat: &StarLattice<'_>,
+    lat: &KLattice<'_>,
 ) -> Result<Vec<StarRoot>, PbcCcError> {
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
     let (mo_e_o, mo_e_v) = split_mo_energy(imds.eris, nocc);
@@ -2294,51 +2356,17 @@ pub fn eaccsd_star_contract(
                         let kc = kc_of[ka * nkpts + kb];
                         // `contract_pl3p` (`:653-663`): the k-vector permutes
                         // `[1,0,3,2,4]` and the result transposes the same.
-                        let mut l = ea_l3p(
-                            &l1,
-                            &l2,
-                            [ki, kj, ka, kb, kc],
-                            kshift,
-                            imds,
-                            kconserv,
-                            
-                        )?;
+                        let mut l = ea_l3p(&l1, &l2, [ki, kj, ka, kb, kc], kshift, imds, kconserv)?;
                         l.add_assign(
-                            &ea_l3p(
-                                &l1,
-                                &l2,
-                                [kj, ki, kb, ka, kc],
-                                kshift,
-                                imds,
-                                kconserv,
-                                
-                            )?
-                            .transpose(&[1, 0, 3, 2, 4])?,
+                            &ea_l3p(&l1, &l2, [kj, ki, kb, ka, kc], kshift, imds, kconserv)?
+                                .transpose(&[1, 0, 3, 2, 4])?,
                         )?;
                         lijabc.set_leading(&[ka, kb], &l)?;
 
-                        let mut r = ea_r3p(
-                            &r1,
-                            &r2,
-                            
-                            [ki, kj, ka, kb, kc],
-                            kshift,
-                            imds,
-                            kconserv,
-                            
-                        )?;
+                        let mut r = ea_r3p(&r1, &r2, [ki, kj, ka, kb, kc], kshift, imds, kconserv)?;
                         r.add_assign(
-                            &ea_r3p(
-                                &r1,
-                                &r2,
-                                
-                                [kj, ki, kb, ka, kc],
-                                kshift,
-                                imds,
-                                kconserv,
-                                
-                            )?
-                            .transpose(&[1, 0, 3, 2, 4])?,
+                            &ea_r3p(&r1, &r2, [kj, ki, kb, ka, kc], kshift, imds, kconserv)?
+                                .transpose(&[1, 0, 3, 2, 4])?,
                         )?;
                         rijabc.set_leading(&[ka, kb], &r)?;
                     }
@@ -2433,7 +2461,7 @@ pub fn perturbed_ccsd_kernel(
     imds: &RhfEomImds<'_>,
     padding: &Padding,
     kconserv: &Kconserv,
-    lat: &StarLattice<'_>,
+    lat: &KLattice<'_>,
     opts: &EomOpts,
 ) -> Result<Vec<StarRoot>, PbcCcError> {
     if kind == Excitation::Ee {

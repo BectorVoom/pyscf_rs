@@ -125,6 +125,61 @@ impl<'a> EomImds<'a> {
         Ok(self)
     }
 
+    /// `_IMDS.make_t3p2_ip(cc)` (`:1896-1910`) — the `EOM-IP-CCSD(T)*(a)`
+    /// intermediates behind `EOMIP_Ta` (`:760-765`).
+    ///
+    /// Three things happen, in upstream's order:
+    ///
+    /// 1. `get_t3p2_imds_slow` produces `pt1`/`pt2` and the `Wmcik` addition;
+    /// 2. `self.t1`/`self.t2` are REPLACED by `pt1`/`pt2` and the whole shared
+    ///    set is rebuilt from them — `:1903`'s `self._made_shared = False`
+    ///    with the comment "Force update", so `Foo`, `Fvv`, `Fov`, `Wovvo`,
+    ///    `Woooo`, `Wooov` and `Wovoo` are all the PERTURBED ones;
+    /// 3. only then is `Wmcik` ADDED to the rebuilt `Wovoo`.
+    ///
+    /// Returns the intermediates and `delta_ccsd_energy`, which upstream
+    /// computes and only logs (`:528`).
+    ///
+    /// # Errors
+    /// Propagates the `T3[2]` build and every intermediate.
+    pub fn make_t3p2_ip(
+        t1: &ZArr,
+        t2: &ZArr,
+        eris: &'a KgEris,
+        kconserv: &Kconserv,
+        padding: &Padding,
+        lat: &KLattice<'_>,
+    ) -> Result<(Self, f64), PbcCcError> {
+        let p = crate::kintermediates::get_t3p2_imds_slow(t1, t2, eris, kconserv, padding, lat)?;
+        let mut imds = Self::make_shared(&p.pt1, &p.pt2, eris, kconserv)?.make_ip(kconserv)?;
+        let mut w = imds.need(&imds.wovoo, "Wovoo")?.clone();
+        w.add_assign(&p.wovoo)?;
+        imds.wovoo = Some(w);
+        Ok((imds, p.delta_ccsd_energy))
+    }
+
+    /// `_IMDS.make_t3p2_ea(cc)` (`:1934-1948`) — the `EOMEA_Ta` (`:1277-1282`)
+    /// intermediates. As [`EomImds::make_t3p2_ip`], with `Wacek` added to the
+    /// rebuilt `Wvvvo`.
+    ///
+    /// # Errors
+    /// As [`EomImds::make_t3p2_ip`].
+    pub fn make_t3p2_ea(
+        t1: &ZArr,
+        t2: &ZArr,
+        eris: &'a KgEris,
+        kconserv: &Kconserv,
+        padding: &Padding,
+        lat: &KLattice<'_>,
+    ) -> Result<(Self, f64), PbcCcError> {
+        let p = crate::kintermediates::get_t3p2_imds_slow(t1, t2, eris, kconserv, padding, lat)?;
+        let mut imds = Self::make_shared(&p.pt1, &p.pt2, eris, kconserv)?.make_ea(kconserv)?;
+        let mut w = imds.need(&imds.wvvvo, "Wvvvo")?.clone();
+        w.add_assign(&p.wvvvo)?;
+        imds.wvvvo = Some(w);
+        Ok((imds, p.delta_ccsd_energy))
+    }
+
     fn need<'w>(&self, w: &'w Option<ZArr>, what: &'static str) -> Result<&'w ZArr, PbcCcError> {
         w.as_ref()
             .ok_or_else(|| PbcCcError::Shape(format!("{what} was not built; call make_ip/make_ea")))
@@ -2480,9 +2535,10 @@ pub struct StarPair<'a> {
 /// Everything `get_kconserv3` needs that a [`Kconserv`] does not carry.
 ///
 /// `ipccsd_star_contract:539` calls `kpts_helper.get_kconserv3(eom._cc._scf.cell,
-/// eom._cc.kpts, …)`, so the lattice and the k-mesh have to reach the
-/// correction. [`crate::kccsd_t`] passes the same pair for the same reason.
-pub struct StarLattice<'a> {
+/// eom._cc.kpts, …)`, and so do `get_full_t3p2` (`kintermediates.py:388`) and
+/// every `(T)` kernel, so the lattice and the k-mesh have to reach them.
+/// [`crate::kccsd_t`] passes the same pair for the same reason.
+pub struct KLattice<'a> {
     /// `cell.lattice_vectors()`.
     pub a: &'a [[f64; 3]; 3],
     /// `cc.kpts`.
@@ -2540,7 +2596,7 @@ fn scale_by_inverse(x: &mut ZArr, (re, im): (f64, f64)) {
 
 /// `get_kconserv3(cell, kpts, [p, q, kshift, range(nkpts), range(nkpts)])`,
 /// returned as a `[nkpts, nkpts]` row-major table.
-fn kklist(lat: &StarLattice<'_>, p: usize, q: usize, kshift: usize, nkpts: usize) -> Vec<usize> {
+fn kklist(lat: &KLattice<'_>, p: usize, q: usize, kshift: usize, nkpts: usize) -> Vec<usize> {
     let all: Vec<usize> = (0..nkpts).collect();
     get_kconserv3(
         lat.a,
@@ -2599,7 +2655,7 @@ pub fn ipccsd_star_contract(
     imds: &EomImds<'_>,
     padding: &Padding,
     kconserv: &Kconserv,
-    lat: &StarLattice<'_>,
+    lat: &KLattice<'_>,
 ) -> Result<Vec<StarRoot>, PbcCcError> {
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
     let (mo_e_o, mo_e_v) = split_mo_energy(imds.eris, nocc);
@@ -2818,7 +2874,7 @@ pub fn eaccsd_star_contract(
     imds: &EomImds<'_>,
     padding: &Padding,
     kconserv: &Kconserv,
-    lat: &StarLattice<'_>,
+    lat: &KLattice<'_>,
 ) -> Result<Vec<StarRoot>, PbcCcError> {
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
     let (mo_e_o, mo_e_v) = split_mo_energy(imds.eris, nocc);
@@ -3067,7 +3123,7 @@ pub fn perturbed_ccsd_kernel(
     imds: &EomImds<'_>,
     padding: &Padding,
     kconserv: &Kconserv,
-    lat: &StarLattice<'_>,
+    lat: &KLattice<'_>,
     opts: &EomOpts,
 ) -> Result<Vec<StarRoot>, PbcCcError> {
     if kind == Excitation::Ee {

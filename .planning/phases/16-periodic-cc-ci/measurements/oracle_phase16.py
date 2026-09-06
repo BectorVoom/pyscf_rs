@@ -1879,6 +1879,134 @@ def section_star_ghf(nk=(1, 1, 2)):
     _star_common(_eomg, _eomg.EOMIP, _eomg.EOMEA, cc, eris, nkpts, "ghf")
 
 
+def section_t3p2_ghf(nk=(1, 1, 2)):
+    """The SPIN-ORBITAL T3[2] intermediates and the `*_Ta` roots.
+
+    `get_t3p2_imds_slow` is emitted on the CONVERGED amplitudes, then the
+    `EOMIP_Ta` / `EOMEA_Ta` roots that stand on it.
+    """
+    from pyscf.pbc import scf as _pbcscf
+    from pyscf.pbc.cc import eom_kccsd_ghf as _eomg
+    from pyscf.pbc.cc import kccsd as _kccsd
+    from pyscf.pbc.cc import kintermediates as _gimd
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+
+    cell = diamond()
+    kpts = cell.make_kpts(list(nk))
+    kmf = _pbcscf.KGHF(cell, kpts, exxdiv=None)
+    kmf.conv_tol = 1e-10
+    kmf.kernel()
+    cc = _kccsd.KGCCSD(kmf)
+    cc.conv_tol = 1e-9
+    cc.conv_tol_normt = 1e-7
+    eris = cc.ao2mo(cc.mo_coeff)
+    nkpts, nocc, nmo = len(kpts), cc.nocc, cc.nmo
+    scalar("e_hf", kmf.e_tot)
+    scalar("nkpts", nkpts)
+    scalar("nocc", nocc)
+    scalar("nmo", nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", np.asarray(eris.fock))
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+    emit("kpts", np.asarray(kpts).ravel())
+    emit("lattice", np.asarray(cell.lattice_vectors()).ravel())
+
+    ecc, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", ecc)
+    emit("t1", t1)
+    emit("t2", t2)
+
+    delta, pt1, pt2, Wmcik, Wacek = _gimd.get_t3p2_imds_slow(cc, t1, t2, eris)
+    scalar("delta_ccsd_energy", delta)
+    emit("pt1", pt1)
+    emit("pt2", pt2)
+    emit("Wmcik", Wmcik)
+    emit("Wacek", Wacek)
+
+    # The `_Ta` classes: the rebuilt Wovoo/Wvvvo, then the roots.
+    ip_ta = _eomg.EOMIP_Ta(cc)
+    imd_ip = ip_ta.make_imds(eris=eris)
+    emit("Ta_Wovoo", np.asarray(imd_ip.Wovoo))
+    ea_ta = _eomg.EOMEA_Ta(cc)
+    imd_ea = ea_ta.make_imds(eris=eris)
+    emit("Ta_Wvvvo", np.asarray(imd_ea.Wvvvo))
+
+    nroots = 2
+    scalar("nroots", nroots)
+    for tag, e, fn, imd in (("ip", ip_ta, "ipccsd", imd_ip), ("ea", ea_ta, "eaccsd", imd_ea)):
+        e.conv_tol = 1e-8
+        e.max_cycle = 100
+        for kshift in range(nkpts):
+            evals, evecs = getattr(e, fn)(nroots=nroots, kptlist=[kshift], imds=imd)
+            emit("Ta_%s_roots_%d" % (tag, kshift), np.asarray(evals).ravel())
+            emit("Ta_%s_conv_%d" % (tag, kshift),
+                 np.asarray(np.real(e.converged), dtype=float).ravel())
+
+
+def section_t3p2_rhf(nk=(1, 1, 2)):
+    """The SPIN-ADAPTED T3[2] intermediates and the `*_Ta` roots.
+
+    BOTH of upstream's implementations are emitted: `get_t3p2_imds_slow`
+    (`kintermediates_rhf.py:465`) and the blocked `get_t3p2_imds` (`:703`)
+    that `_IMDS.make_t3p2_ip` actually calls. They do NOT agree to machine
+    precision, and the Rust gate needs to know by how much.
+    """
+    from pyscf.pbc.cc import eom_kccsd_rhf as _eomr
+    from pyscf.pbc.cc import kintermediates_rhf as _rimd
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+
+    cell, kpts, mf, cc = build(list(nk))
+    eris = cc.ao2mo(cc.mo_coeff)
+    nkpts, nocc, nmo = len(kpts), cc.nocc, cc.nmo
+    scalar("e_hf", mf.e_tot)
+    scalar("nkpts", nkpts)
+    scalar("nocc", nocc)
+    scalar("nmo", nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", eris.fock)
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+    emit("kpts", np.asarray(kpts).ravel())
+    emit("lattice", np.asarray(cell.lattice_vectors()).ravel())
+
+    ecc, t1, t2 = cc.kernel(eris=eris)
+    scalar("e_corr", ecc)
+    emit("t1", t1)
+    emit("t2", t2)
+
+    slow = _rimd.get_t3p2_imds_slow(cc, t1, t2, eris)
+    fast = _rimd.get_t3p2_imds(cc, t1, t2, eris)
+    scalar("delta_ccsd_energy", slow[0])
+    scalar("delta_ccsd_energy_fast", fast[0])
+    for name, i in (("pt1", 1), ("pt2", 2), ("Wmcik", 3), ("Wacek", 4)):
+        emit(name, np.asarray(slow[i]))
+        # How far upstream's own two implementations are apart: the floor any
+        # port of either inherits.
+        scalar("upstream_%s_slow_vs_fast" % name,
+               float(np.abs(np.asarray(slow[i]) - np.asarray(fast[i])).max()))
+
+    ip_ta = _eomr.EOMIP_Ta(cc)
+    imd_ip = ip_ta.make_imds(eris=eris)
+    emit("Ta_Wovoo", np.asarray(imd_ip.Wovoo))
+    ea_ta = _eomr.EOMEA_Ta(cc)
+    imd_ea = ea_ta.make_imds(eris=eris)
+    emit("Ta_Wvvvo", np.asarray(imd_ea.Wvvvo))
+
+    nroots = 2
+    scalar("nroots", nroots)
+    for tag, e, fn, imd in (("ip", ip_ta, "ipccsd", imd_ip), ("ea", ea_ta, "eaccsd", imd_ea)):
+        e.conv_tol = 1e-8
+        e.max_cycle = 100
+        for kshift in range(nkpts):
+            evals, evecs = getattr(e, fn)(nroots=nroots, kptlist=[kshift], imds=imd)
+            emit("Ta_%s_roots_%d" % (tag, kshift), np.asarray(evals).ravel())
+            emit("Ta_%s_conv_%d" % (tag, kshift),
+                 np.asarray(np.real(e.converged), dtype=float).ravel())
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
@@ -1888,6 +2016,8 @@ SECTIONS = {
     "partition": lambda: section_partition((1, 1, 2)),
     "star_rhf": lambda: section_star_rhf((1, 1, 2)),
     "star_ghf": lambda: section_star_ghf((1, 1, 2)),
+    "t3p2_ghf": lambda: section_t3p2_ghf((1, 1, 2)),
+    "t3p2_rhf": lambda: section_t3p2_rhf((1, 1, 2)),
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
     "kuccsd_eom": lambda: section_kuccsd_eom((1, 1, 2)),

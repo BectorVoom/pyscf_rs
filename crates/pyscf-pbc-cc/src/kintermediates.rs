@@ -13,8 +13,9 @@
 //! conjugations appearing as explicit `.conj()` calls where upstream writes
 //! them.
 
-use pyscf_pbc_lib::Kconserv;
+use pyscf_pbc_lib::{KIdx, Kconserv, get_kconserv3};
 
+use crate::eom_kccsd_ghf::{KLattice, Padding};
 use crate::error::PbcCcError;
 use crate::kccsd::{GBlk, KgEris};
 use crate::zarr::{ZArr, einsum, einsum_scaled};
@@ -880,4 +881,396 @@ pub fn wvvvo(
         }
     }
     Ok(w)
+}
+
+// ---------------------------------------------------------------------------
+// T3[2] — the (T)a intermediates `EOMIP_Ta` / `EOMEA_Ta` are built on
+// (`:355-414`, `:416-529`)
+// ---------------------------------------------------------------------------
+
+/// The full `T3[2]` array, one `[nocc³, nvir³]` block per `(ki,kj,kk,ka,kb)`.
+///
+/// Upstream holds it as a single rank-11 `ndarray` (`:385`), which is what its
+/// own docstring calls "the entire T3[2] array in memory" and what the
+/// `_slow` in [`get_t3p2_imds_slow`] refers to. This keeps the same total —
+/// `nkpts⁵·nocc³·nvir³` complex — as `nkpts⁵` separate blocks, so the
+/// `P(ijk)` step is a per-block permutation rather than a rank-11 one, and
+/// the k-axes are addressed by arithmetic instead of by striding.
+pub struct T3p2 {
+    nkpts: usize,
+    blocks: Vec<ZArr>,
+}
+
+impl T3p2 {
+    fn flat(&self, k: [usize; 5]) -> usize {
+        let n = self.nkpts;
+        ((((k[0] * n + k[1]) * n + k[2]) * n + k[3]) * n) + k[4]
+    }
+
+    /// `t3[ki,kj,kk,ka,kb]`, the `[nocc,nocc,nocc,nvir,nvir,nvir]` block.
+    #[must_use]
+    pub fn get(&self, k: [usize; 5]) -> &ZArr {
+        &self.blocks[self.flat(k)]
+    }
+
+    fn set(&mut self, k: [usize; 5], v: ZArr) {
+        let i = self.flat(k);
+        self.blocks[i] = v;
+    }
+}
+
+/// `get_full_t3p2(mycc, t1, t2, eris)` (`:355-414`).
+///
+/// # `t1` is not read
+///
+/// Upstream's signature takes it and its body never uses it — `get_wijkabc`
+/// (`:364-370`) is built from `t2` and the eris alone. It is dropped from this
+/// signature rather than accepted and ignored.
+///
+/// # Errors
+/// Propagates every block access and shape check.
+pub fn get_full_t3p2(
+    t2: &ZArr,
+    eris: &KgEris,
+    kconserv: &Kconserv,
+    padding: &Padding,
+    lat: &KLattice<'_>,
+) -> Result<T3p2, PbcCcError> {
+    let (nz_o, nz_v) = (&padding.occupied, &padding.virtuals);
+    let (a_lat, kpts) = (lat.a, lat.kpts);
+    let (nkpts, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let mo_e_o: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
+    let mo_e_v: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
+
+    let kc_of = |ki: usize, kj: usize, kk: usize, ka: usize, kb: usize| -> usize {
+        get_kconserv3(
+            a_lat,
+            kpts,
+            &[
+                KIdx::One(ki),
+                KIdx::One(kj),
+                KIdx::One(kk),
+                KIdx::One(ka),
+                KIdx::One(kb),
+            ],
+        )
+        .data[0] as usize
+    };
+
+    /// `get_wijkabc` (`:364-370`).
+    #[allow(clippy::too_many_arguments)]
+    fn w(
+        t2: &ZArr,
+        eris: &KgEris,
+        kconserv: &Kconserv,
+        ki: usize,
+        kj: usize,
+        kk: usize,
+        ka: usize,
+        kb: usize,
+        kc: usize,
+    ) -> Result<ZArr, PbcCcError> {
+        let km = kconserv.get(kc, kk, kb) as usize;
+        let kf = kconserv.get(kk, kc, kj) as usize;
+        let mut ret = einsum(
+            "kjcf,ifab->ijkabc",
+            &[
+                &t2.slice_leading(&[kk, kj, kc])?,
+                &eris.blk(GBlk::Ovvv, ki, kf, ka)?.conj(),
+            ],
+        )?;
+        ret.sub_assign(&einsum(
+            "jima,mkbc->ijkabc",
+            &[
+                &eris.blk(GBlk::Ooov, kj, ki, km)?.conj(),
+                &t2.slice_leading(&[km, kk, kb])?,
+            ],
+        )?)?;
+        Ok(ret)
+    }
+
+    let n5 = nkpts.pow(5);
+    let mut raw = T3p2 {
+        nkpts,
+        blocks: vec![ZArr::zeros(&[0]); n5],
+    };
+    // `:387-393` — `P(abc)` on each block.
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for kk in 0..nkpts {
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of(ki, kj, kk, ka, kb);
+                        let mut blk = w(t2, eris, kconserv, ki, kj, kk, ka, kb, kc)?;
+                        blk.add_assign(
+                            &w(t2, eris, kconserv, ki, kj, kk, kb, kc, ka)?
+                                .transpose(&[0, 1, 2, 5, 3, 4])?,
+                        )?;
+                        blk.add_assign(
+                            &w(t2, eris, kconserv, ki, kj, kk, kc, ka, kb)?
+                                .transpose(&[0, 1, 2, 4, 5, 3])?,
+                        )?;
+                        raw.set([ki, kj, kk, ka, kb], blk);
+                    }
+                }
+            }
+        }
+    }
+
+    // `:396-398` — `P(ijk)` over the WHOLE array, k-axes included. Written out
+    // per block: upstream's `transpose(1,2,0,3,4,6,7,5,8,9,10)` sends
+    // `[ki,kj,kk,ka,kb][i,j,k,…]` to `[kk,ki,kj,ka,kb][k,i,j,…]`, and
+    // `transpose(2,0,1,3,4,7,5,6,8,9,10)` to `[kj,kk,ki,ka,kb][j,k,i,…]`.
+    let mut t3 = T3p2 {
+        nkpts,
+        blocks: vec![ZArr::zeros(&[0]); n5],
+    };
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for kk in 0..nkpts {
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let mut blk = raw.get([ki, kj, kk, ka, kb]).clone();
+                        blk.add_assign(
+                            &raw.get([kk, ki, kj, ka, kb])
+                                .transpose(&[1, 2, 0, 3, 4, 5])?,
+                        )?;
+                        blk.add_assign(
+                            &raw.get([kj, kk, ki, ka, kb])
+                                .transpose(&[2, 0, 1, 3, 4, 5])?,
+                        )?;
+                        t3.set([ki, kj, kk, ka, kb], blk);
+                    }
+                }
+            }
+        }
+    }
+    drop(raw);
+
+    // `:400-412` — the denominator.
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for kk in 0..nkpts {
+                let eijk = crate::kccsd_t::epqr3(&mo_e_o, nz_o, ki, kj, kk, nocc, 1.0);
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = kc_of(ki, kj, kk, ka, kb);
+                        let eabc = crate::kccsd_t::epqr3(&mo_e_v, nz_v, ka, kb, kc, nvir, -1.0);
+                        let i = t3.flat([ki, kj, kk, ka, kb]);
+                        let blk = &mut t3.blocks[i];
+                        let mut f = 0;
+                        for &e_ijk in &eijk {
+                            for &e_abc in &eabc {
+                                let d = e_ijk + e_abc;
+                                blk.data_mut().re[f] /= d;
+                                blk.data_mut().im[f] /= d;
+                                f += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(t3)
+}
+
+/// What `get_t3p2_imds_slow` returns (`:529`).
+pub struct T3p2Imds {
+    /// `energy(pt1, pt2) − energy(t1, t2)`, upstream's `delta_ccsd_energy`.
+    pub delta_ccsd_energy: f64,
+    /// The perturbatively corrected `t1`.
+    pub pt1: ZArr,
+    /// The perturbatively corrected `t2`.
+    pub pt2: ZArr,
+    /// `Wmcik` — the `[nkpts³, nocc, nvir, nocc, nocc]` addition to `Wovoo`.
+    pub wovoo: ZArr,
+    /// `Wacek` — the `[nkpts³, nvir, nvir, nvir, nocc]` addition to `Wvvvo`.
+    pub wvvvo: ZArr,
+}
+
+/// `get_t3p2_imds_slow(cc, t1, t2, eris)` (`:416-529`) — the `T1[2]`/`T2[2]`
+/// corrections and the two `(T)a` intermediates, after
+/// D. A. Matthews and J. F. Stanton, JCP **145**, 124102 (2016), Eq. 14.
+///
+/// # This builds the entire `T3[2]` array
+///
+/// `nkpts⁵·nocc³·nvir³` complex, upstream's own shape and the reason its name
+/// ends in `_slow`. There is no blocked spin-orbital form upstream to port
+/// instead: `kintermediates.py` has only this one.
+///
+/// # Errors
+/// Propagates every block access and shape check.
+pub fn get_t3p2_imds_slow(
+    t1: &ZArr,
+    t2: &ZArr,
+    eris: &KgEris,
+    kconserv: &Kconserv,
+    padding: &Padding,
+    lat: &KLattice<'_>,
+) -> Result<T3p2Imds, PbcCcError> {
+    let (nz_o, nz_v) = (&padding.occupied, &padding.virtuals);
+    let (a_lat, kpts) = (lat.a, lat.kpts);
+    let (nkpts, nocc, nvir) = (eris.nkpts, eris.nocc, eris.nvir);
+    let mo_e_o: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[..nocc].to_vec()).collect();
+    let mo_e_v: Vec<Vec<f64>> = eris.mo_energy.iter().map(|e| e[nocc..].to_vec()).collect();
+    let ccsd_energy = crate::kccsd::energy(t1, t2, eris)?;
+
+    let t3 = get_full_t3p2(t2, eris, kconserv, padding, lat)?;
+
+    // `:480-488` — `pt1`.
+    let mut pt1 = ZArr::zeros(&[nkpts, nocc, nvir]);
+    for ki in 0..nkpts {
+        let ka = ki;
+        let mut acc = ZArr::zeros(&[nocc, nvir]);
+        for km in 0..nkpts {
+            for kn in 0..nkpts {
+                for ke in 0..nkpts {
+                    acc.add_assign(&einsum_scaled(
+                        "mnef,imnaef->ia",
+                        &[
+                            &eris.blk(GBlk::Oovv, km, kn, ke)?,
+                            t3.get([ki, km, kn, ka, ke]),
+                        ],
+                        0.25,
+                    )?)?;
+                }
+            }
+        }
+        let eia = crate::kccsd_t::epq_ov(&mo_e_o, nz_o, ki, &mo_e_v, nz_v, ka, nocc, nvir);
+        for (f, d) in eia.iter().enumerate() {
+            acc.data_mut().re[f] /= d;
+            acc.data_mut().im[f] /= d;
+        }
+        pt1.set_leading(&[ki], &acc)?;
+    }
+
+    // `:490-512` — `pt2`.
+    let mut pt2 = ZArr::zeros(&[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir]);
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                let kb = kconserv.get(ki, ka, kj) as usize;
+                let mut acc = ZArr::zeros(&[nocc, nocc, nvir, nvir]);
+                for km in 0..nkpts {
+                    acc.add_assign(&einsum(
+                        "ijmabe,me->ijab",
+                        &[t3.get([ki, kj, km, ka, kb]), &eris.fov(km)?],
+                    )?)?;
+                    for ke in 0..nkpts {
+                        let kf = kconserv.get(km, ke, kb) as usize;
+                        acc.add_assign(&einsum_scaled(
+                            "ijmaef,mbfe->ijab",
+                            &[
+                                t3.get([ki, kj, km, ka, ke]),
+                                &eris.blk(GBlk::Ovvv, km, kb, kf)?,
+                            ],
+                            0.5,
+                        )?)?;
+                        let kf = kconserv.get(km, ke, ka) as usize;
+                        acc.add_assign(&einsum_scaled(
+                            "ijmbef,mafe->ijab",
+                            &[
+                                t3.get([ki, kj, km, kb, ke]),
+                                &eris.blk(GBlk::Ovvv, km, ka, kf)?,
+                            ],
+                            -0.5,
+                        )?)?;
+                    }
+                    for kn in 0..nkpts {
+                        acc.add_assign(&einsum_scaled(
+                            "inmabe,nmje->ijab",
+                            &[
+                                t3.get([ki, kn, km, ka, kb]),
+                                &eris.blk(GBlk::Ooov, kn, km, kj)?,
+                            ],
+                            -0.5,
+                        )?)?;
+                        acc.add_assign(&einsum_scaled(
+                            "jnmabe,nmie->ijab",
+                            &[
+                                t3.get([kj, kn, km, ka, kb]),
+                                &eris.blk(GBlk::Ooov, kn, km, ki)?,
+                            ],
+                            0.5,
+                        )?)?;
+                    }
+                }
+                let eia = crate::kccsd_t::epq_ov(&mo_e_o, nz_o, ki, &mo_e_v, nz_v, ka, nocc, nvir);
+                let ejb = crate::kccsd_t::epq_ov(&mo_e_o, nz_o, kj, &mo_e_v, nz_v, kb, nocc, nvir);
+                let mut f = 0;
+                for i in 0..nocc {
+                    for j in 0..nocc {
+                        for a in 0..nvir {
+                            for b in 0..nvir {
+                                let d = eia[i * nvir + a] + ejb[j * nvir + b];
+                                acc.data_mut().re[f] /= d;
+                                acc.data_mut().im[f] /= d;
+                                f += 1;
+                            }
+                        }
+                    }
+                }
+                pt2.set_leading(&[ki, kj, ka], &acc)?;
+            }
+        }
+    }
+
+    // `:514-515`
+    pt1.add_assign(t1)?;
+    pt2.add_assign(t2)?;
+
+    // `:517-525` — the two `(T)a` intermediates.
+    let mut wovoo = ZArr::zeros(&[nkpts, nkpts, nkpts, nocc, nvir, nocc, nocc]);
+    let mut wvvvo = ZArr::zeros(&[nkpts, nkpts, nkpts, nvir, nvir, nvir, nocc]);
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            for kk in 0..nkpts {
+                for ka in 0..nkpts {
+                    for kb in 0..nkpts {
+                        let kc = get_kconserv3(
+                            a_lat,
+                            kpts,
+                            &[
+                                KIdx::One(ki),
+                                KIdx::One(kj),
+                                KIdx::One(kk),
+                                KIdx::One(ka),
+                                KIdx::One(kb),
+                            ],
+                        )
+                        .data[0] as usize;
+                        let tmp = t3.get([ki, kj, kk, ka, kb]);
+                        let km = kconserv.get(ki, kc, kk) as usize;
+                        let ke = kconserv.get(ka, kk, kc) as usize;
+
+                        let mut w = wovoo.slice_leading(&[km, kc, ki])?;
+                        w.add_assign(&einsum_scaled(
+                            "ijkabc,mjab->mcik",
+                            &[tmp, &eris.blk(GBlk::Oovv, km, kj, ka)?],
+                            0.5,
+                        )?)?;
+                        wovoo.set_leading(&[km, kc, ki], &w)?;
+
+                        let mut w = wvvvo.slice_leading(&[ka, kc, ke])?;
+                        w.add_assign(&einsum_scaled(
+                            "ijkabc,ijeb->acek",
+                            &[tmp, &eris.blk(GBlk::Oovv, ki, kj, ke)?],
+                            -0.5,
+                        )?)?;
+                        wvvvo.set_leading(&[ka, kc, ke], &w)?;
+                    }
+                }
+            }
+        }
+    }
+
+    let delta_ccsd_energy = crate::kccsd::energy(&pt1, &pt2, eris)? - ccsd_energy;
+    Ok(T3p2Imds {
+        delta_ccsd_energy,
+        pt1,
+        pt2,
+        wovoo,
+        wvvvo,
+    })
 }
