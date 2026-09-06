@@ -133,3 +133,43 @@ end-to-end gate and break EOM.
   `Woooo`, `Woovo`, `Wooov`, `Wovvo`, `W1oovv`, `W2oovv`, `Woovv`,
   `_eri_spin2spatial`, `_eri_spatial2spin`. These are EOM-KUCCSD's (plan 16-11),
   not the ground state's. NOT stubbed.
+
+
+---
+
+# 16-12 (part) — `kuccsd_rdm`
+
+16-06 unblocked it, so it ships with this work.
+`crates/pyscf-pbc-cc/src/kuccsd_rdm.rs` ports `pbc/cc/kuccsd_rdm.py` (157 l):
+`gamma1_intermediates`, `make_rdm1`, `make_rdm1_from_gamma1`.
+
+| Gate | Measured | Set | Test |
+|---|---|---|---|
+| `dm1a`/`dm1b` on FIXED synthetic amplitudes | **`6.94e-18`** / `3.47e-18` | `1e-15` | `kuccsd_rdm1_matches_upstream` |
+| non-Hermiticity of the same | **`0e0`** | `1e-15` | same |
+| `dm1a`/`dm1b` on the CONVERGED amplitudes | `1.96e-8` / `1.90e-8` | `1e-7` | same |
+| `max|Δt1|` at convergence | `2.41e-9` | reported | same |
+| the frozen-core refusal names `kuccsd_rdm.py:137` | — | — | `rdm1_frozen_core_refuses_and_says_where` |
+
+**The converged comparison does not measure the density-matrix code.** `dm1` is
+a direct function of `t1`/`t2`, and the two sides' converged amplitudes agree
+only to what `conv_tol` bought — measured `2.41e-9`, which the bilinear `dm1`
+amplifies to `1.96e-8`. The gate is therefore set from the amplitude spread, and
+the test PRINTS both numbers so the relationship is visible rather than asserted.
+The synthetic-amplitude comparison is the gate on the equations, and there the
+two implementations are bit-identical up to summation order.
+
+## Still deferred from 16-12
+
+* **`l1`/`l2` default to `conj(t1)`/`conj(t2)`** (`:26-29`), which is upstream's
+  default and not a solution of the Lambda equations. `pbc/cc` ships no k-point
+  Lambda solver — there is no `kccsd_lambda.py` — so there is nothing further to
+  port. A caller wanting response-quality densities brings its own `l1`/`l2`,
+  which the signature accepts.
+* **The frozen-core branch** (`:136-152`) is DEAD CODE upstream: the `raise
+  NotImplementedError` precedes twelve lines that cannot run. The refusal is
+  reproduced; the unreachable body is not, because its only specification is
+  that upstream never executes it.
+* **The Γ-point `pbc/cc/ccsd.py` shim** — still blocked, and not by 16-06. It
+  needs the molecular complex-capable `rccsd.RCCSD` this port does not have
+  (`16-CONTEXT §1.2`), which is a phase, not a task.

@@ -175,7 +175,7 @@ phase inherited from 17-09 is: defer explicitly, never guess.
 |---|---|---|---|
 | ~~**16-06** `KUCCSD`~~ | `kintermediates_uhf` (1225 l) + `kccsd_uhf` (1116 l) | **CLOSED.** `kccsd_uhf.py` and `kintermediates_uhf.py:26-588` ship; `:590-1225` is EOM-KUCCSD's and stays with 16-11. Found and fixed THREE latent defects in the already-shipped complex arena — see `16-06-SUMMARY.md`. | — |
 | **16-09/10/11** EOM-KCCSD GHF/RHF/UHF | 2011 + 1874 + 1275 l | not reached. `16-CONTEXT §4` designates these the phase's **droppable half** — excited-state properties nothing in Phases 17-20 needs for correctness — and BOTH their hard prerequisites now ship and are tested: 16-03's Davidson and 16-07's `KGCCSD`, which the RHF and UHF EOM modules inherit from | — |
-| **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | not reached. `kuccsd_rdm`'s prerequisite 16-06 now SHIPS, so it is unblocked; the Γ shim still needs the molecular complex-capable `rccsd.RCCSD` this port does not have (`16-CONTEXT §1.2`) | — / molecular `RCCSD` |
+| **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | **`kuccsd_rdm` SHIPS** — `6.94e-18` against upstream on fixed synthetic amplitudes, exactly Hermitian, with the converged comparison gated from the measured `2.41e-9` amplitude spread rather than from the RDM. The Γ shim is still blocked and NOT by 16-06: it needs the molecular complex-capable `rccsd.RCCSD` this port does not have (`16-CONTEXT §1.2`), which is a phase, not a task. | molecular `RCCSD` |
 
 **`scf.kghf.KGHF.CCSD` (`kccsd.py:805`), the surface Phase 19 reads, still does
 NOT exist** — 16-07 ships the KGCCSD arithmetic and gates it on upstream's mean

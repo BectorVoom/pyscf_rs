@@ -492,6 +492,18 @@ def section_kuccsd(nk=(1, 1, 2), mesh=(31, 31, 31)):
     emit("t1a", t1[0])
     emit("t1b", t1[1])
 
+    # 16-12 — the one-particle density matrix, on BOTH the converged amplitudes
+    # and the synthetic ones. The synthetic pair is what actually exercises the
+    # equations: at convergence `t1` is small, so a wrong `t1`-linear term
+    # barely moves `dm1`.
+    from pyscf.pbc.cc import kuccsd_rdm as _rdm
+    dm1a, dm1b = _rdm.make_rdm1(cc, t1, t2)
+    emit("rdm1a", dm1a)
+    emit("rdm1b", dm1b)
+    sdm1a, sdm1b = _rdm.make_rdm1(cc, st1, st2)
+    emit("srdm1a", sdm1a)
+    emit("srdm1b", sdm1b)
+
 
 def section_kuccsd_imds(nk=(1, 1, 2), mesh=(31, 31, 31)):
     """Every `kintermediates_uhf` ground-state intermediate on the SAME fixed

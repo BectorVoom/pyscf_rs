@@ -37,6 +37,7 @@ use pyscf_pbc_cc::kccsd_uhf::{
 use pyscf_pbc_cc::kintermediates_uhf::{
     UT1, UT2, cc_foo, cc_fov, cc_fvv, cc_woooo, cc_wovvo, cc_wvvvv_half, make_tau, make_tau2,
 };
+use pyscf_pbc_cc::kuccsd_rdm::{Gamma1, make_rdm1, make_rdm1_from_gamma1};
 use pyscf_pbc_cc::kueris::{KuEris, UBlk, UKind, UPass};
 use pyscf_pbc_cc::{KErisOpts, ZArr};
 use pyscf_pbc_df::{Fftdf, MoCoeff};
@@ -82,6 +83,19 @@ const E_CORR: f64 = 1e-7;
 /// `emp2` from `init_amps`. `1e-9`, as the restricted `emp2` gate is — both
 /// sides are limited by the SCF's own `conv_tol`.
 const EMP2: f64 = 1e-9;
+
+/// The 1-RDM on FIXED synthetic amplitudes — the gate on the equations
+/// themselves, with no convergence in it. MEASURED at `6.9e-18`, i.e. the
+/// two implementations are bit-identical up to summation order, so this is
+/// `1e-15` and not a round number chosen for comfort.
+const RDM_SYNTHETIC: f64 = 1e-15;
+
+/// The 1-RDM on the CONVERGED amplitudes. This one does NOT measure the
+/// density-matrix code: `dm1` is a direct function of `t1`/`t2`, and the two
+/// sides' converged amplitudes agree only to whatever `conv_tol` bought. The
+/// test prints `max|Δt1|` beside the result so the two numbers can be compared,
+/// and the gate is set from the amplitude spread rather than from the RDM.
+const RDM_CONVERGED: f64 = 1e-7;
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -883,4 +897,107 @@ fn kuccsd_fock_block_matches_upstream() {
         failures.is_empty(),
         "the Fock block is above the gate: {failures:?}"
     );
+}
+
+/// **16-12 test 1 — the `KUCCSD` one-particle density matrix.**
+///
+/// Both on the CONVERGED amplitudes and on the fixed synthetic quintuple. The
+/// synthetic pair is the one that exercises the equations: at convergence `t1`
+/// is small, so a wrong `t1`-linear term barely moves `dm1` and an end-to-end
+/// comparison would not see it.
+#[test]
+#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+fn kuccsd_rdm1_matches_upstream() {
+    let Some(ctx) = build("kuccsd") else { return };
+    let nk = ctx.eris.nkpts;
+    let (oa, ob) = ctx.eris.nocc;
+    let (va, vb) = ctx.eris.nvir;
+    let kc = &ctx.khelper.kconserv;
+    let mut failures: Vec<String> = Vec::new();
+
+    // --- the converged amplitudes
+    let pool = Arc::new(ZWorkspacePool::new(4_000_000_000));
+    let res = kernel(
+        &pool,
+        &ctx.eris,
+        (&ctx.pa, &ctx.pb),
+        kc,
+        &KrccsdOpts::default(),
+    )
+    .expect("KUCCSD kernel");
+    assert!(res.converged);
+    // The amplitude spread FIRST, so the RDM residual below is explained by a
+    // measured number and not by an assertion about convergence.
+    let dt1 = maxdiff(&res.t1.0, &cblock(&ctx.out, "t1a"), "t1a").max(maxdiff(
+        &res.t1.1,
+        &cblock(&ctx.out, "t1b"),
+        "t1b",
+    ));
+    println!("  converged max|Δt1| {dt1:e}  (this is what the converged RDM inherits)");
+
+    let (a, b) = make_rdm1(&res.t1, &res.t2, None, None, kc, false).expect("make_rdm1");
+    for (got, name) in [(&a, "rdm1a"), (&b, "rdm1b")] {
+        let d = maxdiff(got, &cblock(&ctx.out, name), name);
+        println!("  {name:7} max|Δ| {d:e}  (gate {RDM_CONVERGED:e})");
+        if !(d < RDM_CONVERGED) {
+            failures.push(format!("{name} {d:e}"));
+        }
+    }
+
+    // --- the synthetic amplitudes
+    let mut r = SplitMix64(20260906);
+    let t1: UT1 = (r.draw(&[nk, oa, va]), r.draw(&[nk, ob, vb]));
+    let t2: UT2 = (
+        r.draw(&[nk, nk, nk, oa, oa, va, va]),
+        r.draw(&[nk, nk, nk, oa, ob, va, vb]),
+        r.draw(&[nk, nk, nk, ob, ob, vb, vb]),
+    );
+    let (a, b) = make_rdm1(&t1, &t2, None, None, kc, false).expect("make_rdm1");
+    for (got, name) in [(&a, "srdm1a"), (&b, "srdm1b")] {
+        let d = maxdiff(got, &cblock(&ctx.out, name), name);
+        println!("  {name:7} max|Δ| {d:e}  (gate {RDM_SYNTHETIC:e})");
+        if !(d < RDM_SYNTHETIC) {
+            failures.push(format!("{name} {d:e}"));
+        }
+    }
+
+    // Hermiticity is structural (`:123` writes the `vo` block as the `ov`
+    // block's conjugate transpose), so it holds for ANY amplitudes and is
+    // asserted rather than compared.
+    for (dm, name) in [(&a, "srdm1a"), (&b, "srdm1b")] {
+        let n = dm.shape()[1];
+        let mut worst = 0.0_f64;
+        for k in 0..nk {
+            let blk = dm.slice_leading(&[k]).expect("block");
+            for p in 0..n {
+                for q in 0..n {
+                    let (re, im) = blk.at(&[p, q]).expect("elem");
+                    let (re2, im2) = blk.at(&[q, p]).expect("elem");
+                    worst = worst.max((re - re2).abs()).max((im + im2).abs());
+                }
+            }
+        }
+        println!("  {name:7} non-Hermiticity {worst:e}");
+        assert!(worst < 1e-15, "{name} is not Hermitian: {worst:e}");
+    }
+    assert!(
+        failures.is_empty(),
+        "the 1-RDM is above the gate: {failures:?}"
+    );
+}
+
+/// **16-12 test 2 — the frozen-core branch refuses, and names the line.**
+#[test]
+fn rdm1_frozen_core_refuses_and_says_where() {
+    let d1 = Gamma1 {
+        doo: (ZArr::zeros(&[1, 1, 1]), ZArr::zeros(&[1, 1, 1])),
+        dov: (ZArr::zeros(&[1, 1, 1]), ZArr::zeros(&[1, 1, 1])),
+        dvo: (ZArr::zeros(&[1, 1, 1]), ZArr::zeros(&[1, 1, 1])),
+        dvv: (ZArr::zeros(&[1, 1, 1]), ZArr::zeros(&[1, 1, 1])),
+    };
+    assert!(make_rdm1_from_gamma1(&d1, false).is_ok());
+    let e = make_rdm1_from_gamma1(&d1, true).expect_err("frozen core must refuse");
+    let msg = e.to_string();
+    assert!(msg.contains("kuccsd_rdm.py:137"), "{msg}");
+    assert!(msg.contains("NotImplementedError"), "{msg}");
 }
