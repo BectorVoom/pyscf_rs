@@ -19,7 +19,8 @@ gate is restated with the evidence — five times, listed in §5.
 | **16-08** `KCCSD(T)` | **COMPLETE** | fast-vs-slow `8.36e-13` rel; spin-orbital `3.46e-11` from upstream |
 | **16-13** `KCIS` | **COMPLETE** | Davidson roots `5.48e-10`; both solver paths |
 | 16-06 `KUCCSD` | **SHIPPED** | `16-06-SUMMARY.md` |
-| 16-09/10/11 EOM | **NOT STARTED** | §6 — the plan set's own "droppable half" |
+| 16-09 EOM-KCCSD (GHF) | **SHIPPED** — IP, EA and EE, all three gated to their roots | `16-09-SUMMARY.md` |
+| 16-10/11 EOM RHF/UHF | **NOT STARTED** | §6 — both inherit from 16-09, which now ships |
 | 16-12 `kuccsd_rdm` + Γ shim | **NOT STARTED** | §6 |
 | **16-14** verification | **this file** | |
 
@@ -60,7 +61,7 @@ cargo test --release -p pyscf-pbc-cc --test kccsd_rhf -- --ignored --nocapture
 | G11 | determinism of `t1`, `t2`, `e_corr` | **bit-identical** | bit-identical | **MET** |
 | G2 | `KRCCSD e_corr`, GDF / RSDF route | — | `1e-7` | **NOT RUN** (§6) |
 | G3 | `KUCCSD e_corr` | `6.05e-10` | `1e-7` | PASS (`oracle_kuccsd.rs::kuccsd_e_corr_matches_upstream`). The gate is `1e-7`, not the plan's `1e-8`: it is the same number `measurements/README.md §1` sets for G1 (`KRCCSD e_corr` vs upstream, FFTDF), and the measured residual sits two orders inside it. |
-| G6 | EOM roots | — | `1e-5` | **NOT RUN** (§6) |
+| G6 | EOM roots (GHF) | `1.54e-10 … 4.94e-9` | `1e-5` | PASS — twelve roots (IP/EA/EE × 2 kshifts × 2), all converged, four orders inside the gate (`oracle_phase16.rs::kgccsd_eom_roots_match_upstream`) |
 | G9 | supercell equivalence | `1.426e-11` | `1e-7` | PASS (`kccsd_rhf.rs::krccsd_matches_the_supercell_at_gamma`, `--ignored --release`) |
 
 ---
@@ -200,7 +201,8 @@ phase inherited from 17-09 is: defer explicitly, never guess.
 | plan | what it is | why not | unblocked by |
 |---|---|---|---|
 | ~~**16-06** `KUCCSD`~~ | `kintermediates_uhf` (1225 l) + `kccsd_uhf` (1116 l) | **CLOSED.** `kccsd_uhf.py` and `kintermediates_uhf.py:26-588` ship; `:590-1225` is EOM-KUCCSD's and stays with 16-11. Found and fixed THREE latent defects in the already-shipped complex arena — see `16-06-SUMMARY.md`. | — |
-| **16-09/10/11** EOM-KCCSD GHF/RHF/UHF | 2011 + 1874 + 1275 l | not reached. `16-CONTEXT §4` designates these the phase's **droppable half** — excited-state properties nothing in Phases 17-20 needs for correctness — and BOTH their hard prerequisites now ship and are tested: 16-03's Davidson and 16-07's `KGCCSD`, which the RHF and UHF EOM modules inherit from | — |
+| ~~**16-09** EOM-KCCSD GHF~~ | 2011 l | **CLOSED for IP, EA and EE.** The ten EOM intermediates, all three vector packings, matvecs, left matvecs, diagonals, `mask_frozen`, and the Davidson driver — gated at the equation level on synthetic amplitudes AND at the root level on upstream's own converged amplitudes. Still out of scope and recorded in `16-09-SUMMARY.md`: the CCSD\* corrections, the `*_Ta` variants, and the `partition='mp'` diagonal branch nothing selects. | — |
+| **16-10/11** EOM-KCCSD RHF/UHF | 1874 + 1275 l | not reached. `16-CONTEXT §4` designates these the phase's **droppable half** — excited-state properties nothing in Phases 17-20 needs for correctness. Both `import eom_kccsd_ghf` and inherit its `EOMIP`/`EOMEA`/`EOMEE`, which now ship and are gated, so the remaining work is the spin-adaptation and the two modules' own matvecs. | — |
 | **16-12** `kuccsd_rdm` + the Γ shim | 157 + 157 l | **`kuccsd_rdm` SHIPS** — `6.94e-18` against upstream on fixed synthetic amplitudes, exactly Hermitian, with the converged comparison gated from the measured `2.41e-9` amplitude spread rather than from the RDM. The Γ shim is still blocked and NOT by 16-06: it needs the molecular complex-capable `rccsd.RCCSD` this port does not have (`16-CONTEXT §1.2`), which is a phase, not a task. | molecular `RCCSD` |
 
 **`scf.kghf.KGHF.CCSD` (`kccsd.py:805`), the surface Phase 19 reads, still does
