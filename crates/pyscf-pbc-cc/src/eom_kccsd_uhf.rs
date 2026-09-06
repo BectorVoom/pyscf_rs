@@ -2673,6 +2673,28 @@ pub fn mask_frozen_ea(
     )
 }
 
+/// The refusal both UHF diagonals give `eom.partition == 'mp'` (`:326`,
+/// `:835`).
+///
+/// `eom_kccsd_uhf` ships NO `'mp'` branch, unlike the other two modules.
+/// Upstream's is a bare `raise Exception("MP diag is not tested")` placed in
+/// FRONT of the code — `# remove this to use untested code` — and the dead
+/// body behind it assigns `Hr2aba` (`:335`), an array `ipccsd_diag` never
+/// allocates, so running it would raise `NameError` even with the guard
+/// removed. There is no reference to port against.
+///
+/// The driver refuses first in any case: `EOMIP`/`EOMEA` here inherit
+/// `ipccsd`/`eaccsd` from the spin-orbital module (`:458`, `:959`), which
+/// raise at `eom_kccsd_ghf.py:618`.
+#[must_use]
+pub fn partition_refusal() -> PbcCcError {
+    PbcCcError::NotImplementedUpstream {
+        upstream: "pbc/cc/eom_kccsd_uhf.py:326",
+        what: "ipccsd_diag/eaccsd_diag raise Exception(\"MP diag is not tested\"); the dead \
+               branch behind it assigns Hr2aba, which the function never allocates",
+    }
+}
+
 /// The Davidson driver for EOM-IP / EOM-EA-KUCCSD.
 ///
 /// Structurally identical to [`crate::eom_kccsd_ghf::eom_kernel`]; only the
@@ -2691,6 +2713,19 @@ pub fn eom_kernel(
     opts: &crate::eom_kccsd_ghf::EomOpts,
 ) -> Result<crate::eom_kccsd_ghf::EomRoots, PbcCcError> {
     use crate::eom_kccsd_ghf::Excitation;
+    // `eom.partition` is refused TWICE over in this module. The driver is the
+    // spin-orbital `ipccsd`/`eaccsd` (`:458`, `:959` inherit them), which
+    // raises at `eom_kccsd_ghf.py:618`/`:905`; and both diagonals here open
+    // their `'mp'` branch with a bare `raise Exception("MP diag is not
+    // tested")` (`:326`, `:835`) that upstream deliberately left in front of
+    // the code — `# remove this to use untested code`. The dead code behind it
+    // does not even name its own arrays consistently (`:335` assigns
+    // `Hr2aba`, which `ipccsd_diag` never allocates: a `NameError` the raise
+    // hides), so there is no reference to port against. Unlike
+    // `eom_kccsd_rhf`, this module ships NO `'mp'` branch.
+    if opts.partition != crate::eom_kccsd_ghf::Partition::None {
+        return Err(partition_refusal());
+    }
     let nk = imds.eris.nkpts;
     let nocc = imds.eris.nocc;
     let nvir = imds.eris.nvir;

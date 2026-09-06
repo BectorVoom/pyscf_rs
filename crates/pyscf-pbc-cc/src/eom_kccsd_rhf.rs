@@ -19,16 +19,35 @@
 //! (`:409-413`). The spin-orbital module's careful `tril` packing exists
 //! because ITS `r2` is antisymmetric; this one's is not.
 //!
-//! # `partition` is not ported
+//! # `partition`
 //!
-//! Both matvecs branch three ways on `eom.partition` (`'mp'`, `'full'`, `None`).
-//! Nothing in this phase sets it, and `lipccsd_matvec`/`leaccsd_matvec` both
-//! `assert eom.partition is None` outright (`:107`, `:510`) — so the `None`
-//! branch is the only one the left matvecs admit at all. Porting the other two
-//! would mean shipping arithmetic no test can reach.
+//! Both matvecs and both diagonals branch three ways on `eom.partition`
+//! (`'mp'`, `'full'`, `None`), and this module ports the two that compute
+//! something:
+//!
+//! * `'mp'` — [`ipccsd_matvec_partition`], [`eaccsd_matvec_partition`],
+//!   [`ipccsd_diag_partition`], [`eaccsd_diag_partition`], plus the
+//!   intermediate skips at [`RhfEomImds::make_ip_partition`] /
+//!   [`RhfEomImds::make_ea_partition`].
+//! * `'full'` — REFUSED. `:471-474` reads `if diag is not None: diag =
+//!   eom.get_diag(imds=imds)`, and this module's `get_diag` is
+//!   `ipccsd_diag(eom, kshift, imds, diag)`, so upstream raises `TypeError:
+//!   ipccsd_diag() missing 1 required positional argument: 'kshift'` before
+//!   computing anything. There is nothing to port against.
+//! * `None` — the default, and the only branch the LEFT matvecs admit:
+//!   `lipccsd_matvec`/`leaccsd_matvec` both `assert eom.partition is None`
+//!   (`:109`, `:510`), as do both `*_star_contract` (`:216`, `:619`).
+//!
+//! **The driver refuses both non-`None` values anyway.** `EOMIP`/`EOMEA` here
+//! inherit `ipccsd`/`eaccsd` from [`crate::eom_kccsd_ghf`] (`:378`, `:777`),
+//! and those raise `NotImplementedError` at `eom_kccsd_ghf.py:618`/`:905`. So
+//! [`eom_kernel`] refuses, exactly as upstream's does, and the branches are
+//! reachable only through the `*_partition` entry points — which is the same
+//! access upstream gives them (set `eom.partition` and call the matvec).
 
 use pyscf_pbc_lib::Kconserv;
 
+use crate::eom_kccsd_ghf::Partition;
 use crate::error::PbcCcError;
 use crate::keris::{Blk, KEris};
 use crate::kintermediates_rhf as imd;
@@ -45,9 +64,11 @@ pub struct RhfEomImds<'a> {
     pub lvv: ZArr,
     /// `[nkpts, nocc, nvir]`.
     pub fov: ZArr,
-    /// Shared 2e.
-    pub wovov: ZArr,
-    pub wovvo: ZArr,
+    /// Shared 2e (`_make_shared_2e`, `:1531-1548`). `None` when the caller
+    /// asked for the `'mp'` partition, which skips the whole block
+    /// (`:1552-1554`, `:1597-1599`) because no `'mp'` branch reads it.
+    pub wovov: Option<ZArr>,
+    pub wovvo: Option<ZArr>,
     /// IP.
     pub woooo: Option<ZArr>,
     pub wooov: Option<ZArr>,
@@ -76,8 +97,8 @@ impl<'a> RhfEomImds<'a> {
             loo: imd::loo(t1, t2, eris, kconserv)?,
             lvv: imd::lvv(t1, t2, eris, kconserv)?,
             fov: imd::cc_fov(t1, t2, eris)?,
-            wovov: imd::wovov(t1, t2, eris, kconserv)?,
-            wovvo: imd::wovvo(t1, t2, eris, kconserv)?,
+            wovov: Some(imd::wovov(t1, t2, eris, kconserv)?),
+            wovvo: Some(imd::wovvo(t1, t2, eris, kconserv)?),
             woooo: None,
             wooov: None,
             wovoo: None,
@@ -87,13 +108,65 @@ impl<'a> RhfEomImds<'a> {
         })
     }
 
-    /// `_IMDS.make_ip` (`:1550-1577`).
+    /// `_make_shared_1e` ALONE (`:1520-1530`) — `Loo`, `Lvv`, `Fov`, and none
+    /// of the shared two-electron set.
+    ///
+    /// This is what `make_ip(ip_partition='mp')` and `make_ea(ea_partition=
+    /// 'mp')` leave behind: `:1552` and `:1597` both guard `_make_shared_2e()`
+    /// on `!= 'mp'`, and no `'mp'` branch reads `Wovov`, `Wovvo` or `Woovv`.
+    /// [`RhfEomImds::wovov`] and [`RhfEomImds::wovvo`] refuse rather than
+    /// return a wrong answer if one ever does.
     ///
     /// # Errors
     /// Propagates every intermediate build.
-    pub fn make_ip(mut self, kconserv: &Kconserv) -> Result<Self, PbcCcError> {
+    pub fn make_shared_1e(
+        t1: &ZArr,
+        t2: &ZArr,
+        eris: &'a KEris,
+        kconserv: &Kconserv,
+    ) -> Result<Self, PbcCcError> {
+        Ok(Self {
+            eris,
+            t1: t1.clone(),
+            t2: t2.clone(),
+            loo: imd::loo(t1, t2, eris, kconserv)?,
+            lvv: imd::lvv(t1, t2, eris, kconserv)?,
+            fov: imd::cc_fov(t1, t2, eris)?,
+            wovov: None,
+            wovvo: None,
+            woooo: None,
+            wooov: None,
+            wovoo: None,
+            wvovv: None,
+            wvvvv: None,
+            wvvvo: None,
+        })
+    }
+
+    /// `_IMDS.make_ip` (`:1550-1577`), the `ip_partition = None` branch.
+    ///
+    /// # Errors
+    /// Propagates every intermediate build.
+    pub fn make_ip(self, kconserv: &Kconserv) -> Result<Self, PbcCcError> {
+        self.make_ip_partition(kconserv, Partition::None)
+    }
+
+    /// `_IMDS.make_ip(ip_partition)` (`:1550-1577`) — `Woooo` is built only
+    /// when the partition is not `'mp'` (`:1570-1571`); `Wooov` and `Wovoo`
+    /// always are.
+    ///
+    /// # Errors
+    /// Propagates every intermediate build; [`PbcCcError::NotImplementedUpstream`]
+    /// for [`Partition::Full`], which upstream cannot build either — see
+    /// [`Partition`].
+    pub fn make_ip_partition(
+        mut self,
+        kconserv: &Kconserv,
+        partition: Partition,
+    ) -> Result<Self, PbcCcError> {
+        Partition::refuse_full(partition)?;
         let (t1, t2) = (self.t1.clone(), self.t2.clone());
-        if self.woooo.is_none() {
+        if partition != Partition::Mp && self.woooo.is_none() {
             self.woooo = Some(imd::eom_woooo(&t1, &t2, self.eris, kconserv)?);
         }
         self.wooov = Some(imd::wooov(&t1, self.eris)?);
@@ -101,17 +174,61 @@ impl<'a> RhfEomImds<'a> {
         Ok(self)
     }
 
-    /// `_IMDS.make_ea` (`:1595-1626`).
+    /// `_IMDS.make_ea` (`:1595-1626`), the `ea_partition = None` branch.
     ///
     /// # Errors
     /// Propagates every intermediate build.
-    pub fn make_ea(mut self, kconserv: &Kconserv) -> Result<Self, PbcCcError> {
+    pub fn make_ea(self, kconserv: &Kconserv) -> Result<Self, PbcCcError> {
+        self.make_ea_partition(kconserv, Partition::None)
+    }
+
+    /// `_IMDS.make_ea(ea_partition)` (`:1595-1626`).
+    ///
+    /// # The `Wvvvv` skip needs BOTH conditions
+    ///
+    /// `:1618` is `if ea_partition == 'mp' and np.all(t1 == 0)` — the phase's
+    /// largest tensor is skipped only when the partition is `'mp'` AND `t1` is
+    /// identically zero, and `Wvvvo` is then built from the eris rather than
+    /// from `Wvvvv`. An `'mp'` run on a converged `t1` still pays for `Wvvvv`.
+    ///
+    /// # Errors
+    /// Propagates every intermediate build; [`PbcCcError::NotImplementedUpstream`]
+    /// for [`Partition::Full`].
+    pub fn make_ea_partition(
+        mut self,
+        kconserv: &Kconserv,
+        partition: Partition,
+    ) -> Result<Self, PbcCcError> {
+        Partition::refuse_full(partition)?;
         let (t1, t2) = (self.t1.clone(), self.t2.clone());
         self.wvovv = Some(imd::wvovv(&t1, self.eris)?);
-        let w4 = imd::eom_wvvvv(&t1, &t2, self.eris, kconserv)?;
-        self.wvvvo = Some(imd::wvvvo(&t1, &t2, self.eris, kconserv, Some(&w4))?);
-        self.wvvvv = Some(w4);
+        let t1_is_zero =
+            t1.data().re.iter().all(|v| *v == 0.0) && t1.data().im.iter().all(|v| *v == 0.0);
+        if partition == Partition::Mp && t1_is_zero {
+            // `:1619` — no `Wvvvv` argument, so `Wvvvo` is built without it.
+            self.wvvvo = Some(imd::wvvvo(&t1, &t2, self.eris, kconserv, None)?);
+        } else {
+            let w4 = imd::eom_wvvvv(&t1, &t2, self.eris, kconserv)?;
+            self.wvvvo = Some(imd::wvvvo(&t1, &t2, self.eris, kconserv, Some(&w4))?);
+            self.wvvvv = Some(w4);
+        }
         Ok(self)
+    }
+
+    /// `Wovov` — present unless the caller built an `'mp'` set.
+    ///
+    /// # Errors
+    /// [`PbcCcError::Shape`] when it was not built.
+    pub fn wovov(&self) -> Result<&ZArr, PbcCcError> {
+        self.need(&self.wovov, "Wovov")
+    }
+
+    /// `Wovvo` — present unless the caller built an `'mp'` set.
+    ///
+    /// # Errors
+    /// [`PbcCcError::Shape`] when it was not built.
+    pub fn wovvo(&self) -> Result<&ZArr, PbcCcError> {
+        self.need(&self.wovvo, "Wovvo")
     }
 
     /// `_IMDS.get_Wvvvv(ka, kb, kc)` (`:1708-1716`) — the cached block when
@@ -233,9 +350,32 @@ pub fn ipccsd_matvec(
     imds: &RhfEomImds<'_>,
     kconserv: &Kconserv,
 ) -> Result<ZArr, PbcCcError> {
+    ipccsd_matvec_partition(vector, kshift, imds, kconserv, Partition::None)
+}
+
+/// `ipccsd_matvec` (`:39-104`) with `eom.partition` selected explicitly.
+///
+/// Only the 2h1p-2h1p block differs. Under [`Partition::Mp`] (`:69-77`) it is
+/// the BARE Fock — `fvv[kb]`, `foo[ki]`, `foo[kj]` in place of `Lvv`/`Loo` —
+/// and every two-body term is dropped, so the `Woooo`, `Wovvo`, `Wovov` and
+/// `Woovv` contractions of the `None` branch do not run and their
+/// intermediates are never read. The 1h-1h, 1h-2h1p and 2h1p-1h blocks are
+/// shared by both branches and use `Loo`, `Fov` and `Wooov`/`Wovoo`, which
+/// `make_ip(ip_partition='mp')` still builds.
+///
+/// # Errors
+/// As [`ipccsd_matvec`]; [`PbcCcError::NotImplementedUpstream`] for
+/// [`Partition::Full`] — see the module doc.
+pub fn ipccsd_matvec_partition(
+    vector: &ZArr,
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+    partition: Partition,
+) -> Result<ZArr, PbcCcError> {
+    Partition::refuse_full(partition)?;
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
     let (r1, r2) = vector_to_amplitudes_ip(vector, nkpts, nocc, nvir)?;
-    let woooo = imds.need(&imds.woooo, "Woooo")?;
     let wooov = imds.need(&imds.wooov, "Wooov")?;
     let wovoo = imds.need(&imds.wovoo, "Wovoo")?;
 
@@ -289,6 +429,31 @@ pub fn ipccsd_matvec(
             hr2.set_leading(&[ki, kj], &v)?;
         }
     }
+    // `:70-77` — the `'mp'` 2h1p-2h1p block: the BARE Fock, no two-body term.
+    if partition == Partition::Mp {
+        for ki in 0..nkpts {
+            for kj in 0..nkpts {
+                let kb = kconserv.get(ki, kshift, kj) as usize;
+                let mut blk = hr2.slice_leading(&[ki, kj])?;
+                blk.add_assign(&einsum(
+                    "bd,ijd->ijb",
+                    &[&imds.eris.fvv(kb)?, &r2.slice_leading(&[ki, kj])?],
+                )?)?;
+                blk.sub_assign(&einsum(
+                    "li,ljb->ijb",
+                    &[&imds.eris.foo(ki)?, &r2.slice_leading(&[ki, kj])?],
+                )?)?;
+                blk.sub_assign(&einsum(
+                    "lj,ilb->ijb",
+                    &[&imds.eris.foo(kj)?, &r2.slice_leading(&[ki, kj])?],
+                )?)?;
+                hr2.set_leading(&[ki, kj], &blk)?;
+            }
+        }
+        return amplitudes_to_vector_ip(&hr1, &hr2);
+    }
+
+    let woooo = imds.need(&imds.woooo, "Woooo")?;
     // `:87-102`
     for ki in 0..nkpts {
         for kj in 0..nkpts {
@@ -328,7 +493,7 @@ pub fn ipccsd_matvec(
                 blk.add_assign(&einsum_scaled(
                     "lbdj,ild->ijb",
                     &[
-                        &imds.wovvo.slice_leading(&[kl, kb, kd])?,
+                        &imds.wovvo()?.slice_leading(&[kl, kb, kd])?,
                         &r2.slice_leading(&[ki, kl])?,
                     ],
                     2.0,
@@ -336,7 +501,7 @@ pub fn ipccsd_matvec(
                 blk.sub_assign(&einsum(
                     "lbdj,lid->ijb",
                     &[
-                        &imds.wovvo.slice_leading(&[kl, kb, kd])?,
+                        &imds.wovvo()?.slice_leading(&[kl, kb, kd])?,
                         &r2.slice_leading(&[kl, ki])?,
                     ],
                 )?)?;
@@ -346,7 +511,7 @@ pub fn ipccsd_matvec(
                 blk.sub_assign(&einsum(
                     "lbjd,ild->ijb",
                     &[
-                        &imds.wovov.slice_leading(&[kl, kb, kj])?,
+                        &imds.wovov()?.slice_leading(&[kl, kb, kj])?,
                         &r2.slice_leading(&[ki, kl])?,
                     ],
                 )?)?;
@@ -354,7 +519,7 @@ pub fn ipccsd_matvec(
                 blk.sub_assign(&einsum(
                     "lbid,ljd->ijb",
                     &[
-                        &imds.wovov.slice_leading(&[kl, kb, ki])?,
+                        &imds.wovov()?.slice_leading(&[kl, kb, ki])?,
                         &r2.slice_leading(&[kl, kj])?,
                     ],
                 )?)?;
@@ -488,11 +653,11 @@ pub fn lipccsd_matvec(
             )?)?;
             for kj in 0..nkpts {
                 let kb = kconserv.get(kd, kl, kj) as usize;
-                let mut sw = imds.wovvo.slice_leading(&[kl, kb, kd])?;
+                let mut sw = imds.wovvo()?.slice_leading(&[kl, kb, kd])?;
                 sw.scale(2.0);
                 sw.sub_assign(
                     &imds
-                        .wovov
+                        .wovov()?
                         .slice_leading(&[kl, kb, kj])?
                         .transpose(&[0, 1, 3, 2])?,
                 )?;
@@ -505,14 +670,14 @@ pub fn lipccsd_matvec(
                 blk.sub_assign(&einsum(
                     "kbdj,ljb->kld",
                     &[
-                        &imds.wovvo.slice_leading(&[kk, kb, kd])?,
+                        &imds.wovvo()?.slice_leading(&[kk, kb, kd])?,
                         &r2.slice_leading(&[kl, kj])?,
                     ],
                 )?)?;
                 blk.sub_assign(&einsum(
                     "kbjd,jlb->kld",
                     &[
-                        &imds.wovov.slice_leading(&[kk, kb, kj])?,
+                        &imds.wovov()?.slice_leading(&[kk, kb, kj])?,
                         &r2.slice_leading(&[kj, kl])?,
                     ],
                 )?)?;
@@ -560,6 +725,67 @@ pub fn lipccsd_matvec(
         }
     }
 
+    amplitudes_to_vector_ip(&hr1, &hr2)
+}
+
+/// `ipccsd_diag` (`:166-212`) with `eom.partition` selected explicitly.
+///
+/// `Hr1` is `−diag(Loo[kshift])` in BOTH branches (`:174`) — the partition
+/// touches only the 2h1p block, where `'mp'` (`:177-186`) is the bare
+/// `fvv[kb] − foo[ki] − foo[kj]` with every `Woooo`/`Wovov`/`Wovvo`/`Woovv`
+/// term of the `None` branch dropped.
+///
+/// # Errors
+/// As [`ipccsd_matvec_partition`].
+pub fn ipccsd_diag_partition(
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+    partition: Partition,
+) -> Result<ZArr, PbcCcError> {
+    // The diagonals have NO `'full'` branch (`:177`/`:583` is `if 'mp' … else`),
+    // so `'full'` here is the `None` diagonal — not a refusal.
+    if partition != Partition::Mp {
+        return ipccsd_diag(kshift, imds, kconserv);
+    }
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+
+    let mut hr1 = ZArr::zeros(&[nocc]);
+    let l = imds.loo.slice_leading(&[kshift])?;
+    for i in 0..nocc {
+        let (re, im) = l.at(&[i, i])?;
+        hr1.data_mut().re[i] = -re;
+        hr1.data_mut().im[i] = -im;
+    }
+
+    let mut hr2 = ZArr::zeros(&[nkpts, nkpts, nocc, nocc, nvir]);
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            let kb = kconserv.get(ki, kshift, kj) as usize;
+            let fb = imds.eris.fvv(kb)?;
+            let fi = imds.eris.foo(ki)?;
+            let fj = imds.eris.foo(kj)?;
+            let mut blk = ZArr::zeros(&[nocc, nocc, nvir]);
+            for i in 0..nocc {
+                for j in 0..nocc {
+                    for b in 0..nvir {
+                        let f = (i * nocc + j) * nvir + b;
+                        // `:182` — an ASSIGNMENT, not an accumulation.
+                        let (r, m) = fb.at(&[b, b])?;
+                        blk.data_mut().re[f] = r;
+                        blk.data_mut().im[f] = m;
+                        let (r, m) = fi.at(&[i, i])?;
+                        blk.data_mut().re[f] -= r;
+                        blk.data_mut().im[f] -= m;
+                        let (r, m) = fj.at(&[j, j])?;
+                        blk.data_mut().re[f] -= r;
+                        blk.data_mut().im[f] -= m;
+                    }
+                }
+            }
+            hr2.set_leading(&[ki, kj], &blk)?;
+        }
+    }
     amplitudes_to_vector_ip(&hr1, &hr2)
 }
 
@@ -621,7 +847,7 @@ pub fn ipccsd_diag(
                 }
             }
             // `:196` `-einsum('jbjb->jb', Wovov[kj,kb,kj])`, broadcast over i.
-            let w = imds.wovov.slice_leading(&[kj, kb, kj])?;
+            let w = imds.wovov()?.slice_leading(&[kj, kb, kj])?;
             for j in 0..nocc {
                 for b in 0..nvir {
                     let (r, m) = w.at(&[j, b, j, b])?;
@@ -635,7 +861,7 @@ pub fn ipccsd_diag(
             // `:198-201` — `2 Wovvo`, then a MINUS on the `i == j` diagonal
             // when `ki == kj`. That last line is the one an index-free port
             // silently drops.
-            let w = imds.wovvo.slice_leading(&[kj, kb, kb])?;
+            let w = imds.wovvo()?.slice_leading(&[kj, kb, kb])?;
             for j in 0..nocc {
                 for b in 0..nvir {
                     let (r, m) = w.at(&[j, b, b, j])?;
@@ -652,7 +878,7 @@ pub fn ipccsd_diag(
                 }
             }
             // `:203` `-einsum('ibib->ib', Wovov[ki,kb,ki])`, broadcast over j.
-            let w = imds.wovov.slice_leading(&[ki, kb, ki])?;
+            let w = imds.wovov()?.slice_leading(&[ki, kb, ki])?;
             for i in 0..nocc {
                 for b in 0..nvir {
                     let (r, m) = w.at(&[i, b, i, b])?;
@@ -690,13 +916,36 @@ pub fn ipccsd_diag(
 ///
 /// # Errors
 /// As [`ipccsd_matvec`].
-#[allow(clippy::too_many_lines)]
 pub fn eaccsd_matvec(
     vector: &ZArr,
     kshift: usize,
     imds: &RhfEomImds<'_>,
     kconserv: &Kconserv,
 ) -> Result<ZArr, PbcCcError> {
+    eaccsd_matvec_partition(vector, kshift, imds, kconserv, Partition::None)
+}
+
+/// `eaccsd_matvec` (`:430-505`) with `eom.partition` selected explicitly.
+///
+/// As [`ipccsd_matvec_partition`]: only the 2p1h-2p1h block differs, and the
+/// [`Partition::Mp`] form (`:462-470`) is the bare `foo[kj]`/`fvv[ka]`/
+/// `fvv[kb]` with every two-body term dropped — so `Wvvvv`, `Wovvo`, `Wovov`
+/// and `Woovv` are never read. Note the sign pattern is `−foo + fvv + fvv`
+/// here, matching the `None` branch's `−Loo + Lvv + Lvv` (`:479-483`); the
+/// spin-orbital module's `'mp'` EA diagonal does NOT match its own `None`
+/// branch that way — see [`crate::eom_kccsd_ghf::eaccsd_diag_mp`].
+///
+/// # Errors
+/// As [`ipccsd_matvec_partition`].
+#[allow(clippy::too_many_lines)]
+pub fn eaccsd_matvec_partition(
+    vector: &ZArr,
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+    partition: Partition,
+) -> Result<ZArr, PbcCcError> {
+    Partition::refuse_full(partition)?;
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
     let (r1, r2) = vector_to_amplitudes_ea(vector, nkpts, nocc, nvir)?;
     let wvovv = imds.need(&imds.wvovv, "Wvovv")?;
@@ -752,6 +1001,30 @@ pub fn eaccsd_matvec(
             hr2.set_leading(&[kj, ka], &v)?;
         }
     }
+    // `:463-470` — the `'mp'` 2p1h-2p1h block: the BARE Fock, no two-body term.
+    if partition == Partition::Mp {
+        for kj in 0..nkpts {
+            for ka in 0..nkpts {
+                let kb = kconserv.get(kshift, ka, kj) as usize;
+                let mut blk = hr2.slice_leading(&[kj, ka])?;
+                blk.sub_assign(&einsum(
+                    "lj,lab->jab",
+                    &[&imds.eris.foo(kj)?, &r2.slice_leading(&[kj, ka])?],
+                )?)?;
+                blk.add_assign(&einsum(
+                    "ac,jcb->jab",
+                    &[&imds.eris.fvv(ka)?, &r2.slice_leading(&[kj, ka])?],
+                )?)?;
+                blk.add_assign(&einsum(
+                    "bd,jad->jab",
+                    &[&imds.eris.fvv(kb)?, &r2.slice_leading(&[kj, ka])?],
+                )?)?;
+                hr2.set_leading(&[kj, ka], &blk)?;
+            }
+        }
+        return amplitudes_to_vector_ea(&hr1, &hr2);
+    }
+
     // `:478-500`
     for kj in 0..nkpts {
         for ka in 0..nkpts {
@@ -789,7 +1062,7 @@ pub fn eaccsd_matvec(
                 blk.add_assign(&einsum_scaled(
                     "lbdj,lad->jab",
                     &[
-                        &imds.wovvo.slice_leading(&[kl, kb, kd])?,
+                        &imds.wovvo()?.slice_leading(&[kl, kb, kd])?,
                         &r2.slice_leading(&[kl, ka])?,
                     ],
                     2.0,
@@ -800,7 +1073,7 @@ pub fn eaccsd_matvec(
                     "bldj,lad->jab",
                     &[
                         &imds
-                            .wovov
+                            .wovov()?
                             .slice_leading(&[kl, kb, kj])?
                             .transpose(&[1, 0, 3, 2])?,
                         &r2.slice_leading(&[kl, ka])?,
@@ -810,7 +1083,7 @@ pub fn eaccsd_matvec(
                     "bljd,lda->jab",
                     &[
                         &imds
-                            .wovvo
+                            .wovvo()?
                             .slice_leading(&[kl, kb, kd])?
                             .transpose(&[1, 0, 3, 2])?,
                         &r2.slice_leading(&[kl, kd])?,
@@ -821,7 +1094,7 @@ pub fn eaccsd_matvec(
                     "aldj,ldb->jab",
                     &[
                         &imds
-                            .wovov
+                            .wovov()?
                             .slice_leading(&[kl, ka, kj])?
                             .transpose(&[1, 0, 3, 2])?,
                         &r2.slice_leading(&[kl, kd])?,
@@ -956,11 +1229,11 @@ pub fn leaccsd_matvec(
             )?)?;
             for kb in 0..nkpts {
                 let kj = kconserv.get(kl, kd, kb) as usize;
-                let mut sw = imds.wovvo.slice_leading(&[kl, kb, kd])?;
+                let mut sw = imds.wovvo()?.slice_leading(&[kl, kb, kd])?;
                 sw.scale(2.0);
                 sw.sub_assign(
                     &imds
-                        .wovov
+                        .wovov()?
                         .slice_leading(&[kl, kb, kj])?
                         .transpose(&[0, 1, 3, 2])?,
                 )?;
@@ -973,14 +1246,14 @@ pub fn leaccsd_matvec(
                 blk.sub_assign(&einsum(
                     "lbjc,jbd->lcd",
                     &[
-                        &imds.wovov.slice_leading(&[kl, kb, kj])?,
+                        &imds.wovov()?.slice_leading(&[kl, kb, kj])?,
                         &r2.slice_leading(&[kj, kb])?,
                     ],
                 )?)?;
                 blk.sub_assign(&einsum(
                     "lbcj,jdb->lcd",
                     &[
-                        &imds.wovvo.slice_leading(&[kl, kb, kc])?,
+                        &imds.wovvo()?.slice_leading(&[kl, kb, kc])?,
                         &r2.slice_leading(&[kj, kd])?,
                     ],
                 )?)?;
@@ -1030,6 +1303,70 @@ pub fn leaccsd_matvec(
     amplitudes_to_vector_ea(&hr1, &hr2)
 }
 
+/// `eaccsd_diag` (`:572-615`) with `eom.partition` selected explicitly.
+///
+/// `Hr1` is `diag(Lvv[kshift])` in both branches (`:580`). The `'mp'` 2p1h
+/// block (`:583-591`) is `−foo[kj] + fvv[ka] + fvv[kb]` — the same sign
+/// pattern as the `None` branch (`:595-597`), unlike the spin-orbital
+/// module's, which flips `fvv[ka]` (see
+/// [`crate::eom_kccsd_ghf::eaccsd_diag_mp`]).
+///
+/// [`Partition::Full`] is NOT refused here: the diagonal has no `'full'`
+/// branch, so upstream computes the `None` diagonal for it and so does this.
+///
+/// # Errors
+/// As [`ipccsd_matvec_partition`].
+pub fn eaccsd_diag_partition(
+    kshift: usize,
+    imds: &RhfEomImds<'_>,
+    kconserv: &Kconserv,
+    partition: Partition,
+) -> Result<ZArr, PbcCcError> {
+    // The diagonals have NO `'full'` branch (`:177`/`:583` is `if 'mp' … else`),
+    // so `'full'` here is the `None` diagonal — not a refusal.
+    if partition != Partition::Mp {
+        return eaccsd_diag(kshift, imds, kconserv);
+    }
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+
+    let mut hr1 = ZArr::zeros(&[nvir]);
+    let l = imds.lvv.slice_leading(&[kshift])?;
+    for a in 0..nvir {
+        let (re, im) = l.at(&[a, a])?;
+        hr1.data_mut().re[a] = re;
+        hr1.data_mut().im[a] = im;
+    }
+
+    let mut hr2 = ZArr::zeros(&[nkpts, nkpts, nocc, nvir, nvir]);
+    for kj in 0..nkpts {
+        for ka in 0..nkpts {
+            let kb = kconserv.get(kshift, ka, kj) as usize;
+            let fj = imds.eris.foo(kj)?;
+            let fa = imds.eris.fvv(ka)?;
+            let fb = imds.eris.fvv(kb)?;
+            let mut blk = ZArr::zeros(&[nocc, nvir, nvir]);
+            for j in 0..nocc {
+                for a in 0..nvir {
+                    for b in 0..nvir {
+                        let f = (j * nvir + a) * nvir + b;
+                        let (r, m) = fj.at(&[j, j])?;
+                        blk.data_mut().re[f] -= r;
+                        blk.data_mut().im[f] -= m;
+                        let (r, m) = fa.at(&[a, a])?;
+                        blk.data_mut().re[f] += r;
+                        blk.data_mut().im[f] += m;
+                        let (r, m) = fb.at(&[b, b])?;
+                        blk.data_mut().re[f] += r;
+                        blk.data_mut().im[f] += m;
+                    }
+                }
+            }
+            hr2.set_leading(&[kj, ka], &blk)?;
+        }
+    }
+    amplitudes_to_vector_ea(&hr1, &hr2)
+}
+
 /// `eaccsd_diag` (`:572-615`), the `partition = None` branch.
 ///
 /// # Errors
@@ -1058,9 +1395,9 @@ pub fn eaccsd_diag(
             let la = imds.lvv.slice_leading(&[ka])?;
             let lb = imds.lvv.slice_leading(&[kb])?;
             let w4 = imds.get_wvvvv(ka, kb, ka, kconserv)?;
-            let wjbjb = imds.wovov.slice_leading(&[kj, kb, kj])?;
-            let wjbbj = imds.wovvo.slice_leading(&[kj, kb, kb])?;
-            let wjaja = imds.wovov.slice_leading(&[kj, ka, kj])?;
+            let wjbjb = imds.wovov()?.slice_leading(&[kj, kb, kj])?;
+            let wjbbj = imds.wovvo()?.slice_leading(&[kj, kb, kb])?;
+            let wjaja = imds.wovov()?.slice_leading(&[kj, ka, kj])?;
             for j in 0..nocc {
                 for a in 0..nvir {
                     for b in 0..nvir {
@@ -1248,6 +1585,13 @@ pub fn eom_kernel(
     opts: &crate::eom_kccsd_ghf::EomOpts,
 ) -> Result<crate::eom_kccsd_ghf::EomRoots, PbcCcError> {
     use crate::eom_kccsd_ghf::Excitation;
+    // `EOMIP`/`EOMEA` here inherit `ipccsd`/`eaccsd` from the spin-orbital
+    // module (`:378`, `:777`), and those refuse both non-`None` partitions at
+    // `eom_kccsd_ghf.py:618`/`:905`. The branches themselves live on in
+    // `*_matvec_partition` / `*_diag_partition`.
+    if opts.partition != Partition::None {
+        return Err(crate::eom_kccsd_ghf::partition_refusal());
+    }
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
     if kind == Excitation::Ee {
         // `EOMEESinglet` (`:1425`) is a different vector shape and a different

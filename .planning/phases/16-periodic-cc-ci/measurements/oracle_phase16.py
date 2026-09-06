@@ -1538,12 +1538,251 @@ def section_kuccsd_eom(nk=(1, 1, 2), mesh=(31, 31, 31)):
             )
 
 
+def section_partition(nk=(1, 1, 2)):
+    """The `eom.partition` branches, and the refusals that guard them.
+
+    Three things are emitted:
+
+      * `*_refused` flags — the driver refusals (`ipccsd`/`eaccsd` with
+        `partition='mp'` and `'full'`, all three modules), the two RHF `'full'`
+        matvec `TypeError`s, and the two UHF `'mp'` diagonals' bare `raise`.
+        Each is `1.0` when upstream raised the expected exception type.
+      * the four `'mp'` branches that need `eom.eris` — upstream never sets it
+        (`AttributeError`), so this emitter SUPPLIES it and records that it had
+        to (`*_needs_eom_eris`). The arithmetic is then upstream's own.
+      * the reference vectors themselves, on the same fixed synthetic
+        amplitudes `krccsd_eom` / `kgccsd_eom_ip` use, so the Rust side gates
+        the equations rather than a converged answer.
+    """
+    from pyscf.pbc import scf as _pbcscf
+    from pyscf.pbc.cc import eom_kccsd_ghf as _eomg
+    from pyscf.pbc.cc import eom_kccsd_rhf as _eomr
+    from pyscf.pbc.cc import eom_kccsd_uhf as _eomu
+    from pyscf.pbc.cc import kccsd as _kccsd
+    from pyscf.pbc.mp.kmp2 import get_nocc as _get_nocc
+
+    def raises(exc_type, fn):
+        """1.0 when `fn()` raised `exc_type`, 0.0 otherwise. The message is
+        echoed as a comment so a reader can see what actually happened."""
+        try:
+            fn()
+        except exc_type as e:
+            print("# raised %s: %s" % (type(e).__name__, e))
+            return 1.0
+        except Exception as e:  # noqa: BLE001 - the point is to report it
+            print("# UNEXPECTED %s: %s" % (type(e).__name__, e))
+            return 0.0
+        print("# DID NOT RAISE")
+        return 0.0
+
+    # ---------------------------------------------------------------- RHF ---
+    cell, kpts, mf, cc = build(list(nk))
+    eris = cc.ao2mo(cc.mo_coeff)
+    nkpts, nocc, nmo = len(kpts), cc.nocc, cc.nmo
+    nvir = nmo - nocc
+    scalar("e_hf", mf.e_tot)
+    scalar("nkpts", nkpts)
+    scalar("nocc", nocc)
+    scalar("nmo", nmo)
+    scalar("nao", np.asarray(eris.mo_coeff)[0].shape[0])
+    emit("fock", eris.fock)
+    emit("mo_energy", np.asarray(eris.mo_energy))
+    emit("mo_coeff", np.asarray(eris.mo_coeff))
+    emit("nocc_per_kpt", np.asarray(_get_nocc(cc, per_kpoint=True), dtype=float))
+
+    st1, st2 = synthetic_amps(
+        (nkpts, nocc, nvir), (nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir)
+    )
+    cc.t1, cc.t2 = st1, st2
+
+    # The driver refusal, both partitions, both excitations.
+    for part in ("mp", "full"):
+        scalar(
+            "rhf_ip_%s_refused" % part,
+            raises(NotImplementedError,
+                   lambda p=part: _eomr.EOMIP(cc).ipccsd(
+                       nroots=1, partition=p, kptlist=[0], eris=eris)),
+        )
+        scalar(
+            "rhf_ea_%s_refused" % part,
+            raises(NotImplementedError,
+                   lambda p=part: _eomr.EOMEA(cc).eaccsd(
+                       nroots=1, partition=p, kptlist=[0], eris=eris)),
+        )
+
+    # `_IMDS.make_ip('mp')` skips `Woooo`; `make_ea('mp')` skips `Wvvvv` only
+    # when `t1` is identically zero (`:1618`). Both are recorded as flags.
+    ip_mp_imds = _eomr._IMDS(cc, eris)
+    ip_mp_imds.make_ip("mp")
+    scalar("rhf_make_ip_mp_has_woooo", float(hasattr(ip_mp_imds, "Woooo")))
+    ea_mp_imds = _eomr._IMDS(cc, eris)
+    ea_mp_imds.make_ea("mp")
+    scalar("rhf_make_ea_mp_t1nonzero_has_wvvvv",
+           float(getattr(ea_mp_imds, "Wvvvv", None) is not None))
+    cc0_t1 = cc.t1
+    cc.t1 = np.zeros_like(cc0_t1)
+    ea_mp0 = _eomr._IMDS(cc, eris)
+    ea_mp0.make_ea("mp")
+    scalar("rhf_make_ea_mp_t1zero_has_wvvvv",
+           float(getattr(ea_mp0, "Wvvvv", None) is not None))
+    cc.t1 = cc0_t1
+
+    # The four `'mp'` branches. Two run as written; two need `eom.eris`.
+    e_ip = _eomr.EOMIP(cc)
+    e_ip.partition = "mp"
+    imd_ip = e_ip.make_imds(eris=eris)
+    scalar("rhf_ip_diag_mp_needs_eom_eris",
+           raises(AttributeError, lambda: _eomr.ipccsd_diag(e_ip, 0, imd_ip)))
+    e_ip.eris = eris
+
+    e_ea = _eomr.EOMEA(cc)
+    e_ea.partition = "mp"
+    imd_ea = e_ea.make_imds(eris=eris)
+    size_ea = e_ea.vector_size()
+    r = SplitMix64(20260911)
+    v_ea = np.array([complex(r.unit(), r.unit()) for _ in range(int(size_ea))])
+    scalar("rhf_ea_matvec_mp_needs_eom_eris",
+           raises(AttributeError,
+                  lambda: _eomr.eaccsd_matvec(e_ea, v_ea, 0, imd_ea)))
+    e_ea.eris = eris
+
+    size_ip = e_ip.vector_size()
+    r = SplitMix64(20260910)
+    v_ip = np.array([complex(r.unit(), r.unit()) for _ in range(int(size_ip))])
+    scalar("rhf_ip_vector_size", size_ip)
+    scalar("rhf_ea_vector_size", size_ea)
+    emit("rhf_ip_vec", v_ip)
+    emit("rhf_ea_vec", v_ea)
+    for kshift in range(nkpts):
+        emit("rhf_ip_matvec_mp_%d" % kshift,
+             _eomr.ipccsd_matvec(e_ip, v_ip, kshift, imd_ip))
+        emit("rhf_ip_diag_mp_%d" % kshift, _eomr.ipccsd_diag(e_ip, kshift, imd_ip))
+        emit("rhf_ea_matvec_mp_%d" % kshift,
+             _eomr.eaccsd_matvec(e_ea, v_ea, kshift, imd_ea))
+        emit("rhf_ea_diag_mp_%d" % kshift, _eomr.eaccsd_diag(e_ea, kshift, imd_ea))
+
+    # `'full'` computes nothing: the matvec raises before any arithmetic.
+    for tag, e_obj, vec, fn in (
+        ("ip", e_ip, v_ip, _eomr.ipccsd_matvec),
+        ("ea", e_ea, v_ea, _eomr.eaccsd_matvec),
+    ):
+        e_obj.partition = "full"
+        imd = imd_ip if tag == "ip" else imd_ea
+        scalar("rhf_%s_matvec_full_typeerror" % tag,
+               raises(TypeError, lambda f=fn, e=e_obj, v=vec, i=imd: f(e, v, 0, i)))
+        e_obj.partition = "mp"
+
+    # ---------------------------------------------------------------- GHF ---
+    gmf = _pbcscf.KGHF(cell, kpts, exxdiv=None)
+    gmf.conv_tol = 1e-10
+    gmf.kernel()
+    gcc = _kccsd.KGCCSD(gmf)
+    gcc.conv_tol = 1e-9
+    geris = gcc.ao2mo(gcc.mo_coeff)
+    gnocc, gnmo = gcc.nocc, gcc.nmo
+    gnvir = gnmo - gnocc
+    scalar("ghf_e_hf", gmf.e_tot)
+    scalar("ghf_nocc", gnocc)
+    scalar("ghf_nmo", gnmo)
+    scalar("ghf_nao", np.asarray(geris.mo_coeff)[0].shape[0])
+    emit("ghf_fock", np.asarray(geris.fock))
+    emit("ghf_mo_energy", np.asarray(geris.mo_energy))
+    emit("ghf_mo_coeff", np.asarray(geris.mo_coeff))
+    emit("ghf_nocc_per_kpt", np.asarray(_get_nocc(gcc, per_kpoint=True), dtype=float))
+    gst1, gst2 = synthetic_amps(
+        (nkpts, gnocc, gnvir),
+        (nkpts, nkpts, nkpts, gnocc, gnocc, gnvir, gnvir),
+    )
+    gcc.t1, gcc.t2 = gst1, gst2
+
+    for part in ("mp", "full"):
+        scalar(
+            "ghf_ip_%s_refused" % part,
+            raises(NotImplementedError,
+                   lambda p=part: _eomg.EOMIP(gcc).ipccsd(
+                       nroots=1, partition=p, kptlist=[0], eris=geris)),
+        )
+        scalar(
+            "ghf_ea_%s_refused" % part,
+            raises(NotImplementedError,
+                   lambda p=part: _eomg.EOMEA(gcc).eaccsd(
+                       nroots=1, partition=p, kptlist=[0], eris=geris)),
+        )
+
+    g_ip = _eomg.EOMIP(gcc)
+    g_ip.partition = "mp"
+    g_imd_ip = g_ip.make_imds(eris=geris)
+    scalar("ghf_ip_diag_mp_needs_eom_eris",
+           raises(AttributeError, lambda: _eomg.ipccsd_diag(g_ip, 0, g_imd_ip)))
+    g_ip.eris = geris
+    g_ea = _eomg.EOMEA(gcc)
+    g_ea.partition = "mp"
+    g_imd_ea = g_ea.make_imds(eris=geris)
+    scalar("ghf_ea_diag_mp_needs_eom_eris",
+           raises(AttributeError, lambda: _eomg.eaccsd_diag(g_ea, 0, g_imd_ea)))
+    g_ea.eris = geris
+    scalar("ghf_ip_vector_size", g_ip.vector_size())
+    scalar("ghf_ea_vector_size", g_ea.vector_size())
+    for kshift in range(nkpts):
+        emit("ghf_ip_diag_mp_%d" % kshift, _eomg.ipccsd_diag(g_ip, kshift, g_imd_ip))
+        emit("ghf_ea_diag_mp_%d" % kshift, _eomg.eaccsd_diag(g_ea, kshift, g_imd_ea))
+
+    # ---------------------------------------------------------------- UHF ---
+    umf = _pbcscf.KUHF(cell, kpts, exxdiv=None)
+    umf.conv_tol = 1e-10
+    umf.kernel()
+    ucc = pbcc.KUCCSD(umf)
+    ucc.conv_tol = 1e-9
+    ueris = ucc.ao2mo(ucc.mo_coeff)
+    unocca, unoccb = ucc.nocc
+    unmoa, unmob = ucc.nmo
+    ra = SplitMix64(20260912)
+    def _rand(shape):
+        n = int(np.prod(shape))
+        return np.array(
+            [complex(0.05 * ra.unit(), 0.05 * ra.unit()) for _ in range(n)]
+        ).reshape(shape)
+    uvira, uvirb = unmoa - unocca, unmob - unoccb
+    ucc.t1 = (_rand((nkpts, unocca, uvira)), _rand((nkpts, unoccb, uvirb)))
+    ucc.t2 = (
+        _rand((nkpts, nkpts, nkpts, unocca, unocca, uvira, uvira)),
+        _rand((nkpts, nkpts, nkpts, unocca, unoccb, uvira, uvirb)),
+        _rand((nkpts, nkpts, nkpts, unoccb, unoccb, uvirb, uvirb)),
+    )
+    for part in ("mp", "full"):
+        scalar(
+            "uhf_ip_%s_refused" % part,
+            raises(NotImplementedError,
+                   lambda p=part: _eomu.EOMIP(ucc).ipccsd(
+                       nroots=1, partition=p, kptlist=[0], eris=ueris)),
+        )
+        scalar(
+            "uhf_ea_%s_refused" % part,
+            raises(NotImplementedError,
+                   lambda p=part: _eomu.EOMEA(ucc).eaccsd(
+                       nroots=1, partition=p, kptlist=[0], eris=ueris)),
+        )
+    u_ip = _eomu.EOMIP(ucc)
+    u_ip.partition = "mp"
+    u_ip.eris = ueris
+    u_imd_ip = u_ip.make_imds(eris=ueris)
+    scalar("uhf_ip_diag_mp_raises",
+           raises(Exception, lambda: _eomu.ipccsd_diag(u_ip, 0, u_imd_ip)))
+    u_ea = _eomu.EOMEA(ucc)
+    u_ea.partition = "mp"
+    u_ea.eris = ueris
+    u_imd_ea = u_ea.make_imds(eris=ueris)
+    scalar("uhf_ea_diag_mp_raises",
+           raises(Exception, lambda: _eomu.eaccsd_diag(u_ea, 0, u_imd_ea)))
+
+
 SECTIONS = {
     "eris_gdf": lambda: section_eris_gdf((1, 1, 2)),
     "kcis": lambda: section_kcis((1, 1, 2)),
     "kgccsd": lambda: section_kgccsd((1, 1, 2)),
     "kgccsd_eom_ip": lambda: section_kgccsd_eom_ip((1, 1, 2)),
     "krccsd_eom": lambda: section_krccsd_eom((1, 1, 2)),
+    "partition": lambda: section_partition((1, 1, 2)),
     "kuccsd": lambda: section_kuccsd((1, 1, 2)),
     "kuccsd_coarse": lambda: section_kuccsd((1, 1, 2), (13, 13, 13)),
     "kuccsd_eom": lambda: section_kuccsd_eom((1, 1, 2)),

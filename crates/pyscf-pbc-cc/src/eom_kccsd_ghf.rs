@@ -1263,6 +1263,9 @@ pub struct EomOpts {
     pub koopmans: bool,
     /// Solve for LEFT eigenvectors.
     pub left: bool,
+    /// `eom.partition`. Anything but [`Partition::None`] is REFUSED, which is
+    /// upstream's own behaviour at `ipccsd`/`eaccsd` — see [`Partition`].
+    pub partition: Partition,
 }
 
 impl Default for EomOpts {
@@ -1274,6 +1277,7 @@ impl Default for EomOpts {
             nroots: 1,
             koopmans: false,
             left: false,
+            partition: Partition::None,
         }
     }
 }
@@ -1333,6 +1337,12 @@ pub fn eom_kernel(
     kconserv: &Kconserv,
     opts: &EomOpts,
 ) -> Result<EomRoots, PbcCcError> {
+    // `ipccsd` (`:615-618`) and `eaccsd` (`:905`) refuse BOTH partitions at the
+    // entry point, verified by running them. The branches live on inside the
+    // matvecs and diagonals and are exposed here as `*_mp` functions.
+    if opts.partition != Partition::None {
+        return Err(partition_refusal());
+    }
     let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
     let size = match kind {
         Excitation::Ip => ip_vector_size(nkpts, nocc, nvir),
@@ -2228,4 +2238,220 @@ pub fn eeccsd_diag(
         }
     }
     amplitudes_to_vector_ee(&hr1, &hr2, kshift, kconserv)
+}
+
+// ---------------------------------------------------------------------------
+// The `partition` branches (`:449-457`, `:1010-1018`)
+// ---------------------------------------------------------------------------
+
+/// Upstream's `eom.partition`, and what this port does with each value.
+///
+/// # Both non-`None` values are REFUSED at upstream's own driver
+///
+/// `ipccsd` (`:612-618`) and `eaccsd` (`:902-906`) both do
+///
+/// ```text
+/// if partition:
+///     eom.partition = partition.lower()
+///     assert eom.partition in ['mp','full']
+///     if eom.partition in ['mp', 'full']:
+///         raise NotImplementedError
+/// ```
+///
+/// and `eom_kccsd_rhf`'s and `eom_kccsd_uhf`'s `EOMIP`/`EOMEA` inherit those
+/// drivers, so NO caller reaches a partition branch through the public API in
+/// ANY of the three modules. Measured, not assumed: all four of
+/// `{ip,ea}ccsd(partition=('mp'|'full'))` raise `NotImplementedError`. Every
+/// `eom_kernel` in this crate reproduces that refusal.
+///
+/// # What is behind the refusal, module by module
+///
+/// The branches stay reachable the way upstream leaves them reachable — set
+/// `eom.partition` and call the matvec or the diagonal directly — and this
+/// crate exposes them as explicit `*_mp` / `*_partition` entry points:
+///
+/// | module | `'mp'` matvec | `'mp'` diagonal |
+/// |---|---|---|
+/// | `eom_kccsd_ghf` | no branch exists | [`ipccsd_diag_mp`], [`eaccsd_diag_mp`] |
+/// | `eom_kccsd_rhf` | `ipccsd_matvec_partition`, `eaccsd_matvec_partition` | `ipccsd_diag_partition`, `eaccsd_diag_partition` |
+/// | `eom_kccsd_uhf` | no branch exists | REFUSED — `raise Exception("MP diag is not tested")` |
+///
+/// **Four of those branches need an attribute upstream never sets.**
+/// `ghf ipccsd_diag:449`, `ghf eaccsd_diag:1010`, `rhf ipccsd_diag:177` and
+/// `rhf eaccsd_matvec:463` open with `eom.eris.fock`, and `eom.eris` does not
+/// exist on an EOM object — `pyscf/cc/eom_rccsd.py`'s `EOM.__init__` never
+/// assigns it, only `_IMDS` does. Measured: they raise `AttributeError:
+/// 'EOMIP' object has no attribute 'eris'`. Their siblings
+/// `rhf ipccsd_matvec:70` and `rhf eaccsd_diag:584` read `imds.eris.fock`
+/// instead and run. `imds.eris` IS the same `_ERIS`, so this port reads the
+/// Fock from the intermediates uniformly, and the oracle that gates these four
+/// supplies `eom.eris` so that upstream's own arithmetic produces the
+/// reference rather than this port inventing one.
+///
+/// # `'full'` computes nothing anywhere
+///
+/// Only the two RHF matvecs have a `'full'` branch at all
+/// (`eom_kccsd_rhf.py:79-83`, `:472-476`). It reads
+///
+/// ```text
+/// if diag is not None:
+///     diag = eom.get_diag(imds=imds)
+/// diag_matrix2 = eom.vector_to_amplitudes(diag, nmo, nocc)[1]
+/// ```
+///
+/// — note the inverted guard — and `EOMIP.vector_to_amplitudes` there takes
+/// `(self, vector, kshift=None)`, so the three-argument call raises
+/// `TypeError: EOMIP.vector_to_amplitudes() takes from 2 to 3 positional
+/// arguments but 4 were given` before any arithmetic happens. Measured for
+/// both IP and EA. [`Partition::refuse_full`] is that `TypeError`.
+///
+/// The DIAGONALS have no `'full'` branch — their `if 'mp' … else …` falls
+/// through — so `partition='full'` on a diagonal IS the `None` diagonal, and
+/// this crate's `*_diag_partition` reproduces that rather than refusing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Partition {
+    /// The only branch upstream's drivers permit.
+    #[default]
+    None,
+    /// Møller-Plesset: bare Fock diagonals in place of `Foo`/`Fvv`, and the
+    /// two-body `W` terms dropped.
+    Mp,
+    /// Unreachable upstream — see the type doc.
+    Full,
+}
+
+/// The refusal `ipccsd`/`eaccsd` give a non-`None` `partition` (`:618`,
+/// `:905`), shared by this module's and [`crate::eom_kccsd_rhf`]'s drivers —
+/// `eom_kccsd_rhf`'s `EOMIP`/`EOMEA` inherit these very functions.
+///
+/// Exposed as a function so the refusal is testable without building a
+/// fixture: it is the first statement of `eom_kernel`, before `imds` is read.
+#[must_use]
+pub fn partition_refusal() -> PbcCcError {
+    PbcCcError::NotImplementedUpstream {
+        upstream: "pbc/cc/eom_kccsd_ghf.py:618",
+        what: "ipccsd/eaccsd raise NotImplementedError for partition in ('mp', 'full')",
+    }
+}
+
+impl Partition {
+    /// The refusal every `'full'` branch in this crate shares.
+    ///
+    /// # Errors
+    /// [`PbcCcError::NotImplementedUpstream`] for [`Partition::Full`].
+    pub fn refuse_full(p: Self) -> Result<(), PbcCcError> {
+        if p == Self::Full {
+            return Err(PbcCcError::NotImplementedUpstream {
+                upstream: "pbc/cc/eom_kccsd_rhf.py:474",
+                what: "partition='full' calls eom.vector_to_amplitudes(diag, nmo, nocc), which \
+                       takes at most 3 positional arguments; upstream raises TypeError before \
+                       any arithmetic",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// `ipccsd_diag`'s `partition == 'mp'` branch (`:449-457`).
+///
+/// The singles diagonal is unchanged; only the doubles block differs, and there
+/// it is the BARE Fock diagonal rather than `Foo`/`Fvv`, with every `W` term
+/// dropped.
+///
+/// # Errors
+/// As [`ipccsd_diag`].
+pub fn ipccsd_diag_mp(
+    kshift: usize,
+    imds: &EomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let mut hr1 = ZArr::zeros(&[nocc]);
+    let foo_s = imds.foo.slice_leading(&[kshift])?;
+    for i in 0..nocc {
+        let (re, im) = foo_s.at(&[i, i])?;
+        hr1.data_mut().re[i] = -re;
+        hr1.data_mut().im[i] = -im;
+    }
+    let mut hr2 = ZArr::zeros(&[nkpts, nkpts, nocc, nocc, nvir]);
+    for ki in 0..nkpts {
+        for kj in 0..nkpts {
+            let ka = kconserv.get(ki, kshift, kj) as usize;
+            let fi = imds.eris.foo(ki)?;
+            let fj = imds.eris.foo(kj)?;
+            let fa = imds.eris.fvv(ka)?;
+            let mut blk = ZArr::zeros(&[nocc, nocc, nvir]);
+            for i in 0..nocc {
+                for j in 0..nocc {
+                    for a in 0..nvir {
+                        let f = (i * nocc + j) * nvir + a;
+                        let (r, m) = fi.at(&[i, i])?;
+                        blk.data_mut().re[f] -= r;
+                        blk.data_mut().im[f] -= m;
+                        let (r, m) = fj.at(&[j, j])?;
+                        blk.data_mut().re[f] -= r;
+                        blk.data_mut().im[f] -= m;
+                        let (r, m) = fa.at(&[a, a])?;
+                        blk.data_mut().re[f] += r;
+                        blk.data_mut().im[f] += m;
+                    }
+                }
+            }
+            hr2.set_leading(&[ki, kj], &blk)?;
+        }
+    }
+    amplitudes_to_vector_ip(&hr1, &hr2)
+}
+
+/// `eaccsd_diag`'s `partition == 'mp'` branch (`:1010-1018`), which upstream
+/// itself labels `# This case is untested`.
+///
+/// **The sign on `fvv[ka]` is a MINUS here** where the `None` branch has a plus
+/// (`:1024` vs `:1015`). Transcribed as written; see [`Partition`] on why this
+/// port does not "fix" upstream.
+///
+/// # Errors
+/// As [`eaccsd_diag`].
+pub fn eaccsd_diag_mp(
+    kshift: usize,
+    imds: &EomImds<'_>,
+    kconserv: &Kconserv,
+) -> Result<ZArr, PbcCcError> {
+    let (nkpts, nocc, nvir) = (imds.eris.nkpts, imds.eris.nocc, imds.eris.nvir);
+    let mut hr1 = ZArr::zeros(&[nvir]);
+    let fvv_s = imds.fvv.slice_leading(&[kshift])?;
+    for a in 0..nvir {
+        let (re, im) = fvv_s.at(&[a, a])?;
+        hr1.data_mut().re[a] = re;
+        hr1.data_mut().im[a] = im;
+    }
+    let mut hr2 = ZArr::zeros(&[nkpts, nkpts, nocc, nvir, nvir]);
+    for kj in 0..nkpts {
+        for ka in 0..nkpts {
+            let kb = kconserv.get(kshift, ka, kj) as usize;
+            let fj = imds.eris.foo(kj)?;
+            let fa = imds.eris.fvv(ka)?;
+            let fb = imds.eris.fvv(kb)?;
+            let mut blk = ZArr::zeros(&[nocc, nvir, nvir]);
+            for j in 0..nocc {
+                for a in 0..nvir {
+                    for b in 0..nvir {
+                        let f = (j * nvir + a) * nvir + b;
+                        let (r, m) = fj.at(&[j, j])?;
+                        blk.data_mut().re[f] -= r;
+                        blk.data_mut().im[f] -= m;
+                        // `:1016` — MINUS, unlike `:1024`'s plus.
+                        let (r, m) = fa.at(&[a, a])?;
+                        blk.data_mut().re[f] -= r;
+                        blk.data_mut().im[f] -= m;
+                        let (r, m) = fb.at(&[b, b])?;
+                        blk.data_mut().re[f] += r;
+                        blk.data_mut().im[f] += m;
+                    }
+                }
+            }
+            hr2.set_leading(&[kj, ka], &blk)?;
+        }
+    }
+    amplitudes_to_vector_ea(&hr1, &hr2, kshift, kconserv)
 }
