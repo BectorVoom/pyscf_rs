@@ -1230,6 +1230,30 @@ def section_kgccsd_eom_ip(nk=(1, 1, 2)):
         emit("ea_lmatvec_%d" % kshift, _eom.leaccsd_matvec(eom_ea, v, kshift, imds_ea))
         emit("ea_diag_%d" % kshift, _eom.eaccsd_diag(eom_ea, kshift, imds_ea))
 
+    # --- EE. The vector length is kshift-dependent whenever `nkpts` is even
+    # (upstream's own docstring, `:1716`), so both the size and the trial
+    # vector are per shift. `kconserv_r2` is emitted too: the Rust side
+    # COMPOSES it from the ordinary `kconserv` rather than rebuilding it
+    # geometrically, and that composition is only valid when `k_0 = 0`.
+    eom_ee = _eom.EOMEE(cc)
+    imds_ee = eom_ee.make_imds(eris=eris)
+    for kshift in range(nkpts):
+        emit(
+            "ee_kconserv_r2_%d" % kshift,
+            np.asarray(eom_ee.get_kconserv_ee_r2(kshift), dtype=float).ravel(),
+        )
+        emit(
+            "ee_kconserv_r1_%d" % kshift,
+            np.asarray(eom_ee.get_kconserv_ee_r1(kshift), dtype=float).ravel(),
+        )
+        size_ee = eom_ee.vector_size(kshift)
+        scalar("ee_vector_size_%d" % kshift, size_ee)
+        r = SplitMix64(20260909 + kshift)
+        v = np.array([complex(r.unit(), r.unit()) for _ in range(int(size_ee))])
+        emit("ee_vec_%d" % kshift, v)
+        emit("ee_matvec_%d" % kshift, _eom.eeccsd_matvec(eom_ee, v, kshift, imds_ee))
+        emit("ee_diag_%d" % kshift, _eom.eeccsd_diag(eom_ee, kshift, imds_ee))
+
     # --- The actual ROOTS, on the CONVERGED amplitudes.
     #
     # The matvec gates above run on synthetic amplitudes so they measure the
@@ -1242,6 +1266,18 @@ def section_kgccsd_eom_ip(nk=(1, 1, 2)):
     emit("t2", t2)
     nroots = 2
     scalar("nroots", nroots)
+    # EE roots, through `kernel_ee`.
+    e_ee = _eom.EOMEE(cc)
+    e_ee.conv_tol = 1e-8
+    e_ee.max_cycle = 100
+    imd_ee = e_ee.make_imds(eris=eris)
+    for kshift in range(nkpts):
+        conv, evals, evecs = _eom.kernel_ee(
+            e_ee, nroots=nroots, kptlist=[kshift], imds=imd_ee
+        )
+        emit("ee_roots_%d" % kshift, np.asarray(evals).ravel())
+        emit("ee_conv_%d" % kshift, np.asarray(np.real(conv), dtype=float).ravel())
+
     for tag, cls, fn in (("ip", _eom.EOMIP, "ipccsd"), ("ea", _eom.EOMEA, "eaccsd")):
         e = cls(cc)
         e.conv_tol = 1e-8

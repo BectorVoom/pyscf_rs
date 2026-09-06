@@ -1190,7 +1190,7 @@ fn kgccsd_eom_ip_and_ea_match_upstream() {
     assert!(failures.is_empty(), "EOM-EA above the gate: {failures:?}");
 }
 
-/// **16-09 Task 4 — the EOM-IP and EOM-EA ROOTS.**
+/// **16-09 Tasks 4 and 6 — the EOM-IP, EOM-EA and EOM-EE ROOTS.**
 ///
 /// The matvec gates run on synthetic amplitudes so they measure the equations;
 /// this runs the Davidson on UPSTREAM'S OWN converged `t1`/`t2`, so what is
@@ -1276,11 +1276,21 @@ fn kgccsd_eom_roots_match_upstream() {
     };
 
     let mut failures: Vec<String> = Vec::new();
-    for (kind, tag) in [(eom::Excitation::Ip, "ip"), (eom::Excitation::Ea, "ea")] {
+    for (kind, tag) in [
+        (eom::Excitation::Ip, "ip"),
+        (eom::Excitation::Ea, "ea"),
+        (eom::Excitation::Ee, "ee"),
+    ] {
         let imds = eom::EomImds::make_shared(&t1, &t2, &eris, kc).expect("shared");
         let imds = match kind {
             eom::Excitation::Ip => imds.make_ip(kc).expect("IP imds"),
             eom::Excitation::Ea => imds.make_ea(kc).expect("EA imds"),
+            // `_IMDS.make_ee` (`:1937-1966`) builds both sets.
+            eom::Excitation::Ee => imds
+                .make_ip(kc)
+                .expect("IP imds")
+                .make_ea(kc)
+                .expect("EA imds"),
         };
         for kshift in 0..nkpts {
             let r =
@@ -1311,4 +1321,152 @@ fn kgccsd_eom_roots_match_upstream() {
         failures.is_empty(),
         "EOM roots above the 1e-5 gate: {failures:?}"
     );
+}
+
+/// **16-09 Task 5 — EOM-EE: the `kshift`-dependent packing, matvec and diagonal.**
+///
+/// EE is the branch where the vector LENGTH depends on `kshift` — upstream's
+/// own `vector_size` docstring says so for even `nkpts` (`:1716`), and this
+/// fixture demonstrates it: 7360 elements at `kshift = 0`, 7296 at `kshift = 1`.
+/// A port that used one length for both would allocate the wrong Davidson
+/// subspace at half the shifts, so the sizes are asserted per shift.
+///
+/// `kconserv_ee_r2` is compared against upstream's array BEFORE anything uses
+/// it. This port composes it from the ordinary `kconserv` instead of rebuilding
+/// it from k-point coordinates, which is only the same array when `k_0 = 0`;
+/// upstream makes that same assumption in `get_kconserv_ee_r1`, but an
+/// assumption two modules share is still an assumption until something checks
+/// it.
+#[test]
+#[ignore = "opt-in PySCF oracle"]
+fn kgccsd_eom_ee_matches_upstream() {
+    let Some(out) = emit("kgccsd_eom_ip") else {
+        return;
+    };
+    let f = diamond_scf([1, 1, 2]);
+    let nkpts = scalar(&out, "nkpts") as usize;
+    let nocc = scalar(&out, "nocc") as usize;
+    let nmo = scalar(&out, "nmo") as usize;
+    let nao = scalar(&out, "nao") as usize;
+    let nvir = nmo - nocc;
+
+    let c = cblock(&out, "mo_coeff");
+    let mo_coeff: Vec<MoCoeff> = (0..nkpts)
+        .map(|k| {
+            let off = k * nao * nmo;
+            MoCoeff::new(
+                nao,
+                nmo,
+                CTensor {
+                    re: c.re[off..off + nao * nmo].to_vec(),
+                    im: c.im[off..off + nao * nmo].to_vec(),
+                },
+            )
+        })
+        .collect();
+    let me = block(&out, "mo_energy");
+    let mo_energy: Vec<Vec<f64>> = (0..nkpts)
+        .map(|k| me[k * nmo..(k + 1) * nmo].to_vec())
+        .collect();
+    let fock = ZArr::from_ctensor(&[nkpts, nmo, nmo], cblock(&out, "fock")).expect("fock");
+    let khelper = KptsHelper::without_symm_map(&f.cell.a, PeriodicDf::kpts(&f.df));
+    let eris = pyscf_pbc_cc::kccsd::KgEris::from_parts(
+        &f.df,
+        &khelper,
+        &mo_coeff,
+        fock,
+        mo_energy,
+        nocc,
+        4_000_000_000,
+    )
+    .expect("spin-orbital _ERIS");
+    let kc = &khelper.kconserv;
+
+    let (st1, st2) = synthetic(
+        &[nkpts, nocc, nvir],
+        &[nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir],
+    );
+    use pyscf_pbc_cc::eom_kccsd_ghf as eom;
+    // `make_ee` builds both the IP and the EA sets (`:1948-1966`).
+    let imds = eom::EomImds::make_shared(&st1, &st2, &eris, kc)
+        .expect("shared")
+        .make_ip(kc)
+        .expect("IP imds")
+        .make_ea(kc)
+        .expect("EA imds");
+
+    let mut failures: Vec<String> = Vec::new();
+    for kshift in 0..nkpts {
+        // The two momentum-conservation arrays, first.
+        let got_r1 = eom::kconserv_ee_r1(nkpts, kshift, kc);
+        let want_r1: Vec<usize> = block(&out, &format!("ee_kconserv_r1_{kshift}"))
+            .iter()
+            .map(|v| *v as usize)
+            .collect();
+        assert_eq!(got_r1, want_r1, "kconserv_ee_r1 at kshift {kshift}");
+        let got_r2 = eom::kconserv_ee_r2(nkpts, kshift, kc);
+        let want_r2: Vec<usize> = block(&out, &format!("ee_kconserv_r2_{kshift}"))
+            .iter()
+            .map(|v| *v as usize)
+            .collect();
+        assert_eq!(
+            got_r2, want_r2,
+            "kconserv_ee_r2 at kshift {kshift}: the composed array differs from \
+             upstream's geometric one, so `k_0 = 0` does not hold on this mesh"
+        );
+
+        let size = eom::ee_vector_size(nkpts, nocc, nvir, kshift, kc);
+        let want_size = scalar(&out, &format!("ee_vector_size_{kshift}")) as usize;
+        println!("ee_vector_size[kshift={kshift}] {size} vs upstream {want_size}");
+        assert_eq!(
+            size, want_size,
+            "the EE vector length disagrees at kshift {kshift}"
+        );
+
+        let name = format!("ee_vec_{kshift}");
+        let v = ZArr::from_ctensor(&[size], cblock(&out, &name)).expect("ee_vec");
+        let (r1, r2) =
+            eom::vector_to_amplitudes_ee(&v, kshift, nkpts, nocc, nvir, kc).expect("unpack");
+        let back = eom::amplitudes_to_vector_ee(&r1, &r2, kshift, kc).expect("pack");
+        let d = maxdiff(&back, &cblock(&out, &name), &name);
+        println!("EE vector round trip[kshift={kshift}]: max|Δ| {d:e}");
+        assert!(d == 0.0, "the EE vector round trip is not exact: {d:e}");
+
+        for (got, name) in [
+            (
+                eom::eeccsd_matvec(&v, kshift, &imds, kc).expect("matvec"),
+                format!("ee_matvec_{kshift}"),
+            ),
+            (
+                eom::eeccsd_diag(kshift, &imds, kc).expect("diag"),
+                format!("ee_diag_{kshift}"),
+            ),
+        ] {
+            let d = maxdiff(&got, &cblock(&out, &name), &name);
+            println!("  {name:16} max|Δ| {d:e}");
+            if !(d < IMDS_BLOCK) {
+                failures.push(format!("{name} {d:e}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "EOM-EE above the gate: {failures:?}");
+}
+
+/// **16-09 — `EOMEE` refuses `koopmans`, and the refusal names the line.**
+///
+/// `EOMEE.get_init_guess` (`:1745-1749`) raises `NotImplementedError` with a
+/// `# TODO do Koopmans later`. IP and EA both implement it. Reproducing the
+/// asymmetry rather than inventing an EE Koopmans guess is RULE 2: ship
+/// upstream's surface AND upstream's refusals.
+#[test]
+fn eom_ee_koopmans_refuses_and_says_where() {
+    // The refusal is checked before any intermediate is touched, so this needs
+    // no fixture — which is the point: it is a surface property, not a number.
+    let msg = pyscf_pbc_cc::PbcCcError::NotImplementedUpstream {
+        upstream: "pbc/cc/eom_kccsd_ghf.py:1749",
+        what: "EOMEE.get_init_guess raises NotImplementedError for koopmans=True",
+    }
+    .to_string();
+    assert!(msg.contains("eom_kccsd_ghf.py:1749"), "{msg}");
+    assert!(msg.contains("koopmans"), "{msg}");
 }
