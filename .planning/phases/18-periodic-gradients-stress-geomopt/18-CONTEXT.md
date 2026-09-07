@@ -349,10 +349,26 @@ Following 17-01's ruling exactly — *measure the floor, then write the gate*.
 * **Gate A — component strain derivatives, port vs its own finite difference.**
   `ovlp`, `kin`, `weight`, `coulG`, `vpplocG`, and the strain AO at
   `deriv = 0, 1` in both sph and cart, each against `_finite_diff_cells` at
-  `disp = 1e-5`. Target **1e-8**, upstream's own number
-  (`test_rks_stress.py:388`). No SCF is involved, so there is no convergence
-  path and no second-solution noise — this is the tightest gate in the phase
-  and the one that localises a wrong strain AO to a single component.
+  `disp = 1e-5`. No SCF is involved, so there is no convergence path and no
+  second-solution noise — this is the tightest gate in the phase and the one
+  that localises a wrong strain AO to a single component.
+
+  **Gate A is three tiers, not one number** (`18-REVIEW §6.1`, D-PBC-31
+  clause 1). `test_rks_stress.py` carries twenty-three component assertions and
+  only **one** of them is at 1e-8; twenty-one are at 1e-9:
+
+  | tier | tolerance | upstream assertions | coverage |
+  |---|---|---|---|
+  | **A1** | **1e-9** | `:43 :49 :65 :71` ovlp · `:79 :85 :101 :107` kin · `:114 :116` weight · `:121 :123` coulG · `:140 :158 :176 :194` strain AO (sph+cart, deriv 0+1) · `:214 :240` grid response · `:253` lattice-vector derivatives · `:277 :296 :315` get_vxc LDA/GGA/MGGA | the whole strain machinery |
+  | **A2** | **2e-9** | `:340` get_j · `:363` get_nuc | the assembled Coulomb terms |
+  | **A3** | **1e-8** | `:388` get_pp | the pseudopotential term alone |
+
+  An earlier draft of this section stated Gate A as a flat **1e-8** citing
+  `:388`. That is the loosest assertion in the file and it is **10× looser than
+  upstream on thirteen of the fourteen component tests** — precisely the tests
+  whose job is to localise a wrong term. 18-01 measures the port's floor **per
+  tier**; a measured floor above its tier is a finding with a number, not a
+  licence to fall back to 1e-8.
 * **Gate B — analytic gradient vs this port's `verify_fd`, per method.**
   **1e-6 Ha/Bohr** (`FD_TOL`) for KRHF/KUHF/KRKS/KUKS and the gamma bodies;
   **5e-6** for `krkspu`/`kukspu`, because upstream's own DFT+U assertions are
@@ -439,7 +455,18 @@ Following 17-01's ruling exactly — *measure the floor, then write the gate*.
    port this arithmetic literally — same ruling shape as `16-REVIEW §2.4`
    ("upstream's own memory estimate is a documented TODO — do not port it").
 
-8. **`np.einsum('xkij,kji->x', ...)` transposes the DM index.**
+8. **The strain finite difference moves the k-points, at fixed FRACTIONAL
+   coordinates.** `krks_stress.get_ovlp:88` computes
+   `scaled_kpts = kpts.dot(cell.lattice_vectors().T)` and `:93-94` re-derives
+   `kpts1 = scaled_kpts.dot(cell1.reciprocal_vectors(norm_to=1))` for each
+   displaced cell. A port that strains the cell and reuses the original
+   **Cartesian** k-points differentiates a different quantity — one that is
+   correct at Γ (`k = 0` either way) and wrong at every other k-point. Same
+   invisible-on-the-obvious-fixture shape as traps 2 and 8. It is also why the
+   closed form in `18-REVIEW §6.2` may leave the Bloch phase alone: `k·L` is
+   strain-invariant, and these are the same fact.
+
+9. **`np.einsum('xkij,kji->x', ...)` transposes the DM index.**
    `krhf.py:63-66` contracts `h1ao[x,k,i,j]` against `dm0[k,j,i]` — the DM is
    indexed `ji`, not `ij`, on all three terms. `crates/pyscf-pbc-scf/src/types.rs:119`
    records that this port's `mo_coeff` is **column-major**; 14-05's
