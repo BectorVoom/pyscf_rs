@@ -380,20 +380,24 @@ exact *for the same reason*.
 
 `18-CONTEXT §2.3` states Gate A as **"Target 1e-8, upstream's own number
 (`test_rks_stress.py:388`)"**, and 18-11, 18-12 and 18-13 all repeat `< 1e-8`.
-Line 388 is real, but it is **one assertion out of twenty-three**, and it is
-the loosest one in the file. The actual distribution:
+Line 388 is real, but it is **one assertion out of twenty-five, from one test
+method out of sixteen**, and it is the loosest one in the file. The actual
+distribution, counted directly against the vendored
+`pbc/grad/test/test_rks_stress.py`:
 
-| tier | tolerance | assertions | what they cover |
-|---|---|---|---|
-| **A1** | **`1e-9`** | `:43 :49 :65 :71` (ovlp), `:79 :85 :101 :107` (kin), `:114 :116` (weight), `:121 :123` (coulG), `:140 :158 :176 :194` (strain AO, sph+cart, deriv 0+1), `:214 :240` (grid response), `:253` (lattice-vector derivatives), `:277 :296 :315` (get_vxc LDA/GGA/MGGA) | every component of the strain machinery |
-| **A2** | **`2e-9`** | `:340` (get_j), `:363` (get_nuc) | the two assembled Coulomb terms |
-| **A3** | **`1e-8`** | `:388` (get_pp) | the pseudopotential term alone |
+| tier | tolerance | test methods | assertions (by line) | what they cover |
+|---|---|---|---|---|
+| **A1** | **`1e-9`** | `test_ovlp`, `test_kin`, `test_weight`, `test_coulG`, `test_eval_ao_{cart,sph}`, `test_eval_ao_deriv1_{cart,sph}`, `test_eval_ao_grid_response`, `test_lattice_vector_derivatives`, `test_get_vxc_{lda,gga,mgga}` — **13 tests** | `:43 :49 :65 :71` (ovlp), `:79 :85 :101 :107` (kin), `:114 :116` (weight), `:121 :123` (coulG), `:140 :158 :176 :194` (strain AO, sph+cart, deriv 0+1), `:214 :240` (grid response), `:253` (lattice-vector derivatives), `:277 :296 :315` (get_vxc LDA/GGA/MGGA) — **22 assertions** | every component of the strain machinery |
+| **A2** | **`2e-9`** | `test_get_j`, `test_get_nuc` — **2 tests** | `:340` (get_j), `:363` (get_nuc) — **2 assertions** | the two assembled Coulomb terms |
+| **A3** | **`1e-8`** | `test_get_pp` — **1 test** | `:388` (get_pp) — **1 assertion** | the pseudopotential term alone |
 
-Twenty-one of the twenty-three assertions are at `1e-9` or `2e-9`. Gating all
-fourteen component tests at `1e-8` is **10× looser than upstream on thirteen of
-them**, and it costs nothing to be right: these are the tests that localise a
-wrong strain term to a single function, and a 10× margin is exactly where a
-wrong term hides.
+Twenty-four of the twenty-five assertions (from fifteen of the sixteen test
+methods) are at `1e-9` or `2e-9`. Gating all sixteen component tests at `1e-8`
+is **10× looser than upstream on the thirteen A1 tests** and **5× looser than
+upstream on the two A2 tests** (`get_j`/`get_nuc`, whose own bound is `2e-9`,
+not `1e-9`) — only `test_get_pp` itself already sits at `1e-8`. It costs
+nothing to be right: these are the tests that localise a wrong strain term to
+a single function, and a 5-10× margin is exactly where a wrong term hides.
 
 **Ruled (clause 1; 18-CONTEXT §2.3, 18-11, 18-12 Task 6, 18-13 Task 5,
 18-15):** Gate A is **A1 = 1e-9 / A2 = 2e-9 / A3 = 1e-8**, each tier naming the

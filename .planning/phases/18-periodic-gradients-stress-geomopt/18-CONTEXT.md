@@ -354,21 +354,24 @@ Following 17-01's ruling exactly — *measure the floor, then write the gate*.
   that localises a wrong strain AO to a single component.
 
   **Gate A is three tiers, not one number** (`18-REVIEW §6.1`, D-PBC-31
-  clause 1). `test_rks_stress.py` carries twenty-three component assertions and
-  only **one** of them is at 1e-8; twenty-one are at 1e-9:
+  clause 1). `test_rks_stress.py` carries **sixteen** component test methods
+  and **twenty-five** assertions (by line); only **one** test (`test_get_pp`,
+  one assertion) is at 1e-8, two tests (two assertions) are at 2e-9, and the
+  remaining thirteen tests (twenty-two assertions) are at 1e-9:
 
-  | tier | tolerance | upstream assertions | coverage |
-  |---|---|---|---|
-  | **A1** | **1e-9** | `:43 :49 :65 :71` ovlp · `:79 :85 :101 :107` kin · `:114 :116` weight · `:121 :123` coulG · `:140 :158 :176 :194` strain AO (sph+cart, deriv 0+1) · `:214 :240` grid response · `:253` lattice-vector derivatives · `:277 :296 :315` get_vxc LDA/GGA/MGGA | the whole strain machinery |
-  | **A2** | **2e-9** | `:340` get_j · `:363` get_nuc | the assembled Coulomb terms |
-  | **A3** | **1e-8** | `:388` get_pp | the pseudopotential term alone |
+  | tier | tolerance | upstream tests | assertions | coverage |
+  |---|---|---|---|---|
+  | **A1** | **1e-9** | 13 (`test_ovlp`, `test_kin`, `test_weight`, `test_coulG`, `test_eval_ao_{cart,sph}`, `test_eval_ao_deriv1_{cart,sph}`, `test_eval_ao_grid_response`, `test_lattice_vector_derivatives`, `test_get_vxc_{lda,gga,mgga}`) | `:43 :49 :65 :71` ovlp · `:79 :85 :101 :107` kin · `:114 :116` weight · `:121 :123` coulG · `:140 :158 :176 :194` strain AO (sph+cart, deriv 0+1) · `:214 :240` grid response · `:253` lattice-vector derivatives · `:277 :296 :315` get_vxc LDA/GGA/MGGA (22 total) | the whole strain machinery |
+  | **A2** | **2e-9** | 2 (`test_get_j`, `test_get_nuc`) | `:340` get_j · `:363` get_nuc (2 total) | the assembled Coulomb terms |
+  | **A3** | **1e-8** | 1 (`test_get_pp`) | `:388` get_pp (1 total) | the pseudopotential term alone |
 
   An earlier draft of this section stated Gate A as a flat **1e-8** citing
-  `:388`. That is the loosest assertion in the file and it is **10× looser than
-  upstream on thirteen of the fourteen component tests** — precisely the tests
-  whose job is to localise a wrong term. 18-01 measures the port's floor **per
-  tier**; a measured floor above its tier is a finding with a number, not a
-  licence to fall back to 1e-8.
+  `:388`. That is the loosest assertion in the file, and gating every test at
+  it is **10× looser than upstream on the thirteen A1 tests** and **5× looser
+  than upstream on the two A2 tests** — precisely the tests whose job is to
+  localise a wrong term. 18-01 measures the port's floor **per tier**; a
+  measured floor above its tier is a finding with a number, not a licence to
+  fall back to 1e-8.
 * **Gate B — analytic gradient vs this port's `verify_fd`, per method.**
   **1e-6 Ha/Bohr** (`FD_TOL`) for KRHF/KUHF/KRKS/KUKS and the gamma bodies;
   **5e-6** for `krkspu`/`kukspu`, because upstream's own DFT+U assertions are
