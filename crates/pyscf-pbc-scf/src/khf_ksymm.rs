@@ -193,7 +193,55 @@ impl KsymAdaptedKrhf {
     /// # Errors
     /// Propagates every hook and the driver.
     pub fn kernel(&self, cfg: &KScfConfig) -> Result<KScfResult, PyscfRsError> {
+        if self.use_ao_symmetry {
+            self.warn_if_kmesh_breaks_the_lattice_symmetry();
+        }
         kernel(self, cfg)
+    }
+
+    /// D-17-09-02 — `use_ao_symmetry = true` is UNSOUND when the k-mesh has
+    /// lower symmetry than the lattice.
+    ///
+    /// `little_cogroup_ops` is filled from `k2opk` as snapshotted BEFORE
+    /// `make_kpts_ibz`'s column wipe (`kpts.py:60` then `:109-113`, and this
+    /// port mirrors it), so it can name operations the k-mesh does not
+    /// respect. [`eig_symm_adapted`] then solves `F c = S c e` one irrep block
+    /// at a time — which Schur's lemma justifies only if `F` has no matrix
+    /// elements BETWEEN the blocks, and it does have them: `v_J` comes from
+    /// `rho(r) = sum_k rho_k(r)` over a mesh that is not point-group invariant.
+    ///
+    /// **`e_tot` is blind to it**, which is why this needed a post-SCF method
+    /// to find. A per-block solve of a non-block-diagonal Fock still spans the
+    /// right OCCUPIED SUBSPACE, so the density and the total energy are
+    /// unaffected — measured `5.329e-15` on `si [1,1,2]`, and 17-07's own
+    /// `ao_symmetry_eig_matches_the_plain_route` compares exactly that
+    /// quantity. What is lost is CANONICALITY: the vectors are eigenvectors of
+    /// the projected Fock, not of `F` — the ORBITAL ENERGIES move by
+    /// **8.229e-03** while `e_tot` does not, which is the signature. `KMP2`'s
+    /// `e_corr` moves by **3.629e-04** on that fixture (36 of 48 operations outside the k-mesh
+    /// subgroup) against **0e0** with `use_ao_symmetry = false`, versus
+    /// **1.138e-10** on `si [2,2,2]`, whose mesh IS closed under the cubic
+    /// group (0 of 48) — `crates/pyscf-pbc-mp/tests/kmp2_ksymm.rs`,
+    /// `crates/pyscf-pbc-symm/tests/kpts_k4_s2.rs`.
+    ///
+    /// **A warning and not a refusal, deliberately.** Upstream has neither; the
+    /// fixtures this phase gates are all symmetry-closed meshes; and turning it
+    /// into a hard error is a behaviour change that belongs with 17-07's own
+    /// suite rather than with the plan (17-09) that found it. Carried over.
+    fn warn_if_kmesh_breaks_the_lattice_symmetry(&self) {
+        let offenders = self.kpts.little_cogroup_ops_outside_kmesh_subgroup();
+        if !offenders.is_empty() {
+            tracing::warn!(
+                count = offenders.len(),
+                first = ?offenders.first(),
+                "use_ao_symmetry = true on a k-mesh with LOWER symmetry than the lattice: \
+                 little_cogroup_ops names operations the k-mesh does not respect, so the \
+                 per-irrep eig returns orbitals that are NOT Fock eigenvectors \
+                 (D-17-09-02). E_scf is unaffected; every post-SCF method that assumes \
+                 canonical orbitals is not. Set use_ao_symmetry = false, or use a k-mesh \
+                 closed under the point group."
+            );
+        }
     }
 }
 

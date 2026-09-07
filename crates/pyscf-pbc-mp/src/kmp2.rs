@@ -93,6 +93,14 @@ impl<'a> Kmp2<'a> {
         })
     }
 
+    /// The reference SCF's total energy — `mp.e_hf` (`kmp2.py:238`).
+    ///
+    /// `pub` accessor rather than a `pub` field: it is copied out of the
+    /// converged [`KScfResult`] at construction and must not be reassigned.
+    pub fn e_hf(&self) -> f64 {
+        self.e_hf
+    }
+
     pub fn padded_mos(&self) -> Result<PaddedMos, PbcMpError> {
         let nao = self.cell.nao_nr;
         let raw: Result<Vec<MoCoeff>, _> = self

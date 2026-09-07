@@ -65,7 +65,7 @@ pub enum Blk {
 
 impl Blk {
     /// The four orbital-space letters, `false` = occupied, `true` = virtual.
-    fn spaces(self) -> [bool; 4] {
+    pub(crate) fn spaces(self) -> [bool; 4] {
         match self {
             Blk::Oooo => [false, false, false, false],
             Blk::Ooov => [false, false, false, true],

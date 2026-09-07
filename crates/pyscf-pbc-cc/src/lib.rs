@@ -15,6 +15,14 @@ pub mod keris;
 // Plan 16-04 — the k-point restricted CC intermediates 16-05's `update_amps`
 // contracts against.
 pub mod kintermediates_rhf;
+/// Plan 17-09 (the CC half) — the seam between `pyscf-pbc-symm`'s
+/// `KsymmArray` and this crate's `ZArr`, and the k-symmetry context every
+/// k-symmetric CC routine indexes by.
+pub mod ksymm_common;
+/// Plan 17-09 (the CC half) — `kintermediates_rhf_ksymm.py`.
+pub mod kintermediates_rhf_ksymm;
+/// Plan 17-09 (the CC half) — `KsymAdaptedRCCSD`.
+pub mod kccsd_rhf_ksymm;
 // Plan 16-05 — KRCCSD itself: update_amps, energy, init_amps, the DIIS kernel.
 pub mod kccsd_rhf;
 // Plan 16-08 Task 1 — the loop-explicit (T) reference, ported BEFORE either
@@ -63,4 +71,9 @@ pub use kintermediates_rhf as imdk;
 pub use ktensor::{KBlocks, KRank, KTensor, Tier};
 pub use kuccsd_rdm::{Gamma1, gamma1_intermediates, make_rdm1_from_gamma1};
 pub use kueris::{KuEris, UBlk, UFock, UKind, UPass};
+pub use kccsd_rhf_ksymm::{
+    KsymEris, KsymRccsdInputs, KsymRccsdOpts, KsymRccsdResult, run as run_ksym_rccsd,
+};
+pub use kintermediates_rhf_ksymm as imdk_ksymm;
+pub use ksymm_common::KsymCtx;
 pub use zarr::{ZArr, einsum, einsum_scaled};

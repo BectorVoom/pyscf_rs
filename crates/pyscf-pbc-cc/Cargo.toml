@@ -22,6 +22,14 @@ pyscf-pbc-df     = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
 pyscf-pbc-ao2mo  = { path = "../pyscf-pbc-ao2mo" }
 pyscf-pbc-mp     = { path = "../pyscf-pbc-mp" }
+# 17-09 (the CC half): `kccsd_rhf_ksymm.py` is written against `KPoints`,
+# `KQuartets`, `MORotationMatrix` and `KsymmArray` — all of which 17-02/05/06
+# shipped in `pyscf-pbc-symm`. D-PBC-15 forbids `pyscf-pbc-df` from naming these
+# types; it says nothing about the post-SCF crates.
+pyscf-pbc-symm   = { path = "../pyscf-pbc-symm" }
+# `KsymmArray` speaks `Vec<Complex64>`; this crate speaks planar `CTensor`.
+# The seam lives in `ksymm_common` alone.
+num-complex      = "0.4.6"
 # The Phase-3 CDIIS ring buffer, reused for the amplitude iteration exactly as
 # pyscf-ccsd reuses it for the molecular one (no new DIIS body).
 pyscf-diis       = { path = "../pyscf-diis" }
@@ -33,3 +41,6 @@ rayon            = { workspace = true }
 
 [dev-dependencies]
 pyscf-gto = { path = "../pyscf-gto" }
+# 17-09 §9.3: the 1-vs-8-thread bit-identity gate varies the worker count
+# inside ONE process with an explicit `rayon::ThreadPool`.
+rayon = { workspace = true }

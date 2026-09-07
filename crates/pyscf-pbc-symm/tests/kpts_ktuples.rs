@@ -202,8 +202,25 @@ fn make_k4_ibz_s1_quartets_conserve_momentum() {
         assert_eq!(kconserv.get(ki, ka, kj) as usize, kb);
     }
 
-    // s2 / s4 are 17-09's, and say so rather than silently returning s1.
-    assert!(kpts.make_k4_ibz(&cell, "s2").is_err());
+    // **`"s2"` SHIPPED in 17-09** (`kmp2_ksymm`, its only consumer), so the
+    // refusal this test used to assert has outlived its reason and is
+    // replaced by a shape check; `tests/kpts_k4_s2.rs` gates the values
+    // against upstream. `"s4"` still refuses: upstream's own tree has NO
+    // caller for it (`kpts.py:284-292`), so this port ships no `"s4"` number
+    // that no oracle can check.
+    let s2 = kpts.make_k4_ibz(&cell, "s2").expect("s2 shipped in 17-09");
+    assert!(
+        s2.k4.len() < k4.k4.len(),
+        "the s2 fold must be strictly coarser than s1: {} vs {}",
+        s2.k4.len(),
+        k4.k4.len()
+    );
+    assert!(
+        s2.ibz2bz.is_empty() && s2.stars_ops.is_empty() && s2.stars_ops_bz.is_empty(),
+        "upstream returns only (k4, weight, bz2ibz) for s2 (kpts.py:299), and an \
+         s2 class is a union of s1 stars — there is no single operation mapping a \
+         BZ tuple onto its s2 representative, so these three have no honest value"
+    );
     assert!(kpts.make_k4_ibz(&cell, "s4").is_err());
     assert!(kpts.make_k4_ibz(&cell, "nonsense").is_err());
 }

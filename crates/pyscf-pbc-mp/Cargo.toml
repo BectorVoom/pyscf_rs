@@ -18,9 +18,23 @@ pyscf-pbc-gto    = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df     = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
 pyscf-pbc-ao2mo  = { path = "../pyscf-pbc-ao2mo" }
+# 17-09: `kmp2_ksymm.py` is written entirely against `KPoints` -- the s2
+# k-quartet classes it loops over and the `transform_mo_*` unfolds that give it
+# a full-BZ MO set. D-PBC-15 forbids `pyscf-pbc-df` from naming this type; it
+# says nothing about the post-SCF crates, and upstream's own `kmp2.KMP2`
+# branches on `isinstance(self.kpts, libkpts.KPoints)` (`kmp2.py:715`).
+pyscf-pbc-symm   = { path = "../pyscf-pbc-symm" }
+# `KPoints`'s transforms speak `Vec<Complex64>`; this crate speaks planar
+# `CTensor`. The seam lives in `kmp2_ksymm::unfold_kscf_result` alone.
+num-complex      = "0.4.6"
 thiserror        = { workspace = true }
 tracing          = { workspace = true }
 rayon            = { workspace = true }
 
 [dev-dependencies]
 pyscf-gto = { path = "../pyscf-gto" }
+# PBC-MASTER-PLAN §9.2 reference cells for `tests/kmp2_ksymm.rs`.
+pyscf-pbc-gto = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
+# 17-09 §9.3: the 1-vs-8-thread bit-identity gate varies the worker count
+# inside ONE process with an explicit `rayon::ThreadPool`.
+rayon = { workspace = true }

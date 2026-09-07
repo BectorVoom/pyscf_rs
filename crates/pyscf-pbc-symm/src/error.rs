@@ -104,9 +104,10 @@ pub enum PbcSymmError {
     MeshNotSymmetric(usize, usize, f64),
 
     /// `kpts.py:301` — `make_k4_ibz`'s
-    /// `raise NotImplementedError("Unsupported symmetry.")`, and the `"s2"` /
-    /// `"s4"` branches (`kpts.py:218-300`) which this port defers to 17-09
-    /// (`kccsd_rhf_ksymm`), their only consumer.
+    /// `raise NotImplementedError("Unsupported symmetry.")`, and the `"s4"`
+    /// branch (`kpts.py:284-292`), which upstream's own tree never calls —
+    /// this port therefore ships no `"s4"` number that no oracle can check.
+    /// `"s2"` LANDED in 17-09 (`kmp2_ksymm`) and is no longer refused.
     #[error("make_k4_ibz: unsupported symmetry '{0}'")]
     UnsupportedK4Symmetry(String),
 

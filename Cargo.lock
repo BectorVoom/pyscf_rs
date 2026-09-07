@@ -5813,6 +5813,7 @@ dependencies = [
 name = "pyscf-pbc-cc"
 version = "0.1.0"
 dependencies = [
+ "num-complex",
  "pyscf-algebra",
  "pyscf-ccsd",
  "pyscf-core",
@@ -5824,6 +5825,7 @@ dependencies = [
  "pyscf-pbc-lib",
  "pyscf-pbc-mp",
  "pyscf-pbc-scf",
+ "pyscf-pbc-symm",
  "pyscf-pbc-tools",
  "pyscf-runtime",
  "rayon",
@@ -6003,6 +6005,7 @@ dependencies = [
 name = "pyscf-pbc-mp"
 version = "0.1.0"
 dependencies = [
+ "num-complex",
  "pyscf-algebra",
  "pyscf-core",
  "pyscf-gto",
@@ -6012,6 +6015,7 @@ dependencies = [
  "pyscf-pbc-gto",
  "pyscf-pbc-lib",
  "pyscf-pbc-scf",
+ "pyscf-pbc-symm",
  "pyscf-pbc-tools",
  "rayon",
  "thiserror 2.0.18",

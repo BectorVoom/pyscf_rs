@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Periodic Boundary Conditions
 status: in_progress
-last_updated: "2026-09-05T12:00:00.000Z"
-last_activity: 2026-09-05
+last_updated: "2026-09-07T12:00:00.000Z"
+last_activity: 2026-09-07
 progress:
   total_phases: 5
   completed_phases: 5
@@ -20,13 +20,82 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 16 (periodic CC/CI) — **IN PROGRESS, six of
-fourteen plans complete and measured as of 2026-09-06.** `KRCCSD` ships and
-matches upstream PySCF 2.12.1 to `6.560e-9`; `KCCSD(T)`'s RHF half ships with a
-`8.363e-13` fast-vs-slow agreement. Phase 15, its hard blocker, is **CLOSED as
-of 2026-09-05**.
+**Current focus:** Phase 17 (k-point symmetry + multigrid) — **CLOSED
+2026-09-07**, `.planning/phases/17-ksymm-multigrid/17-VERIFICATION.md` is the
+authority. Thirteen plans, all started, twelve shipped and measured. 17-09 was
+the last externally blocked plan and BOTH its halves landed once Phase 15
+closed (2026-09-05) and Phase 16 shipped `KRCCSD`. Phase 16 remains IN
+PROGRESS on its own remaining plans.
 
 ## Current Position
+
+**Phase 17 CLOSED, 2026-09-07.**
+`.planning/phases/17-ksymm-multigrid/17-VERIFICATION.md` is the authority.
+Thirteen plans, all started; twelve shipped and measured; 17-13 written.
+
+* **17-09 shipped IN FULL**, both halves, after being the phase's one
+  externally blocked plan. Its Task 0 prerequisite gate was re-run and passed
+  on both counts: `pyscf-pbc-mp` exports a working `Kmp2` and `pyscf-pbc-cc`
+  exports `Krccsd`, so the CC half was NOT deferred and no stub file was
+  created for it.
+* `KPoints::make_k4_ibz(sym = "s2")` — the one piece of `kpts.py` 17-05 left
+  refusing — landed with it and is gated **EXACTLY** against upstream's class
+  list, class sizes and 512-entry `bz2ibz` on `si`/`diamond` `[2,2,2]` with
+  time reversal both ways (36 s2 classes of 50 s1 classes of 512 k-triples).
+  `"s4"` still refuses: upstream's own tree has no caller for it.
+* **`KMP2` k-symmetric**: ksymm vs full BZ `e_corr` **1.138e-10** (FFTDF,
+  `|dE_scf|` 8.793e-14) and **5.632e-11** (GDF) on `si [2,2,2]` — an order
+  better than upstream's own 1.067e-9 on the same cell, because this port
+  route-matches both sides while upstream's k-symmetric kernel uses `ao2mo`
+  where its full-BZ kernel uses the `Lov` route. **2.43x** wall clock over the
+  dense kernel (36 s2 classes of 512 k-triples; the realised ratio is smaller
+  than the class-count ratio because each `(ki,kj)` group still rebuilds its
+  own `oovv` table — upstream's structure, stated rather than hidden).
+* **`KRCCSD` k-symmetric**: `e_corr` vs this port's own full-BZ `KRCCSD` from
+  ONE mean field **4.838e-12** — an order tighter than upstream's own
+  4.250e-11 — `emp2` identical to 15 digits, `|d t1|max` **1.262e-11** against
+  upstream's 1.749e-8, `|d t2|max` **5.714e-12** against upstream's 1.392e-10.
+  75 `ao2mo` transforms for 120 IBZ k-quartets of 512 k-triples.
+* **FOUR defects found in upstream PySCF 2.12.1**, three of which change a
+  number. **D-17-09-01**: `kccsd_rhf_ksymm.py:112` guards a T1 term on a STALE
+  loop variable (`kc`, left over from the preceding loop), dropping a
+  contribution worth **1.117e-10** and leaving upstream's k-symmetric answer
+  FURTHER from its own full-BZ one than the corrected guard (6.917e-11 vs
+  4.250e-11); reproduced against upstream ALONE in
+  `measurements/gate_kccsd_stale_kc.py`. **D-17-07-01**: `little_cogroup_ops`
+  indexes `k2opk`'s doubled column space while `basis.py:113` indexes `ops`,
+  so upstream's DEFAULT `use_ao_symmetry` + time-reversal combination raises
+  `IndexError` at Γ. **D-17-09-02**: `little_cogroup_ops` is filled from
+  `k2opk` as snapshotted BEFORE `make_kpts_ibz`'s column wipe (`kpts.py:60`
+  then `:109-113`), so on a k-mesh with lower symmetry than the lattice the
+  per-irrep `eig` solves a Fock matrix that is not block-diagonal in that
+  decomposition and returns orbitals that are NOT Fock eigenvectors. **The
+  first reading of this was wrong and its own measurement corrected it**: the
+  SCF does not land on a different solution — a per-block solve still spans the
+  right occupied subspace, so `E_scf` agrees to **5.329e-15** while the ORBITAL
+  ENERGIES are **8.229e-03** apart — what is lost is CANONICALITY, and 17-07's own gate compares `e_tot`, which is exactly the
+  blind quantity. Measured **36 of 48** operations outside the subgroup on `si
+  [1,1,2]` and **3.629e-04** in `KMP2`'s `e_corr`, against **0e0** with the
+  constraint off and **1.138e-10** on the symmetry-closed `si [2,2,2]`
+  (**0 of 48**); the detector half needs no SCF at all.
+  **A fourth**: `MORotationMatrix.build` passes `-1` as a k-point index
+  (`kpts.py:1156`) — latent upstream, a panic in Rust, now an EMPTY block that
+  fails loudly if ever read.
+* **Two gates are NOT met and are recorded as not met.** 17-08's GDF Gate C
+  sits at **1.432e-06** against a 1e-8 tolerance (the band route was tested
+  and EXONERATED at `max |dvj| = max |dvk| = 0e0`; the leading hypothesis, a
+  symmetry-broken full-BZ GDF solution, is named and untested). Gate D (port
+  vs upstream, per DF route) was not run as a Rust gate and is a carry-over,
+  not a pass.
+* **No `NotYetImplemented { phase: 17 }` remains anywhere in `crates/*/src`.**
+  `rsjk` is re-homed to `{ phase: 14 }` (the cintx `range_omega` gap) and
+  `{ phase: 19 }` (MPI, a named non-goal); `supercell.rs` to `{ phase: 12 }`,
+  where upstream refuses the same input.
+* **Four for four: every speed assumption this phase tested failed in the same
+  direction.** D-PBC-26 point 1's IBZ-sampled `get_jk` is not an identity
+  (9.486e-2 Ha); upstream's own multigrid is 0.18x-0.49x SLOWER than reference
+  `numint`; 17-05's star search parallelises at 0.99x; and 17-08's `numint`
+  under symmetry does full-BZ work PLUS an unfold.
 
 **Phase 16 IN PROGRESS, 2026-09-06.** `.planning/phases/16-periodic-cc-ci/16-VERIFICATION.md`
 is the authority. **Nine plans complete and measured** (16-01, 16-02, 16-03,

@@ -580,17 +580,27 @@ pub struct KtuplesIbz {
     pub stars_ops_bz: Vec<usize>,
 }
 
-/// The return of [`KPoints::make_k4_ibz`] with `sym = "s1"`
-/// (`kpts.py:205-217`).
+/// The return of [`KPoints::make_k4_ibz`] (`kpts.py:205-300`).
+///
+/// With `sym = "s1"` every field is filled. With `sym = "s2"` upstream
+/// returns only `(k4, weight, bz2ibz)` (`:299`), so [`K4Ibz::ibz2bz`],
+/// [`K4Ibz::stars_ops`] and [`K4Ibz::stars_ops_bz`] come back **empty**: an
+/// s2 class is a union of s1 stars, and no single symmetry operation maps a
+/// BZ tuple onto its s2 representative, so there is no honest value for them.
 #[derive(Debug, Clone)]
 pub struct K4Ibz {
     /// `k4[i] = [ki, kj, ka, kb]` — physicist's notation, `kb` from
-    /// momentum conservation.
+    /// momentum conservation. Ascending lexicographic for `sym = "s2"`.
     pub k4: Vec<[usize; 4]>,
+    /// Class weights; sum to 1 for both symmetries.
     pub weight: Vec<f64>,
+    /// `bz2ibz[t]` — the class index of flat 3-tuple `t = (ki, kj, ka)`.
     pub bz2ibz: Vec<usize>,
+    /// `"s1"` only; empty for `"s2"`.
     pub ibz2bz: Vec<usize>,
+    /// `"s1"` only; empty for `"s2"`.
     pub stars_ops: Vec<Vec<usize>>,
+    /// `"s1"` only; empty for `"s2"`.
     pub stars_ops_bz: Vec<usize>,
 }
 
@@ -695,6 +705,66 @@ impl KPoints {
     // -----------------------------------------------------------------
     // addition / inverse tables (kpts.py:1049-1074)
     // -----------------------------------------------------------------
+
+    /// The operations that are NOT in the subgroup the k-mesh belongs to —
+    /// `make_kpts_ibz`'s `if -1 in bz2bz_ks[:,io]` test (`kpts.py:91-94`),
+    /// exposed.
+    ///
+    /// `true` at index `io` means operation `io` moves at least one k-point
+    /// out of the mesh, so the mesh has LOWER symmetry than the lattice for
+    /// that operation.
+    ///
+    /// # Why this is public
+    ///
+    /// [`KPoints::k2opk`] is snapshotted BEFORE the column wipe
+    /// (`kpts.py:60`, and this port mirrors it), and `little_cogroup_ops` is
+    /// filled from that unwiped table (`kpts.py:109-113`). So
+    /// `little_cogroup_ops[i]` can contain operations the k-mesh does not
+    /// respect — see [`KPoints::little_cogroup_ops_outside_kmesh_subgroup`].
+    pub fn ops_outside_kmesh_subgroup(&self) -> Vec<bool> {
+        let ncol = self.k2opk.first().map_or(0, |r| r.len());
+        (0..ncol)
+            .map(|io| self.k2opk.iter().any(|row| row[io] == NO_MAP))
+            .collect()
+    }
+
+    /// The `(IBZ index, operation index)` pairs where `little_cogroup_ops`
+    /// names an operation the k-mesh does NOT respect.
+    ///
+    /// **A non-empty return means `use_ao_symmetry = true` returns
+    /// NON-CANONICAL orbitals on this k-mesh** (D-17-09-02).
+    /// `symm_adapted_basis` builds `symm_orb` from `little_cogroup_ops`, and
+    /// `eig` then solves `F c = S c e` one irrep block at a time — which
+    /// Schur's lemma justifies only if `F` has no matrix elements BETWEEN the
+    /// blocks. It does have them: `v_J` is built from `rho(r) = Σ_k rho_k(r)`
+    /// over a k-mesh that is not point-group invariant, so neither `rho` nor
+    /// `v_J` is invariant under the operations `symm_orb` was built from.
+    ///
+    /// **The total energy is blind to it.** A per-block solve of a
+    /// non-block-diagonal Fock still spans the right OCCUPIED SUBSPACE, so the
+    /// density and `E_scf` are unaffected — measured `5.329e-15` on `si
+    /// [1,1,2]`. What is lost is canonicality: the vectors are eigenvectors of
+    /// the PROJECTED Fock, not of `F`, and every post-SCF method whose
+    /// denominators assume `F` is diagonal in the MO basis is then wrong.
+    /// `KMP2`'s `e_corr` moves by **3.629e-04** on that fixture, against
+    /// **0e0** with `use_ao_symmetry = false`
+    /// (`crates/pyscf-pbc-mp/tests/kmp2_ksymm.rs`). On `si [2,2,2]`, whose
+    /// mesh IS closed under the cubic group, this returns empty and the same
+    /// comparison lands at **1.138e-10**.
+    ///
+    /// Upstream has the same structure and no such check.
+    pub fn little_cogroup_ops_outside_kmesh_subgroup(&self) -> Vec<(usize, usize)> {
+        let outside = self.ops_outside_kmesh_subgroup();
+        let mut out = Vec::new();
+        for (i, ops) in self.little_cogroup_ops.iter().enumerate() {
+            for &io in ops {
+                if outside.get(io).copied().unwrap_or(false) {
+                    out.push((i, io));
+                }
+            }
+        }
+        out
+    }
 
     /// `kpts.py:1049-1063` — `addition_table`. `table[i * nkpts + j]` is the
     /// index of `k_i + k_j` modulo a reciprocal lattice vector. Lazily built
@@ -1001,13 +1071,26 @@ impl KPoints {
     /// notation). `kb` comes from momentum conservation:
     /// `kb = kconserv[ki, ka, kj]`.
     ///
+    /// `sym = "s2"` (`kpts.py:218-283, :293-300`) additionally folds the
+    /// **dummy-index interchange** `(ki, kj, ka, kb) <-> (kj, ki, kb, ka)`,
+    /// which is a symmetry of `(ia|jb)` in chemists' notation and hence of
+    /// the KMP2 energy expression. It is 17-09's `kmp2_ksymm.kernel` set.
+    ///
+    /// **The `"s2"` return is NOT the same shape as `"s1"`'s.** Upstream
+    /// returns only `(k4, weight, bz2ibz)` for it (`:299`), so
+    /// [`K4Ibz::ibz2bz`], [`K4Ibz::stars_ops`] and [`K4Ibz::stars_ops_bz`]
+    /// come back EMPTY — the s2 classes are unions of s1 stars and no single
+    /// symmetry operation maps a BZ tuple onto its s2 representative, so
+    /// there is no honest value to put there. The `"s1"` return keeps all six,
+    /// which is what [`KQuartets`] (and therefore `kccsd_rhf_ksymm`) needs.
+    ///
     /// # Errors
-    /// [`PbcSymmError::UnsupportedK4Symmetry`] for `"s2"` / `"s4"`
-    /// (`kpts.py:218-300`) — deferred to 17-09 (`kccsd_rhf_ksymm`), their
-    /// only consumer — and for anything else (upstream's own
-    /// `raise NotImplementedError("Unsupported symmetry.")`, `:301`).
+    /// [`PbcSymmError::UnsupportedK4Symmetry`] for `"s4"` (`kpts.py:284-292`)
+    /// — upstream's own tree has **no caller** for it, so this port ships no
+    /// number that no oracle can check — and for anything else (upstream's
+    /// own `raise NotImplementedError("Unsupported symmetry.")`, `:301`).
     pub fn make_k4_ibz(&self, cell: &Cell, sym: &str) -> Result<K4Ibz, PbcSymmError> {
-        if sym != "s1" {
+        if sym != "s1" && sym != "s2" {
             return Err(PbcSymmError::UnsupportedK4Symmetry(sym.to_string()));
         }
         let t = self.make_ktuples_ibz(3);
@@ -1021,13 +1104,129 @@ impl KPoints {
                 [kija[0], kija[1], kija[2], kb]
             })
             .collect();
+        if sym == "s1" {
+            return Ok(K4Ibz {
+                k4,
+                weight: t.weight_ibz,
+                bz2ibz: t.bz2ibz,
+                ibz2bz: t.ibz2bz,
+                stars_ops: t.stars_ops,
+                stars_ops_bz: t.stars_ops_bz,
+            });
+        }
+
+        // ---- `kpts.py:219-235` — fold by the dummy-index interchange -----
+        //
+        // `k not in k4_s2` (`:227`) can never fire: `k4` has no repeated row
+        // (each is one star's representative) and `k4_s2` only ever holds
+        // rows of `k4`. The condition that does the work is
+        // `k_sym not in k4_s2`.
+        let n1 = k4.len();
+        let mut ibz2ibz_s2: Vec<usize> = (0..n1).collect();
+        let mut k4_s2: Vec<[usize; 4]> = Vec::new();
+        let mut weight_s2: Vec<f64> = Vec::new();
+        for (i, &q) in k4.iter().enumerate() {
+            let [ki, kj, ka, kb] = q;
+            let q_sym = [kj, ki, kb, ka];
+            if k4_s2.contains(&q) || k4_s2.contains(&q_sym) {
+                continue;
+            }
+            k4_s2.push(q);
+            ibz2ibz_s2[i] = k4_s2.len() - 1;
+            let mut w = t.weight_ibz[i];
+            if q_sym != q {
+                if let Some(idx) = k4.iter().position(|&r| r == q_sym) {
+                    ibz2ibz_s2[idx] = ibz2ibz_s2[i];
+                    w += t.weight_ibz[idx];
+                }
+            }
+            weight_s2.push(w);
+        }
+
+        // ---- `kpts.py:236-273` — "refine s2 symmetry" ---------------------
+        //
+        // The first pass only catches a partner that is ITSELF an s1
+        // representative. When `(kj, ki, kb, ka)` sits elsewhere in the same
+        // s1 star as some OTHER representative, the pass above misses it;
+        // this one searches every later representative whose four k-indices
+        // are the right multiset and then walks that representative's star
+        // looking for the interchanged tuple exactly.
+        let mut k4_refine: Vec<[usize; 4]> = Vec::new();
+        let mut weight_refine: Vec<f64> = Vec::new();
+        let mut skip = vec![false; k4_s2.len()];
+        let mut s2_to_refine: Vec<usize> = (0..k4_s2.len()).collect();
+        for i in 0..k4_s2.len() {
+            if skip[i] {
+                continue;
+            }
+            let [ki, kj, ka, kb] = k4_s2[i];
+            let q_sym = [kj, ki, kb, ka];
+            if ki == kj && ka == kb {
+                k4_refine.push(k4_s2[i]);
+                s2_to_refine[i] = k4_refine.len() - 1;
+                weight_refine.push(weight_s2[i]);
+                continue;
+            }
+            let mut idx_sym: Option<usize> = None;
+            for j in (i + 1)..k4_s2.len() {
+                if skip[j] {
+                    continue;
+                }
+                let r = k4_s2[j];
+                if !(r.contains(&ki) && r.contains(&kj) && r.contains(&ka) && r.contains(&kb)) {
+                    continue;
+                }
+                let Some(idx) = k4.iter().position(|&s| s == r) else {
+                    continue; // unreachable: k4_s2 is a sublist of k4
+                };
+                for &flat in &t.stars[idx] {
+                    let kt = self.index_to_ktuple(flat, 3);
+                    let kbb = kconserv.get(kt[0], kt[2], kt[1]) as usize;
+                    if q_sym == [kt[0], kt[1], kt[2], kbb] {
+                        idx_sym = Some(j);
+                        break;
+                    }
+                }
+                if idx_sym.is_some() {
+                    break;
+                }
+            }
+            let mut w = weight_s2[i];
+            if let Some(j) = idx_sym {
+                skip[j] = true;
+                w += weight_s2[j];
+                s2_to_refine[j] = k4_refine.len();
+            }
+            k4_refine.push(k4_s2[i]);
+            s2_to_refine[i] = k4_refine.len() - 1;
+            weight_refine.push(w);
+        }
+
+        // ---- `kpts.py:275-283` — lexicographic order, and `bz2ibz` --------
+        //
+        // `np.lexsort(k4_s2.T[::-1,:])` sorts on `ki` first, then `kj`, `ka`,
+        // `kb` — a plain ascending lexicographic sort of the rows. 17-09's
+        // kernel depends on it: it groups consecutive equal `(ki, kj)` and
+        // asserts its running counter equals `bz2ibz`.
+        let mut order: Vec<usize> = (0..k4_refine.len()).collect();
+        order.sort_by(|&a, &b| k4_refine[a].cmp(&k4_refine[b]));
+        let mut rank = vec![0usize; order.len()];
+        for (p, &m) in order.iter().enumerate() {
+            rank[m] = p;
+        }
+        let bz2ibz_s2: Vec<usize> = t
+            .bz2ibz
+            .iter()
+            .map(|&b| rank[s2_to_refine[ibz2ibz_s2[b]]])
+            .collect();
+
         Ok(K4Ibz {
-            k4,
-            weight: t.weight_ibz,
-            bz2ibz: t.bz2ibz,
-            ibz2bz: t.ibz2bz,
-            stars_ops: t.stars_ops,
-            stars_ops_bz: t.stars_ops_bz,
+            k4: order.iter().map(|&m| k4_refine[m]).collect(),
+            weight: order.iter().map(|&m| weight_refine[m]).collect(),
+            bz2ibz: bz2ibz_s2,
+            ibz2bz: Vec::new(),
+            stars_ops: Vec::new(),
+            stars_ops_bz: Vec::new(),
         })
     }
 }
@@ -1598,7 +1797,29 @@ impl MORotationMatrix {
         let mut vv = Vec::with_capacity(nkpts);
         for ki in 0..nkpts {
             let k1 = vec![ki; nop];
-            let k2: Vec<usize> = (0..nop).map(|iop| kpts.k2opk[ki][iop] as usize).collect();
+            // `k2opk[ki][iop] == NO_MAP` marks an operation that does not map
+            // the k-mesh onto itself. `make_kpts_ibz` wipes the WHOLE column
+            // when that happens, so `stars_ops` / `stars_ops_bz` never name
+            // such an operation and the rotation matrix for it is unreachable.
+            //
+            // Upstream lets `-1` fall through to NumPy's negative indexing
+            // (`kpts.py:1156`, `k2 = k2opk[ki]`), which quietly builds the
+            // rotation onto the LAST k-point instead — a shaped, wrong matrix
+            // that happens never to be read. Rust would index out of bounds
+            // and panic (`usize::MAX`), which is how this was found. This port
+            // stores an EMPTY block instead: unreachable by construction, and
+            // if anything ever does reach it, `rot_of`'s dimension check turns
+            // it into a loud `KsymmShapeMismatch` rather than a wrong number.
+            let mapped: Vec<bool> = (0..nop).map(|iop| kpts.k2opk[ki][iop] != NO_MAP).collect();
+            let k2: Vec<usize> = (0..nop)
+                .map(|iop| {
+                    if mapped[iop] {
+                        kpts.k2opk[ki][iop] as usize
+                    } else {
+                        ki // a valid index; the result is discarded below
+                    }
+                })
+                .collect();
             // upstream passes `ops_id = np.arange(nop)` (`kpts.py:1164`), and
             // `get_rotation_mat_for_mos` then does
             // `ids = np.asarray(ops_id[k]).reshape(-1)` (`:793`) — so pair
@@ -1626,8 +1847,18 @@ impl MORotationMatrix {
                 &k2,
                 Some(&ops),
             )?;
-            oo.push(rot_oo.into_iter().map(|mut v| v.remove(0)).collect());
-            vv.push(rot_vv.into_iter().map(|mut v| v.remove(0)).collect());
+            let keep = |rot: Vec<Vec<Vec<Complex64>>>| -> Vec<Vec<Complex64>> {
+                rot.into_iter()
+                    .enumerate()
+                    .map(
+                        |(iop, mut v)| {
+                            if mapped[iop] { v.remove(0) } else { Vec::new() }
+                        },
+                    )
+                    .collect()
+            };
+            oo.push(keep(rot_oo));
+            vv.push(keep(rot_vv));
         }
         self.oo = Some(oo);
         self.vv = Some(vv);

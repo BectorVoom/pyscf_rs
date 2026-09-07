@@ -1,0 +1,40 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+time_reversal_symmetry = True
+nkpts = 8  nkpts_ibz = 4
+n_kqrts_ibz = 120  of 512 k-triples
+E_scf(ksymm) = -2.093151893529493
+emp2(ksymm)   = -0.0061825228814290974
+e_corr(ksymm) = -0.007379123020918782
+lib.fp(t1).max() = (0.0009185224798209209-7.592008922886268e-21j)
+t1.shape = (8, 1, 1)  t2.shape = (8, 8, 8, 1, 1, 1, 1)
+E_scf(full BZ, to_khf) = -2.093151893529493
+emp2(full BZ)   = -0.006182522881429109
+e_corr(full BZ) = -0.007379123090006066
+|d e_corr| = 6.908728e-11
+|d t1|max  = 1.748957e-08
+|d t2|max  = 1.391739e-10
+t1_flat = [(0.0006012410879863669+2.160407269717079e-19j), (0.0006147548113397534-3.0391274365576065e-23j), (0.0006147548113397534-3.0391274365576065e-23j), (0.0006280576298676353+3.3615288224244586e-21j), (0.0006147548113397529-3.039127436556656e-23j), (0.0006280576298676353+3.3615288224244586e-21j), (0.0006280576298676355+3.3615288224244635e-21j), (0.0006411449818217611-2.977867711827008e-19j)]
+t2_fp = 0.056235798207098155
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+time_reversal_symmetry = False
+nkpts = 8  nkpts_ibz = 4
+n_kqrts_ibz = 120  of 512 k-triples
+E_scf(ksymm) = -2.0931518935294924
+emp2(ksymm)   = -0.006182522881429089
+e_corr(ksymm) = -0.007379123020831889
+lib.fp(t1).max() = (0.0009185224808174113+2.8285204179414344e-19j)
+t1.shape = (8, 1, 1)  t2.shape = (8, 8, 8, 1, 1, 1, 1)
+E_scf(full BZ, to_khf) = -2.0931518935294924
+emp2(full BZ)   = -0.006182522881429103
+e_corr(full BZ) = -0.007379123090006057
+|d e_corr| = 6.917417e-11
+|d t1|max  = 1.748890e-08
+|d t2|max  = 1.392177e-10
+t1_flat = [(0.0006012410886635242+2.4874044112446936e-19j), (0.0006147548120151772-8.76719720531755e-20j), (0.0006147548120151772-8.76719720531755e-20j), (0.0006280576305411168+6.62289581456081e-20j), (0.0006147548120151767-8.767197205317542e-20j), (0.0006280576305411168+6.62289581456081e-20j), (0.000628057630541117+6.622895814560812e-20j), (0.0006411449824929431-3.8627324299708184e-20j)]
+t2_fp = 0.05623579820642005

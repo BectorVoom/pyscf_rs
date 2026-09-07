@@ -1,0 +1,10 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+e_corr upstream ksymm (stale kc) = -0.007379123020832079
+e_corr ksymm with kk==ka fix     = -0.007379123132508862
+e_corr full BZ KRCCSD            = -0.0073791230900060595
+|stale - fixed|   = 1.116768e-10
+|stale - full BZ| = 6.917398e-11
+|fixed - full BZ| = 4.250280e-11
