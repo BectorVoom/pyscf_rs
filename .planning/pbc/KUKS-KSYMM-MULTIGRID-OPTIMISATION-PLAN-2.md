@@ -22,6 +22,28 @@ for a GPU; GPU speed claims are marked UNVERIFIED throughout and the kernels
 are shaped by `pyscf_algebra::launch` so they are correct on both.
 **Audience:** an execution agent that follows instructions literally and does
 NOT infer.
+**Status (2026-09-08, session 4):** see
+[`KUKS-KSYMM-MULTIGRID-SESSION-4-EXECUTION-SUMMARY.md`](./KUKS-KSYMM-MULTIGRID-SESSION-4-EXECUTION-SUMMARY.md).
+**A-03 is CLOSED without implementation and A-04 is REFUTED as a speed item**:
+kill-switch arms measured the AO kernel's arithmetic at ~0 % of the cold pass
+and K-08's accumulator read-modify-write at 72-84 % (session 3's spans said
+20-23 %). The lever that landed instead is **K-09** (image-batched Bloch
+accumulation, bit-exact, 1.8-3.7×). **M-13** (v2 batch geometry: instance
+indirection, released reach lists, copy-free reverse fold; bit-exact, −23 %
+peak RSS at 25³) landed for the multigrid memory shape.
+**Session 5 (same day):** see
+[`KUKS-KSYMM-MULTIGRID-SESSION-5-EXECUTION-SUMMARY.md`](./KUKS-KSYMM-MULTIGRID-SESSION-5-EXECUTION-SUMMARY.md).
+**A-05/A-06** (hoisted uploads, one AO launch per image batch) landed
+bit-exact and measured 1.0-1.06× — the per-launch model was refuted as well;
+K-09's cap went 16 → 32 (1.11-1.18× at deriv 1); **M-14** (one output scratch
+per v2 level) took the 25³ peak to 2 411 MiB (−39 % over two sessions). The
+one AO lever left above 1.3× was evaluate-into-accumulate fusion, which plan
+10-04 forbade; the user took it (**D-PBC-32**, session 5 §1.5): **K-10**
+landed bit-exact at 1.5-1.6× on the cold pass (2×2×2) and 1.32× on the
+KRKS SCF, plus `launch_1d_chunked` for a CPU-runtime stack hazard it exposed;
+**K-10v** (vector k-loop over a point-major accumulator) then took the 4×4×4
+cold pass 2.3× further — the pure-PBE KRKS SCF on si is now 2.83 s (2×2×2)
+and 8.09 s (4×4×4) against 7.85 s / 45.8 s at the start of the plan.
 
 ---
 
@@ -432,7 +454,12 @@ via `--compare`. State the CPU delta as the GPU lower bound.
 
 ---
 
-### A-03 — **DEFERRED:** vectorise the AO kernels' grid axis
+### A-03 — **CLOSED 2026-09-08 (session 4) without implementation:** vectorise the AO kernels' grid axis
+
+> The DEFER-UNTIL question below was answered by measurement, negatively:
+> with every lane's arithmetic removed the `eval_gto` stage costs the same
+> (session 4 §1.2). There is nothing in the kernel to vectorise on this
+> runtime; the cost was the accumulate (K-09).
 
 **WHY** the general/deriv1 kernels evaluate one `(grid point, shell)` per lane
 with scalar loads; `06_vectorization.md` / `Cubecl_dynamic_vectorization.md`

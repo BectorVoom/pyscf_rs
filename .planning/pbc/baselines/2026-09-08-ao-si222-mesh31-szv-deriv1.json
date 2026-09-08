@@ -1,0 +1,40 @@
+{
+  "driver": "full",
+  "rho_route": "unfold",
+  "cell": "si",
+  "basis": "gth-szv",
+  "nk": [
+    2,
+    2,
+    2
+  ],
+  "mesh": [
+    31,
+    31,
+    31
+  ],
+  "deriv": 1,
+  "screen": true,
+  "nao": 8,
+  "nkpts": 8,
+  "ngrids": 29791,
+  "nimgs": 1331,
+  "launched_images": 454,
+  "kept_points_total": 9428176,
+  "kept_fraction": 0.2377740986977622,
+  "comp": 4,
+  "ao_block_reals": 953312,
+  "ao_cache_bytes": 122023936,
+  "legacy_round_trip_bytes_per_image": 15252992,
+  "legacy_zero_fill_bytes_per_image": 7626496,
+  "round_trip_bytes_per_image": 0,
+  "zero_fill_bytes_per_image": 0,
+  "phase_upload_bytes_per_image": 128,
+  "cold_eval_ao_kpts_ms": 2538.804154,
+  "shift_pack_ms": 30.382902,
+  "eval_gto_ms": 2156.403678,
+  "scatter_ms": 0.0,
+  "k08_accumulate_ms": 121.39992400000001,
+  "peak_rss_mib": 797.64453125,
+  "load_average_at_start": 2.77
+}

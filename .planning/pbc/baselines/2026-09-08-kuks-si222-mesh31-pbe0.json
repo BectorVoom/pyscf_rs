@@ -1,0 +1,36 @@
+{
+  "cell": "si",
+  "basis": "gth-szv",
+  "nk": [
+    2,
+    2,
+    2
+  ],
+  "mesh": [
+    31,
+    31,
+    31
+  ],
+  "xc": "pbe0",
+  "hybrid": true,
+  "nao": 8,
+  "nkpts": 8,
+  "ngrids": 29791,
+  "warm_get_j_kpts_ms": 21.558875,
+  "warm_get_k_kpts_ms": 7135.818696,
+  "warm_nr_rks_ms": 29.552813,
+  "cold_nr_rks_ms": 2335.679447,
+  "driver": "kuks",
+  "warm_get_j_kpts_nset2_ms": 47.426119,
+  "warm_get_k_kpts_nset2_ms": 7321.24546,
+  "nset2_over_nset1_j": 2.1998420140197483,
+  "nset2_over_nset1_k": 1.0259853524731424,
+  "warm_nr_uks_ms": 53.16344,
+  "cold_nr_uks_ms": 2386.552948,
+  "nr_uks_over_nr_rks": 1.7989299360436517,
+  "get_ovlp_ms": 169.7329,
+  "get_hcore_ms": 1413.223127,
+  "full_kernel_ms": 50475.016528,
+  "e_tot": -7.796816043918298,
+  "converged": true
+}

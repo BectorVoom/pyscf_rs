@@ -739,9 +739,16 @@ pub struct PairSlotBatch {
     pub block_inst0: Vec<u32>,
     /// Per concatenated instance: which block owns it.
     pub inst_block: Vec<u32>,
-    /// Per concatenated instance: `eta = alpha_p + alpha_q`.
+    /// Per concatenated instance: its row in [`Self::instance_alpha`] /
+    /// [`Self::instance_center`] — M-13. A kernel instance reaches many
+    /// blocks of a chunk and used to be COPIED (`eta` + centre, 32 B) into
+    /// every one of them; the chunk now stores each distinct instance once
+    /// and every occurrence points at it (4 B). The kernels read the same
+    /// values, so this is bit-exact.
+    pub inst_ref: Vec<u32>,
+    /// Per DISTINCT instance of this chunk: `eta = alpha_p + alpha_q`.
     pub instance_alpha: Vec<f64>,
-    /// Per concatenated instance, 3 entries: the combined centre `P`.
+    /// Per DISTINCT instance of this chunk, 3 entries: the combined centre `P`.
     pub instance_center: Vec<f64>,
     /// `inst_slot0[i]..inst_slot0[i+1]` — instance `i`'s slots.
     /// `n_instances + 1` entries.
@@ -763,8 +770,12 @@ impl PairSlotBatch {
     pub fn npoints(&self) -> usize {
         self.point_block.len()
     }
-    /// Concatenated instances.
+    /// Concatenated instances (occurrences, one per `(block, instance)`).
     pub fn ninstances(&self) -> usize {
+        self.inst_block.len()
+    }
+    /// Distinct instances referenced by this chunk — M-13.
+    pub fn nuinstances(&self) -> usize {
         self.instance_alpha.len()
     }
     /// Concatenated slots.
@@ -818,6 +829,7 @@ pub struct PairSlotBatchDevice {
     block_point0: Handle,
     block_inst0: Handle,
     inst_block: Handle,
+    inst_ref: Handle,
     instance_alpha: Handle,
     instance_center: Handle,
     inst_slot0: Handle,
@@ -827,11 +839,71 @@ pub struct PairSlotBatchDevice {
     out_rho_b: std::sync::OnceLock<Handle>,
     out_integrate: Handle,
     out_integrate_b: std::sync::OnceLock<Handle>,
+    /// M-14: the reals the two output buffers actually hold. Equal to
+    /// `npoints` / `nslots` when the chunk owns its buffers; the level's
+    /// maxima when it borrows the shared [`PairOutScratch`], in which case the
+    /// read-backs are trimmed to the chunk's own length.
+    out_rho_cap: usize,
+    out_integrate_cap: usize,
     npoints: usize,
     ninstances: usize,
     nslots: usize,
     nkslots: usize,
     nblocks: usize,
+    nuinstances: usize,
+}
+
+/// M-14: ONE set of output buffers shared by every chunk of a level.
+///
+/// A chunk's forward output is `npoints · 8` B and its reverse output
+/// `nslots · 8` B, and each chunk used to own both for the life of the SCF —
+/// at `25³` level 3, thirteen chunks × 48 MB of reverse output = 622 MB
+/// resident that is only ever live one chunk at a time (the chunks run
+/// sequentially and every launch reads its output back before the next
+/// launch). The level allocates the largest chunk's buffers once; each chunk
+/// writes its `npoints` / `nslots` prefix and reads that prefix back
+/// (`Handle::offset_end`). Bit-exact: the same lanes write the same values to
+/// the same logical positions; only the allocation behind them changes.
+///
+/// Allocated on ONE stream and handed to [`PairSlotBatchDevice::new_shared`],
+/// which allocates the chunk's geometry on that same stream
+/// (`StreamId::executes`), so every later launch resolves every handle on the
+/// stream that owns it — the session-3 pool lesson, kept.
+pub struct PairOutScratch {
+    stream: StreamId,
+    rho: Handle,
+    rho_b: std::sync::OnceLock<Handle>,
+    integrate: Handle,
+    integrate_b: std::sync::OnceLock<Handle>,
+    max_points: usize,
+    max_slots: usize,
+}
+
+impl core::fmt::Debug for PairOutScratch {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PairOutScratch")
+            .field("max_points", &self.max_points)
+            .field("max_slots", &self.max_slots)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PairOutScratch {
+    /// Buffers for the largest chunk of a level, on the current stream.
+    pub fn new(client: &AlgebraClient, max_points: usize, max_slots: usize) -> Self {
+        let stream = StreamId::current();
+        dispatch_backend!(client, c, Rt, {
+            Self {
+                stream,
+                rho: c.empty(max_points.max(1) * core::mem::size_of::<f64>()),
+                rho_b: std::sync::OnceLock::new(),
+                integrate: c.empty(max_slots.max(1) * core::mem::size_of::<f64>()),
+                integrate_b: std::sync::OnceLock::new(),
+                max_points,
+                max_slots,
+            }
+        })
+    }
 }
 
 impl core::fmt::Debug for PairSlotBatchDevice {
@@ -853,6 +925,41 @@ impl PairSlotBatchDevice {
         // Captured BEFORE the uploads below, which allocate on exactly this
         // stream; every later call is replayed onto it.
         let stream = StreamId::current();
+        Self::upload(client, batch, stream, None)
+    }
+
+    /// M-14: like [`Self::new`], but the chunk borrows `scratch`'s output
+    /// buffers and allocates its geometry on `scratch`'s stream, so the whole
+    /// level lives on one stream. Refuses a chunk larger than the scratch.
+    ///
+    /// # Errors
+    /// As [`Self::new`], plus a chunk that exceeds the scratch's capacity.
+    pub fn new_shared(
+        client: &AlgebraClient,
+        batch: &PairSlotBatch,
+        scratch: &PairOutScratch,
+    ) -> Result<Self, AlgebraError> {
+        validate_batch(batch)?;
+        if batch.npoints() > scratch.max_points || batch.nslots() > scratch.max_slots {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!(
+                    "chunk within the scratch: npoints <= {}, nslots <= {}",
+                    scratch.max_points, scratch.max_slots
+                ),
+                actual: format!("{} / {}", batch.npoints(), batch.nslots()),
+            });
+        }
+        scratch
+            .stream
+            .executes(|| Self::upload(client, batch, scratch.stream, Some(scratch)))
+    }
+
+    fn upload(
+        client: &AlgebraClient,
+        batch: &PairSlotBatch,
+        stream: StreamId,
+        scratch: Option<&PairOutScratch>,
+    ) -> Result<Self, AlgebraError> {
         Ok(dispatch_backend!(client, c, Rt, {
             Self {
                 backend: client.kind(),
@@ -864,20 +971,30 @@ impl PairSlotBatchDevice {
                 block_point0: upload_u32::<Rt>(c, &batch.block_point0),
                 block_inst0: upload_u32::<Rt>(c, &batch.block_inst0),
                 inst_block: upload_u32::<Rt>(c, &batch.inst_block),
+                inst_ref: upload_u32::<Rt>(c, &batch.inst_ref),
                 instance_alpha: upload::<Rt, f64>(c, &batch.instance_alpha),
                 instance_center: upload::<Rt, f64>(c, &batch.instance_center),
                 inst_slot0: upload_u32::<Rt>(c, &batch.inst_slot0),
                 slot_global: upload_u32::<Rt>(c, &batch.slot_global),
                 kslot_pow: upload_u32::<Rt>(c, &batch.kslot_pow),
-                out_rho: c.empty(batch.npoints() * core::mem::size_of::<f64>()),
+                out_rho: match scratch {
+                    Some(sc) => sc.rho.clone(),
+                    None => c.empty(batch.npoints().max(1) * core::mem::size_of::<f64>()),
+                },
                 out_rho_b: std::sync::OnceLock::new(),
-                out_integrate: c.empty(batch.nslots() * core::mem::size_of::<f64>()),
+                out_integrate: match scratch {
+                    Some(sc) => sc.integrate.clone(),
+                    None => c.empty(batch.nslots().max(1) * core::mem::size_of::<f64>()),
+                },
                 out_integrate_b: std::sync::OnceLock::new(),
+                out_rho_cap: scratch.map_or(batch.npoints(), |sc| sc.max_points),
+                out_integrate_cap: scratch.map_or(batch.nslots(), |sc| sc.max_slots),
                 npoints: batch.npoints(),
                 ninstances: batch.ninstances(),
                 nslots: batch.nslots(),
                 nkslots: batch.nkslots(),
                 nblocks: batch.nblocks(),
+                nuinstances: batch.nuinstances(),
             }
         }))
     }
@@ -926,6 +1043,72 @@ impl PairSlotBatchDevice {
                 launch_integrate_resident::<Rt>(self, weight, c)
             })
         }))
+    }
+
+    /// [`Self::integrate`] without the intermediate `Vec`.
+    ///
+    /// `fold(s, v)` is called once per concatenated slot `s`, in increasing
+    /// `s`, with that slot's weighted integral `v` read straight out of the
+    /// device buffer. The caller's accumulation therefore visits the same
+    /// values in the same order as folding the returned `Vec` would — the
+    /// driver's `kint[slot_global[s]] += v` is unchanged bit for bit — and
+    /// the `nslots · 8` B host copy of the read-back is never made (M-13).
+    ///
+    /// # Errors
+    /// As [`Self::integrate`].
+    pub fn integrate_fold(
+        &self,
+        client: &AlgebraClient,
+        weight: &[f64],
+        fold: &mut dyn FnMut(usize, f64),
+    ) -> Result<(), AlgebraError> {
+        self.check_backend(client)?;
+        if weight.len() != self.npoints {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("weight.len() == npoints = {}", self.npoints),
+                actual: weight.len().to_string(),
+            });
+        }
+        let bytes = self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                launch_integrate_resident_bytes::<Rt>(self, weight, c)
+            })
+        });
+        for (s, &v) in bytemuck::cast_slice::<u8, f64>(&bytes).iter().enumerate() {
+            fold(s, v);
+        }
+        Ok(())
+    }
+
+    /// Two-spin twin of [`Self::integrate_fold`]: `fold(spin, s, v)`, spin 0
+    /// completely before spin 1, each in increasing `s`.
+    ///
+    /// # Errors
+    /// As [`Self::integrate2`].
+    pub fn integrate2_fold(
+        &self,
+        client: &AlgebraClient,
+        weight: [&[f64]; 2],
+        fold: &mut dyn FnMut(usize, usize, f64),
+    ) -> Result<(), AlgebraError> {
+        self.check_backend(client)?;
+        if weight.iter().any(|w| w.len() != self.npoints) {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("both weight lengths == npoints = {}", self.npoints),
+                actual: format!("{}/{}", weight[0].len(), weight[1].len()),
+            });
+        }
+        let bytes = self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                launch_integrate2_resident_bytes::<Rt>(self, weight, c)
+            })
+        });
+        for (spin, plane) in bytes.iter().enumerate() {
+            for (s, &v) in bytemuck::cast_slice::<u8, f64>(plane).iter().enumerate() {
+                fold(spin, s, v);
+            }
+        }
+        Ok(())
     }
 
     /// Collocate alpha and beta densities in one geometry traversal.
@@ -983,6 +1166,7 @@ fn collocate_pairs_rho_batched_kernel(
     kslot_pow: &Array<u32>,
     kcoef: &Array<f64>,
     inst_slot0: &Array<u32>,
+    inst_ref: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
     out: &mut Array<f64>,
@@ -998,10 +1182,12 @@ fn collocate_pairs_rho_batched_kernel(
         let i1 = block_inst0[b + 1] as usize;
         let mut acc = 0.0;
         for inst in i0..i1 {
-            let eta = instance_alpha[inst];
-            let dx = x - instance_center[inst * 3];
-            let dy = y - instance_center[inst * 3 + 1];
-            let dz = z - instance_center[inst * 3 + 2];
+            // M-13: one index load, then the instance's own row.
+            let u = inst_ref[inst] as usize;
+            let eta = instance_alpha[u];
+            let dx = x - instance_center[u * 3];
+            let dy = y - instance_center[u * 3 + 1];
+            let dz = z - instance_center[u * 3 + 2];
             let r2 = dx * dx + dy * dy + dz * dz;
             let e = cube_math::double::exp::exp(0.0 - eta * r2, cube_math::MathConfig::EXACT);
             let s0 = inst_slot0[inst] as usize;
@@ -1053,6 +1239,7 @@ fn collocate_pairs_integrate_batched_kernel(
     slot_global: &Array<u32>,
     kslot_pow: &Array<u32>,
     inst_slot0: &Array<u32>,
+    inst_ref: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
     out: &mut Array<f64>,
@@ -1060,10 +1247,11 @@ fn collocate_pairs_integrate_batched_kernel(
 ) {
     let inst = ABSOLUTE_POS;
     if inst < ninst {
-        let eta = instance_alpha[inst];
-        let cx = instance_center[inst * 3];
-        let cy = instance_center[inst * 3 + 1];
-        let cz = instance_center[inst * 3 + 2];
+        let u = inst_ref[inst] as usize;
+        let eta = instance_alpha[u];
+        let cx = instance_center[u * 3];
+        let cy = instance_center[u * 3 + 1];
+        let cz = instance_center[u * 3 + 2];
         let s0 = inst_slot0[inst] as usize;
         let s1 = inst_slot0[inst + 1] as usize;
         let b = inst_block[inst] as usize;
@@ -1124,6 +1312,7 @@ fn collocate_pairs_rho2_batched_kernel(
     kcoef_a: &Array<f64>,
     kcoef_b: &Array<f64>,
     inst_slot0: &Array<u32>,
+    inst_ref: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
     out_a: &mut Array<f64>,
@@ -1139,12 +1328,13 @@ fn collocate_pairs_rho2_batched_kernel(
         let mut acc_a = 0.0;
         let mut acc_b = 0.0;
         for inst in block_inst0[b] as usize..block_inst0[b + 1] as usize {
-            let dx = x - instance_center[inst * 3];
-            let dy = y - instance_center[inst * 3 + 1];
-            let dz = z - instance_center[inst * 3 + 2];
+            let u = inst_ref[inst] as usize;
+            let dx = x - instance_center[u * 3];
+            let dy = y - instance_center[u * 3 + 1];
+            let dz = z - instance_center[u * 3 + 2];
             let r2 = dx * dx + dy * dy + dz * dz;
             let e = cube_math::double::exp::exp(
-                0.0 - instance_alpha[inst] * r2,
+                0.0 - instance_alpha[u] * r2,
                 cube_math::MathConfig::EXACT,
             );
             for slot in inst_slot0[inst] as usize..inst_slot0[inst + 1] as usize {
@@ -1190,6 +1380,7 @@ fn collocate_pairs_integrate2_batched_kernel(
     slot_global: &Array<u32>,
     kslot_pow: &Array<u32>,
     inst_slot0: &Array<u32>,
+    inst_ref: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
     out_a: &mut Array<f64>,
@@ -1198,9 +1389,10 @@ fn collocate_pairs_integrate2_batched_kernel(
 ) {
     let inst = ABSOLUTE_POS;
     if inst < ninst {
-        let cx = instance_center[inst * 3];
-        let cy = instance_center[inst * 3 + 1];
-        let cz = instance_center[inst * 3 + 2];
+        let u = inst_ref[inst] as usize;
+        let cx = instance_center[u * 3];
+        let cy = instance_center[u * 3 + 1];
+        let cz = instance_center[u * 3 + 2];
         let s0 = inst_slot0[inst] as usize;
         let s1 = inst_slot0[inst + 1] as usize;
         let b = inst_block[inst] as usize;
@@ -1216,7 +1408,7 @@ fn collocate_pairs_integrate2_batched_kernel(
             let dz = coords_z[g] - cz;
             let r2 = dx * dx + dy * dy + dz * dz;
             let e = cube_math::double::exp::exp(
-                0.0 - instance_alpha[inst] * r2,
+                0.0 - instance_alpha[u] * r2,
                 cube_math::MathConfig::EXACT,
             );
             for slot in s0..s1 {
@@ -1253,6 +1445,16 @@ fn collocate_pairs_integrate2_batched_kernel(
     }
 }
 
+/// M-14: the chunk's prefix of a (possibly larger, shared) output buffer.
+fn prefix(h: &Handle, cap: usize, len: usize) -> Handle {
+    if cap > len {
+        h.clone()
+            .offset_end(((cap - len) * core::mem::size_of::<f64>()) as u64)
+    } else {
+        h.clone()
+    }
+}
+
 fn launch_rho_resident<R: Runtime>(
     d: &PairSlotBatchDevice,
     kcoef: &[f64],
@@ -1276,13 +1478,14 @@ fn launch_rho_resident<R: Runtime>(
             ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
             ArrayArg::from_raw_parts(coef, d.nkslots),
             ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
-            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.ninstances),
-            ArrayArg::from_raw_parts(d.instance_center.clone(), d.ninstances * 3),
+            ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+            ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
             ArrayArg::from_raw_parts(d.out_rho.clone(), d.npoints),
             d.npoints,
         );
     }
-    let bytes = client.read(vec![d.out_rho.clone()]);
+    let bytes = client.read(vec![prefix(&d.out_rho, d.out_rho_cap, d.npoints)]);
     bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
 }
 
@@ -1291,6 +1494,18 @@ fn launch_integrate_resident<R: Runtime>(
     weight: &[f64],
     client: &ComputeClient<R>,
 ) -> Vec<f64> {
+    let bytes = launch_integrate_resident_bytes::<R>(d, weight, client);
+    bytemuck::cast_slice::<u8, f64>(&bytes).to_vec()
+}
+
+/// The reverse launch, returning the device read-back as it arrives — one
+/// `nslots · 8` B buffer, not that buffer plus a `Vec` copy of it (M-13: at
+/// `25³` level 3 the copy was 622 MB of transient peak per call).
+fn launch_integrate_resident_bytes<R: Runtime>(
+    d: &PairSlotBatchDevice,
+    weight: &[f64],
+    client: &ComputeClient<R>,
+) -> cubecl::bytes::Bytes {
     let weight = upload::<R, f64>(client, weight);
     let per_lane = 50 * (d.npoints / d.nblocks.max(1)).max(1);
     let (count, dim) = launch_1d(client, d.ninstances, per_lane);
@@ -1308,14 +1523,19 @@ fn launch_integrate_resident<R: Runtime>(
             ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
             ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
             ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
-            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.ninstances),
-            ArrayArg::from_raw_parts(d.instance_center.clone(), d.ninstances * 3),
+            ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+            ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
             ArrayArg::from_raw_parts(d.out_integrate.clone(), d.nslots),
             d.ninstances,
         );
     }
-    let bytes = client.read(vec![d.out_integrate.clone()]);
-    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
+    let mut bytes = client.read(vec![prefix(
+        &d.out_integrate,
+        d.out_integrate_cap,
+        d.nslots,
+    )]);
+    bytes.swap_remove(0)
 }
 
 fn launch_rho2_resident<R: Runtime>(
@@ -1346,14 +1566,18 @@ fn launch_rho2_resident<R: Runtime>(
             ArrayArg::from_raw_parts(ca, d.nkslots),
             ArrayArg::from_raw_parts(cb, d.nkslots),
             ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
-            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.ninstances),
-            ArrayArg::from_raw_parts(d.instance_center.clone(), d.ninstances * 3),
+            ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+            ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
             ArrayArg::from_raw_parts(d.out_rho.clone(), d.npoints),
             ArrayArg::from_raw_parts(out_b.clone(), d.npoints),
             d.npoints,
         );
     }
-    let bytes = client.read(vec![d.out_rho.clone(), out_b.clone()]);
+    let bytes = client.read(vec![
+        prefix(&d.out_rho, d.out_rho_cap, d.npoints),
+        out_b.clone(),
+    ]);
     [
         bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
         bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
@@ -1365,6 +1589,19 @@ fn launch_integrate2_resident<R: Runtime>(
     weight: [&[f64]; 2],
     client: &ComputeClient<R>,
 ) -> [Vec<f64>; 2] {
+    let bytes = launch_integrate2_resident_bytes::<R>(d, weight, client);
+    [
+        bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
+        bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
+    ]
+}
+
+/// Two-spin twin of [`launch_integrate_resident_bytes`].
+fn launch_integrate2_resident_bytes<R: Runtime>(
+    d: &PairSlotBatchDevice,
+    weight: [&[f64]; 2],
+    client: &ComputeClient<R>,
+) -> Vec<cubecl::bytes::Bytes> {
     let wa = upload::<R, f64>(client, weight[0]);
     let wb = upload::<R, f64>(client, weight[1]);
     let per_lane = 50 * (d.npoints / d.nblocks.max(1)).max(1);
@@ -1387,18 +1624,18 @@ fn launch_integrate2_resident<R: Runtime>(
             ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
             ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
             ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
-            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.ninstances),
-            ArrayArg::from_raw_parts(d.instance_center.clone(), d.ninstances * 3),
+            ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+            ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
             ArrayArg::from_raw_parts(d.out_integrate.clone(), d.nslots),
             ArrayArg::from_raw_parts(out_b.clone(), d.nslots),
             d.ninstances,
         );
     }
-    let bytes = client.read(vec![d.out_integrate.clone(), out_b.clone()]);
-    [
-        bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
-        bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
-    ]
+    client.read(vec![
+        prefix(&d.out_integrate, d.out_integrate_cap, d.nslots),
+        out_b.clone(),
+    ])
 }
 
 fn launch_rho_batched<R: Runtime>(
@@ -1422,6 +1659,7 @@ fn launch_rho_batched<R: Runtime>(
         upload_u32::<R>(client, &b.slot_global),
         upload_u32::<R>(client, &b.inst_slot0),
         upload_u32::<R>(client, &b.kslot_pow),
+        upload_u32::<R>(client, &b.inst_ref),
     ];
     // Per lane: its block's instances (one `exp` each) and their slots. The
     // average is the total divided by the block count, which is what
@@ -1443,6 +1681,7 @@ fn launch_rho_batched<R: Runtime>(
             ArrayArg::from_raw_parts(hu[4].clone(), b.kslot_pow.len()),
             ArrayArg::from_raw_parts(h[3].clone(), kcoef.len()),
             ArrayArg::from_raw_parts(hu[3].clone(), b.inst_slot0.len()),
+            ArrayArg::from_raw_parts(hu[5].clone(), b.inst_ref.len()),
             ArrayArg::from_raw_parts(h[4].clone(), b.instance_alpha.len()),
             ArrayArg::from_raw_parts(h[5].clone(), b.instance_center.len()),
             ArrayArg::from_raw_parts(out_h.clone(), npoints),
@@ -1475,6 +1714,7 @@ fn launch_integrate_batched<R: Runtime>(
         upload_u32::<R>(client, &b.slot_global),
         upload_u32::<R>(client, &b.inst_slot0),
         upload_u32::<R>(client, &b.kslot_pow),
+        upload_u32::<R>(client, &b.inst_ref),
     ];
     let nblocks = b.nblocks().max(1);
     let per_lane = 50 * (b.npoints() / nblocks).max(1);
@@ -1493,6 +1733,7 @@ fn launch_integrate_batched<R: Runtime>(
             ArrayArg::from_raw_parts(hu[2].clone(), b.slot_global.len()),
             ArrayArg::from_raw_parts(hu[4].clone(), b.kslot_pow.len()),
             ArrayArg::from_raw_parts(hu[3].clone(), b.inst_slot0.len()),
+            ArrayArg::from_raw_parts(hu[5].clone(), b.inst_ref.len()),
             ArrayArg::from_raw_parts(h[4].clone(), b.instance_alpha.len()),
             ArrayArg::from_raw_parts(h[5].clone(), b.instance_center.len()),
             ArrayArg::from_raw_parts(out_h.clone(), nslots),
@@ -1619,20 +1860,26 @@ fn validate_batch(b: &PairSlotBatch) -> Result<(), AlgebraError> {
             format!("{}", b.instance_center.len()),
         ));
     }
-    if b.inst_block.len() != b.instance_alpha.len() {
+    if b.inst_ref.len() != b.inst_block.len() {
         return Err(shape(
-            format!(
-                "inst_block.len() == ninstances = {}",
-                b.instance_alpha.len()
-            ),
-            format!("{}", b.inst_block.len()),
+            format!("inst_ref.len() == ninstances = {}", b.inst_block.len()),
+            format!("{}", b.inst_ref.len()),
         ));
     }
-    if b.inst_slot0.len() != b.instance_alpha.len() + 1 {
+    if b.inst_ref
+        .iter()
+        .any(|&u| u as usize >= b.instance_alpha.len())
+    {
+        return Err(shape(
+            format!("every inst_ref < nuinstances = {}", b.instance_alpha.len()),
+            "an out-of-range distinct-instance index".to_string(),
+        ));
+    }
+    if b.inst_slot0.len() != b.inst_block.len() + 1 {
         return Err(shape(
             format!(
                 "inst_slot0.len() == ninstances + 1 = {}",
-                b.instance_alpha.len() + 1
+                b.inst_block.len() + 1
             ),
             format!("{}", b.inst_slot0.len()),
         ));

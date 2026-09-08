@@ -2598,6 +2598,8 @@ name = "libxc-reval"
 version = "0.1.0"
 dependencies = [
  "libxc-core",
+ "libxc-rkernel-fused_hse",
+ "libxc-rkernel-fused_pbeh",
  "libxc-rkernel-gga_c_acgga",
  "libxc-rkernel-gga_c_acggap",
  "libxc-rkernel-gga_c_am05",
@@ -2857,6 +2859,20 @@ dependencies = [
  "libxc-rkernel-mgga_xc_lp90",
  "libxc-rkernel-mgga_xc_zlp",
  "rayon",
+]
+
+[[package]]
+name = "libxc-rkernel-fused_hse"
+version = "0.1.0"
+dependencies = [
+ "libxc-rkernel-math",
+]
+
+[[package]]
+name = "libxc-rkernel-fused_pbeh"
+version = "0.1.0"
+dependencies = [
+ "libxc-rkernel-math",
 ]
 
 [[package]]
@@ -5741,6 +5757,7 @@ dependencies = [
  "pyscf-algebra",
  "pyscf-core",
  "pyscf-runtime",
+ "rayon",
  "thiserror 2.0.18",
  "tracing",
 ]

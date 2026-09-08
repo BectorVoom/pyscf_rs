@@ -1,0 +1,54 @@
+{
+  "cell": "si",
+  "basis": "gth-szv",
+  "nk": [
+    2,
+    2,
+    2
+  ],
+  "mesh": [
+    31,
+    31,
+    31
+  ],
+  "xc": "pbe",
+  "hybrid": false,
+  "driver": "kuks",
+  "nao": 8,
+  "nkpts": 8,
+  "nkpts_ibz": 4,
+  "fold_factor": 2.0,
+  "weights_ibz": [
+    0.125,
+    0.375,
+    0.375,
+    0.125
+  ],
+  "use_ao_symmetry": true,
+  "full_kernel_ms": 4733.955434,
+  "ksymm_kernel_ms": 4155.237546,
+  "ksymm_over_full_kernel": 0.8777517245211988,
+  "warm_full_get_veff_ms": 82.03575500000001,
+  "warm_ksymm_get_veff_ms": 69.120508,
+  "ksymm_over_full_get_veff": 0.8425656349478345,
+  "warm_unfold_kdms_ms": 0.073368,
+  "unfolds_per_get_veff_equivalent": 942.1070221349908,
+  "full_ao_calls": 2,
+  "full_ao_ms": 3092.505198,
+  "full_ao_nkpts": [
+    "8k/GTOval_sph/899ms",
+    "8k/GTOval_sph_deriv1/2194ms"
+  ],
+  "ksymm_ao_calls": 2,
+  "ksymm_ao_ms": 3026.659879,
+  "ksymm_ao_nkpts": [
+    "8k/GTOval_sph/913ms",
+    "8k/GTOval_sph_deriv1/2114ms"
+  ],
+  "peak_rss_mib": 913.98828125,
+  "load_average_at_start": 2.6,
+  "full_e_tot": -7.785668903652818,
+  "ksymm_e_tot": -7.785668903533426,
+  "full_converged": true,
+  "ksymm_converged": true
+}

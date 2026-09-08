@@ -191,6 +191,10 @@ struct MultigridLevelReport {
     /// the level's own kernel-slot count.
     batch_points: u64,
     batch_instances: u64,
+    /// M-13 (session 4): distinct instances the batches store, against the
+    /// `batch_instances` occurrences, and the resident geometry bytes.
+    batch_uinstances: u64,
+    batch_geometry_bytes: u64,
     batch_slots: u64,
     kslots: u64,
 }
@@ -528,6 +532,8 @@ struct MgSpanMetadata {
     transfer_bytes_after: u64,
     batch_points: u64,
     batch_instances: u64,
+    batch_uinstances: u64,
+    batch_geometry_bytes: u64,
     batch_slots: u64,
     kslots: u64,
     direction: String,
@@ -541,6 +547,8 @@ struct MgFieldVisitor {
     transfer_bytes_after: Option<u64>,
     batch_points: Option<u64>,
     batch_instances: Option<u64>,
+    batch_uinstances: Option<u64>,
+    batch_geometry_bytes: Option<u64>,
     batch_slots: Option<u64>,
     kslots: Option<u64>,
     direction: Option<String>,
@@ -555,6 +563,8 @@ impl Visit for MgFieldVisitor {
             "transfer_bytes_after" => self.transfer_bytes_after = Some(value),
             "batch_points" => self.batch_points = Some(value),
             "batch_instances" => self.batch_instances = Some(value),
+            "batch_uinstances" => self.batch_uinstances = Some(value),
+            "batch_geometry_bytes_total" => self.batch_geometry_bytes = Some(value),
             "batch_slots" => self.batch_slots = Some(value),
             "kslots" => self.kslots = Some(value),
             _ => {}
@@ -611,6 +621,8 @@ where
                     transfer_bytes_after: visitor.transfer_bytes_after.unwrap_or(0),
                     batch_points: visitor.batch_points.unwrap_or(0),
                     batch_instances: visitor.batch_instances.unwrap_or(0),
+                    batch_uinstances: visitor.batch_uinstances.unwrap_or(0),
+                    batch_geometry_bytes: visitor.batch_geometry_bytes.unwrap_or(0),
                     batch_slots: visitor.batch_slots.unwrap_or(0),
                     kslots: visitor.kslots.unwrap_or(0),
                     direction: visitor.direction.unwrap_or_default(),
@@ -675,6 +687,8 @@ where
                 if meta.batch_slots > 0 {
                     level.batch_points = meta.batch_points;
                     level.batch_instances = meta.batch_instances;
+                    level.batch_uinstances = meta.batch_uinstances;
+                    level.batch_geometry_bytes = meta.batch_geometry_bytes;
                     level.batch_slots = meta.batch_slots;
                     level.kslots = meta.kslots;
                 }

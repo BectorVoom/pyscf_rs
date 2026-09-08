@@ -901,6 +901,16 @@ eval_ao_kpts(cell, coords[ngrids][3], kpts[nk][3], deriv) -> Vec<CTensor>  // [n
 Do **not** write a new AO evaluator. `crates/pyscf-kernels/src/eval_gto.rs` (2,564 lines)
 already handles s/p/d + deriv1, sph + cart. K-08 is only the phase-accumulate step.
 
+> **D-PBC-32 (2026-09-08, user decision):** this constraint was lifted for the
+> periodic AO table after the optimisation sessions measured the AO block's
+> write-then-read as the last large term of the cold pass. **K-10**
+> (`eval_ao_k_fused_kernel`) evaluates each image's AO values in-kernel and
+> adds them into the k-point planes in image order without materialising a
+> block; it reuses the per-image kernels' lane bodies operand for operand and
+> is bit-identical to K-08 by gate (`tests/eval_ao_image_batch.rs`). K-08 and
+> K-09 remain the reference path (`PYSCF_PBC_AO_FUSE=0`). Record:
+> `KUKS-KSYMM-MULTIGRID-SESSION-5-EXECUTION-SUMMARY.md` §1.5.
+
 **TEST** `crates/pyscf-pbc-gto/tests/eval_ao_kpts.rs`
 - At `k = 0`, `eval_ao_kpts` is real to 1e-12.
 - **Bloch periodicity:** `ao_k(r + L) == exp(i k·L) · ao_k(r)` to 1e-10 for random `r`, `L`, `k`.

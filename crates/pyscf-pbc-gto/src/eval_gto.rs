@@ -48,10 +48,18 @@
 //! per-shell `rcut` that [`estimate_rcut_for_eval`] already derives from
 //! `cell.precision`. An image with no surviving block is skipped outright.
 //!
-//! **Block granularity, never per element.** A per-element skip is a data-
-//! dependent branch in the inner loop, which is the branch divergence
-//! `plane_alignment.md` warns about on any SIMT backend and a mispredict on
-//! the CPU one.
+//! **The screen decides which images and blocks are LAUNCHED at block
+//! granularity.** W-09 stopped there, reasoning that a per-element skip is the
+//! data-dependent branch `plane_alignment.md` warns about. Session 3 then
+//! measured what the launched blocks still pay for (`krks_profile ao`, si
+//! 2×2×2 mesh 31): the kept blocks cover 70 % of the grid on 454 launched
+//! images, i.e. ~316 `(image, point)` evaluations per grid point, against the
+//! ~50-75 a shell's cutoff sphere actually contains. A-04 (session 4) adds the
+//! per-point test INSIDE the kernels — one compare per `(point, shell)` lane
+//! against the same `rcut²`, on spatially adjacent lanes (so a plane diverges
+//! only along the sphere's surface), in exchange for the shell's primitives
+//! and angular work. `PYSCF_PBC_AO_POINT_SCREEN=0` restores block-only, and
+//! the A/B is measured, not argued.
 //!
 //! **This DROPS TERMS, so it changes the result.** The dropped mass is bounded
 //! by the same `precision` that sized the image list, and
@@ -269,6 +277,89 @@ pub fn eval_ao_kpts_with_images(
     } else {
         None
     };
+    // A-04: the same per-shell radius, applied inside the kernel per grid
+    // point. Only meaningful with the block screen on — the two switches
+    // share one radius, and the per-point test alone would still launch every
+    // image. `PYSCF_PBC_AO_POINT_SCREEN=0` pins the block-only behaviour.
+    let point_rcut2: Option<&[f64]> = match &screen {
+        Some((_, _, rcut2)) if ao_point_screen_enabled() => Some(rcut2.as_slice()),
+        _ => None,
+    };
+
+    // K-09 (session 4): how many images share one accumulate launch. `1` is
+    // the per-image path above (the kill switch, and the bit-identity
+    // reference); more needs the block size up front, which the two device
+    // eval names provide. Anything else stays per-image.
+    let mut batch: Option<pyscf_kernels::pbc::AoImageBatch> = None;
+    // A-05/A-06 (session 5): the image-invariant operands uploaded once, and
+    // the AO evaluation itself launched once per `eval_batch` images straight
+    // into the K-09 slots. `eval_batch == 0` is the per-image evaluation
+    // (`eval_gto_device_target`, the pre-A-06 kernels) — the reference arm.
+    let mut eval_ctx: Option<pyscf_kernels::EvalGtoDeviceContext> = None;
+    let mut eval_batch = 0usize;
+    let mut eval_coords: Vec<f64> = Vec::new();
+    let mut eval_images: Vec<pyscf_kernels::EvalGtoImage> = Vec::new();
+    let mut eval_first_slot = 0usize;
+    if let Some(comp_expected) = comp_of_eval_name(eval_name) {
+        let n_expected = comp_expected * ngrids * nao;
+        let capacity = image_batch_capacity(n_expected);
+        if capacity > 1 && n_expected > 0 && pyscf_kernels::eval_gto_device_capable(&cell.mol._bas)
+        {
+            n = n_expected;
+            comp = comp_expected;
+            batch = Some(pyscf_kernels::pbc::AoImageBatch::new(
+                &client, capacity, n_expected, ngrids, nkpts,
+            ));
+            eval_batch = eval_batch_size(capacity);
+            if eval_batch > 0 {
+                eval_ctx = Some(pyscf_kernels::EvalGtoDeviceContext::new(
+                    &client,
+                    &cell.mol._atm,
+                    &cell.mol._bas,
+                    &cell.mol._env,
+                    &cell.mol.ao_loc_nr,
+                    nao,
+                    point_rcut2,
+                )?);
+                eval_coords.reserve(3 * ngrids * eval_batch);
+            }
+        }
+    }
+    let deriv1 = comp == 4;
+
+    // K-10 (session 5, user-authorised over plan 10-04): the fused path — no
+    // AO block is ever written or read. Engages on the K-09-capable bases
+    // except all-s at deriv 0 (the s-kernel's arithmetic is its own), sized
+    // so `B · Q_max` fits the lane's value array. `PYSCF_PBC_AO_FUSE=0` pins
+    // the K-09/A-06 path (the bit-identity reference for the gate).
+    let mut fused: Option<FusedState> = None;
+    if let (Some(ctx), true) = (eval_ctx.as_ref(), ao_fuse_enabled()) {
+        let all_s = cell
+            .mol
+            ._bas
+            .chunks_exact(BAS_SLOTS)
+            .all(|row| row[pyscf_core::raw_layout::ANG_OF] == 0);
+        let qmax = pyscf_kernels::fused_values_per_image(&cell.mol._bas, deriv1);
+        if !(all_s && !deriv1) && qmax > 0 && qmax <= pyscf_kernels::FUSED_VALS_CAP {
+            let cap = (pyscf_kernels::FUSED_VALS_CAP / qmax)
+                .clamp(1, pyscf_kernels::AO_FUSED_BATCH_MAX)
+                .min(fused_batch_override().unwrap_or(usize::MAX))
+                .max(1);
+            let mut flat = Vec::with_capacity(3 * ngrids);
+            for axis in 0..3 {
+                flat.extend(coords.iter().map(|r| r[axis]));
+            }
+            let grid = pyscf_kernels::AoGridDevice::new(&client, &flat, ngrids);
+            let _ = ctx;
+            fused = Some(FusedState {
+                grid,
+                cap,
+                images: Vec::with_capacity(cap),
+                pr: Vec::with_capacity(cap * nkpts),
+                pi: Vec::with_capacity(cap * nkpts),
+            });
+        }
+    }
 
     for (m, l) in ls.iter().enumerate() {
         // phi(r − L): shift the GRID, not the atoms — same function, and it
@@ -293,59 +384,149 @@ pub fn eval_ao_kpts_with_images(
             }
         };
 
-        let (ao_device, scatter_index): (pyscf_kernels::AoBlockDevice, Option<&[usize]>) =
-            match &keep {
-                None => {
-                    {
-                        let span = tracing::info_span!("pbc_eval_ao_shift_pack");
-                        let _entered = span.enter();
-                        shifted_workspace.clear();
-                        for axis in 0..3 {
-                            shifted_workspace.extend(coords.iter().map(|r| r[axis] - l[axis]));
-                        }
-                    }
-                    let ao = {
-                        // `points` — how many grid points this launch covers, so
-                        // the A-00 instrument can report the launched-image count
-                        // and the kept-point total (the screen's actual yield).
-                        let span =
-                            tracing::info_span!("pbc_eval_ao_eval_gto", points = ngrids as u64);
-                        let _entered = span.enter();
-                        eval_gto_device(&client, cell, eval_name, &shifted_workspace, ngrids)?
-                    };
-                    (ao, None)
-                }
-                Some(keep) => {
-                    {
-                        let span = tracing::info_span!("pbc_eval_ao_shift_pack");
-                        let _entered = span.enter();
-                        gather_kept(
-                            coords,
-                            keep,
-                            *l,
-                            &mut shifted_workspace,
-                            &mut index_workspace,
-                        );
-                    }
-                    let ao = {
-                        let span = tracing::info_span!(
-                            "pbc_eval_ao_eval_gto",
-                            points = index_workspace.len() as u64
-                        );
-                        let _entered = span.enter();
-                        eval_gto_device(
-                            &client,
-                            cell,
-                            eval_name,
-                            &shifted_workspace,
-                            index_workspace.len(),
-                        )?
-                    };
-                    (ao, Some(index_workspace.as_slice()))
-                }
-            };
+        if let (Some(f), Some(ctx)) = (fused.as_mut(), eval_ctx.as_ref()) {
+            // K-10: stage the image's lattice vector, block flags and phases;
+            // the kernel does the shift, the evaluation and the accumulate.
+            f.images.push(pyscf_kernels::FusedImage {
+                l: *l,
+                keep_blocks: match &keep {
+                    None => Vec::new(),
+                    Some(k) => k.iter().map(|&b| u32::from(b)).collect(),
+                },
+            });
+            f.pr.extend((0..nkpts).map(|k| expkl_re[k * nimgs + m]));
+            f.pi.extend((0..nkpts).map(|k| expkl_im[k * nimgs + m]));
+            if f.images.len() >= f.cap {
+                flush_fused(&client, ctx, f, &mut acc, nkpts, n, deriv1, m)?;
+            }
+            continue;
+        }
 
+        // The shift/gather half: `shifted_workspace` holds the image's grid
+        // (all of it, or the kept blocks) in F-order; `scatter_index` its
+        // kept-point list when gathered.
+        let scatter_index: Option<&[usize]> = match &keep {
+            None => {
+                let span = tracing::info_span!("pbc_eval_ao_shift_pack");
+                let _entered = span.enter();
+                shifted_workspace.clear();
+                for axis in 0..3 {
+                    shifted_workspace.extend(coords.iter().map(|r| r[axis] - l[axis]));
+                }
+                None
+            }
+            Some(keep) => {
+                let span = tracing::info_span!("pbc_eval_ao_shift_pack");
+                let _entered = span.enter();
+                gather_kept(
+                    coords,
+                    keep,
+                    *l,
+                    &mut shifted_workspace,
+                    &mut index_workspace,
+                );
+                Some(index_workspace.as_slice())
+            }
+        };
         let image_ngrids = scatter_index.map_or(ngrids, <[usize]>::len);
+
+        // K-08 phases for this image — `exp(i·k·L)`, one per k-point.
+        let pr: Vec<f64> = (0..nkpts).map(|k| expkl_re[k * nimgs + m]).collect();
+        let pi: Vec<f64> = (0..nkpts).map(|k| expkl_im[k * nimgs + m]).collect();
+
+        if let Some(batch) = batch.as_mut() {
+            // K-09 (session 4): evaluate straight into the batch's next slot and
+            // register the image; the accumulate happens once per full batch.
+            // `n`/`comp` are known up front on this path (`comp_of_eval_name`).
+            let len = comp * image_ngrids * nao;
+            let shape = if comp == 1 {
+                vec![image_ngrids, nao]
+            } else {
+                vec![comp, image_ngrids, nao]
+            };
+            if let Some(ctx) = eval_ctx.as_ref() {
+                // A-06: stage this image's grid; the launch covers `eval_batch`
+                // images at once (or the rest of the accumulate batch).
+                if eval_images.is_empty() {
+                    eval_first_slot = batch.len();
+                }
+                eval_coords.extend_from_slice(&shifted_workspace);
+                eval_images.push(pyscf_kernels::EvalGtoImage { npts: image_ngrids });
+                batch.push(scatter_index, &pr, &pi).map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "eval_ao_kpts: K-09 batch push at image {m}: {e}"
+                    )))
+                })?;
+                if eval_images.len() >= eval_batch || batch.is_full() {
+                    let span = tracing::info_span!(
+                        "pbc_eval_ao_eval_gto",
+                        points = eval_images.iter().map(|i| i.npts as u64).sum::<u64>(),
+                        images = eval_images.len() as u64
+                    );
+                    let _entered = span.enter();
+                    pyscf_kernels::eval_gto_batch_into_image_batch(
+                        &client,
+                        ctx,
+                        deriv1,
+                        &eval_coords,
+                        &eval_images,
+                        eval_first_slot,
+                        batch,
+                    )?;
+                    eval_coords.clear();
+                    eval_images.clear();
+                }
+                if batch.is_full() {
+                    flush_image_batch(&client, batch, &mut acc, nkpts, n, ngrids, nao, comp, m)?;
+                }
+                continue;
+            }
+            {
+                let span =
+                    tracing::info_span!("pbc_eval_ao_eval_gto", points = image_ngrids as u64);
+                let _entered = span.enter();
+                let target = batch.slot(len, shape).map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "eval_ao_kpts: K-09 batch slot at image {m}: {e}"
+                    )))
+                })?;
+                eval_gto_device_target(
+                    &client,
+                    cell,
+                    eval_name,
+                    &shifted_workspace,
+                    image_ngrids,
+                    point_rcut2,
+                    &target,
+                )?;
+            }
+            batch.push(scatter_index, &pr, &pi).map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_ao_kpts: K-09 batch push at image {m}: {e}"
+                )))
+            })?;
+            if batch.is_full() {
+                flush_image_batch(&client, batch, &mut acc, nkpts, n, ngrids, nao, comp, m)?;
+            }
+            continue;
+        }
+
+        let ao_device = {
+            // `points` — how many grid points this launch covers, so the A-00
+            // instrument can report the launched-image count and the
+            // kept-point total (the screen's actual yield).
+            let span = tracing::info_span!("pbc_eval_ao_eval_gto", points = image_ngrids as u64);
+            let _entered = span.enter();
+            eval_gto_device(
+                &client,
+                cell,
+                eval_name,
+                &shifted_workspace,
+                image_ngrids,
+                point_rcut2,
+            )?
+        };
+
         // The evaluator reports its own layout — `[ngrids, nao]`, or
         // `[comp, ngrids, nao]` for the derivative variants. Taking `comp`
         // from the shape rather than dividing the buffer length means a block
@@ -375,10 +556,17 @@ pub fn eval_ao_kpts_with_images(
             continue;
         }
 
+        // Measurement arm ONLY (`PYSCF_PBC_AO_SKIP_K08=1`, session 4): drop
+        // the image's AO block without accumulating it, so the cold pass can
+        // be timed without K-08. The output is garbage (zeros).
+        if skip_k08_for_measurement() {
+            if acc.is_none() {
+                acc = Some(pyscf_kernels::pbc::AoKAccumulator::zeros(&client, nkpts, n));
+            }
+            continue;
+        }
         // K-08 — one launch per image, folding this image into every k at once,
         // in place on the device-resident accumulators.
-        let pr: Vec<f64> = (0..nkpts).map(|k| expkl_re[k * nimgs + m]).collect();
-        let pi: Vec<f64> = (0..nkpts).map(|k| expkl_im[k * nimgs + m]).collect();
         // Built on the first image that actually has AO values, so `n` is known;
         // `get_or_insert_with` keeps that lazy without an unreachable panic
         // branch (FOUND-07 — no `unwrap`/`expect` in production code).
@@ -402,6 +590,37 @@ pub fn eval_ao_kpts_with_images(
             })?;
         }
     }
+    // K-10: the ragged last fused batch.
+    if let (Some(f), Some(ctx)) = (fused.as_mut(), eval_ctx.as_ref()) {
+        if !f.images.is_empty() {
+            flush_fused(&client, ctx, f, &mut acc, nkpts, n, deriv1, nimgs)?;
+        }
+    }
+    // K-09: the ragged last batch (A-06: its staged images evaluated first).
+    if let Some(batch) = batch.as_mut() {
+        if let (Some(ctx), false) = (eval_ctx.as_ref(), eval_images.is_empty()) {
+            let span = tracing::info_span!(
+                "pbc_eval_ao_eval_gto",
+                points = eval_images.iter().map(|i| i.npts as u64).sum::<u64>(),
+                images = eval_images.len() as u64
+            );
+            let _entered = span.enter();
+            pyscf_kernels::eval_gto_batch_into_image_batch(
+                &client,
+                ctx,
+                deriv1,
+                &eval_coords,
+                &eval_images,
+                eval_first_slot,
+                batch,
+            )?;
+            eval_coords.clear();
+            eval_images.clear();
+        }
+        if !batch.is_empty() {
+            flush_image_batch(&client, batch, &mut acc, nkpts, n, ngrids, nao, comp, nimgs)?;
+        }
+    }
 
     // W-09: every image may have been screened out (an empty basis, or a grid
     // nothing can reach). `n` is then still 0 and the split below yields the
@@ -412,21 +631,21 @@ pub fn eval_ao_kpts_with_images(
 
     // One read-back for the whole lattice sum. An empty image list never built
     // an accumulator, and `n` is then 0, so the split below yields no planes.
-    let (out_re, out_im) = match acc {
-        Some(a) => a.into_planes(&client),
-        None => (Vec::new(), Vec::new()),
+    // K-10v: read back per k — a point-major (fused) accumulator is gathered
+    // into per-k planes on the way, a k-major one is split.
+    let planes = match acc {
+        Some(a) => a.into_k_planes(&client),
+        None => Vec::new(),
     };
 
-    // Split the flat (nkpts, n) accumulators into one CTensor per k, dropping
-    // the imaginary plane at gamma (eval_gto.py:157-158).
+    // One CTensor per k, dropping the imaginary plane at gamma
+    // (eval_gto.py:157-158).
     let gamma: Vec<bool> = kpts.iter().map(is_gamma).collect();
     let mut kaos = Vec::with_capacity(nkpts);
     for (k, is_g) in gamma.iter().enumerate() {
-        let re = out_re[k * n..(k + 1) * n].to_vec();
-        let im = if *is_g {
-            vec![0.0; n]
-        } else {
-            out_im[k * n..(k + 1) * n].to_vec()
+        let (re, im) = match planes.get(k) {
+            Some((re, im)) => (re.clone(), if *is_g { vec![0.0; n] } else { im.clone() }),
+            None => (Vec::new(), Vec::new()),
         };
         kaos.push(CTensor::from_planes(re, im));
     }
@@ -440,15 +659,214 @@ pub fn eval_ao_kpts_with_images(
     })
 }
 
+/// The component count of the two eval names the device kernels serve —
+/// what K-09 needs before the first image is evaluated. `None` for anything
+/// else (the host fallback decides its own shape).
+fn comp_of_eval_name(eval_name: &str) -> Option<usize> {
+    match eval_name {
+        "GTOval" | "GTOval_sph" => Some(1),
+        "GTOval_sph_deriv1" => Some(4),
+        _ => None,
+    }
+}
+
+/// K-09's images per accumulate launch. `PYSCF_PBC_AO_IMAGE_BATCH=<n>` pins it
+/// (`1` = one launch per image, the pre-K-09 path); unset, the batch buffer is
+/// sized under [`AO_IMAGE_BATCH_BUDGET_BYTES`] and capped at
+/// `AO_IMAGE_BATCH_MAX`.
+fn image_batch_capacity(block_len: usize) -> usize {
+    if let Some(v) = std::env::var("PYSCF_PBC_AO_IMAGE_BATCH")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        return v.clamp(1, pyscf_kernels::pbc::AO_IMAGE_BATCH_MAX);
+    }
+    let block_bytes = block_len.saturating_mul(core::mem::size_of::<f64>()).max(1);
+    (AO_IMAGE_BATCH_BUDGET_BYTES / block_bytes).clamp(1, pyscf_kernels::pbc::AO_IMAGE_BATCH_MAX)
+}
+
+/// K-10's per-call staging: the resident unshifted grid and the images
+/// collected for the next fused launch.
+struct FusedState {
+    grid: pyscf_kernels::AoGridDevice,
+    cap: usize,
+    images: Vec<pyscf_kernels::FusedImage>,
+    pr: Vec<f64>,
+    pi: Vec<f64>,
+}
+
+/// `PYSCF_PBC_AO_FUSE`, per call. `0`/`false`/`no`/`off` pins the K-09/A-06
+/// path (the reference arm of `tests/eval_ao_image_batch.rs`); anything
+/// else, including unset, takes the fused K-10 kernel.
+fn ao_fuse_enabled() -> bool {
+    !std::env::var("PYSCF_PBC_AO_FUSE").is_ok_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+/// `PYSCF_PBC_AO_FUSE_BATCH=<n>` caps the fused batch (measurement dial).
+fn fused_batch_override() -> Option<usize> {
+    std::env::var("PYSCF_PBC_AO_FUSE_BATCH")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+}
+
+/// K-10: one fused launch over the staged images, then reset the staging.
+#[allow(clippy::too_many_arguments)]
+fn flush_fused(
+    client: &AlgebraClient,
+    ctx: &pyscf_kernels::EvalGtoDeviceContext,
+    f: &mut FusedState,
+    acc: &mut Option<pyscf_kernels::pbc::AoKAccumulator>,
+    nkpts: usize,
+    n: usize,
+    deriv1: bool,
+    m: usize,
+) -> Result<(), PyscfRsError> {
+    let span = tracing::info_span!("pbc_eval_ao_k08_accumulate", images = f.images.len() as u64);
+    let _entered = span.enter();
+    // K-10v: point-major, so the kernel's k-loop is a vector.
+    let accumulator = acc.get_or_insert_with(|| {
+        pyscf_kernels::pbc::AoKAccumulator::zeros_point_major(client, nkpts, n)
+    });
+    if !skip_k08_for_measurement() {
+        pyscf_kernels::eval_ao_k_fused_batch(
+            client,
+            ctx,
+            &f.grid,
+            deriv1,
+            &f.images,
+            &f.pr,
+            &f.pi,
+            accumulator,
+            nkpts,
+            SCREEN_BLKSIZE,
+        )
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts: K-10 fused launch failed at image {m}: {e}"
+            )))
+        })?;
+    }
+    f.images.clear();
+    f.pr.clear();
+    f.pi.clear();
+    Ok(())
+}
+
+/// A-06's images per AO evaluation launch. `PYSCF_PBC_AO_EVAL_BATCH=<n>`
+/// pins it: `0` is one launch per image through the pre-A-06 kernels (the
+/// reference arm), `n >= 1` is the batched kernel over `min(n, capacity)`
+/// images (so `1` isolates the hoisted uploads from the collapsed launches).
+/// Unset: the whole accumulate batch in one launch.
+fn eval_batch_size(capacity: usize) -> usize {
+    match std::env::var("PYSCF_PBC_AO_EVAL_BATCH")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+    {
+        Some(0) => 0,
+        Some(n) => n.min(capacity),
+        None => capacity,
+    }
+}
+
+/// The most device memory K-09 spends on staged AO blocks. 256 MiB — the same
+/// per-launch budget the multigrid batches use (`BATCH_BUDGET_BYTES`); at
+/// `si gth-dzvp deriv 1 mesh 31` a block is 25 MB, so ten images share a
+/// launch, and at gth-szv sixteen (the cap).
+pub const AO_IMAGE_BATCH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+
+/// K-09: fold the registered images into the accumulator in one launch and
+/// empty the batch. `m` names the image just registered, for the error.
+#[allow(clippy::too_many_arguments)]
+fn flush_image_batch(
+    client: &AlgebraClient,
+    batch: &mut pyscf_kernels::pbc::AoImageBatch,
+    acc: &mut Option<pyscf_kernels::pbc::AoKAccumulator>,
+    nkpts: usize,
+    n: usize,
+    ngrids: usize,
+    nao: usize,
+    comp: usize,
+    m: usize,
+) -> Result<(), PyscfRsError> {
+    let span = tracing::info_span!("pbc_eval_ao_k08_accumulate", images = batch.len() as u64);
+    let _entered = span.enter();
+    let accumulator =
+        acc.get_or_insert_with(|| pyscf_kernels::pbc::AoKAccumulator::zeros(client, nkpts, n));
+    if !skip_k08_for_measurement() {
+        accumulator
+            .accumulate_batch(client, batch, ngrids, nao, comp)
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "eval_ao_kpts: K-09 accumulate failed at image {m}: {e}"
+                )))
+            })?;
+    }
+    batch.clear();
+    Ok(())
+}
+
+/// [`eval_gto_device`] writing into a caller-owned slot (K-09). Only the two
+/// device eval names reach here (`comp_of_eval_name`).
+#[allow(clippy::too_many_arguments)]
+fn eval_gto_device_target(
+    client: &AlgebraClient,
+    cell: &Cell,
+    eval_name: &str,
+    flat: &[f64],
+    ngrids: usize,
+    rcut2: Option<&[f64]>,
+    target: &pyscf_kernels::AoBlockDevice,
+) -> Result<(), PyscfRsError> {
+    match eval_name {
+        "GTOval" | "GTOval_sph" => pyscf_kernels::eval_gto_sph_into_target(
+            client,
+            flat,
+            ngrids,
+            &cell.mol._atm,
+            &cell.mol._bas,
+            &cell.mol._env,
+            &cell.mol.ao_loc_nr,
+            cell.mol.nao_nr,
+            rcut2,
+            target,
+        ),
+        "GTOval_sph_deriv1" => pyscf_kernels::eval_gto_sph_deriv1_into_target(
+            client,
+            flat,
+            ngrids,
+            &cell.mol._atm,
+            &cell.mol._bas,
+            &cell.mol._env,
+            &cell.mol.ao_loc_nr,
+            cell.mol.nao_nr,
+            rcut2,
+            target,
+        ),
+        other => Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "eval_ao_kpts: K-09 has no device target path for {other:?}"
+        )))),
+    }
+}
+
+/// A-04 (session 4): `rcut2` is the per-shell squared cutoff the W-09 block
+/// screen was built from, handed to the device kernels so they apply the SAME
+/// radius per grid point; `None` is the unscreened kernel.
 fn eval_gto_device(
     client: &AlgebraClient,
     cell: &Cell,
     eval_name: &str,
     flat: &[f64],
     ngrids: usize,
+    rcut2: Option<&[f64]>,
 ) -> Result<pyscf_kernels::AoBlockDevice, PyscfRsError> {
     match eval_name {
-        "GTOval" | "GTOval_sph" => pyscf_kernels::eval_gto_sph_into(
+        "GTOval" | "GTOval_sph" => pyscf_kernels::eval_gto_sph_into_screened(
             client,
             flat,
             ngrids,
@@ -458,8 +876,9 @@ fn eval_gto_device(
             &cell.mol.ao_loc_nr,
             cell.mol.nao_nr,
             true,
+            rcut2,
         ),
-        "GTOval_sph_deriv1" => pyscf_kernels::eval_gto_sph_deriv1_into(
+        "GTOval_sph_deriv1" => pyscf_kernels::eval_gto_sph_deriv1_into_screened(
             client,
             flat,
             ngrids,
@@ -468,6 +887,7 @@ fn eval_gto_device(
             &cell.mol._env,
             &cell.mol.ao_loc_nr,
             cell.mol.nao_nr,
+            rcut2,
         ),
         _ => {
             let coords: Vec<[f64; 3]> = (0..ngrids)
@@ -523,6 +943,38 @@ fn ao_screen_enabled() -> bool {
             )
         })
     })
+}
+
+/// `PYSCF_PBC_AO_POINT_SCREEN`, read once. `1`/`true`/`yes`/`on` also applies
+/// the per-shell radius inside the AO kernels per grid point (A-04, session
+/// 4); unset or anything else keeps the W-09 block screen only.
+///
+/// **Off by default — RULE S.** The item was written on the model that a kept
+/// 128-point block still holds many points outside every shell's cutoff
+/// sphere. Measured (session 4, `krks_profile ao`, si 2×2×2 mesh 31, same
+/// binary): the cold pass moved by under 5 % on every row (1.82 → 1.77 s,
+/// 5.03 → 5.16 s, 17.8 → 17.4 s), and a lane that skips ALL its arithmetic
+/// costs the same as one that does it — the AO kernel is not where the pass's
+/// time goes (K-09 is). It drops terms, so without a speed ratio above 1.0 it
+/// does not ship on; `tests/eval_ao_point_screen.rs` keeps it gated at the
+/// W-09 bound for whoever measures it on a GPU.
+fn ao_point_screen_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("PYSCF_PBC_AO_POINT_SCREEN").is_ok_and(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+    })
+}
+
+fn skip_k08_for_measurement() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PYSCF_PBC_AO_SKIP_K08").is_ok_and(|v| v == "1"))
 }
 
 /// Axis-aligned bounding box of one grid block, in Bohr.

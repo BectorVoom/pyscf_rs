@@ -45,6 +45,8 @@ cubecl-cuda    = { workspace = true, optional = true }
 cubecl-wgpu    = { workspace = true, optional = true }
 cubecl-hip     = { workspace = true, optional = true }
 bytemuck       = { workspace = true }
+# K-10v (session 5): the point-major accumulator is transposed per k on read-back.
+rayon          = { workspace = true }
 cube-math      = { workspace = true }
 tracing        = { workspace = true }
 thiserror      = { workspace = true }

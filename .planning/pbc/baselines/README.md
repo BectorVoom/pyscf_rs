@@ -146,3 +146,32 @@ ratios, nset=2 over nset=1 on identical data: `get_k_kpts` ×1.034,
 `get_j_kpts` ×1.90-2.20, `nr_uks`/`nr_rks` ×1.30-1.75. Cold `nr_rks` (AO
 evaluation) 6.0-6.4 s vs 39-83 ms warm. Analysis in
 `../KUKS-KSYMM-MULTIGRID-OPTIMISATION-PLAN.md` §2.1.0a.
+
+
+## 2026-09-08 — session 4 (`KUKS-KSYMM-MULTIGRID-SESSION-4-EXECUTION-SUMMARY.md`)
+
+Idle box (load 2.6-3.0 at every launch, inside the JSON), no-LTO `target/gate`
+build (absolute times are NOT comparable to the thin-LTO rows above; the
+ratios inside one file are), K-09 image batching on by default, A-04 off.
+These are the P-10 rows plan-2 §3 owed.
+
+| file | mode | what |
+|---|---|---|
+| `2026-09-08-ksymm-{krks,kuks}-si222-mesh31-{pbe,pbe0}.json` | `ksymm` | full-BZ and k-symmetric SCF in one process, si 2×2×2 |
+| `2026-09-08-ksymm-{krks,kuks}-si444-mesh31-pbe.json` | `ksymm` | the same at 4×4×4 |
+| `2026-09-08-kuks-si222-mesh31-pbe0.json` | `jk --driver kuks` | re-run of the 2026-09-02 KUKS baseline (`--compare` diff in the session record) |
+| `2026-09-08-multigrid-{v1,v2}-si-mesh25.json` | `multigrid` | v1 / v2 KRKS LDA at 25³ with per-level tables and peak RSS |
+| `2026-09-08-ao-si222-mesh31-szv-deriv1.json` | `ao` | the cold AO pass, deriv 1 |
+
+Re-run any of them with the same subcommand and `--compare <file>`.
+
+### K-10 rows (same day, fused AO evaluation on — `KUKS-KSYMM-MULTIGRID-SESSION-5-EXECUTION-SUMMARY.md` §1.5)
+
+| file | what |
+|---|---|
+| `2026-09-08-k10-ao-si222-mesh31-szv-deriv{0,1}.json`, `…-si444-…-szv-deriv1.json`, `…-si222-…-dzvp-deriv1.json` | the cold AO pass on the fused K-10 path (defaults) |
+| `2026-09-08-k10-ksymm-krks-si{222,444}-mesh31-pbe.json` | KRKS PBE full-BZ + k-symmetric SCF on the fused path |
+
+The pre-K-10 rows above (`2026-09-08-ksymm-*`, `2026-09-08-ao-*`) are the
+K-09 defaults of the same day; `PYSCF_PBC_AO_FUSE=0` reproduces them on the
+current binary.

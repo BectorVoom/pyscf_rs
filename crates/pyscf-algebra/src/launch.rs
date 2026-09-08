@@ -165,3 +165,68 @@ pub fn reduction_lanes<R: Runtime>(
         (work / WORK_PER_CPU_UNIT).clamp(1, cores.min(n_lines.max(1)))
     }
 }
+
+/// One launch of a lane range — see [`launch_1d_chunked`].
+#[derive(Debug, Clone, Copy)]
+pub struct LaneChunk {
+    /// First lane of this launch; the kernel adds it to `ABSOLUTE_POS`.
+    pub lane0: usize,
+    /// Lanes in this launch.
+    pub len: usize,
+    pub count_x: u32,
+    pub dim: CubeDim,
+}
+
+/// Stack a kernel with per-lane local arrays may consume per unit on the CPU
+/// runtime, per launch.
+///
+/// MEASURED 2026-09-08 (session 5): CubeCL 0.10's CPU runtime allocates a
+/// kernel's `Array::new(..)` locals per cube ITERATION, not per launch — a
+/// unit that walks `lanes / units` iterations keeps growing its stack by the
+/// arrays' bytes each time and nothing releases it until the launch ends. A
+/// 32-image accumulate (384 B of locals) over 3.1 M lanes on 16 units
+/// overflowed the 64 MB worker stack; the same kernel over 0.95 M lanes did
+/// not; a 4 KB local array overflowed at 7 400 iterations and ran at 128 MB.
+/// The mechanism in the lowering is UNVERIFIED; the arithmetic is not.
+pub const CPU_LOCAL_STACK_BUDGET: usize = 16 * 1024 * 1024;
+
+/// [`launch_1d`] for a kernel holding `local_bytes` of per-lane local
+/// arrays: on the CPU runtime the lane range is split into launches whose
+/// iterations per unit × `local_bytes` stay under
+/// [`CPU_LOCAL_STACK_BUDGET`]; on a GPU it is one launch. The cube dimension
+/// is the one [`launch_1d`] would pick for the whole range, so the chunking
+/// changes nothing but the number of launches; every lane still runs the
+/// same body on the same operands, so the result is bit-identical.
+pub fn launch_1d_chunked<R: Runtime>(
+    client: &ComputeClient<R>,
+    lanes: usize,
+    work_per_lane: usize,
+    local_bytes: usize,
+) -> Vec<LaneChunk> {
+    if lanes == 0 {
+        return Vec::new();
+    }
+    let (_, dim) = launch_1d(client, lanes, work_per_lane);
+    let units = (dim.num_elems() as usize).max(1);
+    let is_cpu = client.properties().hardware.plane_size_max <= 1;
+    let chunk = if is_cpu && local_bytes > 0 {
+        let iters = (CPU_LOCAL_STACK_BUDGET / local_bytes).max(1);
+        iters.saturating_mul(units).max(units)
+    } else {
+        usize::MAX
+    };
+    let mut out = Vec::new();
+    let mut lane0 = 0usize;
+    while lane0 < lanes {
+        let len = (lanes - lane0).min(chunk);
+        let count_x = len.div_ceil(units) as u32;
+        out.push(LaneChunk {
+            lane0,
+            len,
+            count_x,
+            dim,
+        });
+        lane0 += len;
+    }
+    out
+}

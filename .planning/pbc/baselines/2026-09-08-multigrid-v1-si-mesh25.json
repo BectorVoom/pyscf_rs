@@ -1,0 +1,43 @@
+{
+  "driver": "krks",
+  "numint": "v1",
+  "cell": "si",
+  "mesh": [
+    25,
+    25,
+    25
+  ],
+  "kernel_ms": 1680.4115309999997,
+  "warm_get_veff_ms": 9.482409,
+  "build_tasks_cache_miss_ms": 0.027090999999999997,
+  "build_tasks_cache_hit_ms": 0.00038,
+  "kernel_collocate_ms": 148.868551,
+  "kernel_collocate_calls": 1,
+  "warm_collocate_ms": 0.0,
+  "warm_collocate_calls": 0,
+  "warm_xc_parts_ms": 2.658784,
+  "warm_levels": [
+    {
+      "level": 0,
+      "forward_ms": 3.4886320000000004,
+      "reverse_ms": 3.3028329999999997,
+      "forward_fft_ms": 0.434586,
+      "reverse_fft_ms": 0.540825,
+      "forward_launches": 1,
+      "reverse_launches": 0,
+      "transfer_bytes_before": 0,
+      "transfer_bytes_after": 0,
+      "batch_points": 0,
+      "batch_instances": 0,
+      "batch_uinstances": 0,
+      "batch_geometry_bytes": 0,
+      "batch_slots": 0,
+      "kslots": 0
+    }
+  ],
+  "e_tot": -7.160554197438174,
+  "converged": true,
+  "max_dm_spin_delta": null,
+  "peak_rss_mib": 235.7265625,
+  "load_average_at_start": 2.8
+}

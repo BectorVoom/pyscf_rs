@@ -269,6 +269,279 @@ fn launch_scatter_on_handles<R: Runtime, F: DeviceScalar>(
     }
 }
 
+/// The most images one K-09 batch may hold — the width of the kernel's
+/// per-lane gather registers. 16 → 32 in session 5: at 16 the accumulate's
+/// remaining traffic per image was one block read plus `4·nkpts·n/16` of
+/// plane read-modify-write, i.e. the planes were still half of it.
+pub const AO_IMAGE_BATCH_MAX: usize = 32;
+
+/// K-09 — fold a BATCH of lattice images into every k-point in one launch.
+///
+/// Session 4 measured the cold periodic AO pass with K-08 switched off
+/// (`PYSCF_PBC_AO_SKIP_K08=1`): 540 ms against 1 946 ms at `deriv 0` and
+/// 826 ms against 5 217 ms at `deriv 1` (si gth-szv 2×2×2, mesh 31). The
+/// accumulate was 72-84 % of the pass, not the 20-23 % its host span showed
+/// (lazy launches), and the AO kernel's arithmetic was ~0 — a lane doing
+/// nothing but its zero-fill store cost the same. What K-08 pays for is the
+/// read-modify-write of BOTH `(nkpts, n)` planes on EVERY image: `4·nkpts·n`
+/// reals of traffic to fold `n` reals in.
+///
+/// This kernel reads and writes each `(k, p)` accumulator ONCE per `nimg`
+/// images. Per lane (one element `p`): gather the element's value from each
+/// image of the batch — a dense image at `p` itself, a screened image through
+/// its inverse index `pos[m·ngrids + g]` (`>= nkeep[m]` when the point was
+/// not kept) — then, per k, `acc = out[k,p]; acc += pr[m,k]·v_m` over the
+/// images IN IMAGE ORDER; store. That is exactly the sequence of additions the
+/// per-image launches performed on the same accumulator (an un-kept element
+/// received no addition from that image, and receives none here), so the
+/// planes are bit-identical to the one-image-per-launch path; RULE-T traffic
+/// per image drops from `4·nkpts·n` to `4·nkpts·n / nimg + n + ngrids/2`.
+///
+/// `ao` holds the batch's AO blocks in fixed-stride slots of `block_len`
+/// reals; `nkeep[m]` is the image's kept-point count (`ngrids` when dense),
+/// `dense[m] != 0` marks a full-grid image whose block is in grid order.
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_ao_k_accumulate_batch_kernel<F: Float + CubeElement>(
+    ao: &Array<F>,
+    pos: &Array<u32>,
+    dense: &Array<u32>,
+    nkeep: &Array<u32>,
+    pr: &Array<F>,
+    pi: &Array<F>,
+    out_re: &mut Array<F>,
+    out_im: &mut Array<F>,
+    nkpts: usize,
+    n: usize,
+    ngrids: usize,
+    nao: usize,
+    nimg: usize,
+    block_len: usize,
+    lane0: usize,
+) {
+    // `lane0`: the launch is chunked on the CPU runtime (`launch_1d_chunked`)
+    // because this kernel's two local arrays cost stack per iteration there.
+    let p = ABSOLUTE_POS + lane0;
+    if p < n {
+        let c = p / (ngrids * nao);
+        let rem = p % (ngrids * nao);
+        let a = rem / ngrids;
+        let g = rem % ngrids;
+        let mut vals = Array::<F>::new(AO_IMAGE_BATCH_MAX);
+        let mut present = Array::<u32>::new(AO_IMAGE_BATCH_MAX);
+        for m in 0..nimg {
+            let mut v = F::from_int(0);
+            let mut hit = 0u32;
+            if dense[m] != 0u32 {
+                v = ao[m * block_len + p];
+                hit = 1u32;
+            } else {
+                let j = pos[m * ngrids + g];
+                let nk = nkeep[m];
+                if j < nk {
+                    let nk_us = nk as usize;
+                    v = ao[m * block_len + c * nk_us * nao + a * nk_us + j as usize];
+                    hit = 1u32;
+                }
+            }
+            vals[m] = v;
+            present[m] = hit;
+        }
+        for k in 0..nkpts {
+            let mut re = out_re[k * n + p];
+            let mut im = out_im[k * n + p];
+            for m in 0..nimg {
+                if present[m] != 0u32 {
+                    let v = vals[m];
+                    re += pr[m * nkpts + k] * v;
+                    im += pi[m * nkpts + k] * v;
+                }
+            }
+            out_re[k * n + p] = re;
+            out_im[k * n + p] = im;
+        }
+    }
+}
+
+/// K-09: a device buffer of `capacity` fixed-stride slots, each able to hold
+/// one image's AO block (`block_len` reals), plus the per-image bookkeeping the
+/// batched kernel needs. The driver fills a slot with
+/// [`AoImageBatch::slot`] + `eval_gto_*_into_target`, registers the image with
+/// [`AoImageBatch::push`], and hands the batch to
+/// [`AoKAccumulator::accumulate_batch`] when it is full or the image list ends.
+///
+/// Handles stay private (ALG-06); the driver never names a cubecl type.
+pub struct AoImageBatch {
+    buf: Handle,
+    block_len: usize,
+    capacity: usize,
+    ngrids: usize,
+    /// Per registered image: kept-point count (`ngrids` when dense).
+    nkeep: Vec<u32>,
+    /// Per registered image: `1` when the slot holds a full-grid block.
+    dense: Vec<u32>,
+    /// `len · ngrids` inverse indices — `pos[m·ngrids + g]` is the kept
+    /// position of grid point `g` in image `m`, or `u32::MAX`. Dense images'
+    /// rows are left as `u32::MAX` and never read.
+    pos: Vec<u32>,
+    /// `len · nkpts` phases, image-major.
+    pr: Vec<f64>,
+    pi: Vec<f64>,
+    nkpts: usize,
+}
+
+impl core::fmt::Debug for AoImageBatch {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AoImageBatch")
+            .field("block_len", &self.block_len)
+            .field("capacity", &self.capacity)
+            .field("len", &self.nkeep.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl AoImageBatch {
+    /// Allocate `capacity` slots of `block_len` reals. `capacity` is clamped
+    /// to `1..=AO_IMAGE_BATCH_MAX`.
+    pub fn new(
+        client: &AlgebraClient,
+        capacity: usize,
+        block_len: usize,
+        ngrids: usize,
+        nkpts: usize,
+    ) -> Self {
+        let capacity = capacity.clamp(1, AO_IMAGE_BATCH_MAX);
+        let bytes = (capacity * block_len).max(1) * core::mem::size_of::<f64>();
+        let buf = dispatch_backend!(client, c, Rt, c.empty(bytes));
+        Self {
+            buf,
+            block_len,
+            capacity,
+            ngrids,
+            nkeep: Vec::with_capacity(capacity),
+            dense: Vec::with_capacity(capacity),
+            pos: Vec::new(),
+            pr: Vec::with_capacity(capacity * nkpts),
+            pi: Vec::with_capacity(capacity * nkpts),
+            nkpts,
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+    /// Reals per slot.
+    pub fn block_len(&self) -> usize {
+        self.block_len
+    }
+    /// The whole slot buffer — for the batched AO kernels (A-06), which write
+    /// every image of a batch into its slot in one launch. Crate-private.
+    pub(crate) fn buffer(&self) -> &Handle {
+        &self.buf
+    }
+    /// Images registered so far.
+    pub fn len(&self) -> usize {
+        self.nkeep.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.nkeep.is_empty()
+    }
+    pub fn is_full(&self) -> bool {
+        self.nkeep.len() == self.capacity
+    }
+
+    /// A view of the NEXT free slot as a device block of `len <= block_len`
+    /// reals with the given logical shape — the target `eval_gto_*_into_target`
+    /// writes into. Call [`Self::push`] afterwards to register the image.
+    ///
+    /// # Errors
+    /// [`AlgebraError::ShapeMismatch`] when the batch is full or `len` exceeds
+    /// the slot.
+    pub fn slot(
+        &self,
+        len: usize,
+        shape: Vec<usize>,
+    ) -> Result<crate::AoBlockDevice, AlgebraError> {
+        if self.is_full() || len > self.block_len {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!(
+                    "a free slot (len {} < capacity {}) of {} reals",
+                    self.len(),
+                    self.capacity,
+                    self.block_len
+                ),
+                actual: format!("len {} images, {len} reals requested", self.len()),
+            });
+        }
+        let offset = (self.len() * self.block_len * core::mem::size_of::<f64>()) as u64;
+        Ok(crate::AoBlockDevice::from_handle(
+            self.buf.clone().offset_start(offset),
+            len,
+            shape,
+        ))
+    }
+
+    /// Register the image whose block was just written into the slot
+    /// [`Self::slot`] handed out: `index` is its kept-point list (`None` for a
+    /// dense, full-grid block), `pr`/`pi` its `nkpts` phases.
+    ///
+    /// # Errors
+    /// [`AlgebraError::ShapeMismatch`] when the batch is full, the phases are
+    /// the wrong length, or an index is out of range.
+    pub fn push(
+        &mut self,
+        index: Option<&[usize]>,
+        pr: &[f64],
+        pi: &[f64],
+    ) -> Result<(), AlgebraError> {
+        if self.is_full() || pr.len() != self.nkpts || pi.len() != self.nkpts {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!(
+                    "a free slot and pr/pi of len {} (batch {}/{})",
+                    self.nkpts,
+                    self.len(),
+                    self.capacity
+                ),
+                actual: format!("pr {} pi {}", pr.len(), pi.len()),
+            });
+        }
+        let row = self.pos.len();
+        self.pos.resize(row + self.ngrids, u32::MAX);
+        match index {
+            None => {
+                self.dense.push(1);
+                self.nkeep.push(self.ngrids as u32);
+            }
+            Some(index) => {
+                if index.iter().any(|&g| g >= self.ngrids) {
+                    self.pos.truncate(row);
+                    return Err(AlgebraError::ShapeMismatch {
+                        expected: format!("kept indices < ngrids = {}", self.ngrids),
+                        actual: format!("max index {:?}", index.iter().max()),
+                    });
+                }
+                for (j, &g) in index.iter().enumerate() {
+                    self.pos[row + g] = j as u32;
+                }
+                self.dense.push(0);
+                self.nkeep.push(index.len() as u32);
+            }
+        }
+        self.pr.extend_from_slice(pr);
+        self.pi.extend_from_slice(pi);
+        Ok(())
+    }
+
+    /// Forget the registered images; the slots are reused from the start.
+    pub fn clear(&mut self) {
+        self.nkeep.clear();
+        self.dense.clear();
+        self.pos.clear();
+        self.pr.clear();
+        self.pi.clear();
+    }
+}
+
 /// The two `(nkpts, n)` accumulator planes, resident on the device for the whole
 /// lattice-image loop.
 ///
@@ -286,6 +559,11 @@ pub struct AoKAccumulator {
     im: Handle,
     nkpts: usize,
     n: usize,
+    /// K-10v: `true` when the planes are stored `out[p·nkpts + k]` (k fastest,
+    /// so the fused kernel's k-loop is a vector), `false` for the k-major
+    /// `out[k·n + p]` every other kernel uses. Read-back transposes either to
+    /// per-k planes.
+    point_major: bool,
 }
 
 impl core::fmt::Debug for AoKAccumulator {
@@ -320,12 +598,39 @@ impl AoKAccumulator {
             Rt,
             (upload(c, zeros.as_slice()), upload(c, zeros.as_slice()))
         );
-        Self { re, im, nkpts, n }
+        Self {
+            re,
+            im,
+            nkpts,
+            n,
+            point_major: false,
+        }
+    }
+
+    /// [`Self::zeros`] in the point-major layout the fused K-10 kernel
+    /// accumulates into. Only `eval_ao_k_fused_batch` and
+    /// [`Self::into_k_planes`] understand this layout; the per-image and
+    /// batched accumulates refuse it.
+    pub fn zeros_point_major(client: &AlgebraClient, nkpts: usize, n: usize) -> Self {
+        let mut acc = Self::zeros(client, nkpts, n);
+        acc.point_major = true;
+        acc
+    }
+
+    /// Whether the planes are point-major (see [`Self::zeros_point_major`]).
+    pub fn is_point_major(&self) -> bool {
+        self.point_major
     }
 
     /// The `(nkpts, n)` shape these planes were built for.
     pub fn shape(&self) -> (usize, usize) {
         (self.nkpts, self.n)
+    }
+
+    /// The two resident planes — for the fused K-10 kernel, which adds into
+    /// them directly. Crate-private.
+    pub(crate) fn planes(&self) -> (&Handle, &Handle) {
+        (&self.re, &self.im)
     }
 
     /// Fold ONE image's real AO block into every k-point, in place on the
@@ -364,6 +669,7 @@ impl AoKAccumulator {
         if self.nkpts == 0 || self.n == 0 {
             return Ok(());
         }
+        self.require_k_major()?;
         let (nkpts, n) = (self.nkpts, self.n);
         dispatch_backend!(client, c, Rt, {
             let ao_h = upload(c, ao);
@@ -397,6 +703,7 @@ impl AoKAccumulator {
         if self.nkpts == 0 || self.n == 0 {
             return Ok(());
         }
+        self.require_k_major()?;
         dispatch_backend!(client, c, Rt, {
             let pr_h = upload(c, pr);
             let pi_h = upload(c, pi);
@@ -454,6 +761,7 @@ impl AoKAccumulator {
         if self.nkpts == 0 || expected_sub == 0 {
             return Ok(());
         }
+        self.require_k_major()?;
         let index_u32: Vec<u32> = index.iter().map(|&g| g as u32).collect();
         dispatch_backend!(client, c, Rt, {
             let index_h = c.create_from_slice(bytemuck::cast_slice(&index_u32));
@@ -477,22 +785,156 @@ impl AoKAccumulator {
         Ok(())
     }
 
+    /// K-09: fold every image registered in `batch` into the planes in ONE
+    /// launch — see [`eval_ao_k_accumulate_batch_kernel`] for why this is
+    /// bit-identical to folding them one launch at a time.
+    ///
+    /// `ngrids`, `nao`, `comp` describe the accumulator's `n = comp · ngrids ·
+    /// nao` layout; the batch's `block_len` must be `n`.
+    ///
+    /// # Errors
+    /// [`AlgebraError::ShapeMismatch`] on a layout disagreement. An empty
+    /// batch is a no-op.
+    pub fn accumulate_batch(
+        &mut self,
+        client: &AlgebraClient,
+        batch: &AoImageBatch,
+        ngrids: usize,
+        nao: usize,
+        comp: usize,
+    ) -> Result<(), AlgebraError> {
+        let nimg = batch.len();
+        if nimg == 0 || self.nkpts == 0 || self.n == 0 {
+            return Ok(());
+        }
+        self.require_k_major()?;
+        if batch.block_len != self.n
+            || self.n != comp * ngrids * nao
+            || batch.nkpts != self.nkpts
+            || batch.ngrids != ngrids
+        {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!(
+                    "batch block_len {} == n {} == comp·ngrids·nao {}, nkpts {}, ngrids {}",
+                    batch.block_len,
+                    self.n,
+                    comp * ngrids * nao,
+                    self.nkpts,
+                    ngrids
+                ),
+                actual: format!("batch nkpts {}, batch ngrids {}", batch.nkpts, batch.ngrids),
+            });
+        }
+        let (nkpts, n) = (self.nkpts, self.n);
+        dispatch_backend!(client, c, Rt, {
+            let pos_h = c.create_from_slice(bytemuck::cast_slice(&batch.pos));
+            let dense_h = c.create_from_slice(bytemuck::cast_slice(&batch.dense));
+            let nkeep_h = c.create_from_slice(bytemuck::cast_slice(&batch.nkeep));
+            let pr_h = upload(c, &batch.pr);
+            let pi_h = upload(c, &batch.pi);
+            // Per lane: `nimg` gathers, then `2·nkpts·nimg` multiply-adds.
+            // Chunked: the lane's `vals` + `present` locals are stack per
+            // iteration on the CPU runtime (see `launch_1d_chunked`).
+            let local_bytes = AO_IMAGE_BATCH_MAX * (core::mem::size_of::<f64>() + 4);
+            for chunk in
+                pyscf_algebra::launch::launch_1d_chunked(c, n, nimg * (2 * nkpts + 1), local_bytes)
+            {
+                unsafe {
+                    eval_ao_k_accumulate_batch_kernel::launch_unchecked::<f64, Rt>(
+                        c,
+                        CubeCount::Static(chunk.count_x, 1, 1),
+                        chunk.dim,
+                        ArrayArg::from_raw_parts(
+                            batch.buf.clone(),
+                            batch.capacity * batch.block_len,
+                        ),
+                        ArrayArg::from_raw_parts(pos_h.clone(), batch.pos.len()),
+                        ArrayArg::from_raw_parts(dense_h.clone(), nimg),
+                        ArrayArg::from_raw_parts(nkeep_h.clone(), nimg),
+                        ArrayArg::from_raw_parts(pr_h.clone(), nimg * nkpts),
+                        ArrayArg::from_raw_parts(pi_h.clone(), nimg * nkpts),
+                        ArrayArg::from_raw_parts(self.re.clone(), nkpts * n),
+                        ArrayArg::from_raw_parts(self.im.clone(), nkpts * n),
+                        nkpts,
+                        n,
+                        ngrids,
+                        nao,
+                        nimg,
+                        batch.block_len,
+                        chunk.lane0,
+                    );
+                }
+            }
+        });
+        Ok(())
+    }
+
+    fn require_k_major(&self) -> Result<(), AlgebraError> {
+        if self.point_major {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: "a k-major accumulator (`AoKAccumulator::zeros`)".to_string(),
+                actual: "a point-major accumulator (only the fused K-10 kernel writes it)"
+                    .to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Read both planes back to the host, consuming the accumulator.
     ///
     /// One transfer for the whole image loop. Returns `(out_re, out_im)`, each
-    /// `nkpts * n` reals in row-major `(nkpts, n)` order.
+    /// `nkpts * n` reals in row-major `(nkpts, n)` order — a point-major
+    /// accumulator is transposed on the way.
     pub fn into_planes(self, client: &AlgebraClient) -> (Vec<f64>, Vec<f64>) {
-        let total = self.nkpts * self.n;
-        if total == 0 {
-            return (Vec::new(), Vec::new());
+        let (nkpts, n) = (self.nkpts, self.n);
+        let planes = self.into_k_planes(client);
+        let mut re = Vec::with_capacity(nkpts * n);
+        let mut im = Vec::with_capacity(nkpts * n);
+        for (r, i) in planes {
+            re.extend_from_slice(&r);
+            im.extend_from_slice(&i);
         }
-        dispatch_backend!(client, c, Rt, {
-            let bytes = c.read(vec![self.re.clone(), self.im.clone()]);
-            (
-                bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
-                bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
-            )
-        })
+        (re, im)
+    }
+
+    /// Read the planes back as one `(re, im)` pair of `n` reals per k-point —
+    /// the shape the periodic driver splits into per-k tensors anyway, so a
+    /// point-major accumulator is gathered straight into them (one strided
+    /// pass per k, k-points in parallel) and never materialised k-major.
+    pub fn into_k_planes(self, client: &AlgebraClient) -> Vec<(Vec<f64>, Vec<f64>)> {
+        use rayon::prelude::*;
+        let (nkpts, n) = (self.nkpts, self.n);
+        if nkpts * n == 0 {
+            return Vec::new();
+        }
+        let bytes = dispatch_backend!(
+            client,
+            c,
+            Rt,
+            c.read(vec![self.re.clone(), self.im.clone()])
+        );
+        let re: &[f64] = bytemuck::cast_slice(&bytes[0]);
+        let im: &[f64] = bytemuck::cast_slice(&bytes[1]);
+        if self.point_major {
+            (0..nkpts)
+                .into_par_iter()
+                .map(|k| {
+                    let rk: Vec<f64> = (0..n).map(|p| re[p * nkpts + k]).collect();
+                    let ik: Vec<f64> = (0..n).map(|p| im[p * nkpts + k]).collect();
+                    (rk, ik)
+                })
+                .collect()
+        } else {
+            (0..nkpts)
+                .into_par_iter()
+                .map(|k| {
+                    (
+                        re[k * n..(k + 1) * n].to_vec(),
+                        im[k * n..(k + 1) * n].to_vec(),
+                    )
+                })
+                .collect()
+        }
     }
 }
 
@@ -547,6 +989,7 @@ pub fn eval_ao_k_accumulate(
         im: im_h,
         nkpts,
         n,
+        point_major: false,
     };
     acc.accumulate(client, ao, pr, pi)?;
     Ok(acc.into_planes(client))

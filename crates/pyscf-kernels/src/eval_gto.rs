@@ -1169,6 +1169,73 @@ pub fn cart2sph_l_matrix(l: u32) -> Result<Vec<f64>, PyscfRsError> {
 // contraction; the general kernels additionally form/transform the angular
 // components, and deriv1 writes four component blocks.
 const EVAL_GTO_S_WORK_PER_LANE: usize = 4 * 100;
+
+/// A-04 — the per-shell squared cutoff table the three device kernels read.
+///
+/// `None` (every molecular caller, and the periodic driver with its point
+/// screen off) becomes `+inf` per shell: `r2 <= +inf` is a constant `true`,
+/// so the kernel performs exactly the operations it performed before the
+/// test existed and stays bit-identical to it. `Some(rcut2)` is the periodic
+/// driver's per-shell `rcut²` (`estimate_rcut_for_eval`), the SAME radius
+/// its W-09 block screen already applies per 128-point block; here it is
+/// applied per point, which is what the block screen's kept blocks still pay
+/// for in full. A table of the wrong length is a caller bug and is treated
+/// as "no screen" rather than indexed past.
+fn rcut2_table(rcut2: Option<&[f64]>, nbas: usize) -> Vec<f64> {
+    // Measurement knob ONLY (`PYSCF_PBC_AO_RCUT2_OVERRIDE=<f64>`): every shell
+    // gets this squared radius, so `0` makes every lane take the zero-fill arm
+    // and times the launch + index + store floor of the kernel. Garbage output.
+    if let Some(v) = rcut2_override() {
+        return vec![v; nbas.max(1)];
+    }
+    match rcut2 {
+        Some(r) if r.len() == nbas => r.to_vec(),
+        _ => vec![f64::INFINITY; nbas.max(1)],
+    }
+}
+
+fn rcut2_override() -> Option<f64> {
+    use std::sync::OnceLock;
+    static V: OnceLock<Option<f64>> = OnceLock::new();
+    *V.get_or_init(|| {
+        std::env::var("PYSCF_PBC_AO_RCUT2_OVERRIDE")
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+    })
+}
+
+/// The primitive exponential of the three device kernels, with the accuracy
+/// policy resolved at expansion (`cube_math`'s own `exp` is written the same
+/// way): `fast == false` is the glibc bit-exact schedule every gate was
+/// measured with; `fast == true` is `cube_math`'s table-free series, NOT
+/// bit-exact to the host `f64::exp`, and exists as a MEASUREMENT arm only —
+/// `PYSCF_PBC_AO_EXP=fast` (session 4, "is the software exp the lane cost?").
+/// Two policies are two kernels with two `KernelId`s; no runtime branch.
+#[cube]
+#[inline(always)]
+fn ao_exp(x: f64, #[comptime] mode: u32) -> f64 {
+    if comptime!(mode == 1) {
+        cube_math::double::exp::exp(x, cube_math::MathConfig::FAST)
+    } else if comptime!(mode == 2) {
+        // Measurement arm ONLY (`PYSCF_PBC_AO_EXP=none`): no exponential at
+        // all, so the rest of the lane can be timed. The output is garbage.
+        x
+    } else {
+        cube_math::double::exp::exp(x, cube_math::MathConfig::EXACT)
+    }
+}
+
+/// `PYSCF_PBC_AO_EXP`, read once: `fast` → 1, `none` → 2, anything else → 0
+/// (the exact schedule, the only shippable value).
+fn ao_exp_mode() -> u32 {
+    use std::sync::OnceLock;
+    static MODE: OnceLock<u32> = OnceLock::new();
+    *MODE.get_or_init(|| match std::env::var("PYSCF_PBC_AO_EXP") {
+        Ok(v) if v.trim().eq_ignore_ascii_case("fast") => 1,
+        Ok(v) if v.trim().eq_ignore_ascii_case("none") => 2,
+        _ => 0,
+    })
+}
 const EVAL_GTO_GENERAL_WORK_PER_LANE: usize = 4 * 100 + 128;
 const EVAL_GTO_DERIV1_WORK_PER_LANE: usize = 4 * 100 + 4 * 128;
 
@@ -1184,6 +1251,7 @@ fn eval_gto_sph_kernel(
     bas: &Array<i32>,
     atm: &Array<i32>,
     ao_loc: &Array<i32>,
+    rcut2: &Array<f64>,
     out: &mut Array<f64>,
     ngrids: usize,
     nbas: usize,
@@ -1198,6 +1266,7 @@ fn eval_gto_sph_kernel(
     ptr_exp: usize,
     ptr_coeff: usize,
     ptr_coord: usize,
+    #[comptime] exp_mode: u32,
 ) {
     let tid = ABSOLUTE_POS;
     if tid < ngrids * nao {
@@ -1236,14 +1305,21 @@ fn eval_gto_sph_kernel(
                 let dz = gz - az;
                 let r2 = dx * dx + dy * dy + dz * dz;
 
-                // ORDERED sequential accumulation over primitives — mirrors the
-                // host l=0 loop exactly (NOT a parallel/tree reduce).
-                for p_idx in 0..nprim {
-                    let alpha = env[pe + p_idx];
-                    // Coefficient matrix is F-order: ptr_coeff + c_idx*nprim + p.
-                    let coef = env[pc + c_idx * nprim + p_idx];
-                    acc += coef
-                        * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
+                // A-04: the per-point reach test. `rcut2[shell]` is the squared
+                // cutoff radius of this shell (or +inf, which makes the test a
+                // constant `true` and the kernel bit-identical to the unscreened
+                // one). Past the cutoff every primitive of the shell is below the
+                // precision that sized it, so the contracted radial is dropped
+                // whole and `acc` stays 0.
+                if r2 <= rcut2[shell_idx] {
+                    // ORDERED sequential accumulation over primitives — mirrors the
+                    // host l=0 loop exactly (NOT a parallel/tree reduce).
+                    for p_idx in 0..nprim {
+                        let alpha = env[pe + p_idx];
+                        // Coefficient matrix is F-order: ptr_coeff + c_idx*nprim + p.
+                        let coef = env[pc + c_idx * nprim + p_idx];
+                        acc += coef * ao_exp(-alpha * r2, exp_mode);
+                    }
                 }
                 // ang_of==0 holds on this path (all-s routing); referenced so the
                 // launch arg is not flagged unused.
@@ -1267,16 +1343,19 @@ fn launch_eval_gto_s_into<R: Runtime>(
     env: &[f64],
     ao_loc: &[i32],
     nao: usize,
+    rcut2: Option<&[f64]>,
     out_handle: &cubecl::server::Handle,
 ) {
     let nbas = bas.len() / BAS_SLOTS;
     let out_len = ngrids * nao;
 
-    let coords_handle = client.create(Bytes::from_elems(coords.to_vec()));
+    let coords_handle = pyscf_algebra::launch::upload::<R, f64>(client, coords);
     let env_handle = client.create(Bytes::from_elems(env.to_vec()));
     let bas_handle = client.create(Bytes::from_elems(bas.to_vec()));
     let atm_handle = client.create(Bytes::from_elems(atm.to_vec()));
     let ao_loc_handle = client.create(Bytes::from_elems(ao_loc.to_vec()));
+    let rcut2_host = rcut2_table(rcut2, nbas);
+    let rcut2_handle = pyscf_algebra::launch::upload::<R, f64>(client, &rcut2_host);
     let y00 = 0.5_f64 / std::f64::consts::PI.sqrt();
     let (cube_count, cube_dim) =
         pyscf_algebra::launch::launch_1d(client, out_len, EVAL_GTO_S_WORK_PER_LANE);
@@ -1295,6 +1374,7 @@ fn launch_eval_gto_s_into<R: Runtime>(
             ArrayArg::from_raw_parts(bas_handle.clone(), bas.len()),
             ArrayArg::from_raw_parts(atm_handle.clone(), atm.len()),
             ArrayArg::from_raw_parts(ao_loc_handle.clone(), ao_loc.len()),
+            ArrayArg::from_raw_parts(rcut2_handle.clone(), rcut2_host.len()),
             ArrayArg::from_raw_parts(out_handle.clone(), out_len),
             // Bare scalar args (LaunchArg for T = T), like gemm's m/k/n.
             ngrids,
@@ -1310,6 +1390,7 @@ fn launch_eval_gto_s_into<R: Runtime>(
             PTR_EXP,
             PTR_COEFF,
             PTR_COORD,
+            ao_exp_mode(),
         );
     }
 }
@@ -1417,6 +1498,7 @@ fn eval_gto_sph_kernel_general(
     fac1_by_l: &Array<f64>,
     c2s_off_by_l: &Array<i32>,
     cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
     out: &mut Array<f64>,
     ngrids: usize,
     nbas: usize,
@@ -1429,6 +1511,7 @@ fn eval_gto_sph_kernel_general(
     ptr_exp: usize,
     ptr_coeff: usize,
     ptr_coord: usize,
+    #[comptime] exp_mode: u32,
 ) {
     let tid = ABSOLUTE_POS;
     if tid < ngrids * nbas {
@@ -1467,30 +1550,39 @@ fn eval_gto_sph_kernel_general(
         let c2s_off = c2s_off_by_l[lu] as usize;
         let cpow_off = cpow_off_by_l[lu] as usize;
 
-        for c_idx in 0..nctr {
-            // ORDERED sequential contracted radial — mirrors the host l>=1 loop
-            // (oracle_sum == strict sequential for nprim<=128), THEN * fac1.
-            let mut acc = 0.0_f64;
-            for p_idx in 0..nprim {
-                let alpha = env[pe + p_idx];
-                let coef = env[pc + c_idx * nprim + p_idx];
-                acc +=
-                    coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
-            }
-            let radial = acc * fac1;
-
-            // cart → sph: row m = Σ_ci c2s[l][m][ci] * (mono[ci] * radial).
-            for m in 0..nsph_l {
-                let mut v = 0.0_f64;
-                for ci in 0..ncart_l {
-                    let lx = cpow_lx[cpow_off + ci] as u32;
-                    let ly = cpow_ly[cpow_off + ci] as u32;
-                    let lz = cpow_lz[cpow_off + ci] as u32;
-                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
-                    let cart_val = mono * radial;
-                    v += c2s_flat[c2s_off + m * ncart_l + ci] * cart_val;
+        // A-04: per-point reach test (see `rcut2_table`). Both arms write every
+        // output element this lane owns — `out` is uninitialised device memory.
+        if r2 <= rcut2[shell] {
+            for c_idx in 0..nctr {
+                // ORDERED sequential contracted radial — mirrors the host l>=1 loop
+                // (oracle_sum == strict sequential for nprim<=128), THEN * fac1.
+                let mut acc = 0.0_f64;
+                for p_idx in 0..nprim {
+                    let alpha = env[pe + p_idx];
+                    let coef = env[pc + c_idx * nprim + p_idx];
+                    acc += coef * ao_exp(-alpha * r2, exp_mode);
                 }
-                out[g + (ao_off + c_idx * nsph_l + m) * ngrids] = v;
+                let radial = acc * fac1;
+
+                // cart → sph: row m = Σ_ci c2s[l][m][ci] * (mono[ci] * radial).
+                for m in 0..nsph_l {
+                    let mut v = 0.0_f64;
+                    for ci in 0..ncart_l {
+                        let lx = cpow_lx[cpow_off + ci] as u32;
+                        let ly = cpow_ly[cpow_off + ci] as u32;
+                        let lz = cpow_lz[cpow_off + ci] as u32;
+                        let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                        let cart_val = mono * radial;
+                        v += c2s_flat[c2s_off + m * ncart_l + ci] * cart_val;
+                    }
+                    out[g + (ao_off + c_idx * nsph_l + m) * ngrids] = v;
+                }
+            }
+        } else {
+            for c_idx in 0..nctr {
+                for m in 0..nsph_l {
+                    out[g + (ao_off + c_idx * nsph_l + m) * ngrids] = 0.0_f64;
+                }
             }
         }
     }
@@ -1521,6 +1613,7 @@ fn eval_gto_sph_deriv1_kernel(
     fac1_by_l: &Array<f64>,
     c2s_off_by_l: &Array<i32>,
     cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
     out: &mut Array<f64>,
     ngrids: usize,
     nbas: usize,
@@ -1534,6 +1627,7 @@ fn eval_gto_sph_deriv1_kernel(
     ptr_coeff: usize,
     ptr_coord: usize,
     comp_stride: usize,
+    #[comptime] exp_mode: u32,
 ) {
     let tid = ABSOLUTE_POS;
     if tid < ngrids * nbas {
@@ -1571,53 +1665,67 @@ fn eval_gto_sph_deriv1_kernel(
         let c2s_off = c2s_off_by_l[lu] as usize;
         let cpow_off = cpow_off_by_l[lu] as usize;
 
-        for c_idx in 0..nctr {
-            // ORDERED sequential radial + radial_2a in ONE p-loop: form g0 once,
-            // then acc += g0 and acc2a += -2α·g0 (mirrors host operand order
-            // eval_gto.rs ~1359-1361). THEN * fac1. Plain sequential acc (NOT
-            // oracle_sum) — the T2 oracle sums sequentially to match (ORACLE-07).
-            let mut acc = 0.0_f64;
-            let mut acc2a = 0.0_f64;
-            for p_idx in 0..nprim {
-                let alpha = env[pe + p_idx];
-                let coef = env[pc + c_idx * nprim + p_idx];
-                let g0 =
-                    coef * cube_math::double::exp::exp(-alpha * r2, cube_math::MathConfig::EXACT);
-                acc += g0;
-                acc2a += (-2.0) * alpha * g0;
-            }
-            let radial = acc * fac1;
-            let radial_2a = acc2a * fac1;
-
-            for m in 0..nsph_l {
-                let mut v = 0.0_f64;
-                let mut vx = 0.0_f64;
-                let mut vy = 0.0_f64;
-                let mut vz = 0.0_f64;
-                for ci in 0..ncart_l {
-                    let lx = cpow_lx[cpow_off + ci] as u32;
-                    let ly = cpow_ly[cpow_off + ci] as u32;
-                    let lz = cpow_lz[cpow_off + ci] as u32;
-                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
-                    let cval = mono * radial;
-                    // operand order EXACTLY matches host eval_gto.rs ~1382-1387.
-                    let cdx =
-                        radial_2a * dx * mono + radial * dpow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
-                    let cdy =
-                        radial_2a * dy * mono + radial * ipow(dx, lx) * dpow(dy, ly) * ipow(dz, lz);
-                    let cdz =
-                        radial_2a * dz * mono + radial * ipow(dx, lx) * ipow(dy, ly) * dpow(dz, lz);
-                    let t = c2s_flat[c2s_off + m * ncart_l + ci];
-                    v += t * cval;
-                    vx += t * cdx;
-                    vy += t * cdy;
-                    vz += t * cdz;
+        // A-04: per-point reach test (see `rcut2_table`); the radius was sized
+        // for this derivative order by the caller. Both arms write all four
+        // component blocks of every output element this lane owns.
+        if r2 <= rcut2[shell] {
+            for c_idx in 0..nctr {
+                // ORDERED sequential radial + radial_2a in ONE p-loop: form g0 once,
+                // then acc += g0 and acc2a += -2α·g0 (mirrors host operand order
+                // eval_gto.rs ~1359-1361). THEN * fac1. Plain sequential acc (NOT
+                // oracle_sum) — the T2 oracle sums sequentially to match (ORACLE-07).
+                let mut acc = 0.0_f64;
+                let mut acc2a = 0.0_f64;
+                for p_idx in 0..nprim {
+                    let alpha = env[pe + p_idx];
+                    let coef = env[pc + c_idx * nprim + p_idx];
+                    let g0 = coef * ao_exp(-alpha * r2, exp_mode);
+                    acc += g0;
+                    acc2a += (-2.0) * alpha * g0;
                 }
-                let off = g + (ao_off + c_idx * nsph_l + m) * ngrids;
-                out[off] = v;
-                out[comp_stride + off] = vx;
-                out[2 * comp_stride + off] = vy;
-                out[3 * comp_stride + off] = vz;
+                let radial = acc * fac1;
+                let radial_2a = acc2a * fac1;
+
+                for m in 0..nsph_l {
+                    let mut v = 0.0_f64;
+                    let mut vx = 0.0_f64;
+                    let mut vy = 0.0_f64;
+                    let mut vz = 0.0_f64;
+                    for ci in 0..ncart_l {
+                        let lx = cpow_lx[cpow_off + ci] as u32;
+                        let ly = cpow_ly[cpow_off + ci] as u32;
+                        let lz = cpow_lz[cpow_off + ci] as u32;
+                        let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                        let cval = mono * radial;
+                        // operand order EXACTLY matches host eval_gto.rs ~1382-1387.
+                        let cdx = radial_2a * dx * mono
+                            + radial * dpow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                        let cdy = radial_2a * dy * mono
+                            + radial * ipow(dx, lx) * dpow(dy, ly) * ipow(dz, lz);
+                        let cdz = radial_2a * dz * mono
+                            + radial * ipow(dx, lx) * ipow(dy, ly) * dpow(dz, lz);
+                        let t = c2s_flat[c2s_off + m * ncart_l + ci];
+                        v += t * cval;
+                        vx += t * cdx;
+                        vy += t * cdy;
+                        vz += t * cdz;
+                    }
+                    let off = g + (ao_off + c_idx * nsph_l + m) * ngrids;
+                    out[off] = v;
+                    out[comp_stride + off] = vx;
+                    out[2 * comp_stride + off] = vy;
+                    out[3 * comp_stride + off] = vz;
+                }
+            }
+        } else {
+            for c_idx in 0..nctr {
+                for m in 0..nsph_l {
+                    let off = g + (ao_off + c_idx * nsph_l + m) * ngrids;
+                    out[off] = 0.0_f64;
+                    out[comp_stride + off] = 0.0_f64;
+                    out[2 * comp_stride + off] = 0.0_f64;
+                    out[3 * comp_stride + off] = 0.0_f64;
+                }
             }
         }
     }
@@ -1712,6 +1820,7 @@ fn launch_eval_gto_general_into<R: Runtime>(
     ao_loc: &[i32],
     nao: usize,
     maxl: u32,
+    rcut2: Option<&[f64]>,
     out_handle: &cubecl::server::Handle,
 ) -> Result<(), PyscfRsError> {
     let nbas = bas.len() / BAS_SLOTS;
@@ -1719,11 +1828,16 @@ fn launch_eval_gto_general_into<R: Runtime>(
 
     let t = build_angular_tables(maxl)?;
 
-    let coords_handle = client.create(Bytes::from_elems(coords.to_vec()));
+    // `upload` stages the coordinate block from the slice directly; the
+    // `Bytes::from_elems(x.to_vec())` idiom copied it once more on the host
+    // first, and coords is the one operand here that scales with the grid.
+    let coords_handle = pyscf_algebra::launch::upload::<R, f64>(client, coords);
     let env_handle = client.create(Bytes::from_elems(env.to_vec()));
     let bas_handle = client.create(Bytes::from_elems(bas.to_vec()));
     let atm_handle = client.create(Bytes::from_elems(atm.to_vec()));
     let ao_loc_handle = client.create(Bytes::from_elems(ao_loc.to_vec()));
+    let rcut2_host = rcut2_table(rcut2, nbas);
+    let rcut2_handle = pyscf_algebra::launch::upload::<R, f64>(client, &rcut2_host);
 
     let c2s_flat_h = client.create(Bytes::from_elems(t.c2s_flat.clone()));
     let cpow_lx_h = client.create(Bytes::from_elems(t.cpow_lx.clone()));
@@ -1762,6 +1876,7 @@ fn launch_eval_gto_general_into<R: Runtime>(
             ArrayArg::from_raw_parts(fac1_h.clone(), t.fac1_by_l.len()),
             ArrayArg::from_raw_parts(c2s_off_h.clone(), t.c2s_off_by_l.len()),
             ArrayArg::from_raw_parts(cpow_off_h.clone(), t.cpow_off_by_l.len()),
+            ArrayArg::from_raw_parts(rcut2_handle.clone(), rcut2_host.len()),
             ArrayArg::from_raw_parts(out_handle.clone(), out_len),
             // Bare scalar args (LaunchArg for T = T), like the s-kernel.
             ngrids,
@@ -1775,6 +1890,7 @@ fn launch_eval_gto_general_into<R: Runtime>(
             PTR_EXP,
             PTR_COEFF,
             PTR_COORD,
+            ao_exp_mode(),
         );
     }
 
@@ -1797,6 +1913,7 @@ fn launch_eval_gto_deriv1_into<R: Runtime>(
     ao_loc: &[i32],
     nao: usize,
     maxl: u32,
+    rcut2: Option<&[f64]>,
     out_handle: &cubecl::server::Handle,
 ) -> Result<(), PyscfRsError> {
     let nbas = bas.len() / BAS_SLOTS;
@@ -1805,11 +1922,16 @@ fn launch_eval_gto_deriv1_into<R: Runtime>(
 
     let t = build_angular_tables(maxl)?;
 
-    let coords_handle = client.create(Bytes::from_elems(coords.to_vec()));
+    // `upload` stages the coordinate block from the slice directly; the
+    // `Bytes::from_elems(x.to_vec())` idiom copied it once more on the host
+    // first, and coords is the one operand here that scales with the grid.
+    let coords_handle = pyscf_algebra::launch::upload::<R, f64>(client, coords);
     let env_handle = client.create(Bytes::from_elems(env.to_vec()));
     let bas_handle = client.create(Bytes::from_elems(bas.to_vec()));
     let atm_handle = client.create(Bytes::from_elems(atm.to_vec()));
     let ao_loc_handle = client.create(Bytes::from_elems(ao_loc.to_vec()));
+    let rcut2_host = rcut2_table(rcut2, nbas);
+    let rcut2_handle = pyscf_algebra::launch::upload::<R, f64>(client, &rcut2_host);
 
     let c2s_flat_h = client.create(Bytes::from_elems(t.c2s_flat.clone()));
     let cpow_lx_h = client.create(Bytes::from_elems(t.cpow_lx.clone()));
@@ -1847,6 +1969,7 @@ fn launch_eval_gto_deriv1_into<R: Runtime>(
             ArrayArg::from_raw_parts(fac1_h.clone(), t.fac1_by_l.len()),
             ArrayArg::from_raw_parts(c2s_off_h.clone(), t.c2s_off_by_l.len()),
             ArrayArg::from_raw_parts(cpow_off_h.clone(), t.cpow_off_by_l.len()),
+            ArrayArg::from_raw_parts(rcut2_handle.clone(), rcut2_host.len()),
             ArrayArg::from_raw_parts(out_handle.clone(), out_len),
             // Bare scalar args (LaunchArg for T = T), like the general kernel.
             ngrids,
@@ -1861,6 +1984,7 @@ fn launch_eval_gto_deriv1_into<R: Runtime>(
             PTR_COEFF,
             PTR_COORD,
             comp_stride,
+            ao_exp_mode(),
         );
     }
 
@@ -1898,6 +2022,16 @@ impl core::fmt::Debug for AoBlockDevice {
 }
 
 impl AoBlockDevice {
+    /// A block over an existing (possibly offset) device handle — K-09's
+    /// image-batch slots. Crate-private: the handle never crosses ALG-06.
+    pub(crate) fn from_handle(
+        handle: cubecl::server::Handle,
+        len: usize,
+        shape: Vec<usize>,
+    ) -> Self {
+        Self { handle, len, shape }
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -1955,13 +2089,47 @@ pub fn eval_gto_sph_into(
     nao: usize,
     spherical: bool,
 ) -> Result<AoBlockDevice, PyscfRsError> {
+    eval_gto_sph_into_screened(
+        client, coords, ngrids, atm, bas, env, ao_loc, nao, spherical, None,
+    )
+}
+
+/// [`eval_gto_sph_into`] with A-04's per-point, per-shell reach test.
+///
+/// `rcut2` is one SQUARED cutoff radius per shell (`bas.len() / BAS_SLOTS`
+/// entries). A grid point farther than that from the shell's centre gets an
+/// exact `0.0` for every AO of the shell instead of a contracted radial that
+/// the radius was chosen to bound below the caller's precision. **This drops
+/// terms and so changes the result** — by construction by less than the same
+/// bound the periodic block screen (W-09) already accepts, but it is not
+/// bit-exact against `None`, which is the unscreened kernel and the only form
+/// the molecular callers use. The periodic driver owns the radius
+/// (`estimate_rcut_for_eval`) and the kill switch.
+///
+/// The host fallback (no device kernel for the basis) ignores `rcut2`: it is
+/// the reference path and stays unscreened.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_gto_sph_into_screened(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+    spherical: bool,
+    rcut2: Option<&[f64]>,
+) -> Result<AoBlockDevice, PyscfRsError> {
     let all_s = !bas.is_empty() && bas.chunks_exact(BAS_SLOTS).all(|row| row[ANG_OF] == 0);
     let out_len = ngrids * nao;
     if all_s && out_len > 0 {
         let _ = spherical;
         return Ok(dispatch_backend!(client, c, Rt, {
             let out = c.empty(out_len * core::mem::size_of::<f64>());
-            launch_eval_gto_s_into::<Rt>(c, coords, ngrids, atm, bas, env, ao_loc, nao, &out);
+            launch_eval_gto_s_into::<Rt>(
+                c, coords, ngrids, atm, bas, env, ao_loc, nao, rcut2, &out,
+            );
             AoBlockDevice {
                 handle: out,
                 len: out_len,
@@ -1979,7 +2147,7 @@ pub fn eval_gto_sph_into(
         return dispatch_backend!(client, c, Rt, {
             let out = c.empty(out_len * core::mem::size_of::<f64>());
             launch_eval_gto_general_into::<Rt>(
-                c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl, &out,
+                c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl, rcut2, &out,
             )?;
             Ok(AoBlockDevice {
                 handle: out,
@@ -2239,6 +2407,1815 @@ pub fn eval_gto_sph_deriv1_into(
     ao_loc: &[i32],
     nao: usize,
 ) -> Result<AoBlockDevice, PyscfRsError> {
+    eval_gto_sph_deriv1_into_screened(client, coords, ngrids, atm, bas, env, ao_loc, nao, None)
+}
+
+// ---------------------------------------------------------------------------
+// Session 5 — A-05 / A-06: the image-invariant operands uploaded ONCE per
+// periodic AO evaluation, and one launch per image BATCH.
+//
+// Session 4 measured (`PYSCF_PBC_AO_SKIP_K08=1` + `RCUT2_OVERRIDE=0`) that a
+// launch whose every lane does nothing but its zero-fill store still costs
+// 0.9 ms (deriv 0) / 2.2 ms (deriv 1) on the CPU runtime — 404 / 978 ms over
+// 454 images — and that a lane's arithmetic costs ~0 on top of that. So what
+// the AO stage pays for is per LAUNCH: fourteen small uploads of tables that
+// never change between images (`env`, `bas`, `atm`, `ao_loc`, `rcut2` and the
+// nine angular tables), the output allocation, and the runtime's dispatch.
+// `EvalGtoDeviceContext` hoists the uploads (`11_launch_overhead_and_transfers.md`
+// §2); the `*_batched` kernels below collapse the launches (§5): one launch
+// evaluates every image of a K-09 batch straight into that batch's slots.
+//
+// The batched kernels' lane bodies are COPIES of the per-image kernels above,
+// operand for operand, with the output index rebased on the image's slot
+// (`obase + g + ao·npts`). The per-image kernels are deliberately left
+// untouched so that `PYSCF_PBC_AO_IMAGE_BATCH=1` stays an independent
+// reference and `tests/eval_ao_image_batch.rs` compares two code paths, not
+// one path with itself.
+// ---------------------------------------------------------------------------
+
+/// The nine angular tables of the general/deriv1 kernels, resident.
+struct AngularDevice {
+    c2s_flat: cubecl::server::Handle,
+    cpow_lx: cubecl::server::Handle,
+    cpow_ly: cubecl::server::Handle,
+    cpow_lz: cubecl::server::Handle,
+    ncart_by_l: cubecl::server::Handle,
+    nsph_by_l: cubecl::server::Handle,
+    fac1_by_l: cubecl::server::Handle,
+    c2s_off_by_l: cubecl::server::Handle,
+    cpow_off_by_l: cubecl::server::Handle,
+    lens: [usize; 9],
+}
+
+/// The image-invariant device operands of the three AO kernels, uploaded once
+/// per caller loop (A-05). Handles stay private (ALG-06).
+pub struct EvalGtoDeviceContext {
+    env: cubecl::server::Handle,
+    bas: cubecl::server::Handle,
+    atm: cubecl::server::Handle,
+    ao_loc: cubecl::server::Handle,
+    rcut2: cubecl::server::Handle,
+    lens: [usize; 5],
+    angular: Option<AngularDevice>,
+    nbas: usize,
+    nao: usize,
+    all_s: bool,
+    exp_mode: u32,
+}
+
+impl core::fmt::Debug for EvalGtoDeviceContext {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EvalGtoDeviceContext")
+            .field("nbas", &self.nbas)
+            .field("nao", &self.nao)
+            .field("all_s", &self.all_s)
+            .finish_non_exhaustive()
+    }
+}
+
+impl EvalGtoDeviceContext {
+    /// Upload the basis once. Requires [`eval_gto_device_capable`].
+    ///
+    /// # Errors
+    /// [`PyscfRsError::Core`] when the basis has no device kernel.
+    pub fn new(
+        client: &AlgebraClient,
+        atm: &[i32],
+        bas: &[i32],
+        env: &[f64],
+        ao_loc: &[i32],
+        nao: usize,
+        rcut2: Option<&[f64]>,
+    ) -> Result<Self, PyscfRsError> {
+        if !eval_gto_device_capable(bas) {
+            return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+                "EvalGtoDeviceContext: basis has no device kernel (l > 4 or empty)".into(),
+            )));
+        }
+        let nbas = bas.len() / BAS_SLOTS;
+        let all_s = bas.chunks_exact(BAS_SLOTS).all(|row| row[ANG_OF] == 0);
+        let maxl = bas
+            .chunks_exact(BAS_SLOTS)
+            .map(|row| row[ANG_OF])
+            .max()
+            .unwrap_or(0) as u32;
+        let rcut2_host = rcut2_table(rcut2, nbas);
+        let angular_host = if all_s {
+            None
+        } else {
+            Some(build_angular_tables(maxl)?)
+        };
+        Ok(dispatch_backend!(client, c, Rt, {
+            let angular = angular_host.as_ref().map(|t| AngularDevice {
+                c2s_flat: pyscf_algebra::launch::upload::<Rt, f64>(c, &t.c2s_flat),
+                cpow_lx: c.create_from_slice(bytemuck::cast_slice(&t.cpow_lx)),
+                cpow_ly: c.create_from_slice(bytemuck::cast_slice(&t.cpow_ly)),
+                cpow_lz: c.create_from_slice(bytemuck::cast_slice(&t.cpow_lz)),
+                ncart_by_l: c.create_from_slice(bytemuck::cast_slice(&t.ncart_by_l)),
+                nsph_by_l: c.create_from_slice(bytemuck::cast_slice(&t.nsph_by_l)),
+                fac1_by_l: pyscf_algebra::launch::upload::<Rt, f64>(c, &t.fac1_by_l),
+                c2s_off_by_l: c.create_from_slice(bytemuck::cast_slice(&t.c2s_off_by_l)),
+                cpow_off_by_l: c.create_from_slice(bytemuck::cast_slice(&t.cpow_off_by_l)),
+                lens: [
+                    t.c2s_flat.len(),
+                    t.cpow_lx.len(),
+                    t.cpow_ly.len(),
+                    t.cpow_lz.len(),
+                    t.ncart_by_l.len(),
+                    t.nsph_by_l.len(),
+                    t.fac1_by_l.len(),
+                    t.c2s_off_by_l.len(),
+                    t.cpow_off_by_l.len(),
+                ],
+            });
+            Self {
+                env: pyscf_algebra::launch::upload::<Rt, f64>(c, env),
+                bas: c.create_from_slice(bytemuck::cast_slice(bas)),
+                atm: c.create_from_slice(bytemuck::cast_slice(atm)),
+                ao_loc: c.create_from_slice(bytemuck::cast_slice(ao_loc)),
+                rcut2: pyscf_algebra::launch::upload::<Rt, f64>(c, &rcut2_host),
+                lens: [
+                    env.len(),
+                    bas.len(),
+                    atm.len(),
+                    ao_loc.len(),
+                    rcut2_host.len(),
+                ],
+                angular,
+                nbas,
+                nao,
+                all_s,
+                exp_mode: ao_exp_mode(),
+            }
+        }))
+    }
+
+    pub fn nao(&self) -> usize {
+        self.nao
+    }
+    pub fn nbas(&self) -> usize {
+        self.nbas
+    }
+}
+
+/// One image of a batched AO launch: how many grid points it covers.
+/// Its coordinates are the next `3 · npts` reals of the concatenated F-order
+/// coordinate buffer; its output is the next K-09 slot.
+#[derive(Debug, Clone, Copy)]
+pub struct EvalGtoImage {
+    pub npts: usize,
+}
+
+/// s-shell lane — the body of `eval_gto_sph_kernel`, rebased on `obase`.
+#[allow(clippy::too_many_arguments)]
+#[cube]
+fn eval_gto_s_lane(
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    ao_idx: usize,
+    g: usize,
+    stride: usize,
+    obase: usize,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    rcut2: &Array<f64>,
+    out: &mut Array<f64>,
+    nbas: usize,
+    y00: f64,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let mut acc = 0.0_f64;
+    for shell_idx in 0..nbas {
+        let bas_row = shell_idx * bas_slots;
+        let ao_off = ao_loc[shell_idx] as usize;
+        let nctr = bas[bas_row + nctr_of] as usize;
+        if ao_idx >= ao_off && ao_idx < ao_off + nctr {
+            let c_idx = ao_idx - ao_off;
+            let atom_id = bas[bas_row + atom_of] as usize;
+            let nprim = bas[bas_row + nprim_of] as usize;
+            let pe = bas[bas_row + ptr_exp] as usize;
+            let pc = bas[bas_row + ptr_coeff] as usize;
+
+            let atm_row = atom_id * atm_slots;
+            let pcoord = atm[atm_row + ptr_coord] as usize;
+            let ax = env[pcoord];
+            let ay = env[pcoord + 1];
+            let az = env[pcoord + 2];
+
+            let dx = gx - ax;
+            let dy = gy - ay;
+            let dz = gz - az;
+            let r2 = dx * dx + dy * dy + dz * dz;
+
+            if r2 <= rcut2[shell_idx] {
+                for p_idx in 0..nprim {
+                    let alpha = env[pe + p_idx];
+                    let coef = env[pc + c_idx * nprim + p_idx];
+                    acc += coef * ao_exp(-alpha * r2, exp_mode);
+                }
+            }
+        }
+    }
+    out[obase + g + ao_idx * stride] = acc * y00;
+}
+
+/// General l 0..=4 lane — the body of `eval_gto_sph_kernel_general`, rebased.
+#[allow(clippy::too_many_arguments)]
+#[cube]
+fn eval_gto_general_lane(
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    shell: usize,
+    g: usize,
+    stride: usize,
+    obase: usize,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
+    out: &mut Array<f64>,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let bas_row = shell * bas_slots;
+    let l = bas[bas_row + ang_of] as u32;
+    let lu = l as usize;
+    let atom_id = bas[bas_row + atom_of] as usize;
+    let nprim = bas[bas_row + nprim_of] as usize;
+    let nctr = bas[bas_row + nctr_of] as usize;
+    let pe = bas[bas_row + ptr_exp] as usize;
+    let pc = bas[bas_row + ptr_coeff] as usize;
+    let ao_off = ao_loc[shell] as usize;
+
+    let atm_row = atom_id * atm_slots;
+    let pcoord = atm[atm_row + ptr_coord] as usize;
+    let ax = env[pcoord];
+    let ay = env[pcoord + 1];
+    let az = env[pcoord + 2];
+
+    let dx = gx - ax;
+    let dy = gy - ay;
+    let dz = gz - az;
+    let r2 = dx * dx + dy * dy + dz * dz;
+
+    let ncart_l = ncart_by_l[lu] as usize;
+    let nsph_l = nsph_by_l[lu] as usize;
+    let fac1 = fac1_by_l[lu];
+    let c2s_off = c2s_off_by_l[lu] as usize;
+    let cpow_off = cpow_off_by_l[lu] as usize;
+
+    if r2 <= rcut2[shell] {
+        for c_idx in 0..nctr {
+            let mut acc = 0.0_f64;
+            for p_idx in 0..nprim {
+                let alpha = env[pe + p_idx];
+                let coef = env[pc + c_idx * nprim + p_idx];
+                acc += coef * ao_exp(-alpha * r2, exp_mode);
+            }
+            let radial = acc * fac1;
+            for m in 0..nsph_l {
+                let mut v = 0.0_f64;
+                for ci in 0..ncart_l {
+                    let lx = cpow_lx[cpow_off + ci] as u32;
+                    let ly = cpow_ly[cpow_off + ci] as u32;
+                    let lz = cpow_lz[cpow_off + ci] as u32;
+                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cart_val = mono * radial;
+                    v += c2s_flat[c2s_off + m * ncart_l + ci] * cart_val;
+                }
+                out[obase + g + (ao_off + c_idx * nsph_l + m) * stride] = v;
+            }
+        }
+    } else {
+        for c_idx in 0..nctr {
+            for m in 0..nsph_l {
+                out[obase + g + (ao_off + c_idx * nsph_l + m) * stride] = 0.0_f64;
+            }
+        }
+    }
+}
+
+/// deriv1 lane — the body of `eval_gto_sph_deriv1_kernel`, rebased. The four
+/// component blocks are `comp_stride` (= `npts · nao` of THIS image) apart.
+#[allow(clippy::too_many_arguments)]
+#[cube]
+fn eval_gto_deriv1_lane(
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    shell: usize,
+    g: usize,
+    stride: usize,
+    obase: usize,
+    comp_stride: usize,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
+    out: &mut Array<f64>,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let bas_row = shell * bas_slots;
+    let l = bas[bas_row + ang_of] as u32;
+    let lu = l as usize;
+    let atom_id = bas[bas_row + atom_of] as usize;
+    let nprim = bas[bas_row + nprim_of] as usize;
+    let nctr = bas[bas_row + nctr_of] as usize;
+    let pe = bas[bas_row + ptr_exp] as usize;
+    let pc = bas[bas_row + ptr_coeff] as usize;
+    let ao_off = ao_loc[shell] as usize;
+
+    let atm_row = atom_id * atm_slots;
+    let pcoord = atm[atm_row + ptr_coord] as usize;
+    let ax = env[pcoord];
+    let ay = env[pcoord + 1];
+    let az = env[pcoord + 2];
+
+    let dx = gx - ax;
+    let dy = gy - ay;
+    let dz = gz - az;
+    let r2 = dx * dx + dy * dy + dz * dz;
+
+    let ncart_l = ncart_by_l[lu] as usize;
+    let nsph_l = nsph_by_l[lu] as usize;
+    let fac1 = fac1_by_l[lu];
+    let c2s_off = c2s_off_by_l[lu] as usize;
+    let cpow_off = cpow_off_by_l[lu] as usize;
+
+    if r2 <= rcut2[shell] {
+        for c_idx in 0..nctr {
+            let mut acc = 0.0_f64;
+            let mut acc2a = 0.0_f64;
+            for p_idx in 0..nprim {
+                let alpha = env[pe + p_idx];
+                let coef = env[pc + c_idx * nprim + p_idx];
+                let g0 = coef * ao_exp(-alpha * r2, exp_mode);
+                acc += g0;
+                acc2a += (-2.0) * alpha * g0;
+            }
+            let radial = acc * fac1;
+            let radial_2a = acc2a * fac1;
+
+            for m in 0..nsph_l {
+                let mut v = 0.0_f64;
+                let mut vx = 0.0_f64;
+                let mut vy = 0.0_f64;
+                let mut vz = 0.0_f64;
+                for ci in 0..ncart_l {
+                    let lx = cpow_lx[cpow_off + ci] as u32;
+                    let ly = cpow_ly[cpow_off + ci] as u32;
+                    let lz = cpow_lz[cpow_off + ci] as u32;
+                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cval = mono * radial;
+                    let cdx =
+                        radial_2a * dx * mono + radial * dpow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cdy =
+                        radial_2a * dy * mono + radial * ipow(dx, lx) * dpow(dy, ly) * ipow(dz, lz);
+                    let cdz =
+                        radial_2a * dz * mono + radial * ipow(dx, lx) * ipow(dy, ly) * dpow(dz, lz);
+                    let t = c2s_flat[c2s_off + m * ncart_l + ci];
+                    v += t * cval;
+                    vx += t * cdx;
+                    vy += t * cdy;
+                    vz += t * cdz;
+                }
+                let off = obase + g + (ao_off + c_idx * nsph_l + m) * stride;
+                out[off] = v;
+                out[comp_stride + off] = vx;
+                out[2 * comp_stride + off] = vy;
+                out[3 * comp_stride + off] = vz;
+            }
+        }
+    } else {
+        for c_idx in 0..nctr {
+            for m in 0..nsph_l {
+                let off = obase + g + (ao_off + c_idx * nsph_l + m) * stride;
+                out[off] = 0.0_f64;
+                out[comp_stride + off] = 0.0_f64;
+                out[2 * comp_stride + off] = 0.0_f64;
+                out[3 * comp_stride + off] = 0.0_f64;
+            }
+        }
+    }
+}
+
+/// Which image owns lane `tid`: the largest `m` with `lane0[m] <= tid`.
+/// `lane0` has `nimg + 1` entries, `lane0[0] == 0`, and `tid < lane0[nimg]`.
+///
+/// A range `for` with a single `if` and no `else`, on purpose: the first
+/// version was a `while` binary search with an `if/else` body and the CPU
+/// runtime's MLIR lowering rejected it at run time ("operation with block
+/// successors must terminate its parent block", `cubecl-cpu module.rs:94`);
+/// `Cubecl_loop_control.md` prefers range loops, and this shape is the one
+/// every other kernel in this crate already compiles. At most 32 iterations
+/// of one compare, against the lane's hundreds of operations; adjacent lanes
+/// agree on `m`, so a plane does not diverge on it.
+#[cube]
+fn eval_gto_image_of(lane0: &Array<u32>, nimg: usize, tid: usize) -> usize {
+    let mut m = 0usize;
+    for i in 1..nimg {
+        if lane0[i] as usize <= tid {
+            m = i;
+        }
+    }
+    m
+}
+
+/// A-06: every image of a batch in ONE launch, s-shell basis. Lane = `(image,
+/// g, ao)`; each image's block lands F-order in its own slot.
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_gto_sph_kernel_batched(
+    coords: &Array<f64>,
+    img_lane0: &Array<u32>,
+    img_npts: &Array<u32>,
+    img_coord_off: &Array<u32>,
+    img_out_off: &Array<u32>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    rcut2: &Array<f64>,
+    out: &mut Array<f64>,
+    nimg: usize,
+    nlanes: usize,
+    nbas: usize,
+    nao: usize,
+    y00: f64,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let tid = ABSOLUTE_POS;
+    if tid < nlanes {
+        let m = eval_gto_image_of(img_lane0, nimg, tid);
+        let local = tid - img_lane0[m] as usize;
+        let npts = img_npts[m] as usize;
+        let g = local % npts;
+        let ao_idx = local / npts;
+        let cbase = img_coord_off[m] as usize;
+        let gx = coords[cbase + g];
+        let gy = coords[cbase + npts + g];
+        let gz = coords[cbase + 2 * npts + g];
+        let _ = nao;
+        eval_gto_s_lane(
+            gx,
+            gy,
+            gz,
+            ao_idx,
+            g,
+            npts,
+            img_out_off[m] as usize,
+            env,
+            bas,
+            atm,
+            ao_loc,
+            rcut2,
+            out,
+            nbas,
+            y00,
+            atm_slots,
+            bas_slots,
+            atom_of,
+            nprim_of,
+            nctr_of,
+            ptr_exp,
+            ptr_coeff,
+            ptr_coord,
+            exp_mode,
+        );
+    }
+}
+
+/// A-06: every image of a batch in ONE launch, general l 0..=4. Lane =
+/// `(image, g, shell)`.
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_gto_sph_kernel_general_batched(
+    coords: &Array<f64>,
+    img_lane0: &Array<u32>,
+    img_npts: &Array<u32>,
+    img_coord_off: &Array<u32>,
+    img_out_off: &Array<u32>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
+    out: &mut Array<f64>,
+    nimg: usize,
+    nlanes: usize,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let tid = ABSOLUTE_POS;
+    if tid < nlanes {
+        let m = eval_gto_image_of(img_lane0, nimg, tid);
+        let local = tid - img_lane0[m] as usize;
+        let npts = img_npts[m] as usize;
+        let g = local % npts;
+        let shell = local / npts;
+        let cbase = img_coord_off[m] as usize;
+        let gx = coords[cbase + g];
+        let gy = coords[cbase + npts + g];
+        let gz = coords[cbase + 2 * npts + g];
+        eval_gto_general_lane(
+            gx,
+            gy,
+            gz,
+            shell,
+            g,
+            npts,
+            img_out_off[m] as usize,
+            env,
+            bas,
+            atm,
+            ao_loc,
+            c2s_flat,
+            cpow_lx,
+            cpow_ly,
+            cpow_lz,
+            ncart_by_l,
+            nsph_by_l,
+            fac1_by_l,
+            c2s_off_by_l,
+            cpow_off_by_l,
+            rcut2,
+            out,
+            atm_slots,
+            bas_slots,
+            atom_of,
+            ang_of,
+            nprim_of,
+            nctr_of,
+            ptr_exp,
+            ptr_coeff,
+            ptr_coord,
+            exp_mode,
+        );
+    }
+}
+
+/// A-06: every image of a batch in ONE launch, deriv1. Lane = `(image, g,
+/// shell)`; `comp_stride = npts · nao` per image.
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_gto_sph_deriv1_kernel_batched(
+    coords: &Array<f64>,
+    img_lane0: &Array<u32>,
+    img_npts: &Array<u32>,
+    img_coord_off: &Array<u32>,
+    img_out_off: &Array<u32>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
+    out: &mut Array<f64>,
+    nimg: usize,
+    nlanes: usize,
+    nao: usize,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let tid = ABSOLUTE_POS;
+    if tid < nlanes {
+        let m = eval_gto_image_of(img_lane0, nimg, tid);
+        let local = tid - img_lane0[m] as usize;
+        let npts = img_npts[m] as usize;
+        let g = local % npts;
+        let shell = local / npts;
+        let cbase = img_coord_off[m] as usize;
+        let gx = coords[cbase + g];
+        let gy = coords[cbase + npts + g];
+        let gz = coords[cbase + 2 * npts + g];
+        eval_gto_deriv1_lane(
+            gx,
+            gy,
+            gz,
+            shell,
+            g,
+            npts,
+            img_out_off[m] as usize,
+            npts * nao,
+            env,
+            bas,
+            atm,
+            ao_loc,
+            c2s_flat,
+            cpow_lx,
+            cpow_ly,
+            cpow_lz,
+            ncart_by_l,
+            nsph_by_l,
+            fac1_by_l,
+            c2s_off_by_l,
+            cpow_off_by_l,
+            rcut2,
+            out,
+            atm_slots,
+            bas_slots,
+            atom_of,
+            ang_of,
+            nprim_of,
+            nctr_of,
+            ptr_exp,
+            ptr_coeff,
+            ptr_coord,
+            exp_mode,
+        );
+    }
+}
+
+/// A-06: evaluate every image of `images` in one launch, straight into the
+/// batch's slots `first_slot..first_slot + images.len()`, in order.
+///
+/// `coords` is the images' shifted grids concatenated, each F-order
+/// (`x[0..npts], y[..], z[..]`); `deriv1` selects the four-component kernel
+/// (the slot layout is then `[4, npts, nao]`). Bit-identical to evaluating
+/// each image alone: every lane computes the per-image kernel's expression
+/// on the same operands and writes it to the same slot position.
+///
+/// # Errors
+/// [`PyscfRsError::Core`] on a shape disagreement (coordinate count, slot
+/// capacity, an image too large for its slot, or offsets past `u32`).
+pub fn eval_gto_batch_into_image_batch(
+    client: &AlgebraClient,
+    ctx: &EvalGtoDeviceContext,
+    deriv1: bool,
+    coords: &[f64],
+    images: &[EvalGtoImage],
+    first_slot: usize,
+    batch: &crate::pbc::AoImageBatch,
+) -> Result<(), PyscfRsError> {
+    let nimg = images.len();
+    let comp = if deriv1 { 4 } else { 1 };
+    let per_lane_shells = if ctx.all_s && !deriv1 {
+        ctx.nao
+    } else {
+        ctx.nbas
+    };
+    if nimg == 0 {
+        return Ok(());
+    }
+    if first_slot + nimg > batch.capacity() {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+            format!(
+                "eval_gto_batch: slots {first_slot}..{} exceed the batch capacity {}",
+                first_slot + nimg,
+                batch.capacity()
+            ),
+        )));
+    }
+    let mut lane0 = Vec::with_capacity(nimg + 1);
+    let mut npts_v = Vec::with_capacity(nimg);
+    let mut coord_off = Vec::with_capacity(nimg);
+    let mut out_off = Vec::with_capacity(nimg);
+    let (mut lanes, mut coff) = (0usize, 0usize);
+    lane0.push(0u32);
+    for (m, img) in images.iter().enumerate() {
+        let block = comp * img.npts * ctx.nao;
+        if block > batch.block_len() {
+            return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+                format!(
+                    "eval_gto_batch: image {m} needs {block} reals, slot holds {}",
+                    batch.block_len()
+                ),
+            )));
+        }
+        npts_v.push(img.npts as u32);
+        coord_off.push(coff as u32);
+        out_off.push(((first_slot + m) * batch.block_len()) as u32);
+        coff += 3 * img.npts;
+        lanes += img.npts * per_lane_shells;
+        lane0.push(lanes as u32);
+    }
+    if coff != coords.len() || coff > u32::MAX as usize || lanes > u32::MAX as usize {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+            format!(
+                "eval_gto_batch: coordinate buffer {} reals for {coff} expected, {lanes} lanes",
+                coords.len()
+            ),
+        )));
+    }
+    if (first_slot + nimg) * batch.block_len() > u32::MAX as usize {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+            "eval_gto_batch: slot offsets exceed u32".into(),
+        )));
+    }
+    if lanes == 0 {
+        return Ok(());
+    }
+    let y00 = 0.5_f64 / std::f64::consts::PI.sqrt();
+    let total_out = batch.capacity() * batch.block_len();
+    dispatch_backend!(client, c, Rt, {
+        let coords_h = pyscf_algebra::launch::upload::<Rt, f64>(c, coords);
+        let lane0_h = c.create_from_slice(bytemuck::cast_slice(&lane0));
+        let npts_h = c.create_from_slice(bytemuck::cast_slice(&npts_v));
+        let coff_h = c.create_from_slice(bytemuck::cast_slice(&coord_off));
+        let ooff_h = c.create_from_slice(bytemuck::cast_slice(&out_off));
+        let out_h = batch.buffer().clone();
+        let [env_len, bas_len, atm_len, ao_loc_len, rcut2_len] = ctx.lens;
+        // SAFETY: every handle length is the length of the slice it was
+        // created from; the kernels guard `tid < nlanes`; `out` is the only
+        // `&mut` and every lane's slot offset was bounds-checked above.
+        if ctx.all_s && !deriv1 {
+            let (count, dim) = pyscf_algebra::launch::launch_1d(c, lanes, EVAL_GTO_S_WORK_PER_LANE);
+            unsafe {
+                eval_gto_sph_kernel_batched::launch_unchecked::<Rt>(
+                    c,
+                    count,
+                    dim,
+                    ArrayArg::from_raw_parts(coords_h, coords.len()),
+                    ArrayArg::from_raw_parts(lane0_h, nimg + 1),
+                    ArrayArg::from_raw_parts(npts_h, nimg),
+                    ArrayArg::from_raw_parts(coff_h, nimg),
+                    ArrayArg::from_raw_parts(ooff_h, nimg),
+                    ArrayArg::from_raw_parts(ctx.env.clone(), env_len),
+                    ArrayArg::from_raw_parts(ctx.bas.clone(), bas_len),
+                    ArrayArg::from_raw_parts(ctx.atm.clone(), atm_len),
+                    ArrayArg::from_raw_parts(ctx.ao_loc.clone(), ao_loc_len),
+                    ArrayArg::from_raw_parts(ctx.rcut2.clone(), rcut2_len),
+                    ArrayArg::from_raw_parts(out_h, total_out),
+                    nimg,
+                    lanes,
+                    ctx.nbas,
+                    ctx.nao,
+                    y00,
+                    ATM_SLOTS,
+                    BAS_SLOTS,
+                    ATOM_OF,
+                    NPRIM_OF,
+                    NCTR_OF,
+                    PTR_EXP,
+                    PTR_COEFF,
+                    PTR_COORD,
+                    ctx.exp_mode,
+                );
+            }
+            return Ok(());
+        }
+        let Some(ang) = ctx.angular.as_ref() else {
+            // all-s basis on the deriv1 path: the general tables are needed and
+            // were not built. Build them here (l = 0 only) — a small upload.
+            let t = build_angular_tables(0)?;
+            let tmp = AngularDevice {
+                c2s_flat: pyscf_algebra::launch::upload::<Rt, f64>(c, &t.c2s_flat),
+                cpow_lx: c.create_from_slice(bytemuck::cast_slice(&t.cpow_lx)),
+                cpow_ly: c.create_from_slice(bytemuck::cast_slice(&t.cpow_ly)),
+                cpow_lz: c.create_from_slice(bytemuck::cast_slice(&t.cpow_lz)),
+                ncart_by_l: c.create_from_slice(bytemuck::cast_slice(&t.ncart_by_l)),
+                nsph_by_l: c.create_from_slice(bytemuck::cast_slice(&t.nsph_by_l)),
+                fac1_by_l: pyscf_algebra::launch::upload::<Rt, f64>(c, &t.fac1_by_l),
+                c2s_off_by_l: c.create_from_slice(bytemuck::cast_slice(&t.c2s_off_by_l)),
+                cpow_off_by_l: c.create_from_slice(bytemuck::cast_slice(&t.cpow_off_by_l)),
+                lens: [
+                    t.c2s_flat.len(),
+                    t.cpow_lx.len(),
+                    t.cpow_ly.len(),
+                    t.cpow_lz.len(),
+                    t.ncart_by_l.len(),
+                    t.nsph_by_l.len(),
+                    t.fac1_by_l.len(),
+                    t.c2s_off_by_l.len(),
+                    t.cpow_off_by_l.len(),
+                ],
+            };
+            launch_batched_angular::<Rt>(
+                c,
+                ctx,
+                &tmp,
+                deriv1,
+                coords_h,
+                coords.len(),
+                lane0_h,
+                npts_h,
+                coff_h,
+                ooff_h,
+                out_h,
+                total_out,
+                nimg,
+                lanes,
+            );
+            return Ok(());
+        };
+        launch_batched_angular::<Rt>(
+            c,
+            ctx,
+            ang,
+            deriv1,
+            coords_h,
+            coords.len(),
+            lane0_h,
+            npts_h,
+            coff_h,
+            ooff_h,
+            out_h,
+            total_out,
+            nimg,
+            lanes,
+        );
+        Ok(())
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_batched_angular<R: Runtime>(
+    c: &ComputeClient<R>,
+    ctx: &EvalGtoDeviceContext,
+    ang: &AngularDevice,
+    deriv1: bool,
+    coords_h: cubecl::server::Handle,
+    coords_len: usize,
+    lane0_h: cubecl::server::Handle,
+    npts_h: cubecl::server::Handle,
+    coff_h: cubecl::server::Handle,
+    ooff_h: cubecl::server::Handle,
+    out_h: cubecl::server::Handle,
+    total_out: usize,
+    nimg: usize,
+    lanes: usize,
+) {
+    let [env_len, bas_len, atm_len, ao_loc_len, rcut2_len] = ctx.lens;
+    let al = ang.lens;
+    // SAFETY: as in `eval_gto_batch_into_image_batch`.
+    if deriv1 {
+        let (count, dim) =
+            pyscf_algebra::launch::launch_1d(c, lanes, EVAL_GTO_DERIV1_WORK_PER_LANE);
+        unsafe {
+            eval_gto_sph_deriv1_kernel_batched::launch_unchecked::<R>(
+                c,
+                count,
+                dim,
+                ArrayArg::from_raw_parts(coords_h, coords_len),
+                ArrayArg::from_raw_parts(lane0_h, nimg + 1),
+                ArrayArg::from_raw_parts(npts_h, nimg),
+                ArrayArg::from_raw_parts(coff_h, nimg),
+                ArrayArg::from_raw_parts(ooff_h, nimg),
+                ArrayArg::from_raw_parts(ctx.env.clone(), env_len),
+                ArrayArg::from_raw_parts(ctx.bas.clone(), bas_len),
+                ArrayArg::from_raw_parts(ctx.atm.clone(), atm_len),
+                ArrayArg::from_raw_parts(ctx.ao_loc.clone(), ao_loc_len),
+                ArrayArg::from_raw_parts(ang.c2s_flat.clone(), al[0]),
+                ArrayArg::from_raw_parts(ang.cpow_lx.clone(), al[1]),
+                ArrayArg::from_raw_parts(ang.cpow_ly.clone(), al[2]),
+                ArrayArg::from_raw_parts(ang.cpow_lz.clone(), al[3]),
+                ArrayArg::from_raw_parts(ang.ncart_by_l.clone(), al[4]),
+                ArrayArg::from_raw_parts(ang.nsph_by_l.clone(), al[5]),
+                ArrayArg::from_raw_parts(ang.fac1_by_l.clone(), al[6]),
+                ArrayArg::from_raw_parts(ang.c2s_off_by_l.clone(), al[7]),
+                ArrayArg::from_raw_parts(ang.cpow_off_by_l.clone(), al[8]),
+                ArrayArg::from_raw_parts(ctx.rcut2.clone(), rcut2_len),
+                ArrayArg::from_raw_parts(out_h, total_out),
+                nimg,
+                lanes,
+                ctx.nao,
+                ATM_SLOTS,
+                BAS_SLOTS,
+                ATOM_OF,
+                ANG_OF,
+                NPRIM_OF,
+                NCTR_OF,
+                PTR_EXP,
+                PTR_COEFF,
+                PTR_COORD,
+                ctx.exp_mode,
+            );
+        }
+    } else {
+        let (count, dim) =
+            pyscf_algebra::launch::launch_1d(c, lanes, EVAL_GTO_GENERAL_WORK_PER_LANE);
+        unsafe {
+            eval_gto_sph_kernel_general_batched::launch_unchecked::<R>(
+                c,
+                count,
+                dim,
+                ArrayArg::from_raw_parts(coords_h, coords_len),
+                ArrayArg::from_raw_parts(lane0_h, nimg + 1),
+                ArrayArg::from_raw_parts(npts_h, nimg),
+                ArrayArg::from_raw_parts(coff_h, nimg),
+                ArrayArg::from_raw_parts(ooff_h, nimg),
+                ArrayArg::from_raw_parts(ctx.env.clone(), env_len),
+                ArrayArg::from_raw_parts(ctx.bas.clone(), bas_len),
+                ArrayArg::from_raw_parts(ctx.atm.clone(), atm_len),
+                ArrayArg::from_raw_parts(ctx.ao_loc.clone(), ao_loc_len),
+                ArrayArg::from_raw_parts(ang.c2s_flat.clone(), al[0]),
+                ArrayArg::from_raw_parts(ang.cpow_lx.clone(), al[1]),
+                ArrayArg::from_raw_parts(ang.cpow_ly.clone(), al[2]),
+                ArrayArg::from_raw_parts(ang.cpow_lz.clone(), al[3]),
+                ArrayArg::from_raw_parts(ang.ncart_by_l.clone(), al[4]),
+                ArrayArg::from_raw_parts(ang.nsph_by_l.clone(), al[5]),
+                ArrayArg::from_raw_parts(ang.fac1_by_l.clone(), al[6]),
+                ArrayArg::from_raw_parts(ang.c2s_off_by_l.clone(), al[7]),
+                ArrayArg::from_raw_parts(ang.cpow_off_by_l.clone(), al[8]),
+                ArrayArg::from_raw_parts(ctx.rcut2.clone(), rcut2_len),
+                ArrayArg::from_raw_parts(out_h, total_out),
+                nimg,
+                lanes,
+                ATM_SLOTS,
+                BAS_SLOTS,
+                ATOM_OF,
+                ANG_OF,
+                NPRIM_OF,
+                NCTR_OF,
+                PTR_EXP,
+                PTR_COEFF,
+                PTR_COORD,
+                ctx.exp_mode,
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// K-10 — the fused periodic AO evaluation (session 5, user-authorised over
+// PBC-MASTER-PLAN plan 10-04's "do not write a new AO evaluator").
+//
+// After K-09 and A-06 the cold pass was one third AO evaluation and two
+// thirds accumulate, and the accumulate's remaining traffic per image was
+// the AO block itself: `n` reals written by the evaluation kernel and read
+// back by the accumulate. K-10 never materialises it. One lane per
+// `(g, shell)` over the UNSHIFTED grid: for each image `m` of the batch it
+// forms `r_g − L_m` in-kernel (the same IEEE subtraction the host did), runs
+// the per-image kernel's lane body into a local value array, and then, per
+// output `(c, ao)` of the shell and per k-point, adds `pr[m,k]·v_m` into the
+// resident planes IN IMAGE ORDER. Each `(k, p)` therefore receives exactly
+// the additions the per-image path performed, in the same order — a point a
+// screened image does not keep receives none from it (`keep[m][block(g)]`,
+// the W-09 decision) — so the planes are bit-identical. What crosses to the
+// device per batch: `3·B` lattice vectors, `B·nkpts` phases and `B·nblocks`
+// keep flags; per call: the grid once and the basis tables once (A-05).
+//
+// The per-lane value array is `FUSED_VALS_CAP` reals; the host sizes the
+// batch so `B · Q_max` fits, `Q_max = comp · max(nctr·nsph)` over shells.
+// ---------------------------------------------------------------------------
+
+/// Reals of per-image AO values one fused lane may hold (`B · Q_max`).
+///
+/// 512, not more, because of a MEASURED CPU-runtime limit whose mechanism is
+/// UNVERIFIED: with 2048 the worker threads overflowed their 64 MB stacks
+/// (`CUBECL_CPU_STACK_MB=128` ran, `80` did not), with 512 they run at the
+/// default and at 32 MB — i.e. the kernel's stack frame grows ~50 KB per
+/// element of this local array, three orders more than its 8 B. Whatever the
+/// lowering does with a large `LocalArray`, the budget is `B · Q_max <= 512`:
+/// 32 images at gth-szv (`Q = 12` at deriv 1), 12 at gth-dzvp (`Q = 40`).
+pub const FUSED_VALS_CAP: usize = 512;
+
+/// The device-resident unshifted grid, F-order (`x[0..ngrids], y, z`),
+/// uploaded once per periodic AO evaluation. Opaque (ALG-06).
+pub struct AoGridDevice {
+    handle: cubecl::server::Handle,
+    ngrids: usize,
+}
+
+impl core::fmt::Debug for AoGridDevice {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AoGridDevice")
+            .field("ngrids", &self.ngrids)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AoGridDevice {
+    /// `coords` is `3 · ngrids` reals, F-order.
+    pub fn new(client: &AlgebraClient, coords: &[f64], ngrids: usize) -> Self {
+        let handle = dispatch_backend!(
+            client,
+            c,
+            Rt,
+            pyscf_algebra::launch::upload::<Rt, f64>(c, coords)
+        );
+        Self { handle, ngrids }
+    }
+    pub fn ngrids(&self) -> usize {
+        self.ngrids
+    }
+}
+
+/// One image of a fused batch.
+#[derive(Debug, Clone)]
+pub struct FusedImage {
+    /// The lattice vector `L`; the lane evaluates at `r_g − L`.
+    pub l: [f64; 3],
+    /// Per screening block: kept (`!= 0`) or not. Empty = dense (every point).
+    pub keep_blocks: Vec<u32>,
+}
+
+/// The general-kernel lane body writing its `nctr · nsph` values to
+/// `vals[vbase + c_idx·nsph + m]` instead of the output buffer. Same
+/// operands, same order as `eval_gto_general_lane`.
+#[allow(clippy::too_many_arguments)]
+#[cube]
+fn eval_gto_general_values(
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    shell: usize,
+    vbase: usize,
+    vals: &mut Array<f64>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let bas_row = shell * bas_slots;
+    let l = bas[bas_row + ang_of] as u32;
+    let lu = l as usize;
+    let atom_id = bas[bas_row + atom_of] as usize;
+    let nprim = bas[bas_row + nprim_of] as usize;
+    let nctr = bas[bas_row + nctr_of] as usize;
+    let pe = bas[bas_row + ptr_exp] as usize;
+    let pc = bas[bas_row + ptr_coeff] as usize;
+
+    let atm_row = atom_id * atm_slots;
+    let pcoord = atm[atm_row + ptr_coord] as usize;
+    let ax = env[pcoord];
+    let ay = env[pcoord + 1];
+    let az = env[pcoord + 2];
+
+    let dx = gx - ax;
+    let dy = gy - ay;
+    let dz = gz - az;
+    let r2 = dx * dx + dy * dy + dz * dz;
+
+    let ncart_l = ncart_by_l[lu] as usize;
+    let nsph_l = nsph_by_l[lu] as usize;
+    let fac1 = fac1_by_l[lu];
+    let c2s_off = c2s_off_by_l[lu] as usize;
+    let cpow_off = cpow_off_by_l[lu] as usize;
+
+    if r2 <= rcut2[shell] {
+        for c_idx in 0..nctr {
+            let mut acc = 0.0_f64;
+            for p_idx in 0..nprim {
+                let alpha = env[pe + p_idx];
+                let coef = env[pc + c_idx * nprim + p_idx];
+                acc += coef * ao_exp(-alpha * r2, exp_mode);
+            }
+            let radial = acc * fac1;
+            for m in 0..nsph_l {
+                let mut v = 0.0_f64;
+                for ci in 0..ncart_l {
+                    let lx = cpow_lx[cpow_off + ci] as u32;
+                    let ly = cpow_ly[cpow_off + ci] as u32;
+                    let lz = cpow_lz[cpow_off + ci] as u32;
+                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cart_val = mono * radial;
+                    v += c2s_flat[c2s_off + m * ncart_l + ci] * cart_val;
+                }
+                vals[vbase + c_idx * nsph_l + m] = v;
+            }
+        }
+    } else {
+        for c_idx in 0..nctr {
+            for m in 0..nsph_l {
+                vals[vbase + c_idx * nsph_l + m] = 0.0_f64;
+            }
+        }
+    }
+}
+
+/// The deriv1 lane body writing its `4 · nctr · nsph` values to
+/// `vals[vbase + c·qn + c_idx·nsph + m]`, `qn = nctr·nsph`. Same operands,
+/// same order as `eval_gto_deriv1_lane`.
+#[allow(clippy::too_many_arguments)]
+#[cube]
+fn eval_gto_deriv1_values(
+    gx: f64,
+    gy: f64,
+    gz: f64,
+    shell: usize,
+    vbase: usize,
+    vals: &mut Array<f64>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let bas_row = shell * bas_slots;
+    let l = bas[bas_row + ang_of] as u32;
+    let lu = l as usize;
+    let atom_id = bas[bas_row + atom_of] as usize;
+    let nprim = bas[bas_row + nprim_of] as usize;
+    let nctr = bas[bas_row + nctr_of] as usize;
+    let pe = bas[bas_row + ptr_exp] as usize;
+    let pc = bas[bas_row + ptr_coeff] as usize;
+
+    let atm_row = atom_id * atm_slots;
+    let pcoord = atm[atm_row + ptr_coord] as usize;
+    let ax = env[pcoord];
+    let ay = env[pcoord + 1];
+    let az = env[pcoord + 2];
+
+    let dx = gx - ax;
+    let dy = gy - ay;
+    let dz = gz - az;
+    let r2 = dx * dx + dy * dy + dz * dz;
+
+    let ncart_l = ncart_by_l[lu] as usize;
+    let nsph_l = nsph_by_l[lu] as usize;
+    let fac1 = fac1_by_l[lu];
+    let c2s_off = c2s_off_by_l[lu] as usize;
+    let cpow_off = cpow_off_by_l[lu] as usize;
+    let qn = nctr * nsph_l;
+
+    if r2 <= rcut2[shell] {
+        for c_idx in 0..nctr {
+            let mut acc = 0.0_f64;
+            let mut acc2a = 0.0_f64;
+            for p_idx in 0..nprim {
+                let alpha = env[pe + p_idx];
+                let coef = env[pc + c_idx * nprim + p_idx];
+                let g0 = coef * ao_exp(-alpha * r2, exp_mode);
+                acc += g0;
+                acc2a += (-2.0) * alpha * g0;
+            }
+            let radial = acc * fac1;
+            let radial_2a = acc2a * fac1;
+
+            for m in 0..nsph_l {
+                let mut v = 0.0_f64;
+                let mut vx = 0.0_f64;
+                let mut vy = 0.0_f64;
+                let mut vz = 0.0_f64;
+                for ci in 0..ncart_l {
+                    let lx = cpow_lx[cpow_off + ci] as u32;
+                    let ly = cpow_ly[cpow_off + ci] as u32;
+                    let lz = cpow_lz[cpow_off + ci] as u32;
+                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cval = mono * radial;
+                    let cdx =
+                        radial_2a * dx * mono + radial * dpow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                    let cdy =
+                        radial_2a * dy * mono + radial * ipow(dx, lx) * dpow(dy, ly) * ipow(dz, lz);
+                    let cdz =
+                        radial_2a * dz * mono + radial * ipow(dx, lx) * ipow(dy, ly) * dpow(dz, lz);
+                    let t = c2s_flat[c2s_off + m * ncart_l + ci];
+                    v += t * cval;
+                    vx += t * cdx;
+                    vy += t * cdy;
+                    vz += t * cdz;
+                }
+                let q = c_idx * nsph_l + m;
+                vals[vbase + q] = v;
+                vals[vbase + qn + q] = vx;
+                vals[vbase + 2 * qn + q] = vy;
+                vals[vbase + 3 * qn + q] = vz;
+            }
+        }
+    } else {
+        for c_idx in 0..nctr {
+            for m in 0..nsph_l {
+                let q = c_idx * nsph_l + m;
+                vals[vbase + q] = 0.0_f64;
+                vals[vbase + qn + q] = 0.0_f64;
+                vals[vbase + 2 * qn + q] = 0.0_f64;
+                vals[vbase + 3 * qn + q] = 0.0_f64;
+            }
+        }
+    }
+}
+
+/// K-10: one lane per `(g, shell)`; evaluates `nimg` images and folds them
+/// into the `nkpts` planes. `comp` is 1 or 4 (`deriv1`); `keep[m·nblocks +
+/// g / blk]` says whether image `m` covers the point.
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_ao_k_fused_kernel<N: Size>(
+    coords: &Array<f64>,
+    lvec: &Array<f64>,
+    keep: &Array<u32>,
+    pr: &Array<Vector<f64, N>>,
+    pi: &Array<Vector<f64, N>>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
+    out_re: &mut Array<Vector<f64, N>>,
+    out_im: &mut Array<Vector<f64, N>>,
+    ngrids: usize,
+    nbas: usize,
+    nao: usize,
+    nkv: usize,
+    nimg: usize,
+    nblocks: usize,
+    blk: usize,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    lane0: usize,
+    #[comptime] deriv1: bool,
+    #[comptime] exp_mode: u32,
+) {
+    // `lane0`: chunked on the CPU runtime — `vals` and `present` are stack per
+    // iteration there (`launch_1d_chunked`).
+    let tid = ABSOLUTE_POS + lane0;
+    if tid < ngrids * nbas {
+        let g = tid % ngrids;
+        let shell = tid / ngrids;
+        let x = coords[g];
+        let y = coords[g + ngrids];
+        let z = coords[g + 2 * ngrids];
+        let block = g / blk;
+
+        let bas_row = shell * bas_slots;
+        let lu = bas[bas_row + ang_of] as usize;
+        let nctr = bas[bas_row + nctr_of] as usize;
+        let nsph_l = nsph_by_l[lu] as usize;
+        let ao_off = ao_loc[shell] as usize;
+        let qn = nctr * nsph_l;
+        let mut comp = 1usize;
+        if comptime!(deriv1) {
+            comp = 4usize;
+        }
+        let qtot = comp * qn;
+
+        let mut vals = Array::<f64>::new(FUSED_VALS_CAP);
+        for m in 0..nimg {
+            let hit = keep[m * nblocks + block];
+            if hit == 0u32 {
+                // Not kept by this image: contributes nothing. The value slots
+                // are zeroed so the unconditional multiply-add below adds an
+                // exact `±0.0`, which leaves an accumulator that is never
+                // `-0.0` (it starts at `+0.0` and `+0.0 + -0.0 == +0.0`)
+                // bit-for-bit unchanged — the same as the per-image path,
+                // which skipped the point.
+                for q in 0..qtot {
+                    vals[m * qtot + q] = 0.0_f64;
+                }
+            } else {
+                // The host's `coords[g][axis] - l[axis]`, in-kernel.
+                let gx = x - lvec[m * 3];
+                let gy = y - lvec[m * 3 + 1];
+                let gz = z - lvec[m * 3 + 2];
+                if comptime!(deriv1) {
+                    eval_gto_deriv1_values(
+                        gx,
+                        gy,
+                        gz,
+                        shell,
+                        m * qtot,
+                        &mut vals,
+                        env,
+                        bas,
+                        atm,
+                        c2s_flat,
+                        cpow_lx,
+                        cpow_ly,
+                        cpow_lz,
+                        ncart_by_l,
+                        nsph_by_l,
+                        fac1_by_l,
+                        c2s_off_by_l,
+                        cpow_off_by_l,
+                        rcut2,
+                        atm_slots,
+                        bas_slots,
+                        atom_of,
+                        ang_of,
+                        nprim_of,
+                        nctr_of,
+                        ptr_exp,
+                        ptr_coeff,
+                        ptr_coord,
+                        exp_mode,
+                    );
+                } else {
+                    eval_gto_general_values(
+                        gx,
+                        gy,
+                        gz,
+                        shell,
+                        m * qtot,
+                        &mut vals,
+                        env,
+                        bas,
+                        atm,
+                        c2s_flat,
+                        cpow_lx,
+                        cpow_ly,
+                        cpow_lz,
+                        ncart_by_l,
+                        nsph_by_l,
+                        fac1_by_l,
+                        c2s_off_by_l,
+                        cpow_off_by_l,
+                        rcut2,
+                        atm_slots,
+                        bas_slots,
+                        atom_of,
+                        ang_of,
+                        nprim_of,
+                        nctr_of,
+                        ptr_exp,
+                        ptr_coeff,
+                        ptr_coord,
+                        exp_mode,
+                    );
+                }
+            }
+        }
+        // The accumulate: per output of this lane, per k-VECTOR (N adjacent
+        // k-points of the point-major planes, `out[p·nkpts + k]`), the images
+        // in order. K-10v: one `Vector<f64, N>` multiply-add per image covers
+        // N k-points; the phases `pr[m·nkpts + k..+N]` are contiguous, the
+        // value broadcasts. Per `(k, p)` the sequence of additions is the
+        // per-image path's, so the planes stay bit-identical.
+        for c in 0..comp {
+            for c_idx in 0..nctr {
+                for msph in 0..nsph_l {
+                    let q = c * qn + c_idx * nsph_l + msph;
+                    let p = c * ngrids * nao + g + (ao_off + c_idx * nsph_l + msph) * ngrids;
+                    for kv in 0..nkv {
+                        let idx = p * nkv + kv;
+                        let mut re = out_re[idx];
+                        let mut im = out_im[idx];
+                        for m in 0..nimg {
+                            let v = Vector::<f64, N>::new(vals[m * qtot + q]);
+                            re += pr[m * nkv + kv] * v;
+                            im += pi[m * nkv + kv] * v;
+                        }
+                        out_re[idx] = re;
+                        out_im[idx] = im;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The most images one fused batch may hold.
+pub const AO_FUSED_BATCH_MAX: usize = 32;
+
+/// `Q_max = comp · max_shell(nctr · nsph)` — the per-image value count of the
+/// widest shell, which sizes the fused batch (`B · Q_max <= FUSED_VALS_CAP`).
+pub fn fused_values_per_image(bas: &[i32], deriv1: bool) -> usize {
+    let comp = if deriv1 { 4 } else { 1 };
+    bas.chunks_exact(BAS_SLOTS)
+        .map(|row| {
+            let l = row[ANG_OF].max(0) as u32;
+            let nctr = row[NCTR_OF].max(0) as usize;
+            nctr * nsph(l)
+        })
+        .max()
+        .unwrap_or(0)
+        * comp
+}
+
+/// K-10: fold `images` into `acc`'s planes in ONE launch, evaluating the AO
+/// values in-kernel. `ctx` carries the basis (its `rcut2` is the per-point
+/// screen, `+inf` when off); `grid` the unshifted coordinates;
+/// `pr`/`pi` are `images.len() · nkpts`, image-major; `blk` is the
+/// screening block size the `keep_blocks` were built with.
+///
+/// Refused (as an error, never silently) when the basis has no device kernel,
+/// when it is all-s at `deriv 0` (that path's s-kernel arithmetic is not the
+/// general kernel's), or when `images.len() · Q_max` exceeds
+/// [`FUSED_VALS_CAP`] — the caller sizes its batches with
+/// [`fused_values_per_image`].
+///
+/// # Errors
+/// [`PyscfRsError::Core`] on any of the above or a shape disagreement.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_ao_k_fused_batch(
+    client: &AlgebraClient,
+    ctx: &EvalGtoDeviceContext,
+    grid: &AoGridDevice,
+    deriv1: bool,
+    images: &[FusedImage],
+    pr: &[f64],
+    pi: &[f64],
+    acc: &mut crate::pbc::AoKAccumulator,
+    nkpts: usize,
+    blk: usize,
+) -> Result<(), PyscfRsError> {
+    let err = |msg: String| PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(msg));
+    let nimg = images.len();
+    if nimg == 0 {
+        return Ok(());
+    }
+    if ctx.all_s && !deriv1 {
+        return Err(err(
+            "K-10: all-s basis at deriv 0 keeps the s-kernel path".into()
+        ));
+    }
+    let ang = ctx
+        .angular
+        .as_ref()
+        .ok_or_else(|| err("K-10: no angular tables in the context".into()))?;
+    let ngrids = grid.ngrids;
+    let comp = if deriv1 { 4 } else { 1 };
+    let n = comp * ngrids * ctx.nao;
+    let (acc_nkpts, acc_n) = acc.shape();
+    if !acc.is_point_major() {
+        return Err(err(
+            "K-10: the fused kernel needs a point-major accumulator (`AoKAccumulator::zeros_point_major`)"
+                .into(),
+        ));
+    }
+    if acc_nkpts != nkpts || acc_n != n || pr.len() != nimg * nkpts || pi.len() != nimg * nkpts {
+        return Err(err(format!(
+            "K-10: accumulator ({acc_nkpts}, {acc_n}) vs ({nkpts}, {n}); pr {} pi {} for {nimg} images",
+            pr.len(),
+            pi.len()
+        )));
+    }
+    if nimg > AO_FUSED_BATCH_MAX {
+        return Err(err(format!(
+            "K-10: {nimg} images exceed {AO_FUSED_BATCH_MAX}"
+        )));
+    }
+    let nblocks = ngrids.div_ceil(blk.max(1)).max(1);
+    let mut keep: Vec<u32> = Vec::with_capacity(nimg * nblocks);
+    let mut lvec: Vec<f64> = Vec::with_capacity(3 * nimg);
+    for (m, img) in images.iter().enumerate() {
+        lvec.extend_from_slice(&img.l);
+        if img.keep_blocks.is_empty() {
+            keep.extend(std::iter::repeat_n(1u32, nblocks));
+        } else if img.keep_blocks.len() == nblocks {
+            keep.extend_from_slice(&img.keep_blocks);
+        } else {
+            return Err(err(format!(
+                "K-10: image {m} has {} keep flags for {nblocks} blocks",
+                img.keep_blocks.len()
+            )));
+        }
+    }
+    let lanes = ngrids * ctx.nbas;
+    if lanes == 0 || nkpts == 0 {
+        return Ok(());
+    }
+    let (re_h, im_h) = acc.planes();
+    let [env_len, bas_len, atm_len, ao_loc_len, rcut2_len] = ctx.lens;
+    let al = ang.lens;
+    // Per lane: the images' evaluations plus `2 · Q · nkpts · nimg` multiply-adds.
+    let per_lane =
+        nimg * (if deriv1 {
+            EVAL_GTO_DERIV1_WORK_PER_LANE
+        } else {
+            EVAL_GTO_GENERAL_WORK_PER_LANE
+        }) + 2 * comp * 9 * nkpts * nimg;
+    dispatch_backend!(client, c, Rt, {
+        let lvec_h = pyscf_algebra::launch::upload::<Rt, f64>(c, &lvec);
+        let keep_h = c.create_from_slice(bytemuck::cast_slice(&keep));
+        let pr_h = pyscf_algebra::launch::upload::<Rt, f64>(c, pr);
+        let pi_h = pyscf_algebra::launch::upload::<Rt, f64>(c, pi);
+        let local_bytes = FUSED_VALS_CAP * core::mem::size_of::<f64>();
+        // K-10v: the widest vector the device likes for f64 that divides nkpts.
+        let line = pyscf_algebra::launch::line_size_for::<Rt, f64>(c, nkpts);
+        let nkv = nkpts / line;
+        // SAFETY: every handle length is its slice's length; the kernel
+        // guards `tid < ngrids·nbas`; the two planes are the only `&mut`.
+        for chunk in pyscf_algebra::launch::launch_1d_chunked(c, lanes, per_lane, local_bytes) {
+            unsafe {
+                eval_ao_k_fused_kernel::launch_unchecked::<Rt>(
+                    c,
+                    CubeCount::Static(chunk.count_x, 1, 1),
+                    chunk.dim,
+                    line,
+                    ArrayArg::from_raw_parts(grid.handle.clone(), 3 * ngrids),
+                    ArrayArg::from_raw_parts(lvec_h.clone(), 3 * nimg),
+                    ArrayArg::from_raw_parts(keep_h.clone(), nimg * nblocks),
+                    ArrayArg::from_raw_parts(pr_h.clone(), nimg * nkpts),
+                    ArrayArg::from_raw_parts(pi_h.clone(), nimg * nkpts),
+                    ArrayArg::from_raw_parts(ctx.env.clone(), env_len),
+                    ArrayArg::from_raw_parts(ctx.bas.clone(), bas_len),
+                    ArrayArg::from_raw_parts(ctx.atm.clone(), atm_len),
+                    ArrayArg::from_raw_parts(ctx.ao_loc.clone(), ao_loc_len),
+                    ArrayArg::from_raw_parts(ang.c2s_flat.clone(), al[0]),
+                    ArrayArg::from_raw_parts(ang.cpow_lx.clone(), al[1]),
+                    ArrayArg::from_raw_parts(ang.cpow_ly.clone(), al[2]),
+                    ArrayArg::from_raw_parts(ang.cpow_lz.clone(), al[3]),
+                    ArrayArg::from_raw_parts(ang.ncart_by_l.clone(), al[4]),
+                    ArrayArg::from_raw_parts(ang.nsph_by_l.clone(), al[5]),
+                    ArrayArg::from_raw_parts(ang.fac1_by_l.clone(), al[6]),
+                    ArrayArg::from_raw_parts(ang.c2s_off_by_l.clone(), al[7]),
+                    ArrayArg::from_raw_parts(ang.cpow_off_by_l.clone(), al[8]),
+                    ArrayArg::from_raw_parts(ctx.rcut2.clone(), rcut2_len),
+                    ArrayArg::from_raw_parts(re_h.clone(), nkpts * n),
+                    ArrayArg::from_raw_parts(im_h.clone(), nkpts * n),
+                    ngrids,
+                    ctx.nbas,
+                    ctx.nao,
+                    nkv,
+                    nimg,
+                    nblocks,
+                    blk.max(1),
+                    ATM_SLOTS,
+                    BAS_SLOTS,
+                    ATOM_OF,
+                    ANG_OF,
+                    NPRIM_OF,
+                    NCTR_OF,
+                    PTR_EXP,
+                    PTR_COEFF,
+                    PTR_COORD,
+                    chunk.lane0,
+                    deriv1,
+                    ctx.exp_mode,
+                );
+            }
+        }
+    });
+    Ok(())
+}
+
+/// Whether [`eval_gto_sph_into_target`] / [`eval_gto_sph_deriv1_into_target`]
+/// can serve this basis on the device: every shell `l <= 4`, at least one
+/// shell. Bases outside that take the host fallback, which allocates its own
+/// block and so cannot write into a caller-owned slot.
+pub fn eval_gto_device_capable(bas: &[i32]) -> bool {
+    !bas.is_empty()
+        && bas
+            .chunks_exact(BAS_SLOTS)
+            .all(|row| (0..=4).contains(&row[ANG_OF]))
+}
+
+/// [`eval_gto_sph_into_screened`], writing into `target` — a caller-owned
+/// device block of exactly `ngrids * nao` reals (K-09's image-batch slot)
+/// instead of a fresh allocation. Requires [`eval_gto_device_capable`].
+///
+/// # Errors
+/// [`PyscfRsError::Core`] when `target` has the wrong length or the basis has
+/// no device kernel.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_gto_sph_into_target(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+    rcut2: Option<&[f64]>,
+    target: &AoBlockDevice,
+) -> Result<(), PyscfRsError> {
+    let out_len = ngrids * nao;
+    if target.len() != out_len || !eval_gto_device_capable(bas) {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+            format!(
+                "eval_gto_sph_into_target: target holds {} reals, need {out_len}; \
+                 device-capable basis: {}",
+                target.len(),
+                eval_gto_device_capable(bas)
+            ),
+        )));
+    }
+    if out_len == 0 {
+        return Ok(());
+    }
+    let all_s = bas.chunks_exact(BAS_SLOTS).all(|row| row[ANG_OF] == 0);
+    if all_s {
+        dispatch_backend!(client, c, Rt, {
+            launch_eval_gto_s_into::<Rt>(
+                c,
+                coords,
+                ngrids,
+                atm,
+                bas,
+                env,
+                ao_loc,
+                nao,
+                rcut2,
+                target.handle(),
+            );
+        });
+        return Ok(());
+    }
+    let maxl = bas
+        .chunks_exact(BAS_SLOTS)
+        .map(|row| row[ANG_OF])
+        .max()
+        .unwrap_or(0) as u32;
+    dispatch_backend!(client, c, Rt, {
+        launch_eval_gto_general_into::<Rt>(
+            c,
+            coords,
+            ngrids,
+            atm,
+            bas,
+            env,
+            ao_loc,
+            nao,
+            maxl,
+            rcut2,
+            target.handle(),
+        )
+    })
+}
+
+/// [`eval_gto_sph_deriv1_into_screened`], writing into `target` — exactly
+/// `4 * ngrids * nao` reals. See [`eval_gto_sph_into_target`].
+///
+/// # Errors
+/// As [`eval_gto_sph_into_target`].
+#[allow(clippy::too_many_arguments)]
+pub fn eval_gto_sph_deriv1_into_target(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+    rcut2: Option<&[f64]>,
+    target: &AoBlockDevice,
+) -> Result<(), PyscfRsError> {
+    let out_len = 4 * ngrids * nao;
+    if target.len() != out_len || !eval_gto_device_capable(bas) {
+        return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+            format!(
+                "eval_gto_sph_deriv1_into_target: target holds {} reals, need {out_len}; \
+                 device-capable basis: {}",
+                target.len(),
+                eval_gto_device_capable(bas)
+            ),
+        )));
+    }
+    if out_len == 0 {
+        return Ok(());
+    }
+    let maxl = bas
+        .chunks_exact(BAS_SLOTS)
+        .map(|row| row[ANG_OF])
+        .max()
+        .unwrap_or(0) as u32;
+    dispatch_backend!(client, c, Rt, {
+        launch_eval_gto_deriv1_into::<Rt>(
+            c,
+            coords,
+            ngrids,
+            atm,
+            bas,
+            env,
+            ao_loc,
+            nao,
+            maxl,
+            rcut2,
+            target.handle(),
+        )
+    })
+}
+
+/// [`eval_gto_sph_deriv1_into`] with A-04's per-point reach test — see
+/// [`eval_gto_sph_into_screened`]. The caller sizes `rcut2` for `deriv = 1`.
+#[allow(clippy::too_many_arguments)]
+pub fn eval_gto_sph_deriv1_into_screened(
+    client: &AlgebraClient,
+    coords: &[f64],
+    ngrids: usize,
+    atm: &[i32],
+    bas: &[i32],
+    env: &[f64],
+    ao_loc: &[i32],
+    nao: usize,
+    rcut2: Option<&[f64]>,
+) -> Result<AoBlockDevice, PyscfRsError> {
     let maxl = bas
         .chunks_exact(BAS_SLOTS)
         .map(|row| row[ANG_OF])
@@ -2249,7 +4226,7 @@ pub fn eval_gto_sph_deriv1_into(
         return dispatch_backend!(client, c, Rt, {
             let out = c.empty(out_len * core::mem::size_of::<f64>());
             launch_eval_gto_deriv1_into::<Rt>(
-                c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl, &out,
+                c, coords, ngrids, atm, bas, env, ao_loc, nao, maxl, rcut2, &out,
             )?;
             Ok(AoBlockDevice {
                 handle: out,

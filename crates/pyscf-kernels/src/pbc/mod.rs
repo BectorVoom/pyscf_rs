@@ -21,7 +21,7 @@ pub mod struct_factor;
 pub mod zhadamard;
 
 pub use bloch::bloch_phase;
-pub use eval_ao_k::{AoKAccumulator, eval_ao_k_accumulate};
+pub use eval_ao_k::{AO_IMAGE_BATCH_MAX, AoImageBatch, AoKAccumulator, eval_ao_k_accumulate};
 pub use ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use ft_aopair::{FtAopairTables, ft_aopair};
 pub use gv::gv;
