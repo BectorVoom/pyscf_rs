@@ -44,6 +44,21 @@ KRKS SCF, plus `launch_1d_chunked` for a CPU-runtime stack hazard it exposed;
 **K-10v** (vector k-loop over a point-major accumulator) then took the 4×4×4
 cold pass 2.3× further — the pure-PBE KRKS SCF on si is now 2.83 s (2×2×2)
 and 8.09 s (4×4×4) against 7.85 s / 45.8 s at the start of the plan.
+**Session 6 (same day):** see
+[`KUKS-KSYMM-MULTIGRID-SESSION-6-EXECUTION-SUMMARY.md`](./KUKS-KSYMM-MULTIGRID-SESSION-6-EXECUTION-SUMMARY.md).
+The user asked for v2's speed as well as its memory ("multigrid gpu
+kernel"), which lifts RULE M for the pair kernels. **M-15** (term sets in
+place of the per-concatenated-slot table), **M-16** (the reverse fold on
+the device onto a resident `kint`), **M-17** (the forward kernel over
+`Vector<f64, N>` points), **M-18** (host geometry released after upload)
+and **M-19** (the reverse kernel over `Vector<f64, N>` occurrences with
+predicated power products) landed, every one bit-exact against the
+per-block route by `multigrid_batch`; level-3 forward 3.8×, reverse 1.75×
+on the isolated kernels; the resident level-3 geometry 622 → 259 MB with
+no host copy beside it. The `exp` is now half of both kernels (kill-switch
+arm) — the next lever is a `Vector<f64, N>` exp in `cube-math`, or the
+instance-radius screen (changes results). The M-08 step 4 / Q12 rows are
+answered by session 6 §3.
 
 ---
 

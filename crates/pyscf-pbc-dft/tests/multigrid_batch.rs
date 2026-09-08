@@ -34,7 +34,7 @@
 mod common;
 
 use pyscf_kernels::multigrid_pair::{
-    PairSlotBatchDevice, collocate_pairs_integrate_batched, collocate_pairs_rho_batched,
+    PAD_POINT, PairSlotBatchDevice, collocate_pairs_integrate_batched, collocate_pairs_rho_batched,
 };
 use pyscf_pbc_dft::multigrid::pair::{
     build_pair_level_tables, build_pair_task_list, pairlevel_pass2_with, pairlevel_rho_with,
@@ -156,6 +156,40 @@ fn batched_and_streamed_launches_agree_bit_for_bit_on_silicon() {
     compare("si", &small_silicon());
 }
 
+/// **M-17 — the vector width is not a variable of the result.** The forward
+/// kernel runs at the device's f64 vector width by default; pinned to 1 and
+/// to 2 it must produce the same bits (each point sees the same operations in
+/// the same order whatever its lane's width). One test, sequential arms: the
+/// pin is process-wide state.
+#[test]
+fn forward_vector_width_is_not_a_variable_of_the_result() {
+    let cell = small_silicon();
+    let decon = build_pshells(&cell).expect("build_pshells");
+    let task_list = build_pair_task_list(&cell, &decon).expect("task list");
+    let tables = build_pair_level_tables(&cell, &decon, &task_list).expect("tables");
+    let dm = random_symmetric_dm(cell.mol.nao_nr, 0x0BAD_F00D);
+    let dm_p = pyscf_pbc_dft::multigrid::colloc::expand_dm(&decon, &dm);
+    let lv = tables
+        .iter()
+        .flatten()
+        .find(|lv| !lv.batches.is_empty())
+        .expect("a batched level");
+    let mut arms = Vec::new();
+    for pin in ["", "1", "2", "8"] {
+        if pin.is_empty() {
+            unsafe { std::env::remove_var("PYSCF_MG_PAIR_LINE") };
+        } else {
+            unsafe { std::env::set_var("PYSCF_MG_PAIR_LINE", pin) };
+        }
+        arms.push(pairlevel_rho_with(lv, &decon, &dm_p, true).expect("batched rho"));
+    }
+    unsafe { std::env::remove_var("PYSCF_MG_PAIR_LINE") };
+    let streamed = pairlevel_rho_with(lv, &decon, &dm_p, false).expect("streamed rho");
+    for (arm, pin) in arms.iter().zip(["device", "1", "2", "8"]) {
+        same_bits(&format!("forward width {pin} vs streamed"), arm, &streamed);
+    }
+}
+
 #[test]
 fn batched_and_streamed_launches_agree_bit_for_bit_on_diamond() {
     compare("diamond", &small_diamond());
@@ -231,6 +265,9 @@ fn a_level_over_the_register_bound_falls_back_to_streaming() {
 /// count is a property of the mesh, not a contract.
 #[test]
 fn the_batch_is_actually_built() {
+    // M-18 takes the host geometry on first upload; this test reads it after
+    // the resident copy exists, so keep it.
+    unsafe { std::env::set_var("PYSCF_MG_PAIR_KEEP_HOST", "1") };
     for (name, cell) in [("si", small_silicon()), ("diamond", small_diamond())] {
         let decon = build_pshells(&cell).expect("build_pshells");
         let task_list = build_pair_task_list(&cell, &decon).expect("task list");
@@ -245,61 +282,76 @@ fn the_batch_is_actually_built() {
                      a single block exceeds the batch budget, streaming"
                 );
             } else {
-                let total_points: usize = lv.batches.iter().map(|bl| bl.batch.npoints()).sum();
+                let mut real_points = 0usize;
                 for (chunk, bl) in lv.batches.iter().enumerate() {
-                    let b = &bl.batch;
-                    // M-12: coefficients are per KERNEL slot of the level.
-                    let kcoef: Vec<f64> = (0..b.nkslots())
+                    let b = bl.host_batch(lv);
+                    // M-15: coefficients are per SET slot of the level.
+                    let coef: Vec<f64> = (0..b.nsetslots())
                         .map(|i| ((i * 17 + 3) as f64).sin())
                         .collect();
                     let client = pyscf_algebra::select_backend().expect("backend").client;
-                    let resident = PairSlotBatchDevice::new(&client, b).expect("resident");
-                    let plain_rho = collocate_pairs_rho_batched(&client, b, &kcoef).expect("rho");
-                    let resident_rho = resident.rho(&client, &kcoef).expect("resident rho");
+                    let resident = PairSlotBatchDevice::new(&client, &b).expect("resident");
+                    let plain_rho = collocate_pairs_rho_batched(&client, &b, &coef).expect("rho");
+                    let resident_rho = resident.rho(&client, &coef).expect("resident rho");
                     same_bits("resident rho", &plain_rho, &resident_rho);
-                    let coef_b: Vec<f64> = kcoef
+                    let coef_b: Vec<f64> = coef
                         .iter()
                         .enumerate()
                         .map(|(i, &x)| x * 0.37 - (i as f64 * 0.013).cos())
                         .collect();
                     let single_rho_b = resident.rho(&client, &coef_b).expect("single rho b");
-                    let fused_rho = resident
-                        .rho2(&client, [&kcoef, &coef_b])
-                        .expect("fused rho");
+                    let fused_rho = resident.rho2(&client, [&coef, &coef_b]).expect("fused rho");
                     same_bits("fused rho alpha", &resident_rho, &fused_rho[0]);
                     same_bits("fused rho beta", &single_rho_b, &fused_rho[1]);
                     let weight = model_weight(b.npoints(), 0xABCD_0000 + chunk as u64);
                     let plain_int =
-                        collocate_pairs_integrate_batched(&client, b, &weight).expect("integrate");
-                    let resident_int = resident
-                        .integrate(&client, &weight)
+                        collocate_pairs_integrate_batched(&client, &b, &weight).expect("integrate");
+                    resident.zero_kint(&client, 1).expect("zero");
+                    resident
+                        .integrate_into_kint(&client, &weight)
                         .expect("resident integrate");
+                    let resident_int = resident.read_kint(&client, 1).expect("read").swap_remove(0);
                     same_bits("resident integrate", &plain_int, &resident_int);
                     let weight_b = model_weight(b.npoints(), 0xDCBA_0000 + chunk as u64);
-                    let single_int_b = resident
-                        .integrate(&client, &weight_b)
+                    resident.zero_kint(&client, 1).expect("zero");
+                    resident
+                        .integrate_into_kint(&client, &weight_b)
                         .expect("single integrate b");
-                    let fused_int = resident
-                        .integrate2(&client, [&weight, &weight_b])
+                    let single_int_b = resident.read_kint(&client, 1).expect("read").swap_remove(0);
+                    resident.zero_kint(&client, 2).expect("zero");
+                    resident
+                        .integrate2_into_kint(&client, [&weight, &weight_b])
                         .expect("fused integrate");
+                    let fused_int = resident.read_kint(&client, 2).expect("read");
                     same_bits("fused integrate alpha", &resident_int, &fused_int[0]);
                     same_bits("fused integrate beta", &single_int_b, &fused_int[1]);
-                    let bytes = (b.coords_x.len() + b.coords_y.len() + b.coords_z.len()) * 8
-                        + b.point_block.len() * 4
-                        + b.slot_global.len() * 4
-                        + b.kslot_pow.len() * 4
-                        + b.inst_slot0.len() * 4
-                        + b.instance_alpha.len() * 8
-                        + b.instance_center.len() * 8;
+                    // A second fold onto a non-zero `kint` continues the
+                    // running sum occurrence by occurrence (the cross-chunk
+                    // contract `compare` exercises on the multi-chunk levels);
+                    // here only that it moved every touched slot.
+                    resident
+                        .integrate_into_kint(&client, &weight)
+                        .expect("second fold");
+                    let twice = resident.read_kint(&client, 2).expect("read").swap_remove(0);
+                    for (k, (&a, &b)) in twice.iter().zip(&resident_int).enumerate() {
+                        assert!(
+                            (b == 0.0 && a == 0.0) || a != b,
+                            "{name} level {l} chunk {chunk}: kint[{k}] did not continue"
+                        );
+                    }
                     println!(
                         "{name} level {l} chunk {chunk}: mesh {:?}, {nblocks} blocks -> {} launch(es) per \
-                         direction; batch = {} points, {} instances, {} slots, {:.1} MiB",
+                         direction; batch = {} padded points, {} occurrences, {} distinct, {} slots, \
+                         {} sets / {} set slots, {:.1} MiB",
                         lv.mesh,
                         lv.batches.len(),
                         b.npoints(),
                         b.ninstances(),
+                        b.nuinstances(),
                         b.nslots(),
-                        bytes as f64 / (1024.0 * 1024.0)
+                        b.set_off.len() - 1,
+                        b.nsetslots(),
+                        b.geometry_bytes() as f64 / (1024.0 * 1024.0)
                     );
                     assert_eq!(
                         b.npoints(),
@@ -307,22 +359,20 @@ fn the_batch_is_actually_built() {
                         "{name} level {l} chunk {chunk}: point map must match the batch"
                     );
                     assert_eq!(
-                        b.inst_slot0.len(),
+                        (bl.npoints, bl.ninstances, bl.nuinstances, bl.nslots),
+                        (b.npoints(), b.ninstances(), b.nuinstances(), b.nslots()),
+                        "{name} level {l} chunk {chunk}: the recorded shape must match the batch"
+                    );
+                    assert_eq!(
+                        b.occ_slot0.len(),
                         b.ninstances() + 1,
-                        "{name} level {l}: the instance prefix table is malformed"
+                        "{name} level {l}: the occurrence prefix table is malformed"
                     );
-                    assert_eq!(
-                        b.inst_slot0[0], 0,
-                        "{name} level {l}: the instance prefix must start at 0"
-                    );
-                    assert_eq!(
-                        *b.inst_slot0.last().expect("non-empty") as usize,
-                        b.nslots(),
-                        "{name} level {l}: the instance prefix must end at the slot count"
-                    );
+                    assert_eq!(b.occ_slot0[0], 0);
+                    real_points += bl.point_global.iter().filter(|&&g| g != PAD_POINT).count();
                 }
                 assert_eq!(
-                    total_points, lv.ngrids,
+                    real_points, lv.ngrids,
                     "{name} level {l}: chunks must partition the mesh exactly"
                 );
             }

@@ -705,72 +705,119 @@ fn launch_integrate<R: Runtime>(
 // `plane_alignment.md` warns about. Precomputing it is both simpler and
 // strictly less work per lane.
 //
+// # M-15 (session 6) — term SETS instead of a per-concatenated-slot table
+//
+// A kernel instance is one wrap image of one fused pair `(p, q, L)`, and
+// every image of that pair carries the SAME monomial-and-term sequence
+// (`build_pair_level_table` pushes `terms_here` once per image). The M-12
+// layout still spent one `u32` per CONCATENATED slot (`slot_global`, 311 MB
+// at `25³` level 3) to reach a per-kernel-slot power and coefficient through
+// two dependent gathers. The chunk now carries the level's term sets —
+// `set_off`/`set_pow` (a few thousand entries) — and one set index per
+// distinct instance; the slot loop of both kernels walks `set_pow[so..so+n]`
+// and the per-call `set_coef[so..so+n]` SEQUENTIALLY (`07_memory_coalescing.md`
+// §4: put the inner loop on the unit stride). The values read are the same
+// values, in the same order, so the arithmetic is unchanged.
+//
+// # M-16 (session 6) — the reverse fold on the device
+//
+// The reverse direction used to read every concatenated slot's integral back
+// (`nslots · 8` B, 622 MB at level 3) and fold it into the level's
+// kernel-slot integrals on the host. `mg_fold_kernel` now does that fold on
+// the device against a level-resident `kint` (`nkslots · 8` B): one lane per
+// `(distinct instance, monomial)`, walking that instance's occurrences of the
+// chunk IN OCCURRENCE ORDER and adding onto the running `kint` value. Per
+// kernel slot the sequence of additions — occurrences in block-major order,
+// chunk after chunk — is exactly the host fold's, so `kint` is bit-identical
+// and only `nkslots · 8` B ever crosses back.
+//
+// # M-17 (session 6) — the forward kernel over `Vector<f64, N>` points
+//
+// One lane evaluates N ADJACENT grid points of one block (blocks are padded
+// to a multiple of [`POINT_PAD`] points, so a vector never straddles two).
+// Every operation is elementwise — the instance loop, the `exp` (N scalar
+// `cube_math` calls, one per element: the vector type has no bit-exact
+// `exp`), the power products and the accumulate — so each point sees the
+// scalar kernel's operations in the scalar kernel's order (`06_vectorization.md`,
+// `Cubecl_dynamic_vectorization.md`). Pad points are evaluated and discarded.
+//
 // # Bit-parity: EXACT against the per-block route
 //
 // Every lane runs the identical inner loops over the identical slot list in
-// the identical order; only the launch geometry changes. The per-point sum is
-// still sequential in table order, each output is still written by exactly one
-// lane, and the host still folds the integrate results in block-major,
-// within-block-table order. Asserted at `to_bits()` in
-// `tests/multigrid_pair.rs`, not argued.
+// the identical order; only the launch geometry and where the operands live
+// change. The per-point sum is still sequential in table order, each output is
+// still written by exactly one lane, and the fold still visits a kernel slot's
+// occurrences in block-major order. Asserted at `to_bits()` in
+// `tests/multigrid_batch.rs`, not argued.
 // ---------------------------------------------------------------------------
 
+/// Points per block are padded to a multiple of this, so that every vector
+/// width [`pair_line_size`] can return divides every block's point range.
+pub const POINT_PAD: usize = 8;
+
+/// Sentinel in a batch's `point_global` map for a pad point — evaluated by
+/// the forward kernel, never scattered back.
+pub const PAD_POINT: u32 = u32::MAX;
+
 /// Every spatial block of ONE grid level, concatenated into a single set of
-/// device tables — the M-03 batch.
+/// device tables — the M-03 batch, in the M-15 term-set layout.
 ///
-/// Everything here except [`Self::slot_coef`] is pure geometry and can be
-/// built once per cell (which is what `pyscf-pbc-dft`'s `PairLevelTable`
-/// does); `slot_coef` carries the density (forward) or ones (reverse) and
-/// changes per call.
+/// Everything here is geometry, built once per cell (which is what
+/// `pyscf-pbc-dft`'s `PairLevelTable` does). The per-call inputs are the
+/// forward coefficients (one per SET slot, see [`Self::set_pow`]) and the
+/// reverse weights (one per padded point).
 #[derive(Debug, Clone, Default)]
 pub struct PairSlotBatch {
-    /// Grid coordinates in structure-of-arrays form, concatenated in block order.
+    /// Grid coordinates in structure-of-arrays form, concatenated in block
+    /// order, each block padded to a multiple of [`POINT_PAD`] points (the
+    /// pads repeat the block's last real point).
     pub coords_x: Vec<f64>,
     pub coords_y: Vec<f64>,
     pub coords_z: Vec<f64>,
-    /// Per concatenated point: which block owns it. The inverse of
-    /// [`Self::block_point0`], materialised so no lane has to search.
+    /// Per padded point: which block owns it.
     pub point_block: Vec<u32>,
-    /// `block_point0[b]..block_point0[b+1]` — block `b`'s points.
+    /// `block_point0[b]..block_point0[b+1]` — block `b`'s PADDED point range.
     /// `nblocks + 1` entries.
     pub block_point0: Vec<u32>,
-    /// `block_inst0[b]..block_inst0[b+1]` — block `b`'s instances.
+    /// Per block: one past its last REAL point (the reverse kernel's bound).
+    pub block_point_end: Vec<u32>,
+    /// `block_inst0[b]..block_inst0[b+1]` — block `b`'s instance occurrences.
     /// `nblocks + 1` entries.
     pub block_inst0: Vec<u32>,
-    /// Per concatenated instance: which block owns it.
+    /// Per occurrence: which block owns it.
     pub inst_block: Vec<u32>,
-    /// Per concatenated instance: its row in [`Self::instance_alpha`] /
-    /// [`Self::instance_center`] — M-13. A kernel instance reaches many
-    /// blocks of a chunk and used to be COPIED (`eta` + centre, 32 B) into
-    /// every one of them; the chunk now stores each distinct instance once
-    /// and every occurrence points at it (4 B). The kernels read the same
-    /// values, so this is bit-exact.
+    /// Per occurrence: its row in the distinct-instance tables (M-13).
     pub inst_ref: Vec<u32>,
+    /// `occ_slot0[o]..occ_slot0[o+1]` — occurrence `o`'s reverse outputs.
+    /// `n_occurrences + 1` entries.
+    pub occ_slot0: Vec<u32>,
     /// Per DISTINCT instance of this chunk: `eta = alpha_p + alpha_q`.
     pub instance_alpha: Vec<f64>,
-    /// Per DISTINCT instance of this chunk, 3 entries: the combined centre `P`.
+    /// Per DISTINCT instance, 3 entries: the combined centre `P`.
     pub instance_center: Vec<f64>,
-    /// `inst_slot0[i]..inst_slot0[i+1]` — instance `i`'s slots.
-    /// `n_instances + 1` entries.
-    pub inst_slot0: Vec<u32>,
-    /// Per concatenated slot: the level's KERNEL slot it is an image of —
-    /// M-12. The only per-slot array: the slot's monomial powers and its
-    /// coefficient are both functions of this index
-    /// (`kslot_pow[slot_global[s]]`, `kcoef[slot_global[s]]`), so they are
-    /// stored once per kernel slot instead of once per concatenated slot.
-    /// A concatenated table is a multiple of the level's own slot count
-    /// (~`0.35 · nkslots · nblocks`), which is why this is the byte lever.
-    pub slot_global: Vec<u32>,
-    /// Per KERNEL slot, packed as `ix | iy << 8 | iz << 16`.
-    pub kslot_pow: Vec<u32>,
+    /// Per DISTINCT instance: its term set (M-15).
+    pub instance_set: Vec<u32>,
+    /// Per DISTINCT instance: the level's first kernel slot of that instance
+    /// — where its set's monomials land in `kint` (M-16).
+    pub instance_kslot0: Vec<u32>,
+    /// `uocc_off[u]..uocc_off[u+1]` into [`Self::uocc`] — distinct instance
+    /// `u`'s occurrences, in increasing occurrence order (M-16).
+    pub uocc_off: Vec<u32>,
+    pub uocc: Vec<u32>,
+    /// `set_off[s]..set_off[s+1]` — term set `s`'s slots (M-15).
+    pub set_off: Vec<u32>,
+    /// Per set slot, packed as `ix | iy << 8 | iz << 16`.
+    pub set_pow: Vec<u32>,
+    /// Kernel slots of the level this batch was cut from — `kint`'s length.
+    pub nkslots: usize,
 }
 
 impl PairSlotBatch {
-    /// Concatenated grid points.
+    /// Concatenated (padded) grid points.
     pub fn npoints(&self) -> usize {
         self.point_block.len()
     }
-    /// Concatenated instances (occurrences, one per `(block, instance)`).
+    /// Concatenated instance occurrences (one per `(block, instance)`).
     pub fn ninstances(&self) -> usize {
         self.inst_block.len()
     }
@@ -778,27 +825,113 @@ impl PairSlotBatch {
     pub fn nuinstances(&self) -> usize {
         self.instance_alpha.len()
     }
-    /// Concatenated slots.
+    /// Concatenated reverse-output slots.
     pub fn nslots(&self) -> usize {
-        self.slot_global.len()
+        self.occ_slot0.last().map_or(0, |&e| e as usize)
     }
     /// Kernel slots of the level this batch was cut from.
     pub fn nkslots(&self) -> usize {
-        self.kslot_pow.len()
+        self.nkslots
+    }
+    /// Set slots — the length of a per-call forward coefficient vector.
+    pub fn nsetslots(&self) -> usize {
+        self.set_pow.len()
     }
     /// Blocks.
     pub fn nblocks(&self) -> usize {
         self.block_point0.len().saturating_sub(1)
     }
+    /// Resident bytes of this geometry on a device (M-15 ledger).
+    pub fn geometry_bytes(&self) -> u64 {
+        let f = self.coords_x.len() * 3 + self.instance_alpha.len() * 4;
+        let u = self.point_block.len()
+            + self.block_point0.len()
+            + self.block_point_end.len()
+            + self.block_inst0.len()
+            + self.inst_block.len()
+            + self.inst_ref.len()
+            + self.occ_slot0.len()
+            + self.instance_set.len()
+            + self.instance_kslot0.len()
+            + self.uocc_off.len()
+            + self.uocc.len()
+            + self.set_off.len()
+            + self.set_pow.len();
+        (f * 8 + u * 4) as u64
+    }
+}
+
+/// Which `exp` the pair kernels evaluate — an INSTRUMENT, read from
+/// `PYSCF_MG_PAIR_EXP` (`exact` (default) | `fast` | `none`). Anything but
+/// `exact` changes results and exists only to attribute the kernels' time
+/// (the K-08 lesson: a stage claim needs a kill-switch arm, not a span).
+fn exp_mode_from_env() -> u32 {
+    match std::env::var("PYSCF_MG_PAIR_EXP")
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "fast" => 1,
+        "none" => 2,
+        _ => 0,
+    }
+}
+
+/// `exp(x)` under [`exp_mode_from_env`]'s three arms.
+#[cube]
+fn mg_exp(x: f64, #[comptime] mode: u32) -> f64 {
+    if comptime!(mode == 1) {
+        cube_math::double::exp::exp(x, cube_math::MathConfig::FAST)
+    } else if comptime!(mode == 2) {
+        1.0 + x * 0.0
+    } else {
+        cube_math::double::exp::exp(x, cube_math::MathConfig::EXACT)
+    }
+}
+
+/// The vector width the pair kernels run at on `client`: the widest the
+/// device likes for `f64` that divides [`POINT_PAD`], or the
+/// `PYSCF_MG_PAIR_LINE` pin (which must divide [`POINT_PAD`] too).
+pub fn pair_line_size<R: Runtime>(client: &ComputeClient<R>) -> usize {
+    if let Ok(v) = std::env::var("PYSCF_MG_PAIR_LINE")
+        && let Ok(n) = v.parse::<usize>()
+        && n >= 1
+        && POINT_PAD.is_multiple_of(n)
+    {
+        return n;
+    }
+    pyscf_algebra::launch::line_size_for::<R, f64>(client, POINT_PAD)
+}
+
+/// M-19: the vector reverse kernel's group table for width `line` — per
+/// group its first occurrence; groups tile each block's occurrence range in
+/// order, the last one of a block ragged.
+fn reverse_groups(batch: &PairSlotBatch, line: usize) -> Vec<u32> {
+    let mut grp = Vec::new();
+    for w in batch.block_inst0.windows(2) {
+        let (i0, i1) = (w[0] as usize, w[1] as usize);
+        let mut o = i0;
+        while o < i1 {
+            grp.push(o as u32);
+            o += line;
+        }
+    }
+    grp
+}
+
+/// Which reverse kernel runs: the M-19 vector-over-occurrences one (default)
+/// or the scalar one — `PYSCF_MG_PAIR_REVERSE=scalar|vector`. Both are
+/// bit-exact against the per-block route; the switch is the A/B arm.
+fn reverse_vector_enabled() -> bool {
+    !std::env::var("PYSCF_MG_PAIR_REVERSE").is_ok_and(|v| v.eq_ignore_ascii_case("scalar"))
 }
 
 /// M-06: device-resident invariant geometry for one batch chunk.
 ///
 /// Handles remain private to keep CubeCL behind the kernels dependency wall.
-/// Only the per-kernel-slot coefficients (forward, `nkslots · 8` B) and the
-/// weights (reverse, `npoints · 8` B) are uploaded per call — M-12; outputs
-/// are allocated once and every launched lane overwrites its complete
-/// logical output.
+/// Only the per-set-slot coefficients (forward) and the weights (reverse,
+/// `npoints · 8` B) are uploaded per call; outputs are allocated once and
+/// every launched lane overwrites its complete logical output.
 pub struct PairSlotBatchDevice {
     backend: BackendKind,
     /// The cubecl stream the handles below were allocated on.
@@ -827,33 +960,50 @@ pub struct PairSlotBatchDevice {
     coords_z: Handle,
     point_block: Handle,
     block_point0: Handle,
+    block_point_end: Handle,
     block_inst0: Handle,
     inst_block: Handle,
     inst_ref: Handle,
+    occ_slot0: Handle,
     instance_alpha: Handle,
     instance_center: Handle,
-    inst_slot0: Handle,
-    slot_global: Handle,
-    kslot_pow: Handle,
+    instance_set: Handle,
+    instance_kslot0: Handle,
+    uocc_off: Handle,
+    uocc: Handle,
+    set_off: Handle,
+    set_pow: Handle,
     out_rho: Handle,
     out_rho_b: std::sync::OnceLock<Handle>,
     out_integrate: Handle,
     out_integrate_b: std::sync::OnceLock<Handle>,
-    /// M-14: the reals the two output buffers actually hold. Equal to
+    /// M-16: the level's running kernel-slot integrals (shared by every chunk
+    /// of the level when built through [`Self::new_shared`]).
+    kint: Handle,
+    kint_b: Handle,
+    /// M-19: the vector reverse kernel's groups — per group, its first
+    /// occurrence; a group is `line` consecutive occurrences of one block
+    /// (the last group of a block may be ragged).
+    grp_occ0: Handle,
+    ngroups: usize,
+    /// The vector width this chunk's group table was cut for.
+    line: usize,
+    /// M-14: the reals the output buffers actually hold. Equal to
     /// `npoints` / `nslots` when the chunk owns its buffers; the level's
-    /// maxima when it borrows the shared [`PairOutScratch`], in which case the
-    /// read-backs are trimmed to the chunk's own length.
+    /// maxima when it borrows the shared [`PairOutScratch`].
     out_rho_cap: usize,
-    out_integrate_cap: usize,
     npoints: usize,
     ninstances: usize,
     nslots: usize,
+    nuinstances: usize,
+    nsets: usize,
+    nsetslots: usize,
     nkslots: usize,
     nblocks: usize,
-    nuinstances: usize,
 }
 
-/// M-14: ONE set of output buffers shared by every chunk of a level.
+/// M-14: ONE set of output buffers shared by every chunk of a level, plus
+/// (M-16) the level's resident kernel-slot integrals.
 ///
 /// A chunk's forward output is `npoints · 8` B and its reverse output
 /// `nslots · 8` B, and each chunk used to own both for the life of the SCF —
@@ -861,22 +1011,24 @@ pub struct PairSlotBatchDevice {
 /// resident that is only ever live one chunk at a time (the chunks run
 /// sequentially and every launch reads its output back before the next
 /// launch). The level allocates the largest chunk's buffers once; each chunk
-/// writes its `npoints` / `nslots` prefix and reads that prefix back
-/// (`Handle::offset_end`). Bit-exact: the same lanes write the same values to
-/// the same logical positions; only the allocation behind them changes.
+/// writes its `npoints` / `nslots` prefix. Bit-exact: the same lanes write
+/// the same values to the same logical positions; only the allocation behind
+/// them changes.
 ///
 /// Allocated on ONE stream and handed to [`PairSlotBatchDevice::new_shared`],
 /// which allocates the chunk's geometry on that same stream
 /// (`StreamId::executes`), so every later launch resolves every handle on the
 /// stream that owns it — the session-3 pool lesson, kept.
 pub struct PairOutScratch {
+    backend: BackendKind,
     stream: StreamId,
     rho: Handle,
-    rho_b: std::sync::OnceLock<Handle>,
     integrate: Handle,
-    integrate_b: std::sync::OnceLock<Handle>,
+    kint: Handle,
+    kint_b: Handle,
     max_points: usize,
     max_slots: usize,
+    nkslots: usize,
 }
 
 impl core::fmt::Debug for PairOutScratch {
@@ -884,25 +1036,88 @@ impl core::fmt::Debug for PairOutScratch {
         f.debug_struct("PairOutScratch")
             .field("max_points", &self.max_points)
             .field("max_slots", &self.max_slots)
+            .field("nkslots", &self.nkslots)
             .finish_non_exhaustive()
     }
 }
 
 impl PairOutScratch {
-    /// Buffers for the largest chunk of a level, on the current stream.
-    pub fn new(client: &AlgebraClient, max_points: usize, max_slots: usize) -> Self {
+    /// Buffers for the largest chunk of a level, plus the level's `kint`, on
+    /// the current stream.
+    pub fn new(
+        client: &AlgebraClient,
+        max_points: usize,
+        max_slots: usize,
+        nkslots: usize,
+    ) -> Self {
         let stream = StreamId::current();
         dispatch_backend!(client, c, Rt, {
             Self {
+                backend: client.kind(),
                 stream,
                 rho: c.empty(max_points.max(1) * core::mem::size_of::<f64>()),
-                rho_b: std::sync::OnceLock::new(),
                 integrate: c.empty(max_slots.max(1) * core::mem::size_of::<f64>()),
-                integrate_b: std::sync::OnceLock::new(),
+                kint: c.empty(nkslots.max(1) * core::mem::size_of::<f64>()),
+                kint_b: c.empty(nkslots.max(1) * core::mem::size_of::<f64>()),
                 max_points,
                 max_slots,
+                nkslots,
             }
         })
+    }
+
+    fn check_backend(&self, client: &AlgebraClient) -> Result<(), AlgebraError> {
+        if self.backend != client.kind() {
+            return Err(AlgebraError::BackendMismatch {
+                op: "PairOutScratch",
+                expected: self.backend.name(),
+                actual: client.kind().name(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Zero the level's running kernel-slot integrals — the start of a
+    /// reverse sweep (`channels` = 1 or 2).
+    ///
+    /// # Errors
+    /// A client of a different backend.
+    pub fn zero_kint(&self, client: &AlgebraClient, channels: usize) -> Result<(), AlgebraError> {
+        self.check_backend(client)?;
+        self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                launch_zero::<Rt>(c, &self.kint, self.nkslots);
+                if channels > 1 {
+                    launch_zero::<Rt>(c, &self.kint_b, self.nkslots);
+                }
+            })
+        });
+        Ok(())
+    }
+
+    /// Read the level's kernel-slot integrals back — the end of a reverse
+    /// sweep. One `nkslots · 8` B transfer per channel.
+    ///
+    /// # Errors
+    /// A client of a different backend.
+    pub fn read_kint(
+        &self,
+        client: &AlgebraClient,
+        channels: usize,
+    ) -> Result<Vec<Vec<f64>>, AlgebraError> {
+        self.check_backend(client)?;
+        Ok(self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                let mut handles = vec![self.kint.clone()];
+                if channels > 1 {
+                    handles.push(self.kint_b.clone());
+                }
+                c.read(handles)
+                    .into_iter()
+                    .map(|b| bytemuck::cast_slice::<u8, f64>(&b)[..self.nkslots].to_vec())
+                    .collect::<Vec<_>>()
+            })
+        }))
     }
 }
 
@@ -920,6 +1135,11 @@ impl core::fmt::Debug for PairSlotBatchDevice {
 }
 
 impl PairSlotBatchDevice {
+    /// A chunk owning its own output buffers and `kint` (tests and the
+    /// un-shared entry points).
+    ///
+    /// # Errors
+    /// [`AlgebraError::ShapeMismatch`] on an inconsistent batch.
     pub fn new(client: &AlgebraClient, batch: &PairSlotBatch) -> Result<Self, AlgebraError> {
         validate_batch(batch)?;
         // Captured BEFORE the uploads below, which allocate on exactly this
@@ -929,8 +1149,9 @@ impl PairSlotBatchDevice {
     }
 
     /// M-14: like [`Self::new`], but the chunk borrows `scratch`'s output
-    /// buffers and allocates its geometry on `scratch`'s stream, so the whole
-    /// level lives on one stream. Refuses a chunk larger than the scratch.
+    /// buffers and `kint`, and allocates its geometry on `scratch`'s stream,
+    /// so the whole level lives on one stream. Refuses a chunk larger than
+    /// the scratch.
     ///
     /// # Errors
     /// As [`Self::new`], plus a chunk that exceeds the scratch's capacity.
@@ -940,13 +1161,21 @@ impl PairSlotBatchDevice {
         scratch: &PairOutScratch,
     ) -> Result<Self, AlgebraError> {
         validate_batch(batch)?;
-        if batch.npoints() > scratch.max_points || batch.nslots() > scratch.max_slots {
+        if batch.npoints() > scratch.max_points
+            || batch.nslots() > scratch.max_slots
+            || batch.nkslots() != scratch.nkslots
+        {
             return Err(AlgebraError::ShapeMismatch {
                 expected: format!(
-                    "chunk within the scratch: npoints <= {}, nslots <= {}",
-                    scratch.max_points, scratch.max_slots
+                    "chunk within the scratch: npoints <= {}, nslots <= {}, nkslots == {}",
+                    scratch.max_points, scratch.max_slots, scratch.nkslots
                 ),
-                actual: format!("{} / {}", batch.npoints(), batch.nslots()),
+                actual: format!(
+                    "{} / {} / {}",
+                    batch.npoints(),
+                    batch.nslots(),
+                    batch.nkslots()
+                ),
             });
         }
         scratch
@@ -961,22 +1190,32 @@ impl PairSlotBatchDevice {
         scratch: Option<&PairOutScratch>,
     ) -> Result<Self, AlgebraError> {
         Ok(dispatch_backend!(client, c, Rt, {
+            let line = pair_line_size::<Rt>(c);
+            let grp_occ0 = reverse_groups(batch, line);
             Self {
                 backend: client.kind(),
                 stream,
+                ngroups: grp_occ0.len(),
+                grp_occ0: upload_u32::<Rt>(c, &grp_occ0),
+                line,
                 coords_x: upload::<Rt, f64>(c, &batch.coords_x),
                 coords_y: upload::<Rt, f64>(c, &batch.coords_y),
                 coords_z: upload::<Rt, f64>(c, &batch.coords_z),
                 point_block: upload_u32::<Rt>(c, &batch.point_block),
                 block_point0: upload_u32::<Rt>(c, &batch.block_point0),
+                block_point_end: upload_u32::<Rt>(c, &batch.block_point_end),
                 block_inst0: upload_u32::<Rt>(c, &batch.block_inst0),
                 inst_block: upload_u32::<Rt>(c, &batch.inst_block),
                 inst_ref: upload_u32::<Rt>(c, &batch.inst_ref),
+                occ_slot0: upload_u32::<Rt>(c, &batch.occ_slot0),
                 instance_alpha: upload::<Rt, f64>(c, &batch.instance_alpha),
                 instance_center: upload::<Rt, f64>(c, &batch.instance_center),
-                inst_slot0: upload_u32::<Rt>(c, &batch.inst_slot0),
-                slot_global: upload_u32::<Rt>(c, &batch.slot_global),
-                kslot_pow: upload_u32::<Rt>(c, &batch.kslot_pow),
+                instance_set: upload_u32::<Rt>(c, &batch.instance_set),
+                instance_kslot0: upload_u32::<Rt>(c, &batch.instance_kslot0),
+                uocc_off: upload_u32::<Rt>(c, &batch.uocc_off),
+                uocc: upload_u32::<Rt>(c, &batch.uocc),
+                set_off: upload_u32::<Rt>(c, &batch.set_off),
+                set_pow: upload_u32::<Rt>(c, &batch.set_pow),
                 out_rho: match scratch {
                     Some(sc) => sc.rho.clone(),
                     None => c.empty(batch.npoints().max(1) * core::mem::size_of::<f64>()),
@@ -987,14 +1226,23 @@ impl PairSlotBatchDevice {
                     None => c.empty(batch.nslots().max(1) * core::mem::size_of::<f64>()),
                 },
                 out_integrate_b: std::sync::OnceLock::new(),
+                kint: match scratch {
+                    Some(sc) => sc.kint.clone(),
+                    None => c.empty(batch.nkslots().max(1) * core::mem::size_of::<f64>()),
+                },
+                kint_b: match scratch {
+                    Some(sc) => sc.kint_b.clone(),
+                    None => c.empty(batch.nkslots().max(1) * core::mem::size_of::<f64>()),
+                },
                 out_rho_cap: scratch.map_or(batch.npoints(), |sc| sc.max_points),
-                out_integrate_cap: scratch.map_or(batch.nslots(), |sc| sc.max_slots),
                 npoints: batch.npoints(),
                 ninstances: batch.ninstances(),
                 nslots: batch.nslots(),
+                nuinstances: batch.nuinstances(),
+                nsets: batch.set_off.len().saturating_sub(1),
+                nsetslots: batch.nsetslots(),
                 nkslots: batch.nkslots(),
                 nblocks: batch.nblocks(),
-                nuinstances: batch.nuinstances(),
             }
         }))
     }
@@ -1010,133 +1258,108 @@ impl PairSlotBatchDevice {
         Ok(())
     }
 
-    /// `kcoef` — one coefficient per KERNEL slot of the level (`nkslots`).
-    pub fn rho(&self, client: &AlgebraClient, kcoef: &[f64]) -> Result<Vec<f64>, AlgebraError> {
+    /// The forward direction: `set_coef` — one coefficient per SET slot of
+    /// the level (`nsetslots`). Returns one value per PADDED point.
+    ///
+    /// # Errors
+    /// A client of a different backend, or a wrong coefficient length.
+    pub fn rho(&self, client: &AlgebraClient, set_coef: &[f64]) -> Result<Vec<f64>, AlgebraError> {
         self.check_backend(client)?;
-        if kcoef.len() != self.nkslots {
+        if set_coef.len() != self.nsetslots {
             return Err(AlgebraError::ShapeMismatch {
-                expected: format!("kcoef.len() == nkslots = {}", self.nkslots),
-                actual: kcoef.len().to_string(),
-            });
-        }
-        Ok(self.stream.executes(|| {
-            dispatch_backend!(client, c, Rt, { launch_rho_resident::<Rt>(self, kcoef, c) })
-        }))
-    }
-
-    /// The reverse direction has no coefficient (M-12): the drivers always
-    /// passed `1.0`, and `1.0 · x == x` exactly, so the multiply is gone.
-    pub fn integrate(
-        &self,
-        client: &AlgebraClient,
-        weight: &[f64],
-    ) -> Result<Vec<f64>, AlgebraError> {
-        self.check_backend(client)?;
-        if weight.len() != self.npoints {
-            return Err(AlgebraError::ShapeMismatch {
-                expected: format!("weight.len() == npoints = {}", self.npoints),
-                actual: weight.len().to_string(),
+                expected: format!("set_coef.len() == nsetslots = {}", self.nsetslots),
+                actual: set_coef.len().to_string(),
             });
         }
         Ok(self.stream.executes(|| {
             dispatch_backend!(client, c, Rt, {
-                launch_integrate_resident::<Rt>(self, weight, c)
+                let coef = upload::<Rt, f64>(c, set_coef);
+                launch_rho_resident::<Rt>(self, &coef, &self.out_rho, c);
+                let bytes = c.read(vec![prefix(&self.out_rho, self.out_rho_cap, self.npoints)]);
+                bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
             })
         }))
-    }
-
-    /// [`Self::integrate`] without the intermediate `Vec`.
-    ///
-    /// `fold(s, v)` is called once per concatenated slot `s`, in increasing
-    /// `s`, with that slot's weighted integral `v` read straight out of the
-    /// device buffer. The caller's accumulation therefore visits the same
-    /// values in the same order as folding the returned `Vec` would — the
-    /// driver's `kint[slot_global[s]] += v` is unchanged bit for bit — and
-    /// the `nslots · 8` B host copy of the read-back is never made (M-13).
-    ///
-    /// # Errors
-    /// As [`Self::integrate`].
-    pub fn integrate_fold(
-        &self,
-        client: &AlgebraClient,
-        weight: &[f64],
-        fold: &mut dyn FnMut(usize, f64),
-    ) -> Result<(), AlgebraError> {
-        self.check_backend(client)?;
-        if weight.len() != self.npoints {
-            return Err(AlgebraError::ShapeMismatch {
-                expected: format!("weight.len() == npoints = {}", self.npoints),
-                actual: weight.len().to_string(),
-            });
-        }
-        let bytes = self.stream.executes(|| {
-            dispatch_backend!(client, c, Rt, {
-                launch_integrate_resident_bytes::<Rt>(self, weight, c)
-            })
-        });
-        for (s, &v) in bytemuck::cast_slice::<u8, f64>(&bytes).iter().enumerate() {
-            fold(s, v);
-        }
-        Ok(())
-    }
-
-    /// Two-spin twin of [`Self::integrate_fold`]: `fold(spin, s, v)`, spin 0
-    /// completely before spin 1, each in increasing `s`.
-    ///
-    /// # Errors
-    /// As [`Self::integrate2`].
-    pub fn integrate2_fold(
-        &self,
-        client: &AlgebraClient,
-        weight: [&[f64]; 2],
-        fold: &mut dyn FnMut(usize, usize, f64),
-    ) -> Result<(), AlgebraError> {
-        self.check_backend(client)?;
-        if weight.iter().any(|w| w.len() != self.npoints) {
-            return Err(AlgebraError::ShapeMismatch {
-                expected: format!("both weight lengths == npoints = {}", self.npoints),
-                actual: format!("{}/{}", weight[0].len(), weight[1].len()),
-            });
-        }
-        let bytes = self.stream.executes(|| {
-            dispatch_backend!(client, c, Rt, {
-                launch_integrate2_resident_bytes::<Rt>(self, weight, c)
-            })
-        });
-        for (spin, plane) in bytes.iter().enumerate() {
-            for (s, &v) in bytemuck::cast_slice::<u8, f64>(plane).iter().enumerate() {
-                fold(spin, s, v);
-            }
-        }
-        Ok(())
     }
 
     /// Collocate alpha and beta densities in one geometry traversal.
+    ///
+    /// # Errors
+    /// As [`Self::rho`].
     pub fn rho2(
         &self,
         client: &AlgebraClient,
-        kcoef: [&[f64]; 2],
+        set_coef: [&[f64]; 2],
     ) -> Result<[Vec<f64>; 2], AlgebraError> {
         self.check_backend(client)?;
-        if kcoef.iter().any(|c| c.len() != self.nkslots) {
+        if set_coef.iter().any(|c| c.len() != self.nsetslots) {
             return Err(AlgebraError::ShapeMismatch {
-                expected: format!("both kcoef lengths == nkslots = {}", self.nkslots),
-                actual: format!("{}/{}", kcoef[0].len(), kcoef[1].len()),
+                expected: format!("both set_coef lengths == nsetslots = {}", self.nsetslots),
+                actual: format!("{}/{}", set_coef[0].len(), set_coef[1].len()),
             });
         }
         Ok(self.stream.executes(|| {
             dispatch_backend!(client, c, Rt, {
-                launch_rho2_resident::<Rt>(self, kcoef, c)
+                let ca = upload::<Rt, f64>(c, set_coef[0]);
+                let cb = upload::<Rt, f64>(c, set_coef[1]);
+                let out_b = self
+                    .out_rho_b
+                    .get_or_init(|| c.empty(self.npoints.max(1) * core::mem::size_of::<f64>()));
+                launch_rho2_resident::<Rt>(self, &ca, &cb, &self.out_rho, out_b, c);
+                let bytes = c.read(vec![
+                    prefix(&self.out_rho, self.out_rho_cap, self.npoints),
+                    out_b.clone(),
+                ]);
+                [
+                    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
+                    bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
+                ]
             })
         }))
     }
 
-    /// Integrate alpha and beta weights in one geometry traversal.
-    pub fn integrate2(
+    /// The reverse direction: integrate `weight` (one per PADDED point; pads
+    /// are never read) against every occurrence's monomials and fold the
+    /// result onto the resident `kint` (M-16). Nothing is read back; call
+    /// [`PairOutScratch::read_kint`] (or [`Self::read_kint`]) after the last
+    /// chunk. The driver zeroes `kint` before the first chunk.
+    ///
+    /// The reverse direction has no coefficient (M-12): the drivers always
+    /// passed `1.0`, and `1.0 · x == x` exactly, so the multiply is gone.
+    ///
+    /// # Errors
+    /// A client of a different backend, or a wrong weight length.
+    pub fn integrate_into_kint(
+        &self,
+        client: &AlgebraClient,
+        weight: &[f64],
+    ) -> Result<(), AlgebraError> {
+        self.check_backend(client)?;
+        if weight.len() != self.npoints {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("weight.len() == npoints = {}", self.npoints),
+                actual: weight.len().to_string(),
+            });
+        }
+        self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                let w = upload::<Rt, f64>(c, weight);
+                launch_integrate_resident::<Rt>(self, &w, &self.out_integrate, c);
+                launch_fold_resident::<Rt>(self, &self.out_integrate, &self.kint, c);
+            })
+        });
+        Ok(())
+    }
+
+    /// Two-spin twin of [`Self::integrate_into_kint`]: spin 0 folds onto
+    /// `kint`, spin 1 onto `kint_b`.
+    ///
+    /// # Errors
+    /// As [`Self::integrate_into_kint`].
+    pub fn integrate2_into_kint(
         &self,
         client: &AlgebraClient,
         weight: [&[f64]; 2],
-    ) -> Result<[Vec<f64>; 2], AlgebraError> {
+    ) -> Result<(), AlgebraError> {
         self.check_backend(client)?;
         if weight.iter().any(|w| w.len() != self.npoints) {
             return Err(AlgebraError::ShapeMismatch {
@@ -1144,64 +1367,131 @@ impl PairSlotBatchDevice {
                 actual: format!("{}/{}", weight[0].len(), weight[1].len()),
             });
         }
+        self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                let wa = upload::<Rt, f64>(c, weight[0]);
+                let wb = upload::<Rt, f64>(c, weight[1]);
+                let out_b = self
+                    .out_integrate_b
+                    .get_or_init(|| c.empty(self.nslots.max(1) * core::mem::size_of::<f64>()));
+                launch_integrate2_resident::<Rt>(self, &wa, &wb, &self.out_integrate, out_b, c);
+                launch_fold_resident::<Rt>(self, &self.out_integrate, &self.kint, c);
+                launch_fold_resident::<Rt>(self, out_b, &self.kint_b, c);
+            })
+        });
+        Ok(())
+    }
+
+    /// Zero this chunk's `kint` (own or shared) — the un-shared twin of
+    /// [`PairOutScratch::zero_kint`].
+    ///
+    /// # Errors
+    /// A client of a different backend.
+    pub fn zero_kint(&self, client: &AlgebraClient, channels: usize) -> Result<(), AlgebraError> {
+        self.check_backend(client)?;
+        self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                launch_zero::<Rt>(c, &self.kint, self.nkslots);
+                if channels > 1 {
+                    launch_zero::<Rt>(c, &self.kint_b, self.nkslots);
+                }
+            })
+        });
+        Ok(())
+    }
+
+    /// Read this chunk's `kint` (own or shared) — the un-shared twin of
+    /// [`PairOutScratch::read_kint`].
+    ///
+    /// # Errors
+    /// A client of a different backend.
+    pub fn read_kint(
+        &self,
+        client: &AlgebraClient,
+        channels: usize,
+    ) -> Result<Vec<Vec<f64>>, AlgebraError> {
+        self.check_backend(client)?;
         Ok(self.stream.executes(|| {
             dispatch_backend!(client, c, Rt, {
-                launch_integrate2_resident::<Rt>(self, weight, c)
+                let mut handles = vec![self.kint.clone()];
+                if channels > 1 {
+                    handles.push(self.kint_b.clone());
+                }
+                c.read(handles)
+                    .into_iter()
+                    .map(|b| bytemuck::cast_slice::<u8, f64>(&b)[..self.nkslots].to_vec())
+                    .collect::<Vec<_>>()
             })
         }))
     }
 }
 
-/// [`collocate_pairs_rho_kernel`], batched over every block of a level —
-/// M-03. One lane per concatenated grid point; the lane's block selects which
-/// instances it sums, in the same order the per-block launch used.
+/// `out[i] = 0` — the resident `kint` reset (M-16).
 #[cube(launch_unchecked)]
-fn collocate_pairs_rho_batched_kernel(
-    coords_x: &Array<f64>,
-    coords_y: &Array<f64>,
-    coords_z: &Array<f64>,
+fn mg_zero_kernel(out: &mut Array<f64>, n: usize) {
+    let i = ABSOLUTE_POS;
+    if i < n {
+        out[i] = 0.0;
+    }
+}
+
+/// M-17: the forward direction over `Vector<f64, N>` points. One lane per N
+/// adjacent (padded) points of one block; the lane's block selects which
+/// instances it sums, in the same order the per-block launch used, and each
+/// instance's term set supplies its monomials in table order.
+#[cube(launch_unchecked)]
+fn mg_rho_kernel<N: Size>(
+    coords_x: &Array<Vector<f64, N>>,
+    coords_y: &Array<Vector<f64, N>>,
+    coords_z: &Array<Vector<f64, N>>,
     point_block: &Array<u32>,
     block_inst0: &Array<u32>,
-    slot_global: &Array<u32>,
-    kslot_pow: &Array<u32>,
-    kcoef: &Array<f64>,
-    inst_slot0: &Array<u32>,
     inst_ref: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
-    out: &mut Array<f64>,
-    npoints: usize,
+    instance_set: &Array<u32>,
+    set_off: &Array<u32>,
+    set_pow: &Array<u32>,
+    set_coef: &Array<f64>,
+    out: &mut Array<Vector<f64, N>>,
+    nlanes: usize,
+    #[comptime] exp_mode: u32,
 ) {
-    let p = ABSOLUTE_POS;
-    if p < npoints {
-        let x = coords_x[p];
-        let y = coords_y[p];
-        let z = coords_z[p];
-        let b = point_block[p] as usize;
+    let v = ABSOLUTE_POS;
+    if v < nlanes {
+        let x = coords_x[v];
+        let y = coords_y[v];
+        let z = coords_z[v];
+        let b = point_block[v * N::value()] as usize;
         let i0 = block_inst0[b] as usize;
         let i1 = block_inst0[b + 1] as usize;
-        let mut acc = 0.0;
+        let zero = Vector::<f64, N>::new(0.0);
+        let one = Vector::<f64, N>::new(1.0);
+        let mut acc = zero;
         for inst in i0..i1 {
-            // M-13: one index load, then the instance's own row.
             let u = inst_ref[inst] as usize;
-            let eta = instance_alpha[u];
-            let dx = x - instance_center[u * 3];
-            let dy = y - instance_center[u * 3 + 1];
-            let dz = z - instance_center[u * 3 + 2];
+            let eta = Vector::<f64, N>::new(instance_alpha[u]);
+            let dx = x - Vector::<f64, N>::new(instance_center[u * 3]);
+            let dy = y - Vector::<f64, N>::new(instance_center[u * 3 + 1]);
+            let dz = z - Vector::<f64, N>::new(instance_center[u * 3 + 2]);
             let r2 = dx * dx + dy * dy + dz * dz;
-            let e = cube_math::double::exp::exp(0.0 - eta * r2, cube_math::MathConfig::EXACT);
-            let s0 = inst_slot0[inst] as usize;
-            let s1 = inst_slot0[inst + 1] as usize;
-            for slot in s0..s1 {
-                // M-12: one per-slot load, then two gathers from the small
-                // per-kernel-slot tables (cache-resident on either runtime).
-                let k = slot_global[slot] as usize;
-                let packed = kslot_pow[k];
+            let arg = zero - eta * r2;
+            // The vector type has no bit-exact `exp`; one scalar call per
+            // element keeps every point on the scalar kernel's arithmetic.
+            let mut e = Vector::<f64, N>::empty();
+            for j in 0..N::value() {
+                e[j] = mg_exp(arg[j], exp_mode);
+            }
+            let s = instance_set[u] as usize;
+            let so0 = set_off[s] as usize;
+            let so1 = set_off[s + 1] as usize;
+            for sl in so0..so1 {
+                let packed = set_pow[sl];
                 let ix = packed & 255;
                 let iy = (packed >> 8) & 255;
                 let iz = (packed >> 16) & 255;
-                let coef = kcoef[k];
-                let mut poly = 1.0;
+                let coef = Vector::<f64, N>::new(set_coef[sl]);
+                let mut poly = one;
                 let mut i = 0u32;
                 while i < ix {
                     poly *= dx;
@@ -1220,45 +1510,131 @@ fn collocate_pairs_rho_batched_kernel(
                 acc += coef * poly * e;
             }
         }
-        out[p] = acc;
+        out[v] = acc;
     }
 }
 
-/// [`collocate_pairs_integrate_kernel`], batched over every block of a level —
-/// M-03. One lane per concatenated instance; the lane's block selects which
-/// grid points it integrates over, in the same order the per-block launch
-/// used.
+/// Two-spin twin of [`mg_rho_kernel`]: one geometry traversal, two
+/// coefficient vectors, two outputs — each channel's arithmetic is the
+/// single-channel kernel's.
 #[cube(launch_unchecked)]
-fn collocate_pairs_integrate_batched_kernel(
+fn mg_rho2_kernel<N: Size>(
+    coords_x: &Array<Vector<f64, N>>,
+    coords_y: &Array<Vector<f64, N>>,
+    coords_z: &Array<Vector<f64, N>>,
+    point_block: &Array<u32>,
+    block_inst0: &Array<u32>,
+    inst_ref: &Array<u32>,
+    instance_alpha: &Array<f64>,
+    instance_center: &Array<f64>,
+    instance_set: &Array<u32>,
+    set_off: &Array<u32>,
+    set_pow: &Array<u32>,
+    set_coef_a: &Array<f64>,
+    set_coef_b: &Array<f64>,
+    out_a: &mut Array<Vector<f64, N>>,
+    out_b: &mut Array<Vector<f64, N>>,
+    nlanes: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let v = ABSOLUTE_POS;
+    if v < nlanes {
+        let x = coords_x[v];
+        let y = coords_y[v];
+        let z = coords_z[v];
+        let b = point_block[v * N::value()] as usize;
+        let i0 = block_inst0[b] as usize;
+        let i1 = block_inst0[b + 1] as usize;
+        let zero = Vector::<f64, N>::new(0.0);
+        let one = Vector::<f64, N>::new(1.0);
+        let mut acc_a = zero;
+        let mut acc_b = zero;
+        for inst in i0..i1 {
+            let u = inst_ref[inst] as usize;
+            let eta = Vector::<f64, N>::new(instance_alpha[u]);
+            let dx = x - Vector::<f64, N>::new(instance_center[u * 3]);
+            let dy = y - Vector::<f64, N>::new(instance_center[u * 3 + 1]);
+            let dz = z - Vector::<f64, N>::new(instance_center[u * 3 + 2]);
+            let r2 = dx * dx + dy * dy + dz * dz;
+            let arg = zero - eta * r2;
+            let mut e = Vector::<f64, N>::empty();
+            for j in 0..N::value() {
+                e[j] = mg_exp(arg[j], exp_mode);
+            }
+            let s = instance_set[u] as usize;
+            let so0 = set_off[s] as usize;
+            let so1 = set_off[s + 1] as usize;
+            for sl in so0..so1 {
+                let packed = set_pow[sl];
+                let ix = packed & 255;
+                let iy = (packed >> 8) & 255;
+                let iz = (packed >> 16) & 255;
+                let mut poly = one;
+                let mut i = 0u32;
+                while i < ix {
+                    poly *= dx;
+                    i += 1;
+                }
+                i = 0u32;
+                while i < iy {
+                    poly *= dy;
+                    i += 1;
+                }
+                i = 0u32;
+                while i < iz {
+                    poly *= dz;
+                    i += 1;
+                }
+                acc_a += Vector::<f64, N>::new(set_coef_a[sl]) * poly * e;
+                acc_b += Vector::<f64, N>::new(set_coef_b[sl]) * poly * e;
+            }
+        }
+        out_a[v] = acc_a;
+        out_b[v] = acc_b;
+    }
+}
+
+/// The reverse direction (M-08 register accumulators, M-15 term sets). One
+/// lane per instance occurrence; the lane's block selects which grid points
+/// it integrates over, in the same order the per-block launch used.
+#[cube(launch_unchecked)]
+fn mg_integrate_kernel(
     coords_x: &Array<f64>,
     coords_y: &Array<f64>,
     coords_z: &Array<f64>,
     weight: &Array<f64>,
     inst_block: &Array<u32>,
     block_point0: &Array<u32>,
-    slot_global: &Array<u32>,
-    kslot_pow: &Array<u32>,
-    inst_slot0: &Array<u32>,
+    block_point_end: &Array<u32>,
     inst_ref: &Array<u32>,
+    occ_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_set: &Array<u32>,
+    set_off: &Array<u32>,
+    set_pow: &Array<u32>,
     out: &mut Array<f64>,
-    ninst: usize,
+    nocc: usize,
+    lane0: usize,
+    #[comptime] exp_mode: u32,
 ) {
-    let inst = ABSOLUTE_POS;
-    if inst < ninst {
-        let u = inst_ref[inst] as usize;
+    // `lane0`: chunked on the CPU runtime — `acc` is stack per iteration
+    // there (`launch_1d_chunked`).
+    let occ = ABSOLUTE_POS + lane0;
+    if occ < nocc {
+        let u = inst_ref[occ] as usize;
         let eta = instance_alpha[u];
         let cx = instance_center[u * 3];
         let cy = instance_center[u * 3 + 1];
         let cz = instance_center[u * 3 + 2];
-        let s0 = inst_slot0[inst] as usize;
-        let s1 = inst_slot0[inst + 1] as usize;
-        let b = inst_block[inst] as usize;
+        let s = instance_set[u] as usize;
+        let so0 = set_off[s] as usize;
+        let nsl = set_off[s + 1] as usize - so0;
+        let b = inst_block[occ] as usize;
         let g0 = block_point0[b] as usize;
-        let g1 = block_point0[b + 1] as usize;
+        let g1 = block_point_end[b] as usize;
         let mut acc = Array::<f64>::new(MAX_SLOTS_PER_INSTANCE);
-        for local in 0..s1 - s0 {
+        for local in 0..nsl {
             acc[local] = 0.0;
         }
         for g in g0..g1 {
@@ -1266,10 +1642,10 @@ fn collocate_pairs_integrate_batched_kernel(
             let dy = coords_y[g] - cy;
             let dz = coords_z[g] - cz;
             let r2 = dx * dx + dy * dy + dz * dz;
-            let e = cube_math::double::exp::exp(0.0 - eta * r2, cube_math::MathConfig::EXACT);
+            let e = mg_exp(0.0 - eta * r2, exp_mode);
             let we = weight[g] * e;
-            for slot in s0..s1 {
-                let packed = kslot_pow[slot_global[slot] as usize];
+            for local in 0..nsl {
+                let packed = set_pow[so0 + local];
                 let ix = packed & 255;
                 let iy = (packed >> 8) & 255;
                 let iz = (packed >> 16) & 255;
@@ -1291,85 +1667,19 @@ fn collocate_pairs_integrate_batched_kernel(
                 }
                 // M-12: the driver's coefficient was always `1.0` here, and
                 // `1.0 * x == x` exactly, so dropping it is bit-exact.
-                acc[slot - s0] += poly * we;
+                acc[local] += poly * we;
             }
         }
-        for slot in s0..s1 {
-            out[slot] = acc[slot - s0];
+        let o0 = occ_slot0[occ] as usize;
+        for local in 0..nsl {
+            out[o0 + local] = acc[local];
         }
     }
 }
 
+/// Two-spin twin of [`mg_integrate_kernel`].
 #[cube(launch_unchecked)]
-fn collocate_pairs_rho2_batched_kernel(
-    coords_x: &Array<f64>,
-    coords_y: &Array<f64>,
-    coords_z: &Array<f64>,
-    point_block: &Array<u32>,
-    block_inst0: &Array<u32>,
-    slot_global: &Array<u32>,
-    kslot_pow: &Array<u32>,
-    kcoef_a: &Array<f64>,
-    kcoef_b: &Array<f64>,
-    inst_slot0: &Array<u32>,
-    inst_ref: &Array<u32>,
-    instance_alpha: &Array<f64>,
-    instance_center: &Array<f64>,
-    out_a: &mut Array<f64>,
-    out_b: &mut Array<f64>,
-    npoints: usize,
-) {
-    let p = ABSOLUTE_POS;
-    if p < npoints {
-        let x = coords_x[p];
-        let y = coords_y[p];
-        let z = coords_z[p];
-        let b = point_block[p] as usize;
-        let mut acc_a = 0.0;
-        let mut acc_b = 0.0;
-        for inst in block_inst0[b] as usize..block_inst0[b + 1] as usize {
-            let u = inst_ref[inst] as usize;
-            let dx = x - instance_center[u * 3];
-            let dy = y - instance_center[u * 3 + 1];
-            let dz = z - instance_center[u * 3 + 2];
-            let r2 = dx * dx + dy * dy + dz * dz;
-            let e = cube_math::double::exp::exp(
-                0.0 - instance_alpha[u] * r2,
-                cube_math::MathConfig::EXACT,
-            );
-            for slot in inst_slot0[inst] as usize..inst_slot0[inst + 1] as usize {
-                let k = slot_global[slot] as usize;
-                let packed = kslot_pow[k];
-                let ix = packed & 255;
-                let iy = (packed >> 8) & 255;
-                let iz = (packed >> 16) & 255;
-                let mut poly = 1.0;
-                let mut i = 0u32;
-                while i < ix {
-                    poly *= dx;
-                    i += 1;
-                }
-                i = 0u32;
-                while i < iy {
-                    poly *= dy;
-                    i += 1;
-                }
-                i = 0u32;
-                while i < iz {
-                    poly *= dz;
-                    i += 1;
-                }
-                acc_a += kcoef_a[k] * poly * e;
-                acc_b += kcoef_b[k] * poly * e;
-            }
-        }
-        out_a[p] = acc_a;
-        out_b[p] = acc_b;
-    }
-}
-
-#[cube(launch_unchecked)]
-fn collocate_pairs_integrate2_batched_kernel(
+fn mg_integrate2_kernel(
     coords_x: &Array<f64>,
     coords_y: &Array<f64>,
     coords_z: &Array<f64>,
@@ -1377,42 +1687,49 @@ fn collocate_pairs_integrate2_batched_kernel(
     weight_b: &Array<f64>,
     inst_block: &Array<u32>,
     block_point0: &Array<u32>,
-    slot_global: &Array<u32>,
-    kslot_pow: &Array<u32>,
-    inst_slot0: &Array<u32>,
+    block_point_end: &Array<u32>,
     inst_ref: &Array<u32>,
+    occ_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_set: &Array<u32>,
+    set_off: &Array<u32>,
+    set_pow: &Array<u32>,
     out_a: &mut Array<f64>,
     out_b: &mut Array<f64>,
-    ninst: usize,
+    nocc: usize,
+    lane0: usize,
+    #[comptime] exp_mode: u32,
 ) {
-    let inst = ABSOLUTE_POS;
-    if inst < ninst {
-        let u = inst_ref[inst] as usize;
+    let occ = ABSOLUTE_POS + lane0;
+    if occ < nocc {
+        let u = inst_ref[occ] as usize;
+        let eta = instance_alpha[u];
         let cx = instance_center[u * 3];
         let cy = instance_center[u * 3 + 1];
         let cz = instance_center[u * 3 + 2];
-        let s0 = inst_slot0[inst] as usize;
-        let s1 = inst_slot0[inst + 1] as usize;
-        let b = inst_block[inst] as usize;
+        let s = instance_set[u] as usize;
+        let so0 = set_off[s] as usize;
+        let nsl = set_off[s + 1] as usize - so0;
+        let b = inst_block[occ] as usize;
+        let g0 = block_point0[b] as usize;
+        let g1 = block_point_end[b] as usize;
         let mut acc_a = Array::<f64>::new(MAX_SLOTS_PER_INSTANCE);
         let mut acc_b = Array::<f64>::new(MAX_SLOTS_PER_INSTANCE);
-        for local in 0..s1 - s0 {
+        for local in 0..nsl {
             acc_a[local] = 0.0;
             acc_b[local] = 0.0;
         }
-        for g in block_point0[b] as usize..block_point0[b + 1] as usize {
+        for g in g0..g1 {
             let dx = coords_x[g] - cx;
             let dy = coords_y[g] - cy;
             let dz = coords_z[g] - cz;
             let r2 = dx * dx + dy * dy + dz * dz;
-            let e = cube_math::double::exp::exp(
-                0.0 - instance_alpha[u] * r2,
-                cube_math::MathConfig::EXACT,
-            );
-            for slot in s0..s1 {
-                let packed = kslot_pow[slot_global[slot] as usize];
+            let e = mg_exp(0.0 - eta * r2, exp_mode);
+            let we_a = weight_a[g] * e;
+            let we_b = weight_b[g] * e;
+            for local in 0..nsl {
+                let packed = set_pow[so0 + local];
                 let ix = packed & 255;
                 let iy = (packed >> 8) & 255;
                 let iz = (packed >> 16) & 255;
@@ -1432,15 +1749,344 @@ fn collocate_pairs_integrate2_batched_kernel(
                     poly *= dz;
                     i += 1;
                 }
-                let we_a = weight_a[g] * e;
-                let we_b = weight_b[g] * e;
-                acc_a[slot - s0] += poly * we_a;
-                acc_b[slot - s0] += poly * we_b;
+                acc_a[local] += poly * we_a;
+                acc_b[local] += poly * we_b;
             }
         }
-        for slot in s0..s1 {
-            out_a[slot] = acc_a[slot - s0];
-            out_b[slot] = acc_b[slot - s0];
+        let o0 = occ_slot0[occ] as usize;
+        for local in 0..nsl {
+            out_a[o0 + local] = acc_a[local];
+            out_b[o0 + local] = acc_b[local];
+        }
+    }
+}
+
+/// M-19: the reverse direction over `Vector<f64, N>` OCCURRENCES. One lane
+/// per group of N consecutive occurrences of one block (a ragged tail
+/// duplicates the block's last occurrence into its unused elements, whose
+/// results are never stored). Per grid point the lane forms N displacements,
+/// N scalar `exp`s (one per element, the bit-exact `cube_math` one) and, per
+/// monomial slot, N predicated power products:
+///
+/// ```text
+/// poly *= dx · m + (1 − m),  m ∈ {0, 1}
+/// ```
+///
+/// is exactly `poly *= dx` when `m = 1` (`dx · 1 = dx`, `dx + 0 = dx`) and
+/// exactly `poly` when `m = 0` (`dx · 0 = ±0`, `±0 + 1 = 1`, `poly · 1 =
+/// poly`), so a lane whose slot has power `p` performs the scalar kernel's
+/// `p` multiplications by `dx` in the scalar kernel's order — the one
+/// difference, a `-0.0` where the scalar path had `+0.0 · dx` with `dx =
+/// -0.0`, is a sign of zero that no accumulator can observe (an accumulator
+/// starting at `+0.0` never becomes `-0.0`). Powers are at most 2 in a
+/// batched set (`validate_batch`), so two predicated steps per axis suffice.
+#[cube(launch_unchecked)]
+fn mg_integrate_vec_kernel<N: Size>(
+    coords_x: &Array<f64>,
+    coords_y: &Array<f64>,
+    coords_z: &Array<f64>,
+    weight: &Array<f64>,
+    grp_occ0: &Array<u32>,
+    inst_block: &Array<u32>,
+    block_point0: &Array<u32>,
+    block_point_end: &Array<u32>,
+    block_inst0: &Array<u32>,
+    inst_ref: &Array<u32>,
+    occ_slot0: &Array<u32>,
+    instance_alpha: &Array<f64>,
+    instance_center: &Array<f64>,
+    instance_set: &Array<u32>,
+    set_off: &Array<u32>,
+    set_pow: &Array<u32>,
+    out: &mut Array<f64>,
+    ngroups: usize,
+    lane0: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let grp = ABSOLUTE_POS + lane0;
+    if grp < ngroups {
+        let o0 = grp_occ0[grp] as usize;
+        let b = inst_block[o0] as usize;
+        let i1 = block_inst0[b + 1] as usize;
+        let g0 = block_point0[b] as usize;
+        let g1 = block_point_end[b] as usize;
+        let zero = Vector::<f64, N>::new(0.0);
+        let one = Vector::<f64, N>::new(1.0);
+        let mut eta = Vector::<f64, N>::empty();
+        let mut cx = Vector::<f64, N>::empty();
+        let mut cy = Vector::<f64, N>::empty();
+        let mut cz = Vector::<f64, N>::empty();
+        // Per slot, per element: the packed powers (0 = "no slot", whose
+        // products are all `× 1` and whose result is never stored).
+        let mut pw = Array::<Vector<u32, N>>::new(MAX_SLOTS_PER_INSTANCE);
+        for local in 0..MAX_SLOTS_PER_INSTANCE {
+            pw[local] = Vector::<u32, N>::new(0u32);
+        }
+        let mut nsl_max = 0usize;
+        #[unroll]
+        for j in 0..N::value() {
+            let mut occ = o0 + j;
+            if occ >= i1 {
+                occ = i1 - 1;
+            }
+            let u = inst_ref[occ] as usize;
+            eta[j] = instance_alpha[u];
+            cx[j] = instance_center[u * 3];
+            cy[j] = instance_center[u * 3 + 1];
+            cz[j] = instance_center[u * 3 + 2];
+            let s = instance_set[u] as usize;
+            let so0 = set_off[s] as usize;
+            let nsl = set_off[s + 1] as usize - so0;
+            if nsl > nsl_max {
+                nsl_max = nsl;
+            }
+            for local in 0..nsl {
+                let mut v = pw[local];
+                v[j] = set_pow[so0 + local];
+                pw[local] = v;
+            }
+        }
+        // Hoisted masks: per slot and axis, the two predication steps.
+        let m255 = Vector::<u32, N>::new(255u32);
+        let m1 = Vector::<u32, N>::new(1u32);
+        let sh1 = Vector::<u32, N>::new(1u32);
+        let sh8 = Vector::<u32, N>::new(8u32);
+        let sh16 = Vector::<u32, N>::new(16u32);
+        let mut mask = Array::<Vector<f64, N>>::new(6 * MAX_SLOTS_PER_INSTANCE);
+        for local in 0..nsl_max {
+            let packed = pw[local];
+            let ix = packed & m255;
+            let iy = (packed >> sh8) & m255;
+            let iz = (packed >> sh16) & m255;
+            mask[local * 6] = Vector::<f64, N>::cast_from((ix & m1) | (ix >> sh1));
+            mask[local * 6 + 1] = Vector::<f64, N>::cast_from(ix >> sh1);
+            mask[local * 6 + 2] = Vector::<f64, N>::cast_from((iy & m1) | (iy >> sh1));
+            mask[local * 6 + 3] = Vector::<f64, N>::cast_from(iy >> sh1);
+            mask[local * 6 + 4] = Vector::<f64, N>::cast_from((iz & m1) | (iz >> sh1));
+            mask[local * 6 + 5] = Vector::<f64, N>::cast_from(iz >> sh1);
+        }
+        let mut acc = Array::<Vector<f64, N>>::new(MAX_SLOTS_PER_INSTANCE);
+        for local in 0..nsl_max {
+            acc[local] = zero;
+        }
+        for g in g0..g1 {
+            let dx = Vector::<f64, N>::new(coords_x[g]) - cx;
+            let dy = Vector::<f64, N>::new(coords_y[g]) - cy;
+            let dz = Vector::<f64, N>::new(coords_z[g]) - cz;
+            let r2 = dx * dx + dy * dy + dz * dz;
+            let arg = zero - eta * r2;
+            let mut e = Vector::<f64, N>::empty();
+            #[unroll]
+            for j in 0..N::value() {
+                e[j] = mg_exp(arg[j], exp_mode);
+            }
+            let we = Vector::<f64, N>::new(weight[g]) * e;
+            for local in 0..nsl_max {
+                let mut poly = one;
+                let m = mask[local * 6];
+                poly *= dx * m + (one - m);
+                let m = mask[local * 6 + 1];
+                poly *= dx * m + (one - m);
+                let m = mask[local * 6 + 2];
+                poly *= dy * m + (one - m);
+                let m = mask[local * 6 + 3];
+                poly *= dy * m + (one - m);
+                let m = mask[local * 6 + 4];
+                poly *= dz * m + (one - m);
+                let m = mask[local * 6 + 5];
+                poly *= dz * m + (one - m);
+                acc[local] += poly * we;
+            }
+        }
+        #[unroll]
+        for j in 0..N::value() {
+            let occ = o0 + j;
+            if occ < i1 {
+                let u = inst_ref[occ] as usize;
+                let s = instance_set[u] as usize;
+                let nsl = set_off[s + 1] as usize - set_off[s] as usize;
+                let oo = occ_slot0[occ] as usize;
+                for local in 0..nsl {
+                    let a = acc[local];
+                    out[oo + local] = a[j];
+                }
+            }
+        }
+    }
+}
+
+/// Two-spin twin of [`mg_integrate_vec_kernel`].
+#[cube(launch_unchecked)]
+fn mg_integrate2_vec_kernel<N: Size>(
+    coords_x: &Array<f64>,
+    coords_y: &Array<f64>,
+    coords_z: &Array<f64>,
+    weight_a: &Array<f64>,
+    weight_b: &Array<f64>,
+    grp_occ0: &Array<u32>,
+    inst_block: &Array<u32>,
+    block_point0: &Array<u32>,
+    block_point_end: &Array<u32>,
+    block_inst0: &Array<u32>,
+    inst_ref: &Array<u32>,
+    occ_slot0: &Array<u32>,
+    instance_alpha: &Array<f64>,
+    instance_center: &Array<f64>,
+    instance_set: &Array<u32>,
+    set_off: &Array<u32>,
+    set_pow: &Array<u32>,
+    out_a: &mut Array<f64>,
+    out_b: &mut Array<f64>,
+    ngroups: usize,
+    lane0: usize,
+    #[comptime] exp_mode: u32,
+) {
+    let grp = ABSOLUTE_POS + lane0;
+    if grp < ngroups {
+        let o0 = grp_occ0[grp] as usize;
+        let b = inst_block[o0] as usize;
+        let i1 = block_inst0[b + 1] as usize;
+        let g0 = block_point0[b] as usize;
+        let g1 = block_point_end[b] as usize;
+        let zero = Vector::<f64, N>::new(0.0);
+        let one = Vector::<f64, N>::new(1.0);
+        let mut eta = Vector::<f64, N>::empty();
+        let mut cx = Vector::<f64, N>::empty();
+        let mut cy = Vector::<f64, N>::empty();
+        let mut cz = Vector::<f64, N>::empty();
+        let mut pw = Array::<Vector<u32, N>>::new(MAX_SLOTS_PER_INSTANCE);
+        for local in 0..MAX_SLOTS_PER_INSTANCE {
+            pw[local] = Vector::<u32, N>::new(0u32);
+        }
+        let mut nsl_max = 0usize;
+        #[unroll]
+        for j in 0..N::value() {
+            let mut occ = o0 + j;
+            if occ >= i1 {
+                occ = i1 - 1;
+            }
+            let u = inst_ref[occ] as usize;
+            eta[j] = instance_alpha[u];
+            cx[j] = instance_center[u * 3];
+            cy[j] = instance_center[u * 3 + 1];
+            cz[j] = instance_center[u * 3 + 2];
+            let s = instance_set[u] as usize;
+            let so0 = set_off[s] as usize;
+            let nsl = set_off[s + 1] as usize - so0;
+            if nsl > nsl_max {
+                nsl_max = nsl;
+            }
+            for local in 0..nsl {
+                let mut v = pw[local];
+                v[j] = set_pow[so0 + local];
+                pw[local] = v;
+            }
+        }
+        let m255 = Vector::<u32, N>::new(255u32);
+        let m1 = Vector::<u32, N>::new(1u32);
+        let sh1 = Vector::<u32, N>::new(1u32);
+        let sh8 = Vector::<u32, N>::new(8u32);
+        let sh16 = Vector::<u32, N>::new(16u32);
+        let mut mask = Array::<Vector<f64, N>>::new(6 * MAX_SLOTS_PER_INSTANCE);
+        for local in 0..nsl_max {
+            let packed = pw[local];
+            let ix = packed & m255;
+            let iy = (packed >> sh8) & m255;
+            let iz = (packed >> sh16) & m255;
+            mask[local * 6] = Vector::<f64, N>::cast_from((ix & m1) | (ix >> sh1));
+            mask[local * 6 + 1] = Vector::<f64, N>::cast_from(ix >> sh1);
+            mask[local * 6 + 2] = Vector::<f64, N>::cast_from((iy & m1) | (iy >> sh1));
+            mask[local * 6 + 3] = Vector::<f64, N>::cast_from(iy >> sh1);
+            mask[local * 6 + 4] = Vector::<f64, N>::cast_from((iz & m1) | (iz >> sh1));
+            mask[local * 6 + 5] = Vector::<f64, N>::cast_from(iz >> sh1);
+        }
+        let mut acc_a = Array::<Vector<f64, N>>::new(MAX_SLOTS_PER_INSTANCE);
+        let mut acc_b = Array::<Vector<f64, N>>::new(MAX_SLOTS_PER_INSTANCE);
+        for local in 0..nsl_max {
+            acc_a[local] = zero;
+            acc_b[local] = zero;
+        }
+        for g in g0..g1 {
+            let dx = Vector::<f64, N>::new(coords_x[g]) - cx;
+            let dy = Vector::<f64, N>::new(coords_y[g]) - cy;
+            let dz = Vector::<f64, N>::new(coords_z[g]) - cz;
+            let r2 = dx * dx + dy * dy + dz * dz;
+            let arg = zero - eta * r2;
+            let mut e = Vector::<f64, N>::empty();
+            #[unroll]
+            for j in 0..N::value() {
+                e[j] = mg_exp(arg[j], exp_mode);
+            }
+            let we_a = Vector::<f64, N>::new(weight_a[g]) * e;
+            let we_b = Vector::<f64, N>::new(weight_b[g]) * e;
+            for local in 0..nsl_max {
+                let mut poly = one;
+                let m = mask[local * 6];
+                poly *= dx * m + (one - m);
+                let m = mask[local * 6 + 1];
+                poly *= dx * m + (one - m);
+                let m = mask[local * 6 + 2];
+                poly *= dy * m + (one - m);
+                let m = mask[local * 6 + 3];
+                poly *= dy * m + (one - m);
+                let m = mask[local * 6 + 4];
+                poly *= dz * m + (one - m);
+                let m = mask[local * 6 + 5];
+                poly *= dz * m + (one - m);
+                acc_a[local] += poly * we_a;
+                acc_b[local] += poly * we_b;
+            }
+        }
+        #[unroll]
+        for j in 0..N::value() {
+            let occ = o0 + j;
+            if occ < i1 {
+                let u = inst_ref[occ] as usize;
+                let s = instance_set[u] as usize;
+                let nsl = set_off[s + 1] as usize - set_off[s] as usize;
+                let oo = occ_slot0[occ] as usize;
+                for local in 0..nsl {
+                    let a = acc_a[local];
+                    let bb = acc_b[local];
+                    out_a[oo + local] = a[j];
+                    out_b[oo + local] = bb[j];
+                }
+            }
+        }
+    }
+}
+
+/// M-16: fold one chunk's reverse outputs onto the level's running `kint`.
+/// One lane per `(distinct instance, monomial slot)`, `MAX_SLOTS_PER_INSTANCE`
+/// lanes per instance (the surplus idle): `kint[k] = (kint[k] + out[occ_1,
+/// j]) + out[occ_2, j] + …` over the instance's occurrences in increasing
+/// occurrence order — the host fold's sequence, addition for addition.
+#[cube(launch_unchecked)]
+fn mg_fold_kernel(
+    uocc_off: &Array<u32>,
+    uocc: &Array<u32>,
+    occ_slot0: &Array<u32>,
+    instance_kslot0: &Array<u32>,
+    instance_set: &Array<u32>,
+    set_off: &Array<u32>,
+    out: &Array<f64>,
+    kint: &mut Array<f64>,
+    nlanes: usize,
+) {
+    let lane = ABSOLUTE_POS;
+    if lane < nlanes {
+        let u = lane / MAX_SLOTS_PER_INSTANCE;
+        let j = lane % MAX_SLOTS_PER_INSTANCE;
+        let s = instance_set[u] as usize;
+        let nsl = set_off[s + 1] as usize - set_off[s] as usize;
+        if j < nsl {
+            let k = instance_kslot0[u] as usize + j;
+            let mut acc = kint[k];
+            for oi in uocc_off[u] as usize..uocc_off[u + 1] as usize {
+                let occ = uocc[oi] as usize;
+                acc += out[occ_slot0[occ] as usize + j];
+            }
+            kint[k] = acc;
         }
     }
 }
@@ -1455,300 +2101,327 @@ fn prefix(h: &Handle, cap: usize, len: usize) -> Handle {
     }
 }
 
-fn launch_rho_resident<R: Runtime>(
-    d: &PairSlotBatchDevice,
-    kcoef: &[f64],
-    client: &ComputeClient<R>,
-) -> Vec<f64> {
-    let coef = upload::<R, f64>(client, kcoef);
-    let per_lane =
-        50 * (d.ninstances / d.nblocks.max(1)).max(1) + 10 * (d.nslots / d.nblocks.max(1)).max(1);
-    let (count, dim) = launch_1d(client, d.npoints, per_lane);
+fn launch_zero<R: Runtime>(client: &ComputeClient<R>, h: &Handle, n: usize) {
+    if n == 0 {
+        return;
+    }
+    let (count, dim) = launch_1d(client, n, 1);
     unsafe {
-        collocate_pairs_rho_batched_kernel::launch_unchecked::<R>(
+        mg_zero_kernel::launch_unchecked::<R>(
             client,
             count,
             dim,
+            ArrayArg::from_raw_parts(h.clone(), n),
+            n,
+        );
+    }
+}
+
+/// Per-lane work model of the forward kernels, for [`launch_1d`].
+fn forward_work_per_lane(d: &PairSlotBatchDevice, line: usize) -> usize {
+    let nblocks = d.nblocks.max(1);
+    line * (50 * (d.ninstances / nblocks).max(1) + 10 * (d.nslots / nblocks).max(1))
+}
+
+fn launch_rho_resident<R: Runtime>(
+    d: &PairSlotBatchDevice,
+    coef: &Handle,
+    out: &Handle,
+    client: &ComputeClient<R>,
+) {
+    if d.npoints == 0 {
+        return;
+    }
+    let line = d.line;
+    let nlanes = d.npoints / line;
+    let (count, dim) = launch_1d(client, nlanes, forward_work_per_lane(d, line));
+    let exp_mode = exp_mode_from_env();
+    unsafe {
+        mg_rho_kernel::launch_unchecked::<R>(
+            client,
+            count,
+            dim,
+            line,
             ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.point_block.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.block_inst0.clone(), d.nblocks + 1),
-            ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
-            ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
-            ArrayArg::from_raw_parts(coef, d.nkslots),
-            ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
             ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
             ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
-            ArrayArg::from_raw_parts(d.out_rho.clone(), d.npoints),
-            d.npoints,
+            ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
+            ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
+            ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
+            ArrayArg::from_raw_parts(coef.clone(), d.nsetslots),
+            ArrayArg::from_raw_parts(out.clone(), d.npoints),
+            nlanes,
+            exp_mode,
         );
     }
-    let bytes = client.read(vec![prefix(&d.out_rho, d.out_rho_cap, d.npoints)]);
-    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
-}
-
-fn launch_integrate_resident<R: Runtime>(
-    d: &PairSlotBatchDevice,
-    weight: &[f64],
-    client: &ComputeClient<R>,
-) -> Vec<f64> {
-    let bytes = launch_integrate_resident_bytes::<R>(d, weight, client);
-    bytemuck::cast_slice::<u8, f64>(&bytes).to_vec()
-}
-
-/// The reverse launch, returning the device read-back as it arrives — one
-/// `nslots · 8` B buffer, not that buffer plus a `Vec` copy of it (M-13: at
-/// `25³` level 3 the copy was 622 MB of transient peak per call).
-fn launch_integrate_resident_bytes<R: Runtime>(
-    d: &PairSlotBatchDevice,
-    weight: &[f64],
-    client: &ComputeClient<R>,
-) -> cubecl::bytes::Bytes {
-    let weight = upload::<R, f64>(client, weight);
-    let per_lane = 50 * (d.npoints / d.nblocks.max(1)).max(1);
-    let (count, dim) = launch_1d(client, d.ninstances, per_lane);
-    unsafe {
-        collocate_pairs_integrate_batched_kernel::launch_unchecked::<R>(
-            client,
-            count,
-            dim,
-            ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
-            ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
-            ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
-            ArrayArg::from_raw_parts(weight, d.npoints),
-            ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
-            ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
-            ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
-            ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
-            ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
-            ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
-            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
-            ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
-            ArrayArg::from_raw_parts(d.out_integrate.clone(), d.nslots),
-            d.ninstances,
-        );
-    }
-    let mut bytes = client.read(vec![prefix(
-        &d.out_integrate,
-        d.out_integrate_cap,
-        d.nslots,
-    )]);
-    bytes.swap_remove(0)
 }
 
 fn launch_rho2_resident<R: Runtime>(
     d: &PairSlotBatchDevice,
-    kcoef: [&[f64]; 2],
+    coef_a: &Handle,
+    coef_b: &Handle,
+    out_a: &Handle,
+    out_b: &Handle,
     client: &ComputeClient<R>,
-) -> [Vec<f64>; 2] {
-    let ca = upload::<R, f64>(client, kcoef[0]);
-    let cb = upload::<R, f64>(client, kcoef[1]);
-    let per_lane =
-        50 * (d.ninstances / d.nblocks.max(1)).max(1) + 10 * (d.nslots / d.nblocks.max(1)).max(1);
-    let (count, dim) = launch_1d(client, d.npoints, per_lane);
-    let out_b = d
-        .out_rho_b
-        .get_or_init(|| client.empty(d.npoints * core::mem::size_of::<f64>()));
+) {
+    if d.npoints == 0 {
+        return;
+    }
+    let line = d.line;
+    let nlanes = d.npoints / line;
+    let (count, dim) = launch_1d(client, nlanes, forward_work_per_lane(d, line));
+    let exp_mode = exp_mode_from_env();
     unsafe {
-        collocate_pairs_rho2_batched_kernel::launch_unchecked::<R>(
+        mg_rho2_kernel::launch_unchecked::<R>(
             client,
             count,
             dim,
+            line,
             ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.point_block.clone(), d.npoints),
             ArrayArg::from_raw_parts(d.block_inst0.clone(), d.nblocks + 1),
-            ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
-            ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
-            ArrayArg::from_raw_parts(ca, d.nkslots),
-            ArrayArg::from_raw_parts(cb, d.nkslots),
-            ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
             ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
             ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
-            ArrayArg::from_raw_parts(d.out_rho.clone(), d.npoints),
+            ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
+            ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
+            ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
+            ArrayArg::from_raw_parts(coef_a.clone(), d.nsetslots),
+            ArrayArg::from_raw_parts(coef_b.clone(), d.nsetslots),
+            ArrayArg::from_raw_parts(out_a.clone(), d.npoints),
             ArrayArg::from_raw_parts(out_b.clone(), d.npoints),
-            d.npoints,
+            nlanes,
+            exp_mode,
         );
     }
-    let bytes = client.read(vec![
-        prefix(&d.out_rho, d.out_rho_cap, d.npoints),
-        out_b.clone(),
-    ]);
-    [
-        bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
-        bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
-    ]
+}
+
+/// Bytes of per-lane local arrays in the reverse kernels (one accumulator
+/// array per channel) — what `launch_1d_chunked` budgets on the CPU runtime.
+const REVERSE_LOCAL_BYTES: usize = MAX_SLOTS_PER_INSTANCE * core::mem::size_of::<f64>();
+
+/// Bytes of per-lane local arrays in the vector reverse kernels: the packed
+/// powers, the hoisted masks and the accumulator(s), per element.
+fn reverse_vec_local_bytes(line: usize, channels: usize) -> usize {
+    MAX_SLOTS_PER_INSTANCE * line * (4 + 6 * 8 + channels * 8) + 8 * line * 8
+}
+
+fn launch_integrate_resident<R: Runtime>(
+    d: &PairSlotBatchDevice,
+    weight: &Handle,
+    out: &Handle,
+    client: &ComputeClient<R>,
+) {
+    if d.ninstances == 0 {
+        return;
+    }
+    let per_lane = 50 * (d.npoints / d.nblocks.max(1)).max(1);
+    let exp_mode = exp_mode_from_env();
+    if reverse_vector_enabled() {
+        for chunk in pyscf_algebra::launch::launch_1d_chunked(
+            client,
+            d.ngroups,
+            per_lane * d.line,
+            reverse_vec_local_bytes(d.line, 1),
+        ) {
+            unsafe {
+                mg_integrate_vec_kernel::launch_unchecked::<R>(
+                    client,
+                    CubeCount::Static(chunk.count_x, 1, 1),
+                    chunk.dim,
+                    d.line,
+                    ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(weight.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(d.grp_occ0.clone(), d.ngroups),
+                    ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
+                    ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
+                    ArrayArg::from_raw_parts(d.block_point_end.clone(), d.nblocks),
+                    ArrayArg::from_raw_parts(d.block_inst0.clone(), d.nblocks + 1),
+                    ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+                    ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
+                    ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+                    ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                    ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
+                    ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
+                    ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
+                    ArrayArg::from_raw_parts(out.clone(), d.nslots),
+                    d.ngroups,
+                    chunk.lane0,
+                    exp_mode,
+                );
+            }
+        }
+        return;
+    }
+    for chunk in pyscf_algebra::launch::launch_1d_chunked(
+        client,
+        d.ninstances,
+        per_lane,
+        REVERSE_LOCAL_BYTES,
+    ) {
+        unsafe {
+            mg_integrate_kernel::launch_unchecked::<R>(
+                client,
+                CubeCount::Static(chunk.count_x, 1, 1),
+                chunk.dim,
+                ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
+                ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
+                ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
+                ArrayArg::from_raw_parts(weight.clone(), d.npoints),
+                ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
+                ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
+                ArrayArg::from_raw_parts(d.block_point_end.clone(), d.nblocks),
+                ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+                ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
+                ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+                ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
+                ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
+                ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
+                ArrayArg::from_raw_parts(out.clone(), d.nslots),
+                d.ninstances,
+                chunk.lane0,
+                exp_mode,
+            );
+        }
+    }
 }
 
 fn launch_integrate2_resident<R: Runtime>(
     d: &PairSlotBatchDevice,
-    weight: [&[f64]; 2],
+    weight_a: &Handle,
+    weight_b: &Handle,
+    out_a: &Handle,
+    out_b: &Handle,
     client: &ComputeClient<R>,
-) -> [Vec<f64>; 2] {
-    let bytes = launch_integrate2_resident_bytes::<R>(d, weight, client);
-    [
-        bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec(),
-        bytemuck::cast_slice::<u8, f64>(&bytes[1]).to_vec(),
-    ]
-}
-
-/// Two-spin twin of [`launch_integrate_resident_bytes`].
-fn launch_integrate2_resident_bytes<R: Runtime>(
-    d: &PairSlotBatchDevice,
-    weight: [&[f64]; 2],
-    client: &ComputeClient<R>,
-) -> Vec<cubecl::bytes::Bytes> {
-    let wa = upload::<R, f64>(client, weight[0]);
-    let wb = upload::<R, f64>(client, weight[1]);
+) {
+    if d.ninstances == 0 {
+        return;
+    }
     let per_lane = 50 * (d.npoints / d.nblocks.max(1)).max(1);
-    let (count, dim) = launch_1d(client, d.ninstances, per_lane);
-    let out_b = d
-        .out_integrate_b
-        .get_or_init(|| client.empty(d.nslots * core::mem::size_of::<f64>()));
-    unsafe {
-        collocate_pairs_integrate2_batched_kernel::launch_unchecked::<R>(
+    let exp_mode = exp_mode_from_env();
+    if reverse_vector_enabled() {
+        for chunk in pyscf_algebra::launch::launch_1d_chunked(
             client,
-            count,
-            dim,
-            ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
-            ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
-            ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
-            ArrayArg::from_raw_parts(wa, d.npoints),
-            ArrayArg::from_raw_parts(wb, d.npoints),
-            ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
-            ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
-            ArrayArg::from_raw_parts(d.slot_global.clone(), d.nslots),
-            ArrayArg::from_raw_parts(d.kslot_pow.clone(), d.nkslots),
-            ArrayArg::from_raw_parts(d.inst_slot0.clone(), d.ninstances + 1),
-            ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
-            ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
-            ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
-            ArrayArg::from_raw_parts(d.out_integrate.clone(), d.nslots),
-            ArrayArg::from_raw_parts(out_b.clone(), d.nslots),
-            d.ninstances,
-        );
+            d.ngroups,
+            per_lane * d.line,
+            reverse_vec_local_bytes(d.line, 2),
+        ) {
+            unsafe {
+                mg_integrate2_vec_kernel::launch_unchecked::<R>(
+                    client,
+                    CubeCount::Static(chunk.count_x, 1, 1),
+                    chunk.dim,
+                    d.line,
+                    ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(weight_a.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(weight_b.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(d.grp_occ0.clone(), d.ngroups),
+                    ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
+                    ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
+                    ArrayArg::from_raw_parts(d.block_point_end.clone(), d.nblocks),
+                    ArrayArg::from_raw_parts(d.block_inst0.clone(), d.nblocks + 1),
+                    ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+                    ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
+                    ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+                    ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                    ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
+                    ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
+                    ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
+                    ArrayArg::from_raw_parts(out_a.clone(), d.nslots),
+                    ArrayArg::from_raw_parts(out_b.clone(), d.nslots),
+                    d.ngroups,
+                    chunk.lane0,
+                    exp_mode,
+                );
+            }
+        }
+        return;
     }
-    client.read(vec![
-        prefix(&d.out_integrate, d.out_integrate_cap, d.nslots),
-        out_b.clone(),
-    ])
+    for chunk in pyscf_algebra::launch::launch_1d_chunked(
+        client,
+        d.ninstances,
+        per_lane,
+        2 * REVERSE_LOCAL_BYTES,
+    ) {
+        unsafe {
+            mg_integrate2_kernel::launch_unchecked::<R>(
+                client,
+                CubeCount::Static(chunk.count_x, 1, 1),
+                chunk.dim,
+                ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
+                ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
+                ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
+                ArrayArg::from_raw_parts(weight_a.clone(), d.npoints),
+                ArrayArg::from_raw_parts(weight_b.clone(), d.npoints),
+                ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
+                ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
+                ArrayArg::from_raw_parts(d.block_point_end.clone(), d.nblocks),
+                ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+                ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
+                ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+                ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
+                ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
+                ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
+                ArrayArg::from_raw_parts(out_a.clone(), d.nslots),
+                ArrayArg::from_raw_parts(out_b.clone(), d.nslots),
+                d.ninstances,
+                chunk.lane0,
+                exp_mode,
+            );
+        }
+    }
 }
 
-fn launch_rho_batched<R: Runtime>(
-    b: &PairSlotBatch,
-    kcoef: &[f64],
+fn launch_fold_resident<R: Runtime>(
+    d: &PairSlotBatchDevice,
+    out: &Handle,
+    kint: &Handle,
     client: &ComputeClient<R>,
-) -> Vec<f64> {
-    let npoints = b.npoints();
-    let out_h = upload::<R, f64>(client, &vec![0.0f64; npoints]);
-    let h = [
-        upload::<R, f64>(client, &b.coords_x),
-        upload::<R, f64>(client, &b.coords_y),
-        upload::<R, f64>(client, &b.coords_z),
-        upload::<R, f64>(client, kcoef),
-        upload::<R, f64>(client, &b.instance_alpha),
-        upload::<R, f64>(client, &b.instance_center),
-    ];
-    let hu = [
-        upload_u32::<R>(client, &b.point_block),
-        upload_u32::<R>(client, &b.block_inst0),
-        upload_u32::<R>(client, &b.slot_global),
-        upload_u32::<R>(client, &b.inst_slot0),
-        upload_u32::<R>(client, &b.kslot_pow),
-        upload_u32::<R>(client, &b.inst_ref),
-    ];
-    // Per lane: its block's instances (one `exp` each) and their slots. The
-    // average is the total divided by the block count, which is what
-    // `launch_1d` needs to size the CPU cube.
-    let nblocks = b.nblocks().max(1);
-    let per_lane = 50 * (b.ninstances() / nblocks).max(1) + 10 * (b.nslots() / nblocks).max(1);
-    let (count, dim) = launch_1d(client, npoints, per_lane);
+) {
+    if d.nuinstances == 0 {
+        return;
+    }
+    let nlanes = d.nuinstances * MAX_SLOTS_PER_INSTANCE;
+    let per_lane = 2 * (d.ninstances / d.nuinstances.max(1)).max(1);
+    let (count, dim) = launch_1d(client, nlanes, per_lane);
     unsafe {
-        collocate_pairs_rho_batched_kernel::launch_unchecked::<R>(
+        mg_fold_kernel::launch_unchecked::<R>(
             client,
             count,
             dim,
-            ArrayArg::from_raw_parts(h[0].clone(), b.coords_x.len()),
-            ArrayArg::from_raw_parts(h[1].clone(), b.coords_y.len()),
-            ArrayArg::from_raw_parts(h[2].clone(), b.coords_z.len()),
-            ArrayArg::from_raw_parts(hu[0].clone(), b.point_block.len()),
-            ArrayArg::from_raw_parts(hu[1].clone(), b.block_inst0.len()),
-            ArrayArg::from_raw_parts(hu[2].clone(), b.slot_global.len()),
-            ArrayArg::from_raw_parts(hu[4].clone(), b.kslot_pow.len()),
-            ArrayArg::from_raw_parts(h[3].clone(), kcoef.len()),
-            ArrayArg::from_raw_parts(hu[3].clone(), b.inst_slot0.len()),
-            ArrayArg::from_raw_parts(hu[5].clone(), b.inst_ref.len()),
-            ArrayArg::from_raw_parts(h[4].clone(), b.instance_alpha.len()),
-            ArrayArg::from_raw_parts(h[5].clone(), b.instance_center.len()),
-            ArrayArg::from_raw_parts(out_h.clone(), npoints),
-            npoints,
+            ArrayArg::from_raw_parts(d.uocc_off.clone(), d.nuinstances + 1),
+            ArrayArg::from_raw_parts(d.uocc.clone(), d.ninstances),
+            ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
+            ArrayArg::from_raw_parts(d.instance_kslot0.clone(), d.nuinstances),
+            ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
+            ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
+            ArrayArg::from_raw_parts(out.clone(), d.nslots),
+            ArrayArg::from_raw_parts(kint.clone(), d.nkslots),
+            nlanes,
         );
     }
-    let bytes = client.read(vec![out_h]);
-    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
 }
 
-fn launch_integrate_batched<R: Runtime>(
-    b: &PairSlotBatch,
-    weight: &[f64],
-    client: &ComputeClient<R>,
-) -> Vec<f64> {
-    let ninst = b.ninstances();
-    let nslots = b.nslots();
-    let out_h = upload::<R, f64>(client, &vec![0.0f64; nslots]);
-    let h = [
-        upload::<R, f64>(client, &b.coords_x),
-        upload::<R, f64>(client, &b.coords_y),
-        upload::<R, f64>(client, &b.coords_z),
-        upload::<R, f64>(client, weight),
-        upload::<R, f64>(client, &b.instance_alpha),
-        upload::<R, f64>(client, &b.instance_center),
-    ];
-    let hu = [
-        upload_u32::<R>(client, &b.inst_block),
-        upload_u32::<R>(client, &b.block_point0),
-        upload_u32::<R>(client, &b.slot_global),
-        upload_u32::<R>(client, &b.inst_slot0),
-        upload_u32::<R>(client, &b.kslot_pow),
-        upload_u32::<R>(client, &b.inst_ref),
-    ];
-    let nblocks = b.nblocks().max(1);
-    let per_lane = 50 * (b.npoints() / nblocks).max(1);
-    let (count, dim) = launch_1d(client, ninst, per_lane);
-    unsafe {
-        collocate_pairs_integrate_batched_kernel::launch_unchecked::<R>(
-            client,
-            count,
-            dim,
-            ArrayArg::from_raw_parts(h[0].clone(), b.coords_x.len()),
-            ArrayArg::from_raw_parts(h[1].clone(), b.coords_y.len()),
-            ArrayArg::from_raw_parts(h[2].clone(), b.coords_z.len()),
-            ArrayArg::from_raw_parts(h[3].clone(), weight.len()),
-            ArrayArg::from_raw_parts(hu[0].clone(), b.inst_block.len()),
-            ArrayArg::from_raw_parts(hu[1].clone(), b.block_point0.len()),
-            ArrayArg::from_raw_parts(hu[2].clone(), b.slot_global.len()),
-            ArrayArg::from_raw_parts(hu[4].clone(), b.kslot_pow.len()),
-            ArrayArg::from_raw_parts(hu[3].clone(), b.inst_slot0.len()),
-            ArrayArg::from_raw_parts(hu[5].clone(), b.inst_ref.len()),
-            ArrayArg::from_raw_parts(h[4].clone(), b.instance_alpha.len()),
-            ArrayArg::from_raw_parts(h[5].clone(), b.instance_center.len()),
-            ArrayArg::from_raw_parts(out_h.clone(), nslots),
-            ninst,
-        );
-    }
-    let bytes = client.read(vec![out_h]);
-    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
-}
-
-/// The M-03 batched forward direction: `rho` at every concatenated grid point
-/// of one level, in ONE launch.
+/// The M-03 batched forward direction: `rho` at every concatenated (padded)
+/// grid point of one chunk, in ONE launch, through a throw-away resident
+/// upload. `set_coef` has one entry per SET slot.
 ///
 /// Returns one value per entry of [`PairSlotBatch::coords_x`], in the batch's
-/// own (block-major) order; the caller scatters them back to mesh order.
+/// own (block-major, padded) order; the caller scatters the real points back
+/// to mesh order.
 ///
 /// # Errors
 /// [`AlgebraError::ShapeMismatch`] on an inconsistent batch. An empty batch
@@ -1756,35 +2429,18 @@ fn launch_integrate_batched<R: Runtime>(
 pub fn collocate_pairs_rho_batched(
     client: &AlgebraClient,
     b: &PairSlotBatch,
-    kcoef: &[f64],
+    set_coef: &[f64],
 ) -> Result<Vec<f64>, AlgebraError> {
-    validate_batch(b)?;
-    if kcoef.len() != b.nkslots() {
-        return Err(AlgebraError::ShapeMismatch {
-            expected: format!("kcoef.len() == nkslots = {}", b.nkslots()),
-            actual: format!("{}", kcoef.len()),
-        });
-    }
     if b.npoints() == 0 {
+        validate_batch(b)?;
         return Ok(Vec::new());
     }
-    if b.nslots() == 0 {
-        return Ok(vec![0.0; b.npoints()]);
-    }
-    Ok(dispatch_backend!(
-        client,
-        c,
-        Rt,
-        launch_rho_batched::<Rt>(b, kcoef, c)
-    ))
+    PairSlotBatchDevice::new(client, b)?.rho(client, set_coef)
 }
 
-/// The M-03 batched reverse direction: every concatenated slot's weighted grid
-/// integral for one level, in ONE launch.
-///
-/// `weight` is indexed by CONCATENATED point, i.e. it must be permuted into
-/// the batch's block-major order by the caller — the same order
-/// [`PairSlotBatch::coords_x`] is in.
+/// The M-03 batched reverse direction for ONE chunk: the level's kernel-slot
+/// integrals (`nkslots` entries) from this chunk alone, i.e. `kint` folded
+/// from zero. `weight` is indexed by CONCATENATED (padded) point.
 ///
 /// # Errors
 /// As [`collocate_pairs_rho_batched`], plus a length mismatch on `weight`.
@@ -1800,26 +2456,20 @@ pub fn collocate_pairs_integrate_batched(
             actual: format!("{}", weight.len()),
         });
     }
-    if b.nslots() == 0 {
-        return Ok(Vec::new());
+    let d = PairSlotBatchDevice::new(client, b)?;
+    d.zero_kint(client, 1)?;
+    if b.npoints() > 0 {
+        d.integrate_into_kint(client, weight)?;
     }
-    if b.npoints() == 0 {
-        return Ok(vec![0.0; b.nslots()]);
-    }
-    Ok(dispatch_backend!(
-        client,
-        c,
-        Rt,
-        launch_integrate_batched::<Rt>(b, weight, c)
-    ))
+    Ok(d.read_kint(client, 1)?.swap_remove(0))
 }
 
 /// The most slots one instance may own in a batched launch — M-08.
 ///
 /// The reverse batched kernels accumulate an instance's slot integrals in a
-/// fixed-width register array indexed by `slot - inst_slot0[inst]`, so an
-/// instance carrying more slots than this cannot be batched at all. Hosts
-/// must partition to respect it (see the pair-level table builder's own
+/// fixed-width register array indexed by the slot's position in its term set,
+/// so an instance carrying more slots than this cannot be batched at all.
+/// Hosts must partition to respect it (see the pair-level table builder's own
 /// guard); [`validate_batch`] is the last line of defence, not the first.
 pub const MAX_SLOTS_PER_INSTANCE: usize = 10;
 
@@ -1828,15 +2478,10 @@ pub const MAX_SLOTS_PER_INSTANCE: usize = 10;
 /// and is refused rather than indexed past.
 fn validate_batch(b: &PairSlotBatch) -> Result<(), AlgebraError> {
     let shape = |expected: String, actual: String| AlgebraError::ShapeMismatch { expected, actual };
-    if b.coords_x.len() != b.point_block.len()
-        || b.coords_y.len() != b.point_block.len()
-        || b.coords_z.len() != b.point_block.len()
-    {
+    let npoints = b.point_block.len();
+    if b.coords_x.len() != npoints || b.coords_y.len() != npoints || b.coords_z.len() != npoints {
         return Err(shape(
-            format!(
-                "each coordinate plane has npoints = {}",
-                b.point_block.len()
-            ),
+            format!("each coordinate plane has npoints = {npoints}"),
             format!(
                 "{}/{}/{}",
                 b.coords_x.len(),
@@ -1845,71 +2490,144 @@ fn validate_batch(b: &PairSlotBatch) -> Result<(), AlgebraError> {
             ),
         ));
     }
-    if b.block_point0.len() != b.block_inst0.len() {
+    if !npoints.is_multiple_of(POINT_PAD) {
         return Err(shape(
-            "block_point0 and block_inst0 to have the same length (nblocks + 1)".to_string(),
-            format!("{} vs {}", b.block_point0.len(), b.block_inst0.len()),
+            format!("npoints a multiple of POINT_PAD = {POINT_PAD}"),
+            npoints.to_string(),
         ));
     }
-    if b.instance_center.len() != b.instance_alpha.len() * 3 {
+    let nblocks = b.block_point0.len().saturating_sub(1);
+    if b.block_inst0.len() != nblocks + 1 || b.block_point_end.len() != nblocks {
+        return Err(shape(
+            "block_point0 (nblocks + 1), block_inst0 (nblocks + 1) and block_point_end (nblocks)"
+                .to_string(),
+            format!(
+                "{} / {} / {}",
+                b.block_point0.len(),
+                b.block_inst0.len(),
+                b.block_point_end.len()
+            ),
+        ));
+    }
+    for bi in 0..nblocks {
+        let p0 = b.block_point0[bi] as usize;
+        let p1 = b.block_point0[bi + 1] as usize;
+        let pe = b.block_point_end[bi] as usize;
+        if !(p0 <= pe && pe <= p1) || !p0.is_multiple_of(POINT_PAD) || p1 > npoints {
+            return Err(shape(
+                "every block's point range padded to POINT_PAD with its real end inside"
+                    .to_string(),
+                format!("block {bi}: {p0}..{pe}..{p1}"),
+            ));
+        }
+    }
+    let nocc = b.inst_block.len();
+    if b.inst_ref.len() != nocc || b.occ_slot0.len() != nocc + 1 {
+        return Err(shape(
+            format!("inst_ref (nocc = {nocc}) and occ_slot0 (nocc + 1)"),
+            format!("{} / {}", b.inst_ref.len(), b.occ_slot0.len()),
+        ));
+    }
+    if b.block_inst0.last().is_some_and(|&e| e as usize != nocc) {
+        return Err(shape(
+            format!("block_inst0 to end at nocc = {nocc}"),
+            format!("{:?}", b.block_inst0.last()),
+        ));
+    }
+    let nuinst = b.instance_alpha.len();
+    if b.instance_center.len() != nuinst * 3
+        || b.instance_set.len() != nuinst
+        || b.instance_kslot0.len() != nuinst
+        || b.uocc_off.len() != nuinst + 1
+    {
+        return Err(shape(
+            format!("per-distinct tables sized nuinst = {nuinst} (centre 3x, uocc_off + 1)"),
+            format!(
+                "{} / {} / {} / {}",
+                b.instance_center.len(),
+                b.instance_set.len(),
+                b.instance_kslot0.len(),
+                b.uocc_off.len()
+            ),
+        ));
+    }
+    if b.uocc.len() != nocc || b.uocc_off.last().is_some_and(|&e| e as usize != nocc) {
+        return Err(shape(
+            format!("uocc to list every occurrence once (nocc = {nocc})"),
+            format!("{} / {:?}", b.uocc.len(), b.uocc_off.last()),
+        ));
+    }
+    if b.inst_ref.iter().any(|&u| u as usize >= nuinst)
+        || b.uocc.iter().any(|&o| o as usize >= nocc)
+    {
+        return Err(shape(
+            "every inst_ref < nuinst and every uocc < nocc".to_string(),
+            "an out-of-range index".to_string(),
+        ));
+    }
+    let nsets = b.set_off.len().saturating_sub(1);
+    if b.set_off.first().is_some_and(|&s| s != 0)
+        || b.set_off
+            .last()
+            .is_some_and(|&e| e as usize != b.set_pow.len())
+        || b.set_off
+            .windows(2)
+            .any(|w| w[1] < w[0] || (w[1] - w[0]) as usize > MAX_SLOTS_PER_INSTANCE)
+    {
         return Err(shape(
             format!(
-                "instance_center.len() == 3 * ninstances = {}",
-                b.instance_alpha.len() * 3
+                "set_off a prefix over set_pow with at most {MAX_SLOTS_PER_INSTANCE} slots per set"
             ),
-            format!("{}", b.instance_center.len()),
-        ));
-    }
-    if b.inst_ref.len() != b.inst_block.len() {
-        return Err(shape(
-            format!("inst_ref.len() == ninstances = {}", b.inst_block.len()),
-            format!("{}", b.inst_ref.len()),
-        ));
-    }
-    if b.inst_ref
-        .iter()
-        .any(|&u| u as usize >= b.instance_alpha.len())
-    {
-        return Err(shape(
-            format!("every inst_ref < nuinstances = {}", b.instance_alpha.len()),
-            "an out-of-range distinct-instance index".to_string(),
-        ));
-    }
-    if b.inst_slot0.len() != b.inst_block.len() + 1 {
-        return Err(shape(
             format!(
-                "inst_slot0.len() == ninstances + 1 = {}",
-                b.inst_block.len() + 1
+                "{:?}..{:?} over {}",
+                b.set_off.first(),
+                b.set_off.last(),
+                b.set_pow.len()
             ),
-            format!("{}", b.inst_slot0.len()),
         ));
     }
-    if b.inst_slot0
-        .windows(2)
-        .any(|w| w[1] < w[0] || (w[1] - w[0]) as usize > MAX_SLOTS_PER_INSTANCE)
-    {
-        return Err(shape(
-            format!("at most {MAX_SLOTS_PER_INSTANCE} ordered slots per instance"),
-            "instance slot span exceeds the M-08 register bound".to_string(),
-        ));
-    }
-    if b.inst_slot0
-        .last()
-        .is_some_and(|&end| end as usize != b.slot_global.len())
-    {
-        return Err(shape(
-            format!("inst_slot0 to end at nslots = {}", b.slot_global.len()),
-            format!("{:?}", b.inst_slot0.last()),
-        ));
-    }
-    if b.slot_global
+    if b.set_pow
         .iter()
-        .any(|&k| k as usize >= b.kslot_pow.len())
+        .any(|&p| p & 255 > 2 || (p >> 8) & 255 > 2 || (p >> 16) & 255 > 2)
     {
         return Err(shape(
-            format!("every slot_global < nkslots = {}", b.kslot_pow.len()),
-            "an out-of-range kernel-slot index".to_string(),
+            "every monomial power <= 2 in a batched set".to_string(),
+            "a power above 2".to_string(),
         ));
+    }
+    if b.instance_set.iter().any(|&s| s as usize >= nsets) {
+        return Err(shape(
+            format!("every instance_set < nsets = {nsets}"),
+            "an out-of-range set index".to_string(),
+        ));
+    }
+    for (u, &s) in b.instance_set.iter().enumerate() {
+        let nsl = (b.set_off[s as usize + 1] - b.set_off[s as usize]) as usize;
+        let k0 = b.instance_kslot0[u] as usize;
+        if k0 + nsl > b.nkslots {
+            return Err(shape(
+                format!("instance_kslot0 + set size <= nkslots = {}", b.nkslots),
+                format!("distinct instance {u}: {k0} + {nsl}"),
+            ));
+        }
+    }
+    // Every occurrence's output span is its set's size, and the spans tile
+    // `occ_slot0` exactly.
+    if b.occ_slot0.first().is_some_and(|&s| s != 0) {
+        return Err(shape(
+            "occ_slot0 to start at 0".to_string(),
+            format!("{:?}", b.occ_slot0.first()),
+        ));
+    }
+    for occ in 0..nocc {
+        let s = b.instance_set[b.inst_ref[occ] as usize] as usize;
+        let nsl = b.set_off[s + 1] - b.set_off[s];
+        if b.occ_slot0[occ + 1] - b.occ_slot0[occ] != nsl {
+            return Err(shape(
+                "occ_slot0 spans equal to the occurrence's set size".to_string(),
+                format!("occurrence {occ}"),
+            ));
+        }
     }
     Ok(())
 }

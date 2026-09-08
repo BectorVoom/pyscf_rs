@@ -66,8 +66,8 @@
 
 use pyscf_algebra::AlgebraError;
 use pyscf_kernels::multigrid_pair::{
-    MAX_SLOTS_PER_INSTANCE, PairSlotBatch, PairSlotBatchDevice, PairSlotTable,
-    collocate_pairs_integrate, collocate_pairs_rho,
+    MAX_SLOTS_PER_INSTANCE, PAD_POINT, POINT_PAD, PairSlotBatch, PairSlotBatchDevice,
+    PairSlotTable, collocate_pairs_integrate, collocate_pairs_rho,
 };
 use pyscf_pbc_gto::Cell;
 use pyscf_pbc_gto::lattice::get_lattice_ls;
@@ -318,6 +318,22 @@ pub struct PairLevelTable {
     /// Per kernel instance: the fused Gaussian's own cutoff radius
     /// ([`fused_radius`]) — what decides which [`GridBlock`]s it reaches.
     pub instance_radius: Vec<f64>,
+    /// M-15: per kernel instance, its term SET — an index into
+    /// [`Self::set_off`]. Every wrap image of one fused pair `(p, q, L)`
+    /// shares one set: the same `terms_here` sequence, hence the same
+    /// monomials and the same fused terms.
+    pub instance_set: Vec<u32>,
+    /// M-16: `instance_kslot0[i]..instance_kslot0[i+1]` — instance `i`'s
+    /// kernel slots (the `kslot_*` rows), in set order. `ninstances + 1`
+    /// entries.
+    pub instance_kslot0: Vec<u32>,
+    /// `set_off[s]..set_off[s+1]` — set `s`'s slots in [`Self::set_pow`] /
+    /// [`Self::set_term`]. `nsets + 1` entries.
+    pub set_off: Vec<u32>,
+    /// Per set slot: the monomial powers packed `ix | iy << 8 | iz << 16`.
+    pub set_pow: Vec<u32>,
+    /// Per set slot: the fused term it is an image of.
+    pub set_term: Vec<u32>,
 
     /// M-02: the spatial block partition of this level's mesh, and each
     /// block's kernel-slot reach list, computed ONCE at build time.
@@ -349,18 +365,45 @@ pub struct PairLevelTable {
     pub out_scratch: std::sync::OnceLock<pyscf_kernels::PairOutScratch>,
 }
 
-/// The M-03 concatenated launch tables for one level, plus the two maps that
-/// scatter a batched result back into mesh / kernel-slot order.
+/// The M-03 concatenated launch tables for one level chunk, plus the map
+/// that scatters a batched forward result back into mesh order.
 #[derive(Debug)]
 pub struct BatchedLevel {
-    /// Geometry only. M-12: the per-call coefficients are indexed INSIDE the
-    /// kernel through `batch.slot_global`, so nothing per concatenated slot
-    /// is built or moved per call.
-    pub batch: PairSlotBatch,
-    /// Concatenated point index -> this level's mesh grid index.
+    /// The level blocks this chunk concatenates.
+    pub range: std::ops::Range<usize>,
+    /// Geometry, host-side, until the first upload — M-18. `resident_batch`
+    /// TAKES it once the device copy exists: on the CPU runtime the device
+    /// copy IS host memory, so holding both doubled the chunk's resident
+    /// bytes for the life of the SCF. `PYSCF_MG_PAIR_KEEP_HOST=1` keeps it
+    /// (tests, or a later client of another backend); [`Self::host_batch`]
+    /// rebuilds it on demand otherwise.
+    pub batch: std::sync::Mutex<Option<PairSlotBatch>>,
+    /// Concatenated (padded) point index -> this level's mesh grid index,
+    /// or [`PAD_POINT`] for a pad point.
     pub point_global: Vec<u32>,
+    /// The chunk's shape, kept beside the (droppable) geometry for the
+    /// instrument: padded points, instance occurrences, distinct instances,
+    /// reverse-output slots, resident geometry bytes.
+    pub npoints: usize,
+    pub ninstances: usize,
+    pub nuinstances: usize,
+    pub nslots: usize,
+    pub geometry_bytes: u64,
     /// M-06: invariant geometry, uploaded lazily on first use.
     pub device: std::sync::OnceLock<PairSlotBatchDevice>,
+}
+
+impl BatchedLevel {
+    /// The host geometry — the retained copy, or rebuilt from the level
+    /// (deterministically: the same blocks in the same order).
+    pub fn host_batch(&self, lv: &PairLevelTable) -> PairSlotBatch {
+        if let Ok(g) = self.batch.lock()
+            && let Some(b) = g.as_ref()
+        {
+            return b.clone();
+        }
+        build_batch_geometry(lv, self.range.clone()).0
+    }
 }
 
 /// The largest concatenated batch M-03 will build, in bytes.
@@ -623,6 +666,12 @@ pub fn build_pair_level_table(
     let mut instance_alpha = Vec::new();
     let mut instance_center = Vec::new();
     let mut instance_radius = Vec::new();
+    // M-15 / M-16: term sets and the per-instance kernel-slot prefix.
+    let mut instance_set: Vec<u32> = Vec::new();
+    let mut instance_kslot0: Vec<u32> = vec![0];
+    let mut set_off: Vec<u32> = vec![0];
+    let mut set_pow: Vec<u32> = Vec::new();
+    let mut set_term: Vec<u32> = Vec::new();
 
     let threshold = cell.precision * EXTRA_PREC;
 
@@ -730,6 +779,14 @@ pub fn build_pair_level_table(
             if r_inst <= 0.0 {
                 continue;
             }
+            // M-15: one term set per `(pair, L)`, shared by its wrap images.
+            let set = set_off.len() as u32 - 1;
+            for &(t, pw) in &terms_here {
+                debug_assert!(pw[0] < 256 && pw[1] < 256 && pw[2] < 256);
+                set_pow.push(pw[0] | (pw[1] << 8) | (pw[2] << 16));
+                set_term.push(t);
+            }
+            set_off.push(set_pow.len() as u32);
             for c in wrap_images(&a, &inv_a, &heights, glo, ghi, pcen, r_inst) {
                 let inst = instance_alpha.len() as u32;
                 instance_alpha.push(eta);
@@ -737,6 +794,7 @@ pub fn build_pair_level_table(
                 instance_center.push(c[1]);
                 instance_center.push(c[2]);
                 instance_radius.push(r_inst);
+                instance_set.push(set);
                 for &(t, pw) in &terms_here {
                     kslot_pow.push(pw[0]);
                     kslot_pow.push(pw[1]);
@@ -744,6 +802,7 @@ pub fn build_pair_level_table(
                     kslot_instance.push(inst);
                     kslot_term.push(t);
                 }
+                instance_kslot0.push(kslot_term.len() as u32);
             }
         }
     }
@@ -765,6 +824,11 @@ pub fn build_pair_level_table(
         instance_alpha,
         instance_center,
         instance_radius,
+        instance_set,
+        instance_kslot0,
+        set_off,
+        set_pow,
+        set_term,
         blocks: Vec::new(),
         block_sel: Vec::new(),
         batches: Vec::new(),
@@ -792,42 +856,60 @@ pub fn build_pair_level_table(
     Ok(table)
 }
 
-/// Concatenate every block's launch table into one — M-03.
+/// Concatenate every block's launch table into one — M-03, in the M-15
+/// term-set layout.
 ///
-/// Mirrors [`block_table`] block by block and slot by slot, so the batched
-/// kernel sees each block's instances and slots in exactly the order the
-/// per-block launch presented them. Returns `None` above
-/// [`BATCH_BUDGET_BYTES`], leaving the caller on the streaming path.
-fn batch_counts(lv: &PairLevelTable, range: std::ops::Range<usize>) -> (usize, usize, usize) {
-    let mut npoints = 0;
-    let mut nslots = 0;
-    let mut ninst = 0;
+/// Mirrors [`block_table`] block by block and instance by instance, so the
+/// batched kernel sees each block's instances in exactly the order the
+/// per-block launch presented them, and each instance's monomials in its
+/// set's (= its kernel slots') order.
+fn batch_counts(
+    lv: &PairLevelTable,
+    range: std::ops::Range<usize>,
+    stamp: &mut [u32],
+    stamp_id: u32,
+) -> BatchCounts {
+    let mut c = BatchCounts::default();
     for bi in range {
-        npoints += lv.blocks[bi].points.len();
-        nslots += lv.block_sel[bi].len();
+        c.npoints += lv.blocks[bi].points.len().div_ceil(POINT_PAD) * POINT_PAD;
+        let sel = block_sel_of(lv, bi);
+        c.nslots += sel.len();
         let mut last = u32::MAX;
-        for &k in &lv.block_sel[bi] {
+        for &k in sel.iter() {
             let inst = lv.kslot_instance[k as usize];
             if inst != last {
-                ninst += 1;
+                c.nocc += 1;
                 last = inst;
+                if stamp[inst as usize] != stamp_id {
+                    stamp[inst as usize] = stamp_id;
+                    c.nuinst += 1;
+                }
             }
         }
     }
-    (npoints, nslots, ninst)
+    c
 }
 
-fn batch_bytes(npoints: usize, nslots: usize, ninst: usize, nblocks: usize) -> usize {
-    // Geometry, both varying arrays, both outputs, and the two host scatter maps.
-    // Kept as the pre-M-12/M-13 model on purpose: the budget decides the chunk
-    // boundaries, and a chunk boundary is bit-neutral (each point's instance
-    // list and each instance's point list are set by its block alone), so the
-    // conservative count only costs launches, never bits. Re-model it when the
-    // instrument shows the launch count matters (RULE O: one change at a time).
-    npoints * (3 * 8 + 4 + 8 + 4)
-        + nslots * (3 * 4 + 8 + 8 + 4)
-        + ninst * (4 + 8 + 3 * 8 + 4)
-        + (nblocks + 1) * 2 * 4
+#[derive(Default, Clone, Copy)]
+struct BatchCounts {
+    npoints: usize,
+    nslots: usize,
+    nocc: usize,
+    nuinst: usize,
+}
+
+/// Resident device bytes of one chunk: its geometry ([`PairSlotBatch::geometry_bytes`]'s
+/// model) plus its reverse output (`nslots · 8`), which the shared scratch
+/// must hold for the largest chunk. The budget decides the chunk boundaries,
+/// and a chunk boundary is bit-neutral (each point's instance list and each
+/// instance's point list are set by its block alone), so the model only
+/// costs launches, never bits.
+fn batch_bytes(c: BatchCounts, nblocks: usize) -> usize {
+    c.npoints * (3 * 8 + 4)
+        + c.nslots * 8
+        + c.nocc * (4 + 4 + 4 + 4)
+        + c.nuinst * (8 + 3 * 8 + 4 + 4 + 4)
+        + (nblocks + 1) * 3 * 4
 }
 
 /// Block `bi`'s reach list — `lv.block_sel[bi]` while the lists are retained,
@@ -842,29 +924,19 @@ fn block_sel_of(lv: &PairLevelTable, bi: usize) -> std::borrow::Cow<'_, [u32]> {
     }
 }
 
-/// The most slots any one instance owns in any block's reach list — the
-/// quantity [`MAX_SLOTS_PER_INSTANCE`] bounds.
+/// The most slots any one instance owns — the quantity
+/// [`MAX_SLOTS_PER_INSTANCE`] bounds — and whether every monomial power is
+/// at most 2 (the batched kernels' predicated power products assume it).
 ///
 /// An instance's slots are the distinct `(k1,k2,k3)` monomials of its pair,
 /// so this is `C(l_p+l_q+3, 3)` for the level's widest pair: 10 at
 /// `l_p+l_q = 2`, but 20 at 3 and 35 at 4.
 fn max_instance_span(lv: &PairLevelTable) -> usize {
-    let mut max = 0usize;
-    for sel in &lv.block_sel {
-        let mut run = 0usize;
-        let mut last = u32::MAX;
-        for &k in sel {
-            let inst = lv.kslot_instance[k as usize];
-            if inst == last {
-                run += 1;
-            } else {
-                last = inst;
-                run = 1;
-            }
-            max = max.max(run);
-        }
-    }
-    max
+    lv.set_off
+        .windows(2)
+        .map(|w| (w[1] - w[0]) as usize)
+        .max()
+        .unwrap_or(0)
 }
 
 fn build_batched_levels(lv: &PairLevelTable) -> Vec<BatchedLevel> {
@@ -874,16 +946,19 @@ fn build_batched_levels(lv: &PairLevelTable) -> Vec<BatchedLevel> {
     // p·d pairs — exceeds it, and streams instead. Checked here rather than
     // left to `validate_batch`, which would turn the whole density
     // evaluation into an error at launch time.
-    if max_instance_span(lv) > MAX_SLOTS_PER_INSTANCE {
+    if max_instance_span(lv) > MAX_SLOTS_PER_INSTANCE || lv.kslot_pow.iter().any(|&p| p > 2) {
         return Vec::new();
     }
+    let mut stamp = vec![u32::MAX; lv.instance_alpha.len()];
+    let mut stamp_id = 0u32;
     let mut ranges = Vec::new();
     let mut start = 0;
     while start < lv.blocks.len() {
         let mut end = start;
         while end < lv.blocks.len() {
-            let (np, ns, ni) = batch_counts(lv, start..end + 1);
-            if batch_bytes(np, ns, ni, end + 1 - start) > BATCH_BUDGET_BYTES {
+            stamp_id = stamp_id.wrapping_add(1);
+            let c = batch_counts(lv, start..end + 1, &mut stamp, stamp_id);
+            if batch_bytes(c, end + 1 - start) > BATCH_BUDGET_BYTES {
                 break;
             }
             end += 1;
@@ -897,51 +972,50 @@ fn build_batched_levels(lv: &PairLevelTable) -> Vec<BatchedLevel> {
     }
     ranges
         .into_iter()
-        .filter_map(|range| build_batched_range(lv, range))
+        .filter_map(|range| {
+            let (b, point_global) = build_batch_geometry(lv, range.clone());
+            if b.npoints() == 0 || b.nslots() == 0 {
+                return None;
+            }
+            Some(BatchedLevel {
+                range,
+                npoints: b.npoints(),
+                ninstances: b.ninstances(),
+                nuinstances: b.nuinstances(),
+                nslots: b.nslots(),
+                geometry_bytes: b.geometry_bytes(),
+                point_global,
+                batch: std::sync::Mutex::new(Some(b)),
+                device: std::sync::OnceLock::new(),
+            })
+        })
         .collect()
 }
 
-fn build_batched_range(lv: &PairLevelTable, range: std::ops::Range<usize>) -> Option<BatchedLevel> {
-    let (npoints, nslots, _) = batch_counts(lv, range.clone());
-    if npoints == 0 || nslots == 0 {
-        return None;
-    }
-
+/// The chunk geometry for `range` and its point scatter map — a pure
+/// function of the level table, so a taken host copy (M-18) can be rebuilt.
+fn build_batch_geometry(
+    lv: &PairLevelTable,
+    range: std::ops::Range<usize>,
+) -> (PairSlotBatch, Vec<u32>) {
     let mut b = PairSlotBatch {
-        coords_x: Vec::with_capacity(npoints),
-        coords_y: Vec::with_capacity(npoints),
-        coords_z: Vec::with_capacity(npoints),
-        point_block: Vec::with_capacity(npoints),
         block_point0: Vec::with_capacity(range.len() + 1),
+        block_point_end: Vec::with_capacity(range.len()),
         block_inst0: Vec::with_capacity(range.len() + 1),
-        inst_block: Vec::new(),
-        // M-13: per OCCURRENCE an index; per DISTINCT instance the data.
-        inst_ref: Vec::new(),
-        instance_alpha: Vec::new(),
-        instance_center: Vec::new(),
-        // Filled below: one START per instance, then the final end, which is
-        // exactly the `ninst + 1` prefix shape the kernel indexes.
-        inst_slot0: Vec::new(),
-        slot_global: Vec::with_capacity(nslots),
-        // M-12: the level's packed powers, once per KERNEL slot — shared by
-        // every chunk of the level (a `nkslots · 4` B copy per chunk).
-        kslot_pow: (0..lv.nkslots())
-            .map(|k| {
-                let ix = lv.kslot_pow[k * 3];
-                let iy = lv.kslot_pow[k * 3 + 1];
-                let iz = lv.kslot_pow[k * 3 + 2];
-                debug_assert!(ix < 256 && iy < 256 && iz < 256);
-                ix | (iy << 8) | (iz << 16)
-            })
-            .collect(),
+        // M-15: the level's sets, once per chunk (a few KB).
+        set_off: lv.set_off.clone(),
+        set_pow: lv.set_pow.clone(),
+        nkslots: lv.nkslots(),
+        ..Default::default()
     };
-    let mut point_global = Vec::with_capacity(npoints);
+    let mut point_global = Vec::new();
     // M-13: the chunk-local row of each level instance, `u32::MAX` until the
     // instance is first seen in this chunk.
     let mut local_of = vec![u32::MAX; lv.instance_alpha.len()];
 
     b.block_point0.push(0);
     b.block_inst0.push(0);
+    b.occ_slot0.push(0);
     for (local_bi, global_bi) in range.enumerate() {
         let block = &lv.blocks[global_bi];
         let sel = block_sel_of(lv, global_bi);
@@ -954,45 +1028,94 @@ fn build_batched_range(lv: &PairLevelTable, range: std::ops::Range<usize>) -> Op
             b.point_block.push(local_bi as u32);
             point_global.push(g as u32);
         }
+        b.block_point_end.push(b.point_block.len() as u32);
+        // M-17: pad the block to a multiple of the vector width, repeating
+        // its last real point; pads are evaluated and discarded.
+        if let Some(&g) = block.points.last() {
+            let g = g as usize;
+            while !b.point_block.len().is_multiple_of(POINT_PAD) {
+                b.coords_x.push(lv.coords[g * 3]);
+                b.coords_y.push(lv.coords[g * 3 + 1]);
+                b.coords_z.push(lv.coords[g * 3 + 2]);
+                b.point_block.push(local_bi as u32);
+                point_global.push(PAD_POINT);
+            }
+        }
         // Same instance grouping `block_table` performs: a new instance opens
-        // whenever the table-order slot list moves to a different one.
+        // whenever the table-order slot list moves to a different one. Its
+        // whole set reaches the block (reach is per instance), so the run's
+        // length is the set's size — asserted, since the reverse output is
+        // laid out by set size.
         let mut last_inst = u32::MAX;
+        let mut run = 0u32;
         for &k in sel {
-            let k = k as usize;
-            let inst = lv.kslot_instance[k];
+            let inst = lv.kslot_instance[k as usize];
             if inst != last_inst {
+                if last_inst != u32::MAX {
+                    let s = lv.instance_set[last_inst as usize] as usize;
+                    debug_assert_eq!(run, lv.set_off[s + 1] - lv.set_off[s]);
+                }
                 last_inst = inst;
+                run = 0;
                 let i = inst as usize;
                 if local_of[i] == u32::MAX {
                     local_of[i] = b.instance_alpha.len() as u32;
                     b.instance_alpha.push(lv.instance_alpha[i]);
                     b.instance_center
                         .extend_from_slice(&lv.instance_center[i * 3..i * 3 + 3]);
+                    b.instance_set.push(lv.instance_set[i]);
+                    b.instance_kslot0.push(lv.instance_kslot0[i]);
                 }
                 b.inst_ref.push(local_of[i]);
                 b.inst_block.push(local_bi as u32);
-                // This instance's slots start at the running slot count.
-                b.inst_slot0.push(b.slot_global.len() as u32);
+                let s = lv.instance_set[i] as usize;
+                let nsl = lv.set_off[s + 1] - lv.set_off[s];
+                b.occ_slot0
+                    .push(b.occ_slot0.last().copied().unwrap_or(0) + nsl);
             }
-            b.slot_global.push(k as u32);
+            run += 1;
+        }
+        if last_inst != u32::MAX {
+            let s = lv.instance_set[last_inst as usize] as usize;
+            debug_assert_eq!(run, lv.set_off[s + 1] - lv.set_off[s]);
         }
         b.block_point0.push(b.point_block.len() as u32);
         b.block_inst0.push(b.inst_block.len() as u32);
     }
-    // One START was pushed per instance; the final end closes the prefix.
-    b.inst_slot0.push(b.slot_global.len() as u32);
-    debug_assert_eq!(b.inst_slot0.len(), b.inst_block.len() + 1);
-    debug_assert_eq!(b.inst_slot0[0], 0);
-    debug_assert!(
-        b.inst_slot0
-            .windows(2)
-            .all(|w| (w[1] - w[0]) as usize <= MAX_SLOTS_PER_INSTANCE),
-        "M-08 reverse register bound exceeded"
-    );
-    Some(BatchedLevel {
-        batch: b,
-        point_global,
-        device: std::sync::OnceLock::new(),
+    // M-16: each distinct instance's occurrences, in occurrence order
+    // (a counting sort — occurrence order is block-major already).
+    let nuinst = b.instance_alpha.len();
+    let nocc = b.inst_ref.len();
+    let mut uocc_off = vec![0u32; nuinst + 1];
+    for &u in &b.inst_ref {
+        uocc_off[u as usize + 1] += 1;
+    }
+    for u in 0..nuinst {
+        uocc_off[u + 1] += uocc_off[u];
+    }
+    let mut fill = uocc_off.clone();
+    let mut uocc = vec![0u32; nocc];
+    for (occ, &u) in b.inst_ref.iter().enumerate() {
+        let slot = &mut fill[u as usize];
+        uocc[*slot as usize] = occ as u32;
+        *slot += 1;
+    }
+    b.uocc_off = uocc_off;
+    b.uocc = uocc;
+    debug_assert_eq!(b.occ_slot0.len(), b.inst_block.len() + 1);
+    (b, point_global)
+}
+
+/// M-14: the level's shared output scratch (largest chunk's outputs plus the
+/// level's `kint`), allocated on first use.
+fn level_scratch<'a>(
+    lv: &'a PairLevelTable,
+    client: &pyscf_algebra::AlgebraClient,
+) -> &'a pyscf_kernels::PairOutScratch {
+    lv.out_scratch.get_or_init(|| {
+        let max_points = lv.batches.iter().map(|b| b.npoints).max().unwrap_or(0);
+        let max_slots = lv.batches.iter().map(|b| b.nslots).max().unwrap_or(0);
+        pyscf_kernels::PairOutScratch::new(client, max_points, max_slots, lv.nkslots())
     })
 }
 
@@ -1004,24 +1127,21 @@ fn resident_batch<'a>(
     if let Some(device) = bl.device.get() {
         return Ok(device);
     }
-    // M-14: one output scratch per level, sized for its largest chunk.
-    let scratch = lv.out_scratch.get_or_init(|| {
-        let max_points = lv
-            .batches
-            .iter()
-            .map(|b| b.batch.npoints())
-            .max()
-            .unwrap_or(0);
-        let max_slots = lv
-            .batches
-            .iter()
-            .map(|b| b.batch.nslots())
-            .max()
-            .unwrap_or(0);
-        pyscf_kernels::PairOutScratch::new(client, max_points, max_slots)
-    });
-    let candidate =
-        PairSlotBatchDevice::new_shared(client, &bl.batch, scratch).map_err(wrap_alg)?;
+    let scratch = level_scratch(lv, client);
+    // M-18: the host copy goes once the device copy exists.
+    let keep_host = std::env::var("PYSCF_MG_PAIR_KEEP_HOST").is_ok_and(|v| v == "1");
+    let taken = match bl.batch.lock() {
+        Ok(mut g) => {
+            if keep_host {
+                g.as_ref().cloned()
+            } else {
+                g.take()
+            }
+        }
+        Err(_) => None,
+    };
+    let host = taken.unwrap_or_else(|| build_batch_geometry(lv, bl.range.clone()).0);
+    let candidate = PairSlotBatchDevice::new_shared(client, &host, scratch).map_err(wrap_alg)?;
     // `get_or_init` rather than `set` + a second `get`: a concurrent caller
     // that won the race keeps its upload and both callers see it, so there is
     // no "initialization failed" state to invent an error for.
@@ -1220,31 +1340,35 @@ pub fn pairlevel_rho_with(
         let d = dm_p[lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize];
         term_coef[lv.slot_term[s] as usize] += d * lv.slot_coef[s];
     }
-    let kcoef: Vec<f64> = lv
-        .kslot_term
-        .iter()
-        .map(|&t| term_coef[t as usize])
-        .collect();
 
     let client = backend_client()?;
 
-    // M-03: ONE launch for the whole level when the concatenated tables fit.
+    // M-03: ONE launch per chunk when the concatenated tables fit.
     // Bit-identical to the per-block route below — each lane runs the same
     // slot list in the same order, and every output is written by one lane.
     if use_batch && !lv.batches.is_empty() {
+        // M-15: the per-call coefficients go up per SET slot; the kernel
+        // walks them sequentially through the instance's set.
+        let set_coef: Vec<f64> = lv.set_term.iter().map(|&t| term_coef[t as usize]).collect();
         for bl in &lv.batches {
-            // M-12: the per-kernel-slot coefficients go up as they are; the
-            // kernel indexes them through the resident `slot_global`.
             let out = resident_batch(lv, bl, &client)?
-                .rho(&client, &kcoef)
+                .rho(&client, &set_coef)
                 .map_err(wrap_alg)?;
             for (p, v) in out.into_iter().enumerate() {
-                rho[bl.point_global[p] as usize] = v;
+                let g = bl.point_global[p];
+                if g != PAD_POINT {
+                    rho[g as usize] = v;
+                }
             }
         }
         return Ok(rho);
     }
 
+    let kcoef: Vec<f64> = lv
+        .kslot_term
+        .iter()
+        .map(|&t| term_coef[t as usize])
+        .collect();
     // M-02: `lv.blocks` / `lv.block_sel` instead of recomputing the partition
     // and every block's reach list on each call. Same blocks, same order.
     // (M-13: a batched level has released `block_sel`; `block_sel_of`
@@ -1287,8 +1411,8 @@ pub fn pairlevel_rho2(
         term_coef[0][t] += dm_p[0][idx] * lv.slot_coef[s];
         term_coef[1][t] += dm_p[1][idx] * lv.slot_coef[s];
     }
-    let kcoef = term_coef.map(|tc| {
-        lv.kslot_term
+    let set_coef = term_coef.map(|tc| {
+        lv.set_term
             .iter()
             .map(|&t| tc[t as usize])
             .collect::<Vec<_>>()
@@ -1297,11 +1421,14 @@ pub fn pairlevel_rho2(
     let mut rho = [vec![0.0; lv.ngrids], vec![0.0; lv.ngrids]];
     for bl in &lv.batches {
         let out = resident_batch(lv, bl, &client)?
-            .rho2(&client, [&kcoef[0], &kcoef[1]])
+            .rho2(&client, [&set_coef[0], &set_coef[1]])
             .map_err(wrap_alg)?;
         for spin in 0..2 {
             for (p, &v) in out[spin].iter().enumerate() {
-                rho[spin][bl.point_global[p] as usize] = v;
+                let g = bl.point_global[p];
+                if g != PAD_POINT {
+                    rho[spin][g as usize] = v;
+                }
             }
         }
     }
@@ -1331,6 +1458,21 @@ pub fn pairlevel_pass2(
     pairlevel_pass2_with(lv, decon, weight, v_p, true)
 }
 
+/// The batched weights of one chunk: the level's `weight` gathered into the
+/// chunk's padded point order, `0.0` on pad points (never read).
+fn chunk_weights(bl: &BatchedLevel, weight: &[f64]) -> Vec<f64> {
+    bl.point_global
+        .iter()
+        .map(|&g| {
+            if g == PAD_POINT {
+                0.0
+            } else {
+                weight[g as usize]
+            }
+        })
+        .collect()
+}
+
 /// [`pairlevel_pass2`] with M-03's batched launch explicitly on or off — the
 /// reverse-direction twin of [`pairlevel_rho_with`], and for the same reason.
 ///
@@ -1353,27 +1495,25 @@ pub fn pairlevel_pass2_with(
 
     let client = backend_client()?;
 
-    // M-03 — see `pairlevel_rho`. The host fold below visits the concatenated
-    // slots in block-major, within-block-table order, which is exactly the
-    // order the per-block loop accumulated in (D-PBC-17's fixed-order
-    // property, preserved).
+    // M-03 — see `pairlevel_rho`. M-16: the fold onto `kint` runs on the
+    // device, chunk after chunk, against the level's resident `kint`; it
+    // visits a kernel slot's occurrences in block-major order, which is
+    // exactly the order the per-block loop accumulated in (D-PBC-17's
+    // fixed-order property, preserved), and only `nkslots` reals come back.
     let mut batched = false;
     if use_batch && !lv.batches.is_empty() {
+        let scratch = level_scratch(lv, &client);
+        scratch.zero_kint(&client, 1).map_err(wrap_alg)?;
         for bl in &lv.batches {
-            let w: Vec<f64> = bl
-                .point_global
-                .iter()
-                .map(|&g| weight[g as usize])
-                .collect();
-            // M-13: fold straight from the read-back — same `s` order, same
-            // additions into `kint`, no `nslots · 8` B copy in between.
-            let slot_global = &bl.batch.slot_global;
+            let w = chunk_weights(bl, weight);
             resident_batch(lv, bl, &client)?
-                .integrate_fold(&client, &w, &mut |s, v| {
-                    kint[slot_global[s] as usize] += v;
-                })
+                .integrate_into_kint(&client, &w)
                 .map_err(wrap_alg)?;
         }
+        kint = scratch
+            .read_kint(&client, 1)
+            .map_err(wrap_alg)?
+            .swap_remove(0);
         batched = true;
     }
 
@@ -1424,21 +1564,15 @@ pub fn pairlevel_pass2_2(
         return Ok(());
     }
     let client = backend_client()?;
-    let mut kint = [vec![0.0f64; lv.nkslots()], vec![0.0f64; lv.nkslots()]];
+    let scratch = level_scratch(lv, &client);
+    scratch.zero_kint(&client, 2).map_err(wrap_alg)?;
     for bl in &lv.batches {
-        let w = weight.map(|src| {
-            bl.point_global
-                .iter()
-                .map(|&g| src[g as usize])
-                .collect::<Vec<_>>()
-        });
-        let slot_global = &bl.batch.slot_global;
+        let w = [chunk_weights(bl, weight[0]), chunk_weights(bl, weight[1])];
         resident_batch(lv, bl, &client)?
-            .integrate2_fold(&client, [&w[0], &w[1]], &mut |spin, s, v| {
-                kint[spin][slot_global[s] as usize] += v;
-            })
+            .integrate2_into_kint(&client, [&w[0], &w[1]])
             .map_err(wrap_alg)?;
     }
+    let kint = scratch.read_kint(&client, 2).map_err(wrap_alg)?;
     let mut integrals = [vec![0.0f64; lv.nterms], vec![0.0f64; lv.nterms]];
     for spin in 0..2 {
         for k in 0..lv.nkslots() {
@@ -1690,57 +1824,34 @@ impl MultiGridNumInt2 {
     }
 }
 
-/// The per-level tracing span both directions of both spin counts open.
-fn batch_geometry_bytes(batch: &PairSlotBatch) -> u64 {
-    let f64_bytes = batch
-        .coords_x
-        .len()
-        .saturating_add(batch.coords_y.len())
-        .saturating_add(batch.coords_z.len())
-        .saturating_add(batch.instance_alpha.len())
-        .saturating_add(batch.instance_center.len())
-        .saturating_mul(core::mem::size_of::<f64>());
-    let u32_bytes = batch
-        .point_block
-        .len()
-        .saturating_add(batch.block_point0.len())
-        .saturating_add(batch.block_inst0.len())
-        .saturating_add(batch.inst_block.len())
-        .saturating_add(batch.inst_ref.len())
-        .saturating_add(batch.inst_slot0.len())
-        .saturating_add(batch.slot_global.len())
-        .saturating_add(batch.kslot_pow.len())
-        .saturating_mul(core::mem::size_of::<u32>());
-    f64_bytes.saturating_add(u32_bytes) as u64
-}
-
 /// RULE T transfer model for the resident M-06 path. `before` is the former
 /// per-call upload of invariant geometry plus a zero output, varying inputs,
-/// and the read-back; `after` retains only varying inputs and read-backs.
+/// and the read-back; `after` retains only varying inputs and read-backs —
+/// M-15/M-16: per set slot forward, `kint` (once per level) reverse.
 fn pair_level_transfer_bytes(
     direction: &'static str,
     channels: usize,
     lv: &PairLevelTable,
 ) -> (u64, u64) {
+    let kint_bytes = (lv.nkslots() * 8 * channels) as u64;
+    let set_bytes = (lv.set_pow.len() * 8 * channels) as u64;
     lv.batches
         .iter()
-        .fold((0_u64, 0_u64), |(before, after), bl| {
-            let batch = &bl.batch;
-            let geometry = batch_geometry_bytes(batch);
-            // M-12: the per-call coefficient is per KERNEL slot (forward) and
-            // gone (reverse). `before` keeps the pre-M-06 model — the
-            // per-concatenated-slot coefficient — so the column stays the
-            // same reference it has been.
-            let coef_before = batch.nslots().saturating_mul(8).saturating_mul(channels) as u64;
-            let coef_after = batch.nkslots().saturating_mul(8).saturating_mul(channels) as u64;
-            let points = batch.npoints().saturating_mul(8).saturating_mul(channels) as u64;
-            let slots = batch.nslots().saturating_mul(8).saturating_mul(channels) as u64;
-            let (varying_before, varying, output) = if direction == "forward" {
-                (coef_before, coef_after, points)
+        .enumerate()
+        .fold((0_u64, 0_u64), |(before, after), (i, bl)| {
+            let geometry = bl.geometry_bytes;
+            let coef_before = bl.nslots.saturating_mul(8).saturating_mul(channels) as u64;
+            let points = bl.npoints.saturating_mul(8).saturating_mul(channels) as u64;
+            let slots = bl.nslots.saturating_mul(8).saturating_mul(channels) as u64;
+            let (varying_before, output, after_chunk) = if direction == "forward" {
+                (coef_before, points, set_bytes.saturating_add(points))
             } else {
-                (coef_before.saturating_add(points), points, slots)
+                (
+                    coef_before.saturating_add(points),
+                    slots,
+                    points.saturating_add(if i == 0 { kint_bytes } else { 0 }),
+                )
             };
-            let after_chunk = varying.saturating_add(output); // one read-back
             let before_chunk = geometry
                 .saturating_add(varying_before)
                 .saturating_add(output) // zero upload
@@ -1752,6 +1863,7 @@ fn pair_level_transfer_bytes(
         })
 }
 
+/// The per-level tracing span both directions of both spin counts open.
 fn pair_level_span(
     direction: &'static str,
     level: usize,
@@ -1762,33 +1874,13 @@ fn pair_level_span(
     let (transfer_bytes_before, transfer_bytes_after) =
         pair_level_transfer_bytes(direction, channels, lv);
     // Session 3: the concatenated table sizes, so the instrument can show
-    // where the resident bytes go (per-slot data dominates).
-    let batch_points = lv
-        .batches
-        .iter()
-        .map(|b| b.batch.npoints() as u64)
-        .sum::<u64>();
-    let batch_instances = lv
-        .batches
-        .iter()
-        .map(|b| b.batch.ninstances() as u64)
-        .sum::<u64>();
-    let batch_slots = lv
-        .batches
-        .iter()
-        .map(|b| b.batch.nslots() as u64)
-        .sum::<u64>();
+    // where the resident bytes go.
+    let batch_points = lv.batches.iter().map(|b| b.npoints as u64).sum::<u64>();
+    let batch_instances = lv.batches.iter().map(|b| b.ninstances as u64).sum::<u64>();
+    let batch_slots = lv.batches.iter().map(|b| b.nslots as u64).sum::<u64>();
     // M-13: distinct instances actually stored, against the occurrences above.
-    let batch_uinstances = lv
-        .batches
-        .iter()
-        .map(|b| b.batch.nuinstances() as u64)
-        .sum::<u64>();
-    let batch_geometry_bytes_total = lv
-        .batches
-        .iter()
-        .map(|b| batch_geometry_bytes(&b.batch))
-        .sum::<u64>();
+    let batch_uinstances = lv.batches.iter().map(|b| b.nuinstances as u64).sum::<u64>();
+    let batch_geometry_bytes_total = lv.batches.iter().map(|b| b.geometry_bytes).sum::<u64>();
     let kslots = lv.nkslots() as u64;
     match direction {
         "forward" => tracing::info_span!(
