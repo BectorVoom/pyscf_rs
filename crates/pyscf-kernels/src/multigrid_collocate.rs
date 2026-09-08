@@ -63,6 +63,24 @@
 //! cube from the device rather than hard-coding 256, and has no
 //! `sync_cube`/shared-memory staging at all — every lane is independent, so
 //! there is nothing to synchronise.
+//!
+//! # `Vector<f64, N>` over grid points, `cube_math::exp_vec`
+//!
+//! `g` is already the fast axis (`idx = slot*ngrids + g`, adjacent threads
+//! read adjacent grid points), the same layout `ft_aopair_kernel` uses — so
+//! one lane now evaluates `N` ADJACENT grid points of one slot at once,
+//! mirroring `multigrid_pair.rs`'s M-17/M-20 pattern: `dx/dy/dz/r2`, the
+//! monomial `poly` and the accumulate all become elementwise `Vector<f64, N>`
+//! ops, and the one transcendental becomes ONE `cube_math::exp_vec::<N>` call
+//! on the whole vector instead of `N` scalar `exp` calls sharing nothing.
+//! `exp_vec` is bit-identical PER ELEMENT to the scalar `exp`
+//! (`cube-math/tests/vector.rs`), every other op is elementwise IEEE-754 (same
+//! bits whether the operand sits in a scalar or a lane), and the per-record
+//! accumulation stays sequential in the same `r0..r0+nrec` order — so this is
+//! bit-identical to the scalar kernel, not merely close. Grid points are
+//! padded to a multiple of [`GRID_PAD`] by repeating the level's last real
+//! point (M-17's convention exactly); padded lanes are evaluated and their
+//! output discarded on the host, never scattered back.
 
 use cubecl::Runtime;
 use cubecl::client::ComputeClient;
@@ -94,13 +112,19 @@ pub struct PshellGridTable {
     pub rec_center: Vec<f64>,
 }
 
-/// `i = slot*ngrids + g`, `g` the fast axis (adjacent threads read adjacent
-/// grid points), matching `ft_aopair_kernel`'s layout convention.
+/// `v = slot*lanes_per_slot + lane`, `lane` the fast axis (adjacent lanes
+/// cover adjacent groups of `N` grid points), matching `ft_aopair_kernel`'s
+/// scalar layout convention one level up.
 ///
-/// `out[slot*ngrids + g] = coef · Σ_{images} (r-A_L)^pow · exp(-alpha·|r-A_L|²)`.
+/// `out[v]` holds `N` adjacent points' `coef · Σ_{images} (r-A_L)^pow ·
+/// exp(-alpha·|r-A_L|²)` at once — see the module doc's "`Vector<f64, N>`
+/// over grid points" section for the bit-exactness argument.
 #[cube(launch_unchecked)]
-fn collocate_kernel(
-    coords: &Array<f64>,
+#[allow(clippy::too_many_arguments)]
+fn collocate_kernel<N: Size>(
+    coords_x: &Array<Vector<f64, N>>,
+    coords_y: &Array<Vector<f64, N>>,
+    coords_z: &Array<Vector<f64, N>>,
     slot_pow: &Array<u32>,
     slot_pshell: &Array<u32>,
     pshell_rec0: &Array<u32>,
@@ -108,37 +132,39 @@ fn collocate_kernel(
     pshell_alpha: &Array<f64>,
     pshell_coef: &Array<f64>,
     rec_center: &Array<f64>,
-    out: &mut Array<f64>,
+    out: &mut Array<Vector<f64, N>>,
     nslots: usize,
-    ngrids: usize,
+    lanes_per_slot: usize,
 ) {
-    let idx = ABSOLUTE_POS;
-    if idx < nslots * ngrids {
-        let slot = idx / ngrids;
-        let g = idx % ngrids;
+    let v = ABSOLUTE_POS;
+    if v < nslots * lanes_per_slot {
+        let slot = v / lanes_per_slot;
+        let lane = v % lanes_per_slot;
 
-        let x = coords[g * 3];
-        let y = coords[g * 3 + 1];
-        let z = coords[g * 3 + 2];
+        let x = coords_x[lane];
+        let y = coords_y[lane];
+        let z = coords_z[lane];
 
         let ix = slot_pow[slot * 3];
         let iy = slot_pow[slot * 3 + 1];
         let iz = slot_pow[slot * 3 + 2];
 
         let p = slot_pshell[slot] as usize;
-        let alpha = pshell_alpha[p];
-        let coef = pshell_coef[p];
+        let alpha = Vector::<f64, N>::new(pshell_alpha[p]);
+        let coef = Vector::<f64, N>::new(pshell_coef[p]);
         let r0 = pshell_rec0[p] as usize;
         let nrec = pshell_nrec[p] as usize;
 
-        let mut acc = 0.0;
+        let zero = Vector::<f64, N>::new(0.0);
+        let one = Vector::<f64, N>::new(1.0);
+        let mut acc = zero;
         for r in r0..(r0 + nrec) {
-            let dx = x - rec_center[r * 3];
-            let dy = y - rec_center[r * 3 + 1];
-            let dz = z - rec_center[r * 3 + 2];
+            let dx = x - Vector::<f64, N>::new(rec_center[r * 3]);
+            let dy = y - Vector::<f64, N>::new(rec_center[r * 3 + 1]);
+            let dz = z - Vector::<f64, N>::new(rec_center[r * 3 + 2]);
             let r2 = dx * dx + dy * dy + dz * dz;
 
-            let mut poly = 1.0;
+            let mut poly = one;
             let mut i = 0u32;
             while i < ix {
                 poly *= dx;
@@ -155,10 +181,11 @@ fn collocate_kernel(
                 i += 1;
             }
 
-            let e = cube_math::double::exp::exp(0.0 - alpha * r2, cube_math::MathConfig::EXACT);
+            let arg = zero - alpha * r2;
+            let e = cube_math::double::exp::exp_vec::<N>(arg, cube_math::MathConfig::EXACT);
             acc += poly * e;
         }
-        out[idx] = coef * acc;
+        out[v] = coef * acc;
     }
 }
 
@@ -171,31 +198,50 @@ fn work_per_thread(t: &PshellGridTable) -> usize {
     avg_rec * 50
 }
 
+/// Grid points are padded to a multiple of this so every vector width
+/// [`collocate_line_size`] can return divides the padded length — the same
+/// convention [`crate::multigrid_pair::POINT_PAD`] uses for its own points.
+const GRID_PAD: usize = 8;
+
+/// The vector width this launch runs at: the widest the device likes for
+/// `f64` that divides [`GRID_PAD`], or the `PYSCF_MG_COLLOC_LINE` pin (which
+/// must divide [`GRID_PAD`] too).
+fn collocate_line_size<R: Runtime>(client: &ComputeClient<R>) -> usize {
+    pyscf_algebra::launch::pinned_line_size::<R, f64>(client, GRID_PAD, "PYSCF_MG_COLLOC_LINE")
+}
+
+#[allow(clippy::too_many_arguments)]
 fn launch_on_handles<R: Runtime>(
     client: &ComputeClient<R>,
     h: &[Handle],
     out: &Handle,
     t: &PshellGridTable,
     nslots: usize,
-    ngrids: usize,
+    ngrids_padded: usize,
+    line: usize,
 ) {
-    let (count, dim) = launch_1d(client, nslots * ngrids, work_per_thread(t));
+    let lanes_per_slot = ngrids_padded / line;
+    let nlanes = nslots * lanes_per_slot;
+    let (count, dim) = launch_1d(client, nlanes, work_per_thread(t) * line);
     unsafe {
         collocate_kernel::launch_unchecked::<R>(
             client,
             count,
             dim,
-            ArrayArg::from_raw_parts(h[0].clone(), t.coords.len()),
-            ArrayArg::from_raw_parts(h[1].clone(), t.slot_pow.len()),
-            ArrayArg::from_raw_parts(h[2].clone(), t.slot_pshell.len()),
-            ArrayArg::from_raw_parts(h[3].clone(), t.pshell_rec0.len()),
-            ArrayArg::from_raw_parts(h[4].clone(), t.pshell_nrec.len()),
-            ArrayArg::from_raw_parts(h[5].clone(), t.pshell_alpha.len()),
-            ArrayArg::from_raw_parts(h[6].clone(), t.pshell_coef.len()),
-            ArrayArg::from_raw_parts(h[7].clone(), t.rec_center.len()),
-            ArrayArg::from_raw_parts(out.clone(), nslots * ngrids),
+            line,
+            ArrayArg::from_raw_parts(h[0].clone(), ngrids_padded),
+            ArrayArg::from_raw_parts(h[1].clone(), ngrids_padded),
+            ArrayArg::from_raw_parts(h[2].clone(), ngrids_padded),
+            ArrayArg::from_raw_parts(h[3].clone(), t.slot_pow.len()),
+            ArrayArg::from_raw_parts(h[4].clone(), t.slot_pshell.len()),
+            ArrayArg::from_raw_parts(h[5].clone(), t.pshell_rec0.len()),
+            ArrayArg::from_raw_parts(h[6].clone(), t.pshell_nrec.len()),
+            ArrayArg::from_raw_parts(h[7].clone(), t.pshell_alpha.len()),
+            ArrayArg::from_raw_parts(h[8].clone(), t.pshell_coef.len()),
+            ArrayArg::from_raw_parts(h[9].clone(), t.rec_center.len()),
+            ArrayArg::from_raw_parts(out.clone(), nslots * ngrids_padded),
             nslots,
-            ngrids,
+            lanes_per_slot,
         );
     }
 }
@@ -207,14 +253,35 @@ fn upload_u32<R: Runtime>(client: &ComputeClient<R>, data: &[u32]) -> Handle {
 fn launch<R: Runtime>(t: &PshellGridTable, client: &ComputeClient<R>) -> Vec<f64> {
     let ngrids = t.coords.len() / 3;
     let nslots = t.slot_pow.len() / 3;
-    let n_out = ngrids * nslots;
 
-    let zeros = vec![0.0f64; n_out];
+    let ngrids_padded = ngrids.next_multiple_of(GRID_PAD);
+    let mut coords_x = Vec::with_capacity(ngrids_padded);
+    let mut coords_y = Vec::with_capacity(ngrids_padded);
+    let mut coords_z = Vec::with_capacity(ngrids_padded);
+    for g in 0..ngrids {
+        coords_x.push(t.coords[g * 3]);
+        coords_y.push(t.coords[g * 3 + 1]);
+        coords_z.push(t.coords[g * 3 + 2]);
+    }
+    // M-17's convention: pad by repeating the last real point. Padded lanes
+    // are evaluated and their output discarded below, never scattered back.
+    while coords_x.len() < ngrids_padded {
+        coords_x.push(*coords_x.last().expect("ngrids > 0 (checked by caller)"));
+        coords_y.push(*coords_y.last().expect("ngrids > 0 (checked by caller)"));
+        coords_z.push(*coords_z.last().expect("ngrids > 0 (checked by caller)"));
+    }
+
+    let line = collocate_line_size::<R>(client);
+    let n_out_padded = ngrids_padded * nslots;
+
+    let zeros = vec![0.0f64; n_out_padded];
     let out_h = upload::<R, f64>(client, &zeros);
     drop(zeros);
 
     let h = vec![
-        upload::<R, f64>(client, &t.coords),
+        upload::<R, f64>(client, &coords_x),
+        upload::<R, f64>(client, &coords_y),
+        upload::<R, f64>(client, &coords_z),
         upload_u32::<R>(client, &t.slot_pow),
         upload_u32::<R>(client, &t.slot_pshell),
         upload_u32::<R>(client, &t.pshell_rec0),
@@ -223,9 +290,21 @@ fn launch<R: Runtime>(t: &PshellGridTable, client: &ComputeClient<R>) -> Vec<f64
         upload::<R, f64>(client, &t.pshell_coef),
         upload::<R, f64>(client, &t.rec_center),
     ];
-    launch_on_handles::<R>(client, &h, &out_h, t, nslots, ngrids);
+    launch_on_handles::<R>(client, &h, &out_h, t, nslots, ngrids_padded, line);
     let bytes = client.read(vec![out_h]);
-    bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
+    let padded = bytemuck::cast_slice::<u8, f64>(&bytes[0]);
+
+    if ngrids_padded == ngrids {
+        return padded.to_vec();
+    }
+    // Drop each slot's padded tail, mapping `(nslots, ngrids_padded)` back to
+    // the public `(nslots, ngrids)` shape.
+    let mut out = Vec::with_capacity(nslots * ngrids);
+    for slot in 0..nslots {
+        let base = slot * ngrids_padded;
+        out.extend_from_slice(&padded[base..base + ngrids]);
+    }
+    out
 }
 
 /// The multigrid collocation kernel's public entry point.

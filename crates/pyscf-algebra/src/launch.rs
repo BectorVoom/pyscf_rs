@@ -107,6 +107,32 @@ pub fn line_size_for<R: Runtime, F: DeviceScalar>(
         .unwrap_or(1)
 }
 
+/// [`line_size_for`], overridable by an environment variable — the policy
+/// every vectorized kernel that pads its lanes to a fixed `pad` wants: an
+/// explicit `env_var` pin if it parses to a positive width that divides
+/// `pad` (so it also divides any `pad`-multiple padded length), else the
+/// device-detected width for `F` that divides `pad`.
+///
+/// Centralizing this stops each vectorized kernel from re-deriving the same
+/// "parse env / validate it divides pad / fall back to `line_size_for`"
+/// three-liner (e.g. `multigrid_pair::pair_line_size` and
+/// `multigrid_collocate::collocate_line_size`, which used to be that
+/// duplicated exactly).
+pub fn pinned_line_size<R: Runtime, F: DeviceScalar>(
+    client: &ComputeClient<R>,
+    pad: usize,
+    env_var: &str,
+) -> usize {
+    if let Ok(v) = std::env::var(env_var)
+        && let Ok(n) = v.parse::<usize>()
+        && n >= 1
+        && pad.is_multiple_of(n)
+    {
+        return n;
+    }
+    line_size_for::<R, F>(client, pad)
+}
+
 /// Stage a host slice into a fresh device buffer.
 ///
 /// `Bytes::from_elems` takes ownership of a `Vec`, so every launcher here used to

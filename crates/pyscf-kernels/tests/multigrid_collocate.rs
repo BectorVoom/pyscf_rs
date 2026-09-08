@@ -2,17 +2,21 @@
 //! `pyscf_kernels::multigrid_collocate::collocate`, against INDEPENDENT host
 //! references, never against the kernel itself (AGENTS.md / 17-11-PLAN.md).
 //!
-//! Three independent checks:
+//! Independent checks:
 //!   1. a single normalised s-Gaussian, collocated on a wide fine mesh and
 //!      numerically integrated, matches its OWN analytic Gaussian integral —
-//!      the reference here is closed-form calculus, not any other kernel;
+//!      the reference here is closed-form calculus, not any other kernel
+//!      (run twice: once at an `ngrids` that is a multiple of the kernel's
+//!      internal vector-lane padding, once at one that is not);
 //!   2. for l = 0..4, the collocated Cartesian AO values, transformed to
 //!      spherical with the shared `cart2sph_l_matrix`, match
 //!      `pyscf_kernels::eval_gto_sph` — the sibling AO-on-grid kernel, a
 //!      DIFFERENT code path (`crates/pyscf-kernels/src/eval_gto.rs`);
 //!   3. periodic image wrap is exact: a Gaussian centred at a periodic box's
 //!      corner and one centred at its middle integrate (over the box, summed
-//!      over enough images to capture the tails) to the SAME total.
+//!      over enough images to capture the tails) to the SAME total;
+//!   4. the kernel's internal `Vector<f64, N>` lane width is not a variable
+//!      of the result — every width bit-for-bit agrees with every other.
 //!
 //! `gto_norm`/`gaussian_int`/`gamma` mirror the fixture helpers already
 //! established in `crates/pyscf-kernels/tests/eval_gto_lge1.rs`.
@@ -27,6 +31,18 @@ use pyscf_core::raw_layout::{
 };
 use pyscf_kernels::multigrid_collocate::{PshellGridTable, collocate};
 use pyscf_kernels::{cart_powers, cart2sph_l_matrix, common_fac_sp, eval_gto_sph};
+
+/// Serializes every test in this file against `lane_width_is_not_a_variable_
+/// of_the_result`'s `PYSCF_MG_COLLOC_LINE` mutation: `cargo test` runs this
+/// binary's `#[test]` fns on multiple threads by default, and the env var is
+/// process-wide, so a `collocate()` call in another thread could otherwise
+/// transiently observe a pinned width instead of the device default. Every
+/// test that calls `collocate()` takes this lock for its whole body.
+static LINE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn line_env_guard() -> std::sync::MutexGuard<'static, ()> {
+    LINE_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn client() -> AlgebraClient {
     AlgebraClient::Cpu(cubecl_cpu::CpuRuntime::client(&cubecl_cpu::CpuDevice))
@@ -102,6 +118,7 @@ fn box_grid(centre: [f64; 3], half: f64, n: usize) -> (Vec<f64>, f64) {
 /// (not `g^2`), whose closed form is `coef * (pi/alpha)^1.5`.
 #[test]
 fn single_s_gaussian_matches_analytic_norm() {
+    let _guard = line_env_guard();
     let alpha = 0.7_f64;
     let raw_coef = 1.0_f64;
     let coef = raw_coef * gto_norm(0, alpha) * common_fac_sp(0);
@@ -110,6 +127,47 @@ fn single_s_gaussian_matches_analytic_norm() {
     let n = 96usize;
     let (coords, dv) = box_grid([0.0, 0.0, 0.0], half, n);
     let ngrids = n * n * n;
+
+    let t = PshellGridTable {
+        coords,
+        slot_pow: vec![0, 0, 0],
+        slot_pshell: vec![0],
+        pshell_rec0: vec![0],
+        pshell_nrec: vec![1],
+        pshell_alpha: vec![alpha],
+        pshell_coef: vec![coef],
+        rec_center: vec![0.0, 0.0, 0.0],
+    };
+    let out = collocate(&client(), &t).expect("collocate");
+    assert_eq!(out.len(), ngrids);
+
+    let numeric: f64 = out.iter().sum::<f64>() * dv;
+    let analytic = coef * (std::f64::consts::PI / alpha).powf(1.5);
+    let diff = (numeric - analytic).abs();
+    assert!(
+        diff < 1e-9,
+        "numeric {numeric:.15e} vs analytic {analytic:.15e}, diff {diff:.3e}"
+    );
+}
+
+/// Test 1b — `ngrids` NOT a multiple of the kernel's internal vector-lane
+/// padding (`multigrid_collocate::GRID_PAD == 8`), against the same
+/// closed-form integral as test 1. `box_grid` always emits `n^3` points, so
+/// an ODD `n` (`n^3` is then odd, never a multiple of 8) is what forces the
+/// kernel's pad-and-truncate path — this guards it independently of whatever
+/// grid size any OTHER caller happens to use.
+#[test]
+fn ngrids_not_a_multiple_of_the_lane_width_still_integrates_correctly() {
+    let _guard = line_env_guard();
+    let alpha = 0.9_f64;
+    let raw_coef = 1.0_f64;
+    let coef = raw_coef * gto_norm(0, alpha) * common_fac_sp(0);
+
+    let half = 9.0 / alpha.sqrt();
+    let n = 33usize; // 33^3 = 35937, odd -> not a multiple of 8
+    let (coords, dv) = box_grid([0.0, 0.0, 0.0], half, n);
+    let ngrids = n * n * n;
+    assert!(!ngrids.is_multiple_of(8), "fixture must exercise padding");
 
     let t = PshellGridTable {
         coords,
@@ -182,6 +240,7 @@ fn build_one_shell(centre: [f64; 3], l: u32, alpha: f64, raw_coef: f64) -> Fixtu
 /// entry) agrees to the same precision.
 #[test]
 fn l0_to_4_collocated_product_matches_eval_gto() {
+    let _guard = line_env_guard();
     let centre = [0.3, -0.2, 0.5];
     let alpha = 1.3_f64;
     let raw_coef = 1.0_f64;
@@ -304,6 +363,7 @@ fn l0_to_4_collocated_product_matches_eval_gto() {
 /// images are summed to capture the tails.
 #[test]
 fn periodic_wrap_is_exact() {
+    let _guard = line_env_guard();
     let l_box = 6.0_f64; // cubic box side, Bohr
     let alpha = 1.5_f64; // steep enough that a handful of images suffice
     let raw_coef = 1.0_f64;
@@ -375,4 +435,62 @@ fn periodic_wrap_is_exact() {
     // size), independently confirming the wrap did not lose or double mass.
     let analytic = coef * (std::f64::consts::PI / alpha).powf(1.5);
     assert!((corner_total - analytic).abs() < 1e-9);
+}
+
+/// Test 4 — the launch's `Vector<f64, N>` width is not a variable of the
+/// result: every width the `PYSCF_MG_COLLOC_LINE` pin accepts (it must divide
+/// `multigrid_collocate`'s internal `GRID_PAD == 8`) must agree BIT FOR BIT
+/// with the device-chosen default. Mirrors
+/// `multigrid_batch.rs::forward_vector_width_is_not_a_variable_of_the_result`'s
+/// reasoning: the vectorisation only changes how many points one lane
+/// evaluates at once, never the arithmetic, so a tolerance here would hide
+/// exactly the kind of indexing defect this guards against.
+#[test]
+fn lane_width_is_not_a_variable_of_the_result() {
+    let _guard = line_env_guard();
+    let centre = [0.3, -0.2, 0.5];
+    let alpha = 1.1_f64;
+    let raw_coef = 1.0_f64;
+    let coef = raw_coef * gto_norm(1, alpha) * common_fac_sp(1);
+    let half = 6.0;
+    let n = 17usize; // 17^3 = 4913, not a multiple of 8: exercises padding too
+    let (coords, _dv) = box_grid([0.0, 0.0, 0.0], half, n);
+
+    let powers = cart_powers(1);
+    let ncart = powers.len();
+    let mut slot_pow = Vec::with_capacity(3 * ncart);
+    for &(ix, iy, iz) in &powers {
+        slot_pow.push(ix);
+        slot_pow.push(iy);
+        slot_pow.push(iz);
+    }
+    let t = PshellGridTable {
+        coords,
+        slot_pow,
+        slot_pshell: vec![0; ncart],
+        pshell_rec0: vec![0],
+        pshell_nrec: vec![1],
+        pshell_alpha: vec![alpha],
+        pshell_coef: vec![coef],
+        rec_center: centre.to_vec(),
+    };
+
+    let mut arms = Vec::new();
+    for pin in ["1", "2", "4", "8"] {
+        unsafe { std::env::set_var("PYSCF_MG_COLLOC_LINE", pin) };
+        arms.push((pin, collocate(&client(), &t).expect("collocate")));
+    }
+    unsafe { std::env::remove_var("PYSCF_MG_COLLOC_LINE") };
+    let default = collocate(&client(), &t).expect("collocate");
+
+    for (pin, arm) in &arms {
+        assert_eq!(arm.len(), default.len(), "width {pin}: length differs");
+        for (i, (a, b)) in arm.iter().zip(&default).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "width {pin}[{i}]: {a:.17e} vs device-default {b:.17e}"
+            );
+        }
+    }
 }

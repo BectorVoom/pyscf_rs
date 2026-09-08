@@ -959,14 +959,7 @@ fn mg_exp_vec<N: Size>(x: Vector<f64, N>, #[comptime] mode: u32) -> Vector<f64, 
 /// device likes for `f64` that divides [`POINT_PAD`], or the
 /// `PYSCF_MG_PAIR_LINE` pin (which must divide [`POINT_PAD`] too).
 pub fn pair_line_size<R: Runtime>(client: &ComputeClient<R>) -> usize {
-    if let Ok(v) = std::env::var("PYSCF_MG_PAIR_LINE")
-        && let Ok(n) = v.parse::<usize>()
-        && n >= 1
-        && POINT_PAD.is_multiple_of(n)
-    {
-        return n;
-    }
-    pyscf_algebra::launch::line_size_for::<R, f64>(client, POINT_PAD)
+    pyscf_algebra::launch::pinned_line_size::<R, f64>(client, POINT_PAD, "PYSCF_MG_PAIR_LINE")
 }
 
 /// M-19: the vector reverse kernel's group table for width `line` — per
