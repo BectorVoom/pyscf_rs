@@ -766,9 +766,9 @@ fn launch_integrate<R: Runtime>(
 //
 // One lane evaluates N ADJACENT grid points of one block (blocks are padded
 // to a multiple of [`POINT_PAD`] points, so a vector never straddles two).
-// Every operation is elementwise — the instance loop, the `exp` (N scalar
-// `cube_math` calls, one per element: the vector type has no bit-exact
-// `exp`), the power products and the accumulate — so each point sees the
+// Every operation is elementwise — the instance loop, the `exp` (M-20: one
+// `cube_math::exp_vec` call on the whole vector, bit-identical per element
+// to the scalar `exp`), the power products and the accumulate — so each point sees the
 // scalar kernel's operations in the scalar kernel's order (`06_vectorization.md`,
 // `Cubecl_dynamic_vectorization.md`). Pad points are evaluated and discarded.
 //
@@ -941,8 +941,9 @@ fn mg_exp(x: f64, #[comptime] mode: u32) -> f64 {
 
 /// [`mg_exp`] on N elements at once — M-20: `cube_math`'s `exp_vec`, which
 /// is the scalar schedule on the whole vector and bit-identical to `exp` per
-/// element (`cube-math/tests/vector_exp.rs`), so the kernels below keep
-/// their per-point bits while the N exponentials share one chain.
+/// element (`cube-math/tests/vector.rs`, which now covers the whole exp/log
+/// family), so the kernels below keep their per-point bits while the N
+/// exponentials share one chain.
 #[cube]
 fn mg_exp_vec<N: Size>(x: Vector<f64, N>, #[comptime] mode: u32) -> Vector<f64, N> {
     if comptime!(mode == 1) {
