@@ -146,6 +146,36 @@ pub struct PairTaskList {
 /// `cell.precision`).
 const EXTRA_PREC: f64 = 1e-2;
 
+/// M-21: the per-point screen's threshold, relative to the block-level
+/// one, when `PYSCF_MG_PAIR_POINT_SCREEN` is set to something that is not a
+/// number (`on`, `1`): the factor at which the screen keeps `rho` inside
+/// the 1e-9 gate.
+///
+/// The variable is read at table build (this factor) AND at launch (the
+/// kernels' switch); unset or `0` is OFF — the default. Measured on `si` at
+/// `25³` (session 6 §3.3): factor 1 moves `rho` by 5.6e-5 relative on the
+/// coarsest level and loses 2.7e-5 electrons; 1e-6 keeps every level under
+/// 3.3e-11 relative but the kernels run 3-20 % SLOWER than unscreened on
+/// the CPU runtime. Kept as an opt-in arm for a device where the test is
+/// cheaper than the work it skips.
+pub const POINT_SCREEN_FACTOR_DEFAULT: f64 = 1e-6;
+
+/// The per-point screen's factor, `None` when the screen is off (unset,
+/// empty or `0`); a numeric value in `(0, 1]` is the factor, anything else
+/// [`POINT_SCREEN_FACTOR_DEFAULT`].
+pub fn point_screen_factor() -> Option<f64> {
+    match std::env::var("PYSCF_MG_PAIR_POINT_SCREEN") {
+        Ok(v) if v == "0" || v.is_empty() => None,
+        Ok(v) => Some(
+            v.parse::<f64>()
+                .ok()
+                .filter(|f| *f > 0.0 && *f <= 1.0)
+                .unwrap_or(POINT_SCREEN_FACTOR_DEFAULT),
+        ),
+        Err(_) => None,
+    }
+}
+
 /// `build_task_list(cell, decon)` — Task 1's pair enumeration + level
 /// assignment (module doc: a documented reformulation of `build_task_list`,
 /// not a literal port).
@@ -318,6 +348,15 @@ pub struct PairLevelTable {
     /// Per kernel instance: the fused Gaussian's own cutoff radius
     /// ([`fused_radius`]) — what decides which [`GridBlock`]s it reaches.
     pub instance_radius: Vec<f64>,
+    /// M-21: per kernel instance, the radius of the per-POINT screen —
+    /// [`fused_radius`] at `threshold · POINT_SCREEN_FACTOR`, i.e. wider than
+    /// [`Self::instance_radius`]. A block-level drop discards one instance
+    /// per block below `threshold`; a point-level drop discards every
+    /// instance outside its ball at every point, and the SUM of those
+    /// discards over the ~10⁵ instances a point sees must still sit under
+    /// the screening precision — hence the factor ([`point_screen_factor`]).
+    /// `f64::INFINITY` when the screen is off.
+    pub instance_radius_point: Vec<f64>,
     /// M-15: per kernel instance, its term SET — an index into
     /// [`Self::set_off`]. Every wrap image of one fused pair `(p, q, L)`
     /// shares one set: the same `terms_here` sequence, hence the same
@@ -666,6 +705,8 @@ pub fn build_pair_level_table(
     let mut instance_alpha = Vec::new();
     let mut instance_center = Vec::new();
     let mut instance_radius = Vec::new();
+    let mut instance_radius_point = Vec::new();
+    let point_factor = point_screen_factor();
     // M-15 / M-16: term sets and the per-instance kernel-slot prefix.
     let mut instance_set: Vec<u32> = Vec::new();
     let mut instance_kslot0: Vec<u32> = vec![0];
@@ -779,6 +820,13 @@ pub fn build_pair_level_table(
             if r_inst <= 0.0 {
                 continue;
             }
+            // M-21: the per-point radius, at the tighter threshold.
+            let r_point = match point_factor {
+                Some(f) => {
+                    fused_radius(cmax_here, (p.l + q.l) as f64, eta, threshold * f).max(r_inst)
+                }
+                None => f64::INFINITY,
+            };
             // M-15: one term set per `(pair, L)`, shared by its wrap images.
             let set = set_off.len() as u32 - 1;
             for &(t, pw) in &terms_here {
@@ -794,6 +842,7 @@ pub fn build_pair_level_table(
                 instance_center.push(c[1]);
                 instance_center.push(c[2]);
                 instance_radius.push(r_inst);
+                instance_radius_point.push(r_point);
                 instance_set.push(set);
                 for &(t, pw) in &terms_here {
                     kslot_pow.push(pw[0]);
@@ -824,6 +873,7 @@ pub fn build_pair_level_table(
         instance_alpha,
         instance_center,
         instance_radius,
+        instance_radius_point,
         instance_set,
         instance_kslot0,
         set_off,
@@ -908,7 +958,7 @@ fn batch_bytes(c: BatchCounts, nblocks: usize) -> usize {
     c.npoints * (3 * 8 + 4)
         + c.nslots * 8
         + c.nocc * (4 + 4 + 4 + 4)
-        + c.nuinst * (8 + 3 * 8 + 4 + 4 + 4)
+        + c.nuinst * (8 + 3 * 8 + 8 + 4 + 4 + 4)
         + (nblocks + 1) * 3 * 4
 }
 
@@ -1063,6 +1113,8 @@ fn build_batch_geometry(
                     b.instance_alpha.push(lv.instance_alpha[i]);
                     b.instance_center
                         .extend_from_slice(&lv.instance_center[i * 3..i * 3 + 3]);
+                    b.instance_radius2
+                        .push(lv.instance_radius_point[i] * lv.instance_radius_point[i]);
                     b.instance_set.push(lv.instance_set[i]);
                     b.instance_kslot0.push(lv.instance_kslot0[i]);
                 }
@@ -1260,6 +1312,7 @@ fn block_table(lv: &PairLevelTable, block: &GridBlock, sel: &[u32], coef: &[f64]
         slot_instance: Vec::with_capacity(nsel),
         instance_alpha: Vec::new(),
         instance_center: Vec::new(),
+        instance_radius2: Vec::new(),
     };
     let mut last_inst = u32::MAX;
     for &k in sel {
@@ -1272,6 +1325,10 @@ fn block_table(lv: &PairLevelTable, block: &GridBlock, sel: &[u32], coef: &[f64]
             table
                 .instance_center
                 .extend_from_slice(&lv.instance_center[i * 3..i * 3 + 3]);
+            // M-21: the per-point radius, squared.
+            table
+                .instance_radius2
+                .push(lv.instance_radius_point[i] * lv.instance_radius_point[i]);
         }
         table
             .slot_pow

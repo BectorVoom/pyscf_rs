@@ -156,6 +156,81 @@ fn batched_and_streamed_launches_agree_bit_for_bit_on_silicon() {
     compare("si", &small_silicon());
 }
 
+/// **M-21 — the per-point radius screen drops only what is below the
+/// screening threshold, and drops it identically on every route.** The
+/// screened and unscreened arms differ (the screen removes terms), so the
+/// comparison between them is a bound, not `to_bits()`; within the screened
+/// arm, batched vs streamed must still agree bit for bit (and `compare` /
+/// the width test assert the same under the default, screen on). One test,
+/// sequential arms: the switch is process-wide state.
+///
+/// The per-point radius is baked into the level tables at build time from
+/// `PYSCF_MG_PAIR_POINT_SCREEN` (set here to `1e-6`, the factor at which
+/// the screen sits under the gate; a value in the environment at launch
+/// overrides it, to sweep the factor); the two arms below then only flip
+/// the kernels' switch (`0` off, the factor on).
+#[test]
+fn point_screen_is_bounded_and_route_independent() {
+    let factor = std::env::var("PYSCF_MG_PAIR_POINT_SCREEN")
+        .ok()
+        .filter(|v| v != "0" && !v.is_empty())
+        .unwrap_or_else(|| "1e-6".to_string());
+    unsafe { std::env::set_var("PYSCF_MG_PAIR_POINT_SCREEN", &factor) };
+    let cell = small_silicon();
+    let decon = build_pshells(&cell).expect("build_pshells");
+    let task_list = build_pair_task_list(&cell, &decon).expect("task list");
+    let tables = build_pair_level_tables(&cell, &decon, &task_list).expect("tables");
+    let dm = random_symmetric_dm(cell.mol.nao_nr, 0x0BAD_F00D);
+    let dm_p = pyscf_pbc_dft::multigrid::colloc::expand_dm(&decon, &dm);
+    let n = decon.nao_p * decon.nao_p;
+    for (l, lv) in tables.iter().enumerate() {
+        let Some(lv) = lv.as_ref() else { continue };
+        if lv.batches.is_empty() {
+            continue;
+        }
+        let w = model_weight(lv.ngrids, 0x5EED_2000 + l as u64);
+        let mut arms = Vec::new();
+        for screen in ["0", factor.as_str()] {
+            unsafe { std::env::set_var("PYSCF_MG_PAIR_POINT_SCREEN", screen) };
+            let rho_b = pairlevel_rho_with(lv, &decon, &dm_p, true).expect("batched rho");
+            let rho_s = pairlevel_rho_with(lv, &decon, &dm_p, false).expect("streamed rho");
+            same_bits(
+                &format!("screen={screen} level {l} rho batched vs streamed"),
+                &rho_b,
+                &rho_s,
+            );
+            let mut vb = vec![0.0f64; n];
+            let mut vs = vec![0.0f64; n];
+            pairlevel_pass2_with(lv, &decon, &w, &mut vb, true).expect("batched pass2");
+            pairlevel_pass2_with(lv, &decon, &w, &mut vs, false).expect("streamed pass2");
+            same_bits(
+                &format!("screen={screen} level {l} pass2 batched vs streamed"),
+                &vb,
+                &vs,
+            );
+            arms.push((rho_b, vb));
+        }
+        unsafe { std::env::remove_var("PYSCF_MG_PAIR_POINT_SCREEN") };
+        let bound = |name: &str, a: &[f64], b: &[f64], tol: f64| {
+            let scale = a.iter().fold(0.0_f64, |m, x| m.max(x.abs())).max(1e-300);
+            let worst = a
+                .iter()
+                .zip(b)
+                .fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
+            println!(
+                "{name}: max |screened - unscreened| = {worst:e} (max |value| {scale:e}, relative {:e})",
+                worst / scale
+            );
+            assert!(
+                worst <= tol * scale,
+                "{name}: the screen moved a value by {worst:e} against a scale of {scale:e}"
+            );
+        };
+        bound(&format!("level {l} rho"), &arms[0].0, &arms[1].0, 1e-9);
+        bound(&format!("level {l} pass2"), &arms[0].1, &arms[1].1, 1e-9);
+    }
+}
+
 /// **M-17 — the vector width is not a variable of the result.** The forward
 /// kernel runs at the device's f64 vector width by default; pinned to 1 and
 /// to 2 it must produce the same bits (each point sees the same operations in

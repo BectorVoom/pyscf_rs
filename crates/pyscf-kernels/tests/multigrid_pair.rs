@@ -69,6 +69,7 @@ fn random_table(
     let mut slot_instance = Vec::new();
     let mut instance_alpha = Vec::new();
     let mut instance_center = Vec::new();
+    let mut instance_radius2 = Vec::new();
     let mut route_ci = Vec::new();
     let mut route_cj = Vec::new();
 
@@ -77,6 +78,9 @@ fn random_table(
         instance_center.push(rng.f64_in(-0.6, 0.6));
         instance_center.push(rng.f64_in(-0.6, 0.6));
         instance_center.push(rng.f64_in(-0.6, 0.6));
+        // No per-point screen here: these tables test the arithmetic, and the
+        // per-slot reference kernels do not screen.
+        instance_radius2.push(f64::INFINITY);
         for _ in 0..slots_per_inst {
             slot_pow.push((rng.next_u64() % 3) as u32);
             slot_pow.push((rng.next_u64() % 3) as u32);
@@ -96,6 +100,7 @@ fn random_table(
             slot_instance,
             instance_alpha,
             instance_center,
+            instance_radius2,
         },
         route_ci,
         route_cj,
@@ -222,6 +227,7 @@ fn single_slot_matches_direct_formula() {
         slot_instance: vec![0],
         instance_alpha: vec![0.8],
         instance_center: vec![0.1, 0.1, -0.1],
+        instance_radius2: vec![f64::INFINITY],
     };
     let c = client();
     let values = collocate_pairs(&c, &table).expect("collocate_pairs");

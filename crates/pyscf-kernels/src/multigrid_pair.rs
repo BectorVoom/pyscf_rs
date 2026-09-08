@@ -94,6 +94,12 @@ pub struct PairSlotTable {
     pub instance_alpha: Vec<f64>,
     /// Per instance, 3 entries: the combined centre `P`.
     pub instance_center: Vec<f64>,
+    /// Per instance: the square of its own cutoff radius — M-21, the
+    /// per-point screen. A grid point farther than this from `P` receives
+    /// nothing from the instance (the fused Gaussian is below the screening
+    /// threshold there by construction of the radius); `f64::INFINITY`
+    /// disables the screen for that instance.
+    pub instance_radius2: Vec<f64>,
 }
 
 /// `i = slot*ngrids + g`. `out[slot*ngrids+g] = slot_coef[slot] · (r-P)^pow ·
@@ -427,12 +433,13 @@ fn validate(t: &PairSlotTable) -> Result<(), AlgebraError> {
         ));
     }
     let ninst = t.instance_center.len() / 3;
-    if t.instance_alpha.len() != ninst {
+    if t.instance_alpha.len() != ninst || t.instance_radius2.len() != ninst {
         return Err(shape(
-            "instance_alpha.len() == ninstances",
+            "instance_alpha.len() == instance_radius2.len() == ninstances",
             format!(
-                "ninstances {ninst}, instance_alpha {}",
-                t.instance_alpha.len()
+                "ninstances {ninst}, instance_alpha {}, instance_radius2 {}",
+                t.instance_alpha.len(),
+                t.instance_radius2.len()
             ),
         ));
     }
@@ -482,9 +489,11 @@ fn collocate_pairs_rho_kernel(
     inst_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
     out: &mut Array<f64>,
     ninst: usize,
     ngrids: usize,
+    #[comptime] screen: bool,
 ) {
     let g = ABSOLUTE_POS;
     if g < ngrids {
@@ -498,31 +507,38 @@ fn collocate_pairs_rho_kernel(
             let dy = y - instance_center[inst * 3 + 1];
             let dz = z - instance_center[inst * 3 + 2];
             let r2 = dx * dx + dy * dy + dz * dz;
-            let e = cube_math::double::exp::exp(0.0 - eta * r2, cube_math::MathConfig::EXACT);
-            let s0 = inst_slot0[inst] as usize;
-            let s1 = inst_slot0[inst + 1] as usize;
-            for slot in s0..s1 {
-                let ix = slot_pow[slot * 3];
-                let iy = slot_pow[slot * 3 + 1];
-                let iz = slot_pow[slot * 3 + 2];
-                let coef = slot_coef[slot];
-                let mut poly = 1.0;
-                let mut i = 0u32;
-                while i < ix {
-                    poly *= dx;
-                    i += 1;
+            // M-21: outside the instance's own radius the point gets nothing.
+            let mut keep = true;
+            if comptime!(screen) {
+                keep = r2 <= instance_radius2[inst];
+            }
+            if keep {
+                let e = cube_math::double::exp::exp(0.0 - eta * r2, cube_math::MathConfig::EXACT);
+                let s0 = inst_slot0[inst] as usize;
+                let s1 = inst_slot0[inst + 1] as usize;
+                for slot in s0..s1 {
+                    let ix = slot_pow[slot * 3];
+                    let iy = slot_pow[slot * 3 + 1];
+                    let iz = slot_pow[slot * 3 + 2];
+                    let coef = slot_coef[slot];
+                    let mut poly = 1.0;
+                    let mut i = 0u32;
+                    while i < ix {
+                        poly *= dx;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iy {
+                        poly *= dy;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iz {
+                        poly *= dz;
+                        i += 1;
+                    }
+                    acc += coef * poly * e;
                 }
-                i = 0u32;
-                while i < iy {
-                    poly *= dy;
-                    i += 1;
-                }
-                i = 0u32;
-                while i < iz {
-                    poly *= dz;
-                    i += 1;
-                }
-                acc += coef * poly * e;
             }
         }
         out[g] = acc;
@@ -545,9 +561,11 @@ fn collocate_pairs_integrate_kernel(
     inst_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
     out: &mut Array<f64>,
     ninst: usize,
     ngrids: usize,
+    #[comptime] screen: bool,
 ) {
     let inst = ABSOLUTE_POS;
     if inst < ninst {
@@ -555,6 +573,7 @@ fn collocate_pairs_integrate_kernel(
         let cx = instance_center[inst * 3];
         let cy = instance_center[inst * 3 + 1];
         let cz = instance_center[inst * 3 + 2];
+        let rad2 = instance_radius2[inst];
         let s0 = inst_slot0[inst] as usize;
         let s1 = inst_slot0[inst + 1] as usize;
         for g in 0..ngrids {
@@ -562,30 +581,36 @@ fn collocate_pairs_integrate_kernel(
             let dy = coords[g * 3 + 1] - cy;
             let dz = coords[g * 3 + 2] - cz;
             let r2 = dx * dx + dy * dy + dz * dz;
-            let e = cube_math::double::exp::exp(0.0 - eta * r2, cube_math::MathConfig::EXACT);
-            let we = weight[g] * e;
-            for slot in s0..s1 {
-                let ix = slot_pow[slot * 3];
-                let iy = slot_pow[slot * 3 + 1];
-                let iz = slot_pow[slot * 3 + 2];
-                let coef = slot_coef[slot];
-                let mut poly = 1.0;
-                let mut i = 0u32;
-                while i < ix {
-                    poly *= dx;
-                    i += 1;
+            let mut keep = true;
+            if comptime!(screen) {
+                keep = r2 <= rad2;
+            }
+            if keep {
+                let e = cube_math::double::exp::exp(0.0 - eta * r2, cube_math::MathConfig::EXACT);
+                let we = weight[g] * e;
+                for slot in s0..s1 {
+                    let ix = slot_pow[slot * 3];
+                    let iy = slot_pow[slot * 3 + 1];
+                    let iz = slot_pow[slot * 3 + 2];
+                    let coef = slot_coef[slot];
+                    let mut poly = 1.0;
+                    let mut i = 0u32;
+                    while i < ix {
+                        poly *= dx;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iy {
+                        poly *= dy;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iz {
+                        poly *= dz;
+                        i += 1;
+                    }
+                    out[slot] = out[slot] + coef * poly * we;
                 }
-                i = 0u32;
-                while i < iy {
-                    poly *= dy;
-                    i += 1;
-                }
-                i = 0u32;
-                while i < iz {
-                    poly *= dz;
-                    i += 1;
-                }
-                out[slot] = out[slot] + coef * poly * we;
             }
         }
     }
@@ -608,6 +633,7 @@ fn launch_rho<R: Runtime>(
         upload_u32::<R>(client, inst_slot0),
         upload::<R, f64>(client, &t.instance_alpha),
         upload::<R, f64>(client, &t.instance_center),
+        upload::<R, f64>(client, &t.instance_radius2),
     ];
     // Per lane: every instance (one `exp` each) and every slot.
     let per_lane = 50 * ninst.max(1) + 10 * nslots;
@@ -623,9 +649,11 @@ fn launch_rho<R: Runtime>(
             ArrayArg::from_raw_parts(h[3].clone(), inst_slot0.len()),
             ArrayArg::from_raw_parts(h[4].clone(), t.instance_alpha.len()),
             ArrayArg::from_raw_parts(h[5].clone(), t.instance_center.len()),
+            ArrayArg::from_raw_parts(h[6].clone(), t.instance_radius2.len()),
             ArrayArg::from_raw_parts(out_h.clone(), ngrids),
             ninst,
             ngrids,
+            point_screen_enabled(),
         );
     }
     let bytes = client.read(vec![out_h]);
@@ -651,6 +679,7 @@ fn launch_integrate<R: Runtime>(
         upload_u32::<R>(client, inst_slot0),
         upload::<R, f64>(client, &t.instance_alpha),
         upload::<R, f64>(client, &t.instance_center),
+        upload::<R, f64>(client, &t.instance_radius2),
     ];
     // Per lane: every grid point (one `exp` each) times the instance's slots.
     let per_lane = ngrids * (50 + 10 * nslots.div_ceil(ninst.max(1)));
@@ -667,9 +696,11 @@ fn launch_integrate<R: Runtime>(
             ArrayArg::from_raw_parts(h[4].clone(), inst_slot0.len()),
             ArrayArg::from_raw_parts(h[5].clone(), t.instance_alpha.len()),
             ArrayArg::from_raw_parts(h[6].clone(), t.instance_center.len()),
+            ArrayArg::from_raw_parts(h[7].clone(), t.instance_radius2.len()),
             ArrayArg::from_raw_parts(out_h.clone(), nslots),
             ninst,
             ngrids,
+            point_screen_enabled(),
         );
     }
     let bytes = client.read(vec![out_h]);
@@ -795,6 +826,9 @@ pub struct PairSlotBatch {
     pub instance_alpha: Vec<f64>,
     /// Per DISTINCT instance, 3 entries: the combined centre `P`.
     pub instance_center: Vec<f64>,
+    /// Per DISTINCT instance: the square of its cutoff radius (M-21; see
+    /// [`PairSlotTable::instance_radius2`]).
+    pub instance_radius2: Vec<f64>,
     /// Per DISTINCT instance: its term set (M-15).
     pub instance_set: Vec<u32>,
     /// Per DISTINCT instance: the level's first kernel slot of that instance
@@ -843,7 +877,7 @@ impl PairSlotBatch {
     }
     /// Resident bytes of this geometry on a device (M-15 ledger).
     pub fn geometry_bytes(&self) -> u64 {
-        let f = self.coords_x.len() * 3 + self.instance_alpha.len() * 4;
+        let f = self.coords_x.len() * 3 + self.instance_alpha.len() * 5;
         let u = self.point_block.len()
             + self.block_point0.len()
             + self.block_point_end.len()
@@ -877,6 +911,22 @@ fn exp_mode_from_env() -> u32 {
     }
 }
 
+/// M-21: whether the pair kernels apply the per-point instance-radius
+/// screen — OPT-IN, `PYSCF_MG_PAIR_POINT_SCREEN=<factor>` (see
+/// `pyscf_pbc_dft::multigrid::pair::point_screen_factor`); unset or `0`
+/// is off. A point farther from an instance's centre than the instance's
+/// per-point radius (`instance_radius2`) contributes nothing from it. That
+/// drops terms below the (tightened) threshold, so the two arms are NOT
+/// bit-identical; `tests/multigrid_batch.rs` bounds the difference and
+/// asserts that, within one arm, batched / streamed / every vector width
+/// agree bit for bit. Off by default because it MEASURED as a loss on the
+/// CPU runtime at every factor that keeps the density inside the gate
+/// (session 6 §3.3: the per-`(point, instance)` test and branch cost more
+/// than the skipped work), and as 2.7e-5 electrons at factor 1.
+fn point_screen_enabled() -> bool {
+    std::env::var("PYSCF_MG_PAIR_POINT_SCREEN").is_ok_and(|v| v != "0" && !v.is_empty())
+}
+
 /// `exp(x)` under [`exp_mode_from_env`]'s three arms.
 #[cube]
 fn mg_exp(x: f64, #[comptime] mode: u32) -> f64 {
@@ -886,6 +936,21 @@ fn mg_exp(x: f64, #[comptime] mode: u32) -> f64 {
         1.0 + x * 0.0
     } else {
         cube_math::double::exp::exp(x, cube_math::MathConfig::EXACT)
+    }
+}
+
+/// [`mg_exp`] on N elements at once — M-20: `cube_math`'s `exp_vec`, which
+/// is the scalar schedule on the whole vector and bit-identical to `exp` per
+/// element (`cube-math/tests/vector_exp.rs`), so the kernels below keep
+/// their per-point bits while the N exponentials share one chain.
+#[cube]
+fn mg_exp_vec<N: Size>(x: Vector<f64, N>, #[comptime] mode: u32) -> Vector<f64, N> {
+    if comptime!(mode == 1) {
+        cube_math::double::exp::exp_vec::<N>(x, cube_math::MathConfig::FAST)
+    } else if comptime!(mode == 2) {
+        Vector::<f64, N>::new(1.0) + x * Vector::<f64, N>::new(0.0)
+    } else {
+        cube_math::double::exp::exp_vec::<N>(x, cube_math::MathConfig::EXACT)
     }
 }
 
@@ -967,6 +1032,7 @@ pub struct PairSlotBatchDevice {
     occ_slot0: Handle,
     instance_alpha: Handle,
     instance_center: Handle,
+    instance_radius2: Handle,
     instance_set: Handle,
     instance_kslot0: Handle,
     uocc_off: Handle,
@@ -1210,6 +1276,7 @@ impl PairSlotBatchDevice {
                 occ_slot0: upload_u32::<Rt>(c, &batch.occ_slot0),
                 instance_alpha: upload::<Rt, f64>(c, &batch.instance_alpha),
                 instance_center: upload::<Rt, f64>(c, &batch.instance_center),
+                instance_radius2: upload::<Rt, f64>(c, &batch.instance_radius2),
                 instance_set: upload_u32::<Rt>(c, &batch.instance_set),
                 instance_kslot0: upload_u32::<Rt>(c, &batch.instance_kslot0),
                 uocc_off: upload_u32::<Rt>(c, &batch.uocc_off),
@@ -1449,6 +1516,7 @@ fn mg_rho_kernel<N: Size>(
     inst_ref: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
     instance_set: &Array<u32>,
     set_off: &Array<u32>,
     set_pow: &Array<u32>,
@@ -1456,6 +1524,7 @@ fn mg_rho_kernel<N: Size>(
     out: &mut Array<Vector<f64, N>>,
     nlanes: usize,
     #[comptime] exp_mode: u32,
+    #[comptime] screen: bool,
 ) {
     let v = ABSOLUTE_POS;
     if v < nlanes {
@@ -1476,38 +1545,62 @@ fn mg_rho_kernel<N: Size>(
             let dz = z - Vector::<f64, N>::new(instance_center[u * 3 + 2]);
             let r2 = dx * dx + dy * dy + dz * dz;
             let arg = zero - eta * r2;
-            // The vector type has no bit-exact `exp`; one scalar call per
-            // element keeps every point on the scalar kernel's arithmetic.
-            let mut e = Vector::<f64, N>::empty();
-            for j in 0..N::value() {
-                e[j] = mg_exp(arg[j], exp_mode);
+            // M-21: an element outside the instance's radius receives an
+            // exact `±0.0` from it (its `e` is zeroed), which leaves its
+            // accumulator unchanged — the scalar screen's "skip", width for
+            // width; a vector wholly outside skips the instance entirely.
+            let mut run = true;
+            let mut e = zero;
+            if comptime!(screen) {
+                let rad2 = instance_radius2[u];
+                let mut inside: u32 = 0u32;
+                #[unroll]
+                for j in 0..N::value() {
+                    if r2[j] <= rad2 {
+                        inside += 1u32;
+                    }
+                }
+                run = inside > 0u32;
+                if run {
+                    e = mg_exp_vec::<N>(arg, exp_mode);
+                    #[unroll]
+                    for j in 0..N::value() {
+                        if r2[j] > rad2 {
+                            e[j] = 0.0;
+                        }
+                    }
+                }
+            } else {
+                e = mg_exp_vec::<N>(arg, exp_mode);
             }
-            let s = instance_set[u] as usize;
-            let so0 = set_off[s] as usize;
-            let so1 = set_off[s + 1] as usize;
-            for sl in so0..so1 {
-                let packed = set_pow[sl];
-                let ix = packed & 255;
-                let iy = (packed >> 8) & 255;
-                let iz = (packed >> 16) & 255;
-                let coef = Vector::<f64, N>::new(set_coef[sl]);
-                let mut poly = one;
-                let mut i = 0u32;
-                while i < ix {
-                    poly *= dx;
-                    i += 1;
+            if run {
+                let s = instance_set[u] as usize;
+                let so0 = set_off[s] as usize;
+                let so1 = set_off[s + 1] as usize;
+                for sl in so0..so1 {
+                    let packed = set_pow[sl];
+                    let ix = packed & 255;
+                    let iy = (packed >> 8) & 255;
+                    let iz = (packed >> 16) & 255;
+                    let coef = Vector::<f64, N>::new(set_coef[sl]);
+                    let mut poly = one;
+                    let mut i = 0u32;
+                    while i < ix {
+                        poly *= dx;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iy {
+                        poly *= dy;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iz {
+                        poly *= dz;
+                        i += 1;
+                    }
+                    acc += coef * poly * e;
                 }
-                i = 0u32;
-                while i < iy {
-                    poly *= dy;
-                    i += 1;
-                }
-                i = 0u32;
-                while i < iz {
-                    poly *= dz;
-                    i += 1;
-                }
-                acc += coef * poly * e;
             }
         }
         out[v] = acc;
@@ -1527,6 +1620,7 @@ fn mg_rho2_kernel<N: Size>(
     inst_ref: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
     instance_set: &Array<u32>,
     set_off: &Array<u32>,
     set_pow: &Array<u32>,
@@ -1536,6 +1630,7 @@ fn mg_rho2_kernel<N: Size>(
     out_b: &mut Array<Vector<f64, N>>,
     nlanes: usize,
     #[comptime] exp_mode: u32,
+    #[comptime] screen: bool,
 ) {
     let v = ABSOLUTE_POS;
     if v < nlanes {
@@ -1557,36 +1652,62 @@ fn mg_rho2_kernel<N: Size>(
             let dz = z - Vector::<f64, N>::new(instance_center[u * 3 + 2]);
             let r2 = dx * dx + dy * dy + dz * dz;
             let arg = zero - eta * r2;
-            let mut e = Vector::<f64, N>::empty();
-            for j in 0..N::value() {
-                e[j] = mg_exp(arg[j], exp_mode);
+            // M-21: an element outside the instance's radius receives an
+            // exact `±0.0` from it (its `e` is zeroed), which leaves its
+            // accumulator unchanged — the scalar screen's "skip", width for
+            // width; a vector wholly outside skips the instance entirely.
+            let mut run = true;
+            let mut e = zero;
+            if comptime!(screen) {
+                let rad2 = instance_radius2[u];
+                let mut inside: u32 = 0u32;
+                #[unroll]
+                for j in 0..N::value() {
+                    if r2[j] <= rad2 {
+                        inside += 1u32;
+                    }
+                }
+                run = inside > 0u32;
+                if run {
+                    e = mg_exp_vec::<N>(arg, exp_mode);
+                    #[unroll]
+                    for j in 0..N::value() {
+                        if r2[j] > rad2 {
+                            e[j] = 0.0;
+                        }
+                    }
+                }
+            } else {
+                e = mg_exp_vec::<N>(arg, exp_mode);
             }
-            let s = instance_set[u] as usize;
-            let so0 = set_off[s] as usize;
-            let so1 = set_off[s + 1] as usize;
-            for sl in so0..so1 {
-                let packed = set_pow[sl];
-                let ix = packed & 255;
-                let iy = (packed >> 8) & 255;
-                let iz = (packed >> 16) & 255;
-                let mut poly = one;
-                let mut i = 0u32;
-                while i < ix {
-                    poly *= dx;
-                    i += 1;
+            if run {
+                let s = instance_set[u] as usize;
+                let so0 = set_off[s] as usize;
+                let so1 = set_off[s + 1] as usize;
+                for sl in so0..so1 {
+                    let packed = set_pow[sl];
+                    let ix = packed & 255;
+                    let iy = (packed >> 8) & 255;
+                    let iz = (packed >> 16) & 255;
+                    let mut poly = one;
+                    let mut i = 0u32;
+                    while i < ix {
+                        poly *= dx;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iy {
+                        poly *= dy;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iz {
+                        poly *= dz;
+                        i += 1;
+                    }
+                    acc_a += Vector::<f64, N>::new(set_coef_a[sl]) * poly * e;
+                    acc_b += Vector::<f64, N>::new(set_coef_b[sl]) * poly * e;
                 }
-                i = 0u32;
-                while i < iy {
-                    poly *= dy;
-                    i += 1;
-                }
-                i = 0u32;
-                while i < iz {
-                    poly *= dz;
-                    i += 1;
-                }
-                acc_a += Vector::<f64, N>::new(set_coef_a[sl]) * poly * e;
-                acc_b += Vector::<f64, N>::new(set_coef_b[sl]) * poly * e;
             }
         }
         out_a[v] = acc_a;
@@ -1610,6 +1731,7 @@ fn mg_integrate_kernel(
     occ_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
     instance_set: &Array<u32>,
     set_off: &Array<u32>,
     set_pow: &Array<u32>,
@@ -1617,6 +1739,7 @@ fn mg_integrate_kernel(
     nocc: usize,
     lane0: usize,
     #[comptime] exp_mode: u32,
+    #[comptime] screen: bool,
 ) {
     // `lane0`: chunked on the CPU runtime — `acc` is stack per iteration
     // there (`launch_1d_chunked`).
@@ -1627,6 +1750,7 @@ fn mg_integrate_kernel(
         let cx = instance_center[u * 3];
         let cy = instance_center[u * 3 + 1];
         let cz = instance_center[u * 3 + 2];
+        let rad2 = instance_radius2[u];
         let s = instance_set[u] as usize;
         let so0 = set_off[s] as usize;
         let nsl = set_off[s + 1] as usize - so0;
@@ -1642,32 +1766,38 @@ fn mg_integrate_kernel(
             let dy = coords_y[g] - cy;
             let dz = coords_z[g] - cz;
             let r2 = dx * dx + dy * dy + dz * dz;
-            let e = mg_exp(0.0 - eta * r2, exp_mode);
-            let we = weight[g] * e;
-            for local in 0..nsl {
-                let packed = set_pow[so0 + local];
-                let ix = packed & 255;
-                let iy = (packed >> 8) & 255;
-                let iz = (packed >> 16) & 255;
-                let mut poly = 1.0;
-                let mut i = 0u32;
-                while i < ix {
-                    poly *= dx;
-                    i += 1;
+            let mut keep = true;
+            if comptime!(screen) {
+                keep = r2 <= rad2;
+            }
+            if keep {
+                let e = mg_exp(0.0 - eta * r2, exp_mode);
+                let we = weight[g] * e;
+                for local in 0..nsl {
+                    let packed = set_pow[so0 + local];
+                    let ix = packed & 255;
+                    let iy = (packed >> 8) & 255;
+                    let iz = (packed >> 16) & 255;
+                    let mut poly = 1.0;
+                    let mut i = 0u32;
+                    while i < ix {
+                        poly *= dx;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iy {
+                        poly *= dy;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iz {
+                        poly *= dz;
+                        i += 1;
+                    }
+                    // M-12: the driver's coefficient was always `1.0` here, and
+                    // `1.0 * x == x` exactly, so dropping it is bit-exact.
+                    acc[local] += poly * we;
                 }
-                i = 0u32;
-                while i < iy {
-                    poly *= dy;
-                    i += 1;
-                }
-                i = 0u32;
-                while i < iz {
-                    poly *= dz;
-                    i += 1;
-                }
-                // M-12: the driver's coefficient was always `1.0` here, and
-                // `1.0 * x == x` exactly, so dropping it is bit-exact.
-                acc[local] += poly * we;
             }
         }
         let o0 = occ_slot0[occ] as usize;
@@ -1692,6 +1822,7 @@ fn mg_integrate2_kernel(
     occ_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
     instance_set: &Array<u32>,
     set_off: &Array<u32>,
     set_pow: &Array<u32>,
@@ -1700,6 +1831,7 @@ fn mg_integrate2_kernel(
     nocc: usize,
     lane0: usize,
     #[comptime] exp_mode: u32,
+    #[comptime] screen: bool,
 ) {
     let occ = ABSOLUTE_POS + lane0;
     if occ < nocc {
@@ -1708,6 +1840,7 @@ fn mg_integrate2_kernel(
         let cx = instance_center[u * 3];
         let cy = instance_center[u * 3 + 1];
         let cz = instance_center[u * 3 + 2];
+        let rad2 = instance_radius2[u];
         let s = instance_set[u] as usize;
         let so0 = set_off[s] as usize;
         let nsl = set_off[s + 1] as usize - so0;
@@ -1725,32 +1858,38 @@ fn mg_integrate2_kernel(
             let dy = coords_y[g] - cy;
             let dz = coords_z[g] - cz;
             let r2 = dx * dx + dy * dy + dz * dz;
-            let e = mg_exp(0.0 - eta * r2, exp_mode);
-            let we_a = weight_a[g] * e;
-            let we_b = weight_b[g] * e;
-            for local in 0..nsl {
-                let packed = set_pow[so0 + local];
-                let ix = packed & 255;
-                let iy = (packed >> 8) & 255;
-                let iz = (packed >> 16) & 255;
-                let mut poly = 1.0;
-                let mut i = 0u32;
-                while i < ix {
-                    poly *= dx;
-                    i += 1;
+            let mut keep = true;
+            if comptime!(screen) {
+                keep = r2 <= rad2;
+            }
+            if keep {
+                let e = mg_exp(0.0 - eta * r2, exp_mode);
+                let we_a = weight_a[g] * e;
+                let we_b = weight_b[g] * e;
+                for local in 0..nsl {
+                    let packed = set_pow[so0 + local];
+                    let ix = packed & 255;
+                    let iy = (packed >> 8) & 255;
+                    let iz = (packed >> 16) & 255;
+                    let mut poly = 1.0;
+                    let mut i = 0u32;
+                    while i < ix {
+                        poly *= dx;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iy {
+                        poly *= dy;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iz {
+                        poly *= dz;
+                        i += 1;
+                    }
+                    acc_a[local] += poly * we_a;
+                    acc_b[local] += poly * we_b;
                 }
-                i = 0u32;
-                while i < iy {
-                    poly *= dy;
-                    i += 1;
-                }
-                i = 0u32;
-                while i < iz {
-                    poly *= dz;
-                    i += 1;
-                }
-                acc_a[local] += poly * we_a;
-                acc_b[local] += poly * we_b;
             }
         }
         let o0 = occ_slot0[occ] as usize;
@@ -1795,6 +1934,7 @@ fn mg_integrate_vec_kernel<N: Size>(
     occ_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
     instance_set: &Array<u32>,
     set_off: &Array<u32>,
     set_pow: &Array<u32>,
@@ -1802,6 +1942,7 @@ fn mg_integrate_vec_kernel<N: Size>(
     ngroups: usize,
     lane0: usize,
     #[comptime] exp_mode: u32,
+    #[comptime] screen: bool,
 ) {
     let grp = ABSOLUTE_POS + lane0;
     if grp < ngroups {
@@ -1816,6 +1957,7 @@ fn mg_integrate_vec_kernel<N: Size>(
         let mut cx = Vector::<f64, N>::empty();
         let mut cy = Vector::<f64, N>::empty();
         let mut cz = Vector::<f64, N>::empty();
+        let mut rad2 = Vector::<f64, N>::empty();
         // Per slot, per element: the packed powers (0 = "no slot", whose
         // products are all `× 1` and whose result is never stored).
         let mut pw = Array::<Vector<u32, N>>::new(MAX_SLOTS_PER_INSTANCE);
@@ -1834,6 +1976,7 @@ fn mg_integrate_vec_kernel<N: Size>(
             cx[j] = instance_center[u * 3];
             cy[j] = instance_center[u * 3 + 1];
             cz[j] = instance_center[u * 3 + 2];
+            rad2[j] = instance_radius2[u];
             let s = instance_set[u] as usize;
             let so0 = set_off[s] as usize;
             let nsl = set_off[s + 1] as usize - so0;
@@ -1875,27 +2018,45 @@ fn mg_integrate_vec_kernel<N: Size>(
             let dz = Vector::<f64, N>::new(coords_z[g]) - cz;
             let r2 = dx * dx + dy * dy + dz * dz;
             let arg = zero - eta * r2;
-            let mut e = Vector::<f64, N>::empty();
-            #[unroll]
-            for j in 0..N::value() {
-                e[j] = mg_exp(arg[j], exp_mode);
+            // M-21: per element (occurrence) the point is inside its radius
+            // or receives an exact `±0.0`; a point outside every lane's
+            // radius is skipped. The group's occurrences are different
+            // instances (usually images of one pair, far apart), so at any
+            // point most elements are outside: one SCALAR exp per inside
+            // element beats a vector exp over all of them.
+            let mut run = true;
+            let mut e = zero;
+            if comptime!(screen) {
+                let mut inside: u32 = 0u32;
+                #[unroll]
+                for j in 0..N::value() {
+                    if r2[j] <= rad2[j] {
+                        inside += 1u32;
+                        e[j] = mg_exp(arg[j], exp_mode);
+                    }
+                }
+                run = inside > 0u32;
+            } else {
+                e = mg_exp_vec::<N>(arg, exp_mode);
             }
-            let we = Vector::<f64, N>::new(weight[g]) * e;
-            for local in 0..nsl_max {
-                let mut poly = one;
-                let m = mask[local * 6];
-                poly *= dx * m + (one - m);
-                let m = mask[local * 6 + 1];
-                poly *= dx * m + (one - m);
-                let m = mask[local * 6 + 2];
-                poly *= dy * m + (one - m);
-                let m = mask[local * 6 + 3];
-                poly *= dy * m + (one - m);
-                let m = mask[local * 6 + 4];
-                poly *= dz * m + (one - m);
-                let m = mask[local * 6 + 5];
-                poly *= dz * m + (one - m);
-                acc[local] += poly * we;
+            if run {
+                let we = Vector::<f64, N>::new(weight[g]) * e;
+                for local in 0..nsl_max {
+                    let mut poly = one;
+                    let m = mask[local * 6];
+                    poly *= dx * m + (one - m);
+                    let m = mask[local * 6 + 1];
+                    poly *= dx * m + (one - m);
+                    let m = mask[local * 6 + 2];
+                    poly *= dy * m + (one - m);
+                    let m = mask[local * 6 + 3];
+                    poly *= dy * m + (one - m);
+                    let m = mask[local * 6 + 4];
+                    poly *= dz * m + (one - m);
+                    let m = mask[local * 6 + 5];
+                    poly *= dz * m + (one - m);
+                    acc[local] += poly * we;
+                }
             }
         }
         #[unroll]
@@ -1932,6 +2093,7 @@ fn mg_integrate2_vec_kernel<N: Size>(
     occ_slot0: &Array<u32>,
     instance_alpha: &Array<f64>,
     instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
     instance_set: &Array<u32>,
     set_off: &Array<u32>,
     set_pow: &Array<u32>,
@@ -1940,6 +2102,7 @@ fn mg_integrate2_vec_kernel<N: Size>(
     ngroups: usize,
     lane0: usize,
     #[comptime] exp_mode: u32,
+    #[comptime] screen: bool,
 ) {
     let grp = ABSOLUTE_POS + lane0;
     if grp < ngroups {
@@ -1954,6 +2117,7 @@ fn mg_integrate2_vec_kernel<N: Size>(
         let mut cx = Vector::<f64, N>::empty();
         let mut cy = Vector::<f64, N>::empty();
         let mut cz = Vector::<f64, N>::empty();
+        let mut rad2 = Vector::<f64, N>::empty();
         let mut pw = Array::<Vector<u32, N>>::new(MAX_SLOTS_PER_INSTANCE);
         for local in 0..MAX_SLOTS_PER_INSTANCE {
             pw[local] = Vector::<u32, N>::new(0u32);
@@ -1970,6 +2134,7 @@ fn mg_integrate2_vec_kernel<N: Size>(
             cx[j] = instance_center[u * 3];
             cy[j] = instance_center[u * 3 + 1];
             cz[j] = instance_center[u * 3 + 2];
+            rad2[j] = instance_radius2[u];
             let s = instance_set[u] as usize;
             let so0 = set_off[s] as usize;
             let nsl = set_off[s + 1] as usize - so0;
@@ -2012,29 +2177,47 @@ fn mg_integrate2_vec_kernel<N: Size>(
             let dz = Vector::<f64, N>::new(coords_z[g]) - cz;
             let r2 = dx * dx + dy * dy + dz * dz;
             let arg = zero - eta * r2;
-            let mut e = Vector::<f64, N>::empty();
-            #[unroll]
-            for j in 0..N::value() {
-                e[j] = mg_exp(arg[j], exp_mode);
+            // M-21: per element (occurrence) the point is inside its radius
+            // or receives an exact `±0.0`; a point outside every lane's
+            // radius is skipped. The group's occurrences are different
+            // instances (usually images of one pair, far apart), so at any
+            // point most elements are outside: one SCALAR exp per inside
+            // element beats a vector exp over all of them.
+            let mut run = true;
+            let mut e = zero;
+            if comptime!(screen) {
+                let mut inside: u32 = 0u32;
+                #[unroll]
+                for j in 0..N::value() {
+                    if r2[j] <= rad2[j] {
+                        inside += 1u32;
+                        e[j] = mg_exp(arg[j], exp_mode);
+                    }
+                }
+                run = inside > 0u32;
+            } else {
+                e = mg_exp_vec::<N>(arg, exp_mode);
             }
-            let we_a = Vector::<f64, N>::new(weight_a[g]) * e;
-            let we_b = Vector::<f64, N>::new(weight_b[g]) * e;
-            for local in 0..nsl_max {
-                let mut poly = one;
-                let m = mask[local * 6];
-                poly *= dx * m + (one - m);
-                let m = mask[local * 6 + 1];
-                poly *= dx * m + (one - m);
-                let m = mask[local * 6 + 2];
-                poly *= dy * m + (one - m);
-                let m = mask[local * 6 + 3];
-                poly *= dy * m + (one - m);
-                let m = mask[local * 6 + 4];
-                poly *= dz * m + (one - m);
-                let m = mask[local * 6 + 5];
-                poly *= dz * m + (one - m);
-                acc_a[local] += poly * we_a;
-                acc_b[local] += poly * we_b;
+            if run {
+                let we_a = Vector::<f64, N>::new(weight_a[g]) * e;
+                let we_b = Vector::<f64, N>::new(weight_b[g]) * e;
+                for local in 0..nsl_max {
+                    let mut poly = one;
+                    let m = mask[local * 6];
+                    poly *= dx * m + (one - m);
+                    let m = mask[local * 6 + 1];
+                    poly *= dx * m + (one - m);
+                    let m = mask[local * 6 + 2];
+                    poly *= dy * m + (one - m);
+                    let m = mask[local * 6 + 3];
+                    poly *= dy * m + (one - m);
+                    let m = mask[local * 6 + 4];
+                    poly *= dz * m + (one - m);
+                    let m = mask[local * 6 + 5];
+                    poly *= dz * m + (one - m);
+                    acc_a[local] += poly * we_a;
+                    acc_b[local] += poly * we_b;
+                }
             }
         }
         #[unroll]
@@ -2150,6 +2333,7 @@ fn launch_rho_resident<R: Runtime>(
             ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
             ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+            ArrayArg::from_raw_parts(d.instance_radius2.clone(), d.nuinstances),
             ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
             ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
             ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
@@ -2157,6 +2341,7 @@ fn launch_rho_resident<R: Runtime>(
             ArrayArg::from_raw_parts(out.clone(), d.npoints),
             nlanes,
             exp_mode,
+            point_screen_enabled(),
         );
     }
 }
@@ -2190,6 +2375,7 @@ fn launch_rho2_resident<R: Runtime>(
             ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
             ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
             ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+            ArrayArg::from_raw_parts(d.instance_radius2.clone(), d.nuinstances),
             ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
             ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
             ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
@@ -2199,6 +2385,7 @@ fn launch_rho2_resident<R: Runtime>(
             ArrayArg::from_raw_parts(out_b.clone(), d.npoints),
             nlanes,
             exp_mode,
+            point_screen_enabled(),
         );
     }
 }
@@ -2250,6 +2437,7 @@ fn launch_integrate_resident<R: Runtime>(
                     ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
                     ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
                     ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                    ArrayArg::from_raw_parts(d.instance_radius2.clone(), d.nuinstances),
                     ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
                     ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
                     ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
@@ -2257,6 +2445,7 @@ fn launch_integrate_resident<R: Runtime>(
                     d.ngroups,
                     chunk.lane0,
                     exp_mode,
+                    point_screen_enabled(),
                 );
             }
         }
@@ -2284,6 +2473,7 @@ fn launch_integrate_resident<R: Runtime>(
                 ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
                 ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
                 ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                ArrayArg::from_raw_parts(d.instance_radius2.clone(), d.nuinstances),
                 ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
                 ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
                 ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
@@ -2291,6 +2481,7 @@ fn launch_integrate_resident<R: Runtime>(
                 d.ninstances,
                 chunk.lane0,
                 exp_mode,
+                point_screen_enabled(),
             );
         }
     }
@@ -2336,6 +2527,7 @@ fn launch_integrate2_resident<R: Runtime>(
                     ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
                     ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
                     ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                    ArrayArg::from_raw_parts(d.instance_radius2.clone(), d.nuinstances),
                     ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
                     ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
                     ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
@@ -2344,6 +2536,7 @@ fn launch_integrate2_resident<R: Runtime>(
                     d.ngroups,
                     chunk.lane0,
                     exp_mode,
+                    point_screen_enabled(),
                 );
             }
         }
@@ -2372,6 +2565,7 @@ fn launch_integrate2_resident<R: Runtime>(
                 ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
                 ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
                 ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                ArrayArg::from_raw_parts(d.instance_radius2.clone(), d.nuinstances),
                 ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
                 ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
                 ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
@@ -2380,6 +2574,7 @@ fn launch_integrate2_resident<R: Runtime>(
                 d.ninstances,
                 chunk.lane0,
                 exp_mode,
+                point_screen_enabled(),
             );
         }
     }
@@ -2536,6 +2731,7 @@ fn validate_batch(b: &PairSlotBatch) -> Result<(), AlgebraError> {
     }
     let nuinst = b.instance_alpha.len();
     if b.instance_center.len() != nuinst * 3
+        || b.instance_radius2.len() != nuinst
         || b.instance_set.len() != nuinst
         || b.instance_kslot0.len() != nuinst
         || b.uocc_off.len() != nuinst + 1
@@ -2543,8 +2739,9 @@ fn validate_batch(b: &PairSlotBatch) -> Result<(), AlgebraError> {
         return Err(shape(
             format!("per-distinct tables sized nuinst = {nuinst} (centre 3x, uocc_off + 1)"),
             format!(
-                "{} / {} / {} / {}",
+                "{} / {} / {} / {} / {}",
                 b.instance_center.len(),
+                b.instance_radius2.len(),
                 b.instance_set.len(),
                 b.instance_kslot0.len(),
                 b.uocc_off.len()

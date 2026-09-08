@@ -39,7 +39,9 @@ a comptime `usize` (`frontend/element/base.rs`), `#[unroll] for i in
 | **M-18** host release | the chunk's host geometry is TAKEN on first upload (`PYSCF_MG_PAIR_KEEP_HOST=1` keeps it) | landed, bit-neutral; RSS §3 |
 | **M-19** vector reverse | `mg_integrate_vec_kernel<N>`: one lane per N consecutive occurrences of a block, predicated power products (`poly *= dx·m + (1−m)`), hoisted masks, N scalar `exp`s per point | landed, **bit-exact**; **1.54×** over the term-set scalar reverse, 1.75× over session 5's (§3); `PYSCF_MG_PAIR_REVERSE=scalar` is the A/B arm |
 | instrument | `tests/mg_pair_bench.rs` (`#[ignore]`): per-level geometry statistics (sets, same-set run lengths) and the isolated warm forward/reverse wall; `PYSCF_MG_PAIR_EXP=exact|fast|none` kill-switch arm; `PYSCF_MG_PAIR_LINE=1|2|4|8` width pin | landed |
-| GATE S | S-03 (`PYSCF_PBC_KSYMM_RHO=symmetrize`) measured at the gate mesh, §5 | measured |
+| **M-20** vector exp | `cube-math` `exp_vec` (the scalar glibc schedule on `Vector<f64, N>`, `fma64_vec`, per-element table gather and repair) in the four vector kernels | landed in `cube-math` and here, **bit-exact** (`vector_exp.rs` + `multigrid_batch`); level-3 forward 1.29×, reverse 1.19× (§3.2) |
+| **M-21** per-point radius screen | `r² <= rad²` before the exp in all six fused kernels, per-point radius at a tightened threshold | landed **opt-in** (`PYSCF_MG_PAIR_POINT_SCREEN=<factor>`); measured as a LOSS at every factor inside the gate and as an electron-count error at factor 1 (§3.3) |
+| GATE S | S-03 (`PYSCF_PBC_KSYMM_RHO=symmetrize`) measured at the gate mesh, §5; default flipped (D-PBC-33) | measured, flipped |
 
 Everything above went through `tests/multigrid_batch.rs`'s `to_bits()`
 comparison against the per-block streaming route (§4), which is the whole
@@ -189,6 +191,87 @@ per direction, at ~1.7 ns each across 16 threads. Checksums are identical
 across the `LINE` / `REVERSE` arms (and differ, as they must, under
 `EXP=none`).
 
+### 3.2 M-20 — the vector `exp` (`cube-math` `exp_vec`, **bit-exact**)
+
+`cube-math/src/double/exp.rs` (`exp_vec`, `bit_exact_vec`, `core_vec`,
+`fast_vec`), `cube-math/src/fma.rs` (`fma64_vec`),
+`cube-math/tests/vector_exp.rs`; `multigrid_pair.rs` (`mg_exp_vec`, used by
+the four vector kernels). The scalar glibc schedule written on
+`Vector<f64, N>`: every operation elementwise, the fused multiply-adds
+through `fma64_vec` (the intrinsic on the vector, or `fma_f64` per element
+on a device whose `fma` rounds twice), the 128-entry table gathered one
+element at a time, and the elements the scalar routine would branch on
+(`|x| < 2^-54`, `|x| >= 512`, non-finite) repaired afterwards by the scalar
+`bit_exact` on that element alone. IEEE arithmetic rounds the same in a lane
+as in a scalar, so the main-path elements are the scalar bits by
+construction and the repaired ones are the scalar routine itself.
+`vector_exp.rs`: `to_bits()` equality with `exp` over the equivalence
+sweep plus the branch edges, widths 1 / 2 / 4 / 8, policies `exact`, `fast`,
+`exact_finite`, CPU runtime — **all identical**. `multigrid_batch` 5/5 on
+the kernels using it (checksums unchanged to the last digit).
+
+Isolated (`mg_pair_bench`, level 3, load 13 — worse than §3's 4.8):
+
+| | before M-20 | **M-20** | ratio |
+|---|---|---|---|
+| forward | 1 038 ms | **802 ms** | 1.29× |
+| reverse | 2 017 ms | **1 692 ms** | 1.19× |
+| forward, `EXP=none` | 455 | 358 | (the non-exp part, load) |
+
+The exp's own share went 583 → 444 ms on the forward: the vector schedule
+pays its per-element table gather and its per-element repair test, so it
+is not 8× the scalar one on this runtime; it is the same bits for less.
+
+Whole SCF, release binary (`krks_profile multigrid --driver krks --numint
+v2 --mesh 25,25,25`, `baselines/2026-09-08-s6-multigrid-v2-si-mesh25-after-m20.json`,
+load 5.3, same box as §3.1's rows):
+
+| | §3.1 AFTER (M-15..M-19) | **+ M-20** | ratio | vs session start |
+|---|---|---|---|---|
+| warm `get_veff` | 4 038 ms | **3 272 ms** | 1.23× | 9 501 → 3 272: **2.9×** |
+| `kernel()` | 14 981 ms | **12 749 ms** | 1.18× | 30 685 → 12 749: **2.4×** |
+| level 3 forward / reverse | 1 069 / 2 048 | **858 / 1 629** | | 3 860 / 3 428 → 4.5× / 2.1× |
+| peak RSS | 1 640 MiB | **1 403 MiB** | | 2 551 → 1 403: **−45 %** |
+| `e_tot` | −7.160554062714283 | **−7.160554062714283** | identical | |
+
+### 3.3 M-21 — the per-point instance-radius screen (**changes results; OPT-IN, measured as a loss**)
+
+`PairSlotTable::instance_radius2` / `PairSlotBatch::instance_radius2`,
+`PairLevelTable::instance_radius_point`, `point_screen_factor`
+(`pair.rs`), a `#[comptime] screen` on all six fused kernels: a `(point,
+instance)` pair farther apart than the instance's per-point radius
+contributes nothing (`r² <= rad²` test before the exp; in the vector
+kernels an outside element's `e` is zeroed so its accumulator receives an
+exact `±0.0`, width-independent). `PYSCF_MG_PAIR_POINT_SCREEN=<factor>`
+turns it on; the per-point radius is `fused_radius` at `threshold ·
+factor`, because a point-level drop discards every outside instance at
+every point and the SUM of the ~10⁵ per-point discards has to stay under
+the precision, where a block-level drop discards one instance per block.
+
+Measured, same binary, `si` `25³` (`multigrid_batch::point_screen_is_bounded_and_route_independent`
+sweeping the factor; `mg_pair_bench` level 3, load 10-12):
+
+| factor | max relative move of `rho` (worst level) | GATE E v2 | level-3 forward | reverse |
+|---|---|---|---|---|
+| off | — | 10/10 | 978 ms | 1 844 ms |
+| 1 (the block radius itself) | **5.6e-5** | **FAILS**: `int(rho)` loses 2.7e-5 electrons on Si and 1.4e-5 on diamond | 761 (1.29×) | 1 798 (1.03×) |
+| 1e-2 | 4.8e-7 | — | — | — |
+| 1e-4 | 3.8e-9 | — | 1 125 (0.87×) | 1 904 (0.97×) |
+| 1e-6 | 3.3e-11 (under the 1e-9 gate) | — | 1 189 (0.82×) | 1 957 (0.94×) |
+| 1e-8 | 2.1e-13 | — | 1 262 (0.78×) | 2 014 (0.92×) |
+
+Within every arm batched vs streamed stays bit-identical (the same test).
+The one factor that is fast is the one that is wrong, and every factor
+that is right is slower than no screen: on this runtime the per-`(point,
+instance)` compare-and-branch (and, in the vector reverse, the switch from
+one vector exp to per-element scalar exps for the inside elements) costs
+more than the skipped arithmetic, because the block-level reach already
+keeps the wasted volume small (occurrences / distinct = 6 blocks per
+instance, §1). RULE S: **default OFF**, kept as an opt-in arm (a discrete
+GPU pays for a branch differently — UNVERIFIED here), gated at factor 1e-6
+against 1e-9 relative. D-PBC-34 records the user's authorisation to take
+the lever and this measurement as the reason it is not the default.
+
 ### 3.1 Whole SCF — `krks_profile multigrid --driver krks --numint v2 --mesh 25,25,25`, BEFORE vs AFTER release binaries
 
 Thin-LTO `--release` binaries of the tree before and after this session
@@ -236,7 +319,9 @@ and rebuilds the libxc tree, memory `gate-target-dir-lto-spelling`), one
 | `multigrid_scf` (GATE MG-SCF) | **3/3** |
 | `multigrid` (GATE E v1) | **6/6** |
 | `pyscf-kernels` `multigrid_pair` 8, `pbc_eval_ao_k` 7 | **15/15** |
-| `check-dependency-wall` (ALG-06) | PASS |
+| `check-dependency-wall` (ALG-06), `check-no-fma` (FOUND-05) | PASS, PASS |
+| **final build (M-20 + the opt-in M-21 code, screen off):** `multigrid_batch` 6/6 (incl. `point_screen_is_bounded_and_route_independent` at factor 1e-6), `multigrid2` 10/10, `multigrid_uks` 5/5, `multigrid_threads` 4/4, `multigrid_scf` 3/3, `multigrid` 6/6, `multigrid_cache` 4/4, `multigrid_level_cache` 1/1, `multigrid_memory` 1/1, kernels 15/15 | **all green** |
+| `cube-math` `tests/vector_exp.rs` (`exp_vec` vs `exp`, widths 1/2/4/8, three policies, CPU runtime) | **1/1** (every element identical) |
 
 Not run: GATE A / GATE U (oracle venv), `krks_ksymm`, `ksymm_*`,
 `numint_threads`, `eval_ao_*` — nothing in this session touches the AO
@@ -309,15 +394,14 @@ ms at 2×2×2, is the same-process control: unchanged by the flag.)
 
 ## 6. Not done, and why
 
-* **The `exp` is now half of both pair kernels** (§3, kill-switch arm):
-  1.73 G scalar `cube_math` calls per direction per level-3 sweep. Two
-  levers, neither taken: (a) a `Vector<f64, N>` `exp` in `cube-math`
-  (the same glibc schedule per element with a per-element table gather —
-  bit-exact by construction, a cube-math item, not a pyscf one); (b) the
-  per-point instance-radius screen (`r² > r_inst²` → skip), which drops
-  terms below `cell.precision` and therefore changes results — an opt-in
-  item under RULE S, expected ≥ 2× on both directions from the block-vs-
-  ball volume ratio, to be measured and landed alone.
+* **The `exp` was half of both pair kernels** (§3, kill-switch arm). Both
+  levers named here were then taken on the user's instruction: the vector
+  `exp` (M-20, §3.2, bit-exact, 1.29× / 1.19×) and the per-point
+  instance-radius screen (M-21, §3.3), which measured as a loss at every
+  factor that keeps the density inside the gate and is therefore opt-in.
+  What remains of the `exp` cost is its per-element table gather and
+  repair test; a table-free `Fast` policy on the vector path would be the
+  next step and is not bit-exact (the `EXP=fast` arm exists for it).
 * **Uniform-set fast path in the vector reverse** (85 % of occurrences sit
   in same-set runs ≥ 8): the predication could give way to the scalar
   `while` power loops when a group's N lanes share a set, saving ~6
