@@ -1,4 +1,5 @@
-//! S-03: the opt-in IBZ-density route agrees with the full-BZ unfold route.
+//! S-03: the IBZ-density route (the default since session 6; `PYSCF_PBC_KSYMM_RHO=unfold`
+//! restores the full-BZ route) agrees with the full-BZ unfold route.
 
 use pyscf_algebra::CTensor;
 use pyscf_pbc_dft::gen_grid::PeriodicGrids;
@@ -73,7 +74,7 @@ fn symmetrized_open_shell_kuks_energy_matches_unfold() {
         ..Default::default()
     };
 
-    unsafe { std::env::remove_var("PYSCF_PBC_KSYMM_RHO") };
+    unsafe { std::env::set_var("PYSCF_PBC_KSYMM_RHO", "unfold") };
     let unfold = KsymAdaptedKuks::new(cell.clone(), kp.clone(), "lda,vwn")
         .expect("unfold KUKS")
         .kernel(&cfg)
@@ -134,7 +135,7 @@ fn symmetrized_ibz_quadrature_matches_unfold_for_lda_and_gga() {
         let spin_dms = [dms.clone(), vec![scaled_density(&dms[0], 0.73)]];
 
         for xc in ["lda,vwn", "pbe,pbe"] {
-            unsafe { std::env::remove_var("PYSCF_PBC_KSYMM_RHO") };
+            unsafe { std::env::set_var("PYSCF_PBC_KSYMM_RHO", "unfold") };
             let unfold = KNumInt::with_symmetry(&kp)
                 .nr_rks(&cell, &grids, xc, &dms, 1, Some(&kp.kpts_ibz))
                 .expect("unfold route");

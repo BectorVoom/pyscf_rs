@@ -280,10 +280,30 @@ ms at 2×2×2, is the same-process control: unchanged by the flag.)
   remove the last full-BZ table from a pure-functional ksymm SCF; it is a
   ksymm-`get_veff` restructure that changes results at the same 1e-16
   level, listed in §6 as S-10.
-* **Recommendation, not taken here (RULE S / the plan's landing rule for
-  result-changing items):** flip the `PYSCF_PBC_KSYMM_RHO` default to
-  `symmetrize`. The measurement is the number the plan said the flip
-  needed; the flip itself is a planning decision.
+* **Default flipped (user decision, 2026-09-08, recorded here as
+  D-PBC-33):** `symmetry_rho_enabled` now returns true unless
+  `PYSCF_PBC_KSYMM_RHO=unfold`; the old route stays reachable by that
+  spelling and `ksymm_symmetrize_rho` compares the two explicitly. Gates
+  re-run on the new default: §5.1.
+
+### 5.1 Gates on the flipped default
+
+`crates/pyscf-pbc-dft/src/numint.rs::symmetry_rho_enabled` and
+`tests/ksymm_symmetrize_rho.rs` (its unfold arms now spell
+`PYSCF_PBC_KSYMM_RHO=unfold`); no-LTO `target/gate`, one scope each:
+
+| gate | result |
+|---|---|
+| `ksymm_symmetrize_rho` (symmetrize vs unfold, LDA + GGA, RKS + UKS, `nelec` 1e-12 / `e_tot` 1e-11; open shell) | **2/2** |
+| `ksymm_threads` (GATE B ksymm, thread bit-identity on the new route) | **2/2** |
+| `numint_threads` (GATE B numint) | **1/1** |
+| `ksymm_band_ao_reuse` (S-07 / S-08 subset reuse still fires) | **3/3** |
+| `ksymm_trace_precision` | **3/3** |
+| `kuks_bands` | **2/2** |
+| `krks_ksymm` (GATE C: IBZ vs full BZ, KRKS / KUKS / Hubbard, GDF band route) | **7/7** + 3 ignored |
+
+`krks_profile ksymm` still takes the route from the environment, so the
+`unfold` rows of §5 are reproducible with `PYSCF_PBC_KSYMM_RHO=unfold`.
 
 ---
 

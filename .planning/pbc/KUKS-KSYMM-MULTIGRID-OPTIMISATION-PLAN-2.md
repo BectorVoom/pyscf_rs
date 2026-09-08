@@ -58,7 +58,9 @@ on the isolated kernels; the resident level-3 geometry 622 → 259 MB with
 no host copy beside it. The `exp` is now half of both kernels (kill-switch
 arm) — the next lever is a `Vector<f64, N>` exp in `cube-math`, or the
 instance-radius screen (changes results). The M-08 step 4 / Q12 rows are
-answered by session 6 §3.
+answered by session 6 §3. **S-03's default is flipped** (D-PBC-33, user
+decision on session 6 §5's measurement): the symmetrised quadrature is the
+k-symmetric numint's route; `PYSCF_PBC_KSYMM_RHO=unfold` restores Group A.
 
 ---
 

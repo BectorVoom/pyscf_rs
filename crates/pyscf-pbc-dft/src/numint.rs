@@ -336,8 +336,25 @@ pub struct XcKernelCache {
 /// size and a content hash of the coordinates.
 type AoKey = (u8, Vec<[u64; 3]>, u32, usize, u64);
 
+/// Which XC-quadrature route a k-symmetric numint takes — S-03.
+///
+/// `symmetrize` (the DEFAULT since 2026-09-08, session 6): evaluate the AO
+/// table and the density at the `N_ibz` irreducible points and star-average
+/// the real-space density through `KPoints::symmetrize_density`. `unfold`
+/// (the previous default, `PYSCF_PBC_KSYMM_RHO=unfold`): unfold the density
+/// matrix to the full zone and run the full-BZ quadrature — upstream's
+/// Group-A route, the one the module doc below describes.
+///
+/// The two routes are NOT bit-identical (a star-average of rotated copies
+/// against `|star|` independent evaluations); measured on `si` at the gate
+/// mesh they agree to `<= 4e-16` Ha in the converged energy at 2×2×2 and
+/// 4×4×4 (`KUKS-KSYMM-MULTIGRID-SESSION-6-EXECUTION-SUMMARY.md` §5), against
+/// the 1e-11 gate `tests/ksymm_symmetrize_rho.rs` holds them to, and the
+/// symmetrised route is 1.51× on the 4×4×4 k-symmetric KRKS SCF with a
+/// `N_ibz`-sized AO cache. It needs a uniform FFT grid; a Becke grid errors
+/// rather than silently unfolding.
 fn symmetry_rho_enabled() -> bool {
-    std::env::var("PYSCF_PBC_KSYMM_RHO").is_ok_and(|v| v.eq_ignore_ascii_case("symmetrize"))
+    !std::env::var("PYSCF_PBC_KSYMM_RHO").is_ok_and(|v| v.eq_ignore_ascii_case("unfold"))
 }
 
 /// Which k-set [`KNumInt`] integrates over — plan 17-08 Task 1.
@@ -363,10 +380,11 @@ fn symmetry_rho_enabled() -> bool {
 /// grid *indices* across the whole mesh while the density is built per
 /// block — a wall upstream never hits, because upstream never does this.
 ///
-/// The consequence is worth knowing: under symmetry, `numint` does the
-/// full-BZ amount of work **plus** an unfold. It is a convenience interface,
-/// not an optimisation; the IBZ saving in a ksymm DFT run comes from the SCF
-/// side (D-PBC-26), not the XC quadrature.
+/// The consequence is worth knowing: under the `unfold` route, `numint`
+/// does the full-BZ amount of work **plus** an unfold. That was the default
+/// until session 6 flipped it to the symmetrised route (S-03,
+/// [`symmetry_rho_enabled`]), which does the `N_ibz` amount of work; the
+/// SCF side's own IBZ saving (D-PBC-26) is independent of either.
 ///
 /// # Why a field rather than the plan's threaded parameter
 ///
@@ -1024,7 +1042,7 @@ impl KNumInt {
             PeriodicGrids::Uniform(g) => g.mesh,
             PeriodicGrids::Becke(_) => {
                 return Err(err(
-                    "PYSCF_PBC_KSYMM_RHO=symmetrize requires a uniform FFT grid",
+                    "the symmetrized k-symmetric quadrature (the default; PYSCF_PBC_KSYMM_RHO=unfold restores the full-BZ route) requires a uniform FFT grid",
                 ));
             }
         };
