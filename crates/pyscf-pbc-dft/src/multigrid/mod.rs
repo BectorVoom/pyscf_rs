@@ -16,5 +16,10 @@ pub mod pair;
 pub mod pp;
 pub mod utils;
 
+// K-01 — the k-point-resolved layer over the v2 pair engine (phase 17
+// carry-over §10.12: "multigrid v1/v2 are gamma-only"). Host-side only; the
+// collocation kernel is unchanged and shared.
+pub mod kpts;
+
 pub use numint::MultiGridNumInt;
 pub use pair::MultiGridNumInt2;

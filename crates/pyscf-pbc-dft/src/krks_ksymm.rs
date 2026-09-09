@@ -59,7 +59,7 @@ use pyscf_pbc_symm::kpts::KPoints;
 use crate::error::PbcDftError;
 use crate::gen_grid::PeriodicGrids;
 use crate::krks::{KsEnergyTags, unwrap_err};
-use crate::numint::KNumInt;
+use crate::numint::{KNumInt, KsNumInt, unfold_kdms_sym};
 use crate::veff::{add_assign, get_jk, sub_scaled};
 use crate::xc::err;
 
@@ -83,9 +83,20 @@ pub struct KsymAdaptedKrks {
     pub exxdiv: Option<ExxDiv>,
     /// The integration grid.
     pub grids: PeriodicGrids,
-    /// The numerical-integration driver, built with
-    /// [`KNumInt::with_symmetry`] so its seven `KPoints` branches are live.
-    pub ni: KNumInt,
+    /// The numerical-integration driver. Defaults to the grid route built
+    /// with [`KNumInt::with_symmetry`], so its seven `KPoints` branches are
+    /// live.
+    ///
+    /// K-01: this is a [`KsNumInt`], so a caller may set
+    /// [`KsNumInt::multigrid2`] here and run the k-symmetric SCF on the
+    /// k-point-resolved multigrid instead. The two routes differ in what the
+    /// symmetry buys: the grid route's cost is per k-point (S-03 symmetrises
+    /// the quadrature to avoid the unfold), while the multigrid's collocation
+    /// is over lattice IMAGES and does not grow with `nkpts` at all — so the
+    /// multigrid arm simply consumes the full-BZ density S-01 already
+    /// unfolds, and takes its saving in the `kpts_band` return being IBZ
+    /// length.
+    pub ni: KsNumInt,
     /// `ksymm_scf_common_init` (`khf_ksymm.py:142`) defaults this to **true**.
     pub use_ao_symmetry: bool,
     pub(crate) tags: StdCell<Option<KsEnergyTags>>,
@@ -112,7 +123,7 @@ impl KsymAdaptedKrks {
         grids: PeriodicGrids,
     ) -> Self {
         let kpts_ibz = kpts.kpts_ibz.clone();
-        let ni = KNumInt::with_symmetry(&kpts);
+        let ni = KsNumInt::Grid(KNumInt::with_symmetry(&kpts));
         Self {
             with_df,
             kpts,
@@ -177,58 +188,75 @@ impl KsymAdaptedKrks {
         // always carried, asserted by
         // `tests/krks_ksymm.rs::unfold_is_a_bit_exact_no_op_on_full_bz_input`),
         // so the quadrature sees exactly the density it saw before.
-        let dm_bz = self.ni.unfold_kdms(cell, dms, nao)?;
+        let dm_bz = unfold_kdms_sym(&self.kpts, cell, dms, nao)?;
 
         // The XC half. `self.ni` is a `KSet::Ibz` numint, so the density is
         // evaluated over the full BZ (Group A) and the potential is built at
         // `band` — the IBZ points.
-        let nr = self
-            .ni
-            .nr_rks(cell, &self.grids, &self.xc, &dm_bz, 1, Some(&band))?;
-        let mut vxc = nr.vmat;
-        let mut exc = nr.excsum[0];
-
-        // The J/K half. The DF layer is handed the FULL BZ k-points and a
-        // full-BZ density, with `kpts_band` selecting the IBZ output — so it
-        // still knows nothing about symmetry (D-PBC-15), it only ever sees two
-        // plain k-point lists.
-        let jk = get_jk(
-            self.with_df.as_ref(),
+        let nr = self.ni.nr_rks(
+            cell,
+            &self.grids,
             &self.xc,
             &dm_bz,
             1,
             self.kpts_bz(),
             Some(&band),
-            self.exxdiv,
-            true,
         )?;
-        let vj = jk
-            .vj
-            .ok_or_else(|| err("KRKS/ksymm: the density-fitting object returned no vj"))?;
-        add_assign(&mut vxc, &vj);
+        let mut vxc = nr.vmat;
+        let mut exc = nr.exc;
 
-        // `krks_ksymm.py:76` — ecoul = einsum('K,Kij,Kji', weights_ibz, dm, vj) * .5
-        let ecoul = if ground_state {
-            0.5 * self.weighted_trace(dms, &vj, nao)
+        // K-01: a multigrid quadrature has ALREADY folded J into `vxc` and
+        // returns `ecoul` with it — the same seam `Krks::get_veff_tagged`
+        // carries. Its `ecoul` is `0.5·Re⟨ρ|v_G⟩/vol`, computed from the
+        // full-BZ `rho(G)` directly, which is the same Coulomb energy the
+        // `weights_ibz` trace below reconstructs from IBZ matrices; it is a
+        // functional of the density alone and carries no k-weight of its own.
+        let ecoul = if let Some(ecoul) = nr.ecoul {
+            ecoul
         } else {
-            0.0
-        };
+            // The J/K half. The DF layer is handed the FULL BZ k-points and a
+            // full-BZ density, with `kpts_band` selecting the IBZ output — so
+            // it still knows nothing about symmetry (D-PBC-15), it only ever
+            // sees two plain k-point lists.
+            let jk = get_jk(
+                self.with_df.as_ref(),
+                &self.xc,
+                &dm_bz,
+                1,
+                self.kpts_bz(),
+                Some(&band),
+                self.exxdiv,
+                true,
+            )?;
+            let vj = jk
+                .vj
+                .ok_or_else(|| err("KRKS/ksymm: the density-fitting object returned no vj"))?;
+            add_assign(&mut vxc, &vj);
 
-        if let Some(vk) = jk.vk.as_ref() {
-            // `:79` — vxc -= .5 * vk
-            sub_scaled(&mut vxc, 0.5, vk);
-            if ground_state {
-                // `:81` — exc -= einsum('K,Kij,Kji', weights_ibz, dm, vk).real * .25
-                exc -= 0.25 * self.weighted_trace(dms, vk, nao);
+            // `krks_ksymm.py:76` — ecoul = einsum('K,Kij,Kji', weights_ibz, dm, vj) * .5
+            let ecoul = if ground_state {
+                0.5 * self.weighted_trace(dms, &vj, nao)
+            } else {
+                0.0
+            };
+
+            if let Some(vk) = jk.vk.as_ref() {
+                // `:79` — vxc -= .5 * vk
+                sub_scaled(&mut vxc, 0.5, vk);
+                if ground_state {
+                    // `:81` — exc -= einsum('K,Kij,Kji', weights_ibz, dm, vk).real * .25
+                    exc -= 0.25 * self.weighted_trace(dms, vk, nao);
+                }
             }
-        }
+            ecoul
+        };
 
         Ok((
             vxc,
             KsEnergyTags {
                 ecoul,
                 exc,
-                nelec: nr.nelec[0],
+                nelec: nr.nelec,
             },
         ))
     }
@@ -520,8 +548,10 @@ pub struct KsymAdaptedKuks {
     pub exxdiv: Option<ExxDiv>,
     /// The integration grid.
     pub grids: PeriodicGrids,
-    /// The numerical-integration driver, `KSet::Ibz`.
-    pub ni: KNumInt,
+    /// The numerical-integration driver, `KSet::Ibz` by default. K-01: a
+    /// [`KsNumInt`], so the multigrid route is selectable — see
+    /// [`KsymAdaptedKrks::ni`].
+    pub ni: KsNumInt,
     /// Explicit `(nalpha, nbeta)` over the FULL BZ; `None` derives it from the
     /// cell's charge and spin.
     pub nelec: Option<(usize, usize)>,
@@ -543,7 +573,7 @@ impl KsymAdaptedKuks {
         let with_df = Fftdf::new(cell, &kpts.kpts)
             .map_err(|e| err(format!("KUKS/ksymm: FFTDF construction failed: {e}")))?;
         let kpts_ibz = kpts.kpts_ibz.clone();
-        let ni = KNumInt::with_symmetry(&kpts);
+        let ni = KsNumInt::Grid(KNumInt::with_symmetry(&kpts));
         Ok(Self {
             with_df: Box::new(with_df),
             kpts,
@@ -627,22 +657,41 @@ impl KsymAdaptedKuks {
         // unrestricted case unfolded FOUR times (once per spin inside
         // `nr_uks`, then both again for J/K) where two suffice. Bit-exact for
         // the reason `KsymAdaptedKrks::get_veff_tagged` records.
-        let dm_bz = self.ni.unfold_kdms(cell, dms, nao)?;
+        let dm_bz = unfold_kdms_sym(&self.kpts, cell, dms, nao)?;
 
         // `kuks.py:59-60` — one density SET per spin.
         let sets: [KDms; 2] = [vec![dm_bz[0].clone()], vec![dm_bz[1].clone()]];
-        let nr = self
-            .ni
-            .nr_uks(cell, &self.grids, &self.xc, &sets, 1, Some(&band))?;
+        let nr = self.ni.nr_uks(
+            cell,
+            &self.grids,
+            &self.xc,
+            &sets,
+            1,
+            self.kpts_bz(),
+            Some(&band),
+        )?;
         // P-02 step 3 (U-06 step 3, applied to the k-symmetric twin): `nr` is
-        // an OWNED `NrKUksResult`, so take the two `vmat` stacks out of it
-        // rather than cloning `nkpts_ibz x nao^2` complex twice per cycle.
-        // `nr.excsum` is read FIRST because the move invalidates that field.
-        let mut exc = nr.excsum[0];
-        let mut nr_vmat = nr.vmat;
-        let vmat_b = nr_vmat[1].swap_remove(0);
-        let vmat_a = nr_vmat[0].swap_remove(0);
+        // an OWNED result, so take the two `vmat` stacks out of it rather
+        // than cloning `nkpts_ibz x nao^2` complex twice per cycle. `nr.exc`
+        // and `nr.ecoul` are read FIRST because the move invalidates them.
+        let mut exc = nr.exc;
+        let mg_ecoul = nr.ecoul;
+        let [vmat_a, vmat_b] = nr.vmat;
         let mut vxc: KDms = vec![vmat_a, vmat_b];
+
+        // K-01 — see `KsymAdaptedKrks::get_veff_tagged`. A multigrid
+        // quadrature has already added the (spin-summed) Coulomb matrix to
+        // both channels and returns its energy.
+        if let Some(ecoul) = mg_ecoul {
+            return Ok((
+                vxc,
+                KsEnergyTags {
+                    ecoul,
+                    exc,
+                    nelec: nr.nelec.0 + nr.nelec.1,
+                },
+            ));
+        }
 
         let jk = get_jk(
             self.with_df.as_ref(),
@@ -701,7 +750,7 @@ impl KsymAdaptedKuks {
             KsEnergyTags {
                 ecoul,
                 exc,
-                nelec: nr.nelec[0].0 + nr.nelec[0].1,
+                nelec: nr.nelec.0 + nr.nelec.1,
             },
         ))
     }

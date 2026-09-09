@@ -374,6 +374,26 @@ pub struct PairLevelTable {
     /// Per set slot: the fused term it is an image of.
     pub set_term: Vec<u32>,
 
+    /// K-01: per fused term, the lattice image `L` of the SECOND (column)
+    /// primitive of the pair that produced it — an index into
+    /// [`Self::images`].
+    ///
+    /// Well defined because [`build_pair_level_table`] resets its
+    /// monomial->term map on every `L`, so a fused term belongs to exactly
+    /// one `(pair, L)`. This is the ONLY thing the k-point-resolved density
+    /// needs that the gamma-point table did not carry: the Bloch phase of a
+    /// pair product is `e^{-i k·L}` with `L` the column primitive's image,
+    /// and every slot feeding one term shares it.
+    ///
+    /// Do NOT confuse this with the periodic WRAP images
+    /// ([`Self::instance_center`]): those are copies of one fused Gaussian
+    /// translated to reach the mesh, they carry no phase, and they all feed
+    /// the same term.
+    pub term_img: Vec<u32>,
+    /// K-01: the distinct lattice images this level's terms reference,
+    /// `(nimages, 3)` row-major, Bohr. `images[3*i..3*i+3]` is `L`.
+    pub images: Vec<f64>,
+
     /// M-02: the spatial block partition of this level's mesh, and each
     /// block's kernel-slot reach list, computed ONCE at build time.
     ///
@@ -464,6 +484,10 @@ impl PairLevelTable {
     }
     pub fn nkslots(&self) -> usize {
         self.kslot_term.len()
+    }
+    /// K-01: distinct lattice images referenced by this level's terms.
+    pub fn nimages(&self) -> usize {
+        self.images.len() / 3
     }
 
     /// Number of kernel launches used by either direction for this level.
@@ -713,6 +737,10 @@ pub fn build_pair_level_table(
     let mut set_off: Vec<u32> = vec![0];
     let mut set_pow: Vec<u32> = Vec::new();
     let mut set_term: Vec<u32> = Vec::new();
+    // K-01: the term -> lattice-image map and the deduplicated image list.
+    let mut term_img: Vec<u32> = Vec::new();
+    let mut images: Vec<f64> = Vec::new();
+    let mut image_of: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
 
     let threshold = cell.precision * EXTRA_PREC;
 
@@ -766,6 +794,28 @@ pub fn build_pair_level_table(
             terms_here.clear();
             let mut cmax_here = 0.0f64;
 
+            // K-01: this image's index, allocated on first sight — AFTER the
+            // pre-screen, so `images` holds only images some term actually
+            // references and the per-level phase table stays tight.
+            //
+            // The key is the INTEGER lattice triple, not the Cartesian bits:
+            // `get_lattice_ls` is called once per pair with that pair's own
+            // `rcut`, so one physical image is regenerated for many pairs and
+            // must land on one index.
+            let img = {
+                let f = frac_of(&inv_a, *l);
+                let key = [
+                    f[0].round() as i64,
+                    f[1].round() as i64,
+                    f[2].round() as i64,
+                ];
+                *image_of.entry(key).or_insert_with(|| {
+                    let i = (images.len() / 3) as u32;
+                    images.extend_from_slice(l);
+                    i
+                })
+            };
+
             for (ci, &(aix, aiy, aiz)) in powers_i.iter().enumerate() {
                 for (cj, &(bjx, bjy, bjz)) in powers_j.iter().enumerate() {
                     let fx = binom_shift(aix, bjx, pa[0], pb[0]);
@@ -792,6 +842,7 @@ pub fn build_pair_level_table(
                                 let t = if term_of[key] == u32::MAX {
                                     let t = nterms as u32;
                                     nterms += 1;
+                                    term_img.push(img);
                                     term_of[key] = t;
                                     terms_here.push((t, [k1 as u32, k2 as u32, k3 as u32]));
                                     t
@@ -879,6 +930,8 @@ pub fn build_pair_level_table(
         set_off,
         set_pow,
         set_term,
+        term_img,
+        images,
         blocks: Vec::new(),
         block_sel: Vec::new(),
         batches: Vec::new(),
@@ -1076,6 +1129,7 @@ fn build_batch_geometry(
             b.coords_y.push(lv.coords[g * 3 + 1]);
             b.coords_z.push(lv.coords[g * 3 + 2]);
             b.point_block.push(local_bi as u32);
+            b.point_global.push(g as u32);
             point_global.push(g as u32);
         }
         b.block_point_end.push(b.point_block.len() as u32);
@@ -1088,6 +1142,7 @@ fn build_batch_geometry(
                 b.coords_y.push(lv.coords[g * 3 + 1]);
                 b.coords_z.push(lv.coords[g * 3 + 2]);
                 b.point_block.push(local_bi as u32);
+                b.point_global.push(PAD_POINT);
                 point_global.push(PAD_POINT);
             }
         }
@@ -1167,8 +1222,23 @@ fn level_scratch<'a>(
     lv.out_scratch.get_or_init(|| {
         let max_points = lv.batches.iter().map(|b| b.npoints).max().unwrap_or(0);
         let max_slots = lv.batches.iter().map(|b| b.nslots).max().unwrap_or(0);
-        pyscf_kernels::PairOutScratch::new(client, max_points, max_slots, lv.nkslots())
+        // K-03: `ngrids` sizes the level's device-resident density. It is
+        // allocated whether or not the on-device scatter is enabled, which
+        // costs `ngrids · 8 · 2` B per level — the same order as the chunk
+        // outputs already resident, and far less than the geometry.
+        pyscf_kernels::PairOutScratch::new(client, max_points, max_slots, lv.nkslots(), lv.ngrids)
     })
+}
+
+/// K-03: is the forward scatter run on the device (default) or read back and
+/// scattered by the host?
+///
+/// The seam exists so both routes can be compared IN ONE PROCESS at
+/// `to_bits()` equality, exactly as M-03's `use_batch` seam is
+/// (`tests/multigrid_device_scatter.rs`). A bit-parity claim is worth what
+/// the test that checks it is worth.
+fn device_scatter_enabled() -> bool {
+    !std::env::var("PYSCF_MG_PAIR_DEVICE_SCATTER").is_ok_and(|v| v == "0")
 }
 
 fn resident_batch<'a>(
@@ -1385,17 +1455,40 @@ pub fn pairlevel_rho_with(
     dm_p: &[f64],
     use_batch: bool,
 ) -> Result<Vec<f64>, PbcDftError> {
-    let ngrids = lv.ngrids;
-    let nk = lv.nkslots();
-    let mut rho = vec![0.0f64; ngrids];
-    if nk == 0 || ngrids == 0 {
-        return Ok(rho);
+    if lv.nkslots() == 0 || lv.ngrids == 0 {
+        return Ok(vec![0.0f64; lv.ngrids]);
     }
     // Contract the density matrix into the fused terms — fixed slot order.
     let mut term_coef = vec![0.0f64; lv.nterms];
     for s in 0..lv.nslots() {
         let d = dm_p[lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize];
         term_coef[lv.slot_term[s] as usize] += d * lv.slot_coef[s];
+    }
+    pairlevel_rho_from_terms(lv, &term_coef, use_batch)
+}
+
+/// K-01: [`pairlevel_rho_with`] from the fused-term coefficients directly —
+/// everything after the density-matrix contraction.
+///
+/// The seam exists because that contraction is the ONLY part of the forward
+/// direction a k-point-resolved density changes: `term_coef[t]` becomes the
+/// Bloch-phase-weighted `Σ_k w_k Re(D_k[ci,cj] e^{-i k·L_t})` instead of the
+/// gamma point's `D[ci,cj]`, and the launch below is then bit-for-bit the
+/// same work on a different vector of reals. See
+/// [`crate::multigrid::kpts::pairlevel_rho_kpts`].
+///
+/// # Errors
+/// As [`pairlevel_rho`].
+pub fn pairlevel_rho_from_terms(
+    lv: &PairLevelTable,
+    term_coef: &[f64],
+    use_batch: bool,
+) -> Result<Vec<f64>, PbcDftError> {
+    debug_assert_eq!(term_coef.len(), lv.nterms);
+    let ngrids = lv.ngrids;
+    let nk = lv.nkslots();
+    if nk == 0 || ngrids == 0 {
+        return Ok(vec![0.0f64; ngrids]);
     }
 
     let client = backend_client()?;
@@ -1407,6 +1500,30 @@ pub fn pairlevel_rho_with(
         // M-15: the per-call coefficients go up per SET slot; the kernel
         // walks them sequentially through the instance's set.
         let set_coef: Vec<f64> = lv.set_term.iter().map(|&t| term_coef[t as usize]).collect();
+
+        // K-03: the level's density stays ON THE DEVICE across every chunk
+        // and comes back once — no per-chunk read-back, no host scatter, and
+        // no host-side `ngrids` buffer to zero and fill. The route below is
+        // the same arithmetic and the same write set (the blocks partition
+        // the mesh, so every grid index is stored exactly once by exactly one
+        // lane, with no summation whose order could change) and is kept as
+        // the A/B seam (`PYSCF_MG_PAIR_DEVICE_SCATTER=0`) the bit-parity gate
+        // compares through.
+        if device_scatter_enabled() {
+            let scratch = level_scratch(lv, &client);
+            scratch.zero_mesh(&client, 1).map_err(wrap_alg)?;
+            for bl in &lv.batches {
+                resident_batch(lv, bl, &client)?
+                    .rho_into_mesh(&client, &set_coef, scratch)
+                    .map_err(wrap_alg)?;
+            }
+            return Ok(scratch
+                .read_mesh(&client, 1)
+                .map_err(wrap_alg)?
+                .swap_remove(0));
+        }
+
+        let mut rho = vec![0.0f64; ngrids];
         for bl in &lv.batches {
             let out = resident_batch(lv, bl, &client)?
                 .rho(&client, &set_coef)
@@ -1431,6 +1548,7 @@ pub fn pairlevel_rho_with(
     // (M-13: a batched level has released `block_sel`; `block_sel_of`
     // rebuilds the list for this route, which only tests and over-budget
     // levels take.)
+    let mut rho = vec![0.0f64; ngrids];
     for (bi, block) in lv.blocks.iter().enumerate() {
         let sel = block_sel_of(lv, bi);
         if sel.is_empty() {
@@ -1452,21 +1570,44 @@ pub fn pairlevel_rho2(
     decon: &Decontracted,
     dm_p: [&[f64]; 2],
 ) -> Result<[Vec<f64>; 2], PbcDftError> {
-    if lv.batches.is_empty() {
-        // The two channels share no state, so the fallback costs one channel's
-        // wall time rather than two — the batched route's own advantage.
-        let (a, b) = rayon::join(
-            || pairlevel_rho_with(lv, decon, dm_p[0], false),
-            || pairlevel_rho_with(lv, decon, dm_p[1], false),
-        );
-        return Ok([a?, b?]);
-    }
     let mut term_coef = [vec![0.0f64; lv.nterms], vec![0.0f64; lv.nterms]];
     for s in 0..lv.nslots() {
         let idx = lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize;
         let t = lv.slot_term[s] as usize;
         term_coef[0][t] += dm_p[0][idx] * lv.slot_coef[s];
         term_coef[1][t] += dm_p[1][idx] * lv.slot_coef[s];
+    }
+    pairlevel_rho2_from_terms(lv, [&term_coef[0], &term_coef[1]])
+}
+
+/// K-01: [`pairlevel_rho2`] from both channels' fused-term coefficients —
+/// the two-spin twin of [`pairlevel_rho_from_terms`], and it exists for the
+/// same reason plus one more.
+///
+/// Without it a k-resolved open-shell sweep would build each channel through
+/// [`pairlevel_rho_kpts`] and traverse the level's geometry TWICE, throwing
+/// away exactly what M-17's two-channel kernel was written to save. The
+/// k-point generalisation changes only how `term_coef` is computed; it must
+/// not change how many times the geometry is walked.
+///
+/// [`pairlevel_rho_kpts`]: crate::multigrid::kpts::pairlevel_rho_kpts
+///
+/// # Errors
+/// As [`pairlevel_rho`].
+pub fn pairlevel_rho2_from_terms(
+    lv: &PairLevelTable,
+    term_coef: [&[f64]; 2],
+) -> Result<[Vec<f64>; 2], PbcDftError> {
+    debug_assert!(term_coef.iter().all(|t| t.len() == lv.nterms));
+    if lv.batches.is_empty() || lv.nkslots() == 0 || lv.ngrids == 0 {
+        // The two channels share no state, so the fallback costs one
+        // channel's wall time rather than two — the batched route's own
+        // advantage.
+        let (a, b) = rayon::join(
+            || pairlevel_rho_from_terms(lv, term_coef[0], false),
+            || pairlevel_rho_from_terms(lv, term_coef[1], false),
+        );
+        return Ok([a?, b?]);
     }
     let set_coef = term_coef.map(|tc| {
         lv.set_term
@@ -1475,6 +1616,22 @@ pub fn pairlevel_rho2(
             .collect::<Vec<_>>()
     });
     let client = backend_client()?;
+    // K-03 — see `pairlevel_rho_from_terms`. Both channels' meshes live on
+    // the device across every chunk and come back in ONE batched read.
+    if device_scatter_enabled() {
+        let scratch = level_scratch(lv, &client);
+        scratch.zero_mesh(&client, 2).map_err(wrap_alg)?;
+        for bl in &lv.batches {
+            resident_batch(lv, bl, &client)?
+                .rho2_into_mesh(&client, [&set_coef[0], &set_coef[1]], scratch)
+                .map_err(wrap_alg)?;
+        }
+        let mut out = scratch.read_mesh(&client, 2).map_err(wrap_alg)?;
+        let b = out.swap_remove(1);
+        let a = out.swap_remove(0);
+        return Ok([a, b]);
+    }
+
     let mut rho = [vec![0.0; lv.ngrids], vec![0.0; lv.ngrids]];
     for bl in &lv.batches {
         let out = resident_batch(lv, bl, &client)?
@@ -1542,10 +1699,38 @@ pub fn pairlevel_pass2_with(
     v_p: &mut [f64],
     use_batch: bool,
 ) -> Result<(), PbcDftError> {
+    if lv.nkslots() == 0 || lv.ngrids == 0 {
+        return Ok(());
+    }
+    let integrals = pairlevel_integrals(lv, weight, use_batch)?;
+    for s in 0..lv.nslots() {
+        let idx = lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize;
+        v_p[idx] += lv.slot_coef[s] * integrals[lv.slot_term[s] as usize];
+    }
+    Ok(())
+}
+
+/// K-01: [`pairlevel_pass2_with`] up to — and not including — the scatter
+/// into the decontracted potential matrix. Returns `I[t]`, one real per
+/// fused term.
+///
+/// The reverse-direction twin of [`pairlevel_rho_from_terms`], and for the
+/// same reason: `I[t]` is a real grid integral that knows nothing about
+/// k-points, and the k-resolved potential is the same numbers scattered with
+/// the conjugate Bloch phase — `V_k[ci,cj] += coef_s · I_t · e^{+i k·L_t}`.
+/// See [`crate::multigrid::kpts::pairlevel_pass2_kpts`].
+///
+/// # Errors
+/// As [`pairlevel_pass2`].
+pub fn pairlevel_integrals(
+    lv: &PairLevelTable,
+    weight: &[f64],
+    use_batch: bool,
+) -> Result<Vec<f64>, PbcDftError> {
     debug_assert_eq!(weight.len(), lv.ngrids);
     let nk = lv.nkslots();
     if nk == 0 || lv.ngrids == 0 {
-        return Ok(());
+        return Ok(vec![0.0f64; lv.nterms]);
     }
     let ones = vec![1.0f64; nk];
     let mut kint = vec![0.0f64; nk];
@@ -1594,11 +1779,7 @@ pub fn pairlevel_pass2_with(
     for k in 0..nk {
         integrals[lv.kslot_term[k] as usize] += kint[k];
     }
-    for s in 0..lv.nslots() {
-        let idx = lv.slot_ci[s] as usize * decon.nao_p + lv.slot_cj[s] as usize;
-        v_p[idx] += lv.slot_coef[s] * integrals[lv.slot_term[s] as usize];
-    }
-    Ok(())
+    Ok(integrals)
 }
 
 /// Two-spin reverse sweep sharing each resident geometry traversal.
@@ -1674,7 +1855,7 @@ pub struct MultiGridNumInt2 {
 /// full binomial-shift image enumeration for EVERY pshell pair, which on the
 /// `25^3` reference cells is the bulk of the 7-9 s 17-12 measured per density
 /// evaluation.
-type V2Tasks = (Decontracted, Vec<Option<PairLevelTable>>);
+pub(crate) type V2Tasks = (Decontracted, Vec<Option<PairLevelTable>>);
 
 /// [`MultiGridNumInt2::nr_rks`]'s return — same shape as v1's
 /// `MgNrRksResult`.
@@ -1716,7 +1897,7 @@ impl MultiGridNumInt2 {
     /// Decontract, build the pair task list, and build every non-empty
     /// level's [`PairLevelTable`] ONCE — shared by the forward and reverse
     /// directions of one density evaluation.
-    fn build_tasks(&self, cell: &Cell) -> Result<std::sync::Arc<V2Tasks>, PbcDftError> {
+    pub(crate) fn tasks(&self, cell: &Cell) -> Result<std::sync::Arc<V2Tasks>, PbcDftError> {
         let key = crate::multigrid::utils::cell_fingerprint(cell);
         if let Ok(g) = self.prepared.lock()
             && let Some((k, v)) = g.as_ref()
@@ -1758,7 +1939,7 @@ impl MultiGridNumInt2 {
     /// # Errors
     /// Propagates task-list / collocation / FFT construction.
     pub fn eval_rho_g(&self, cell: &Cell, dm: &[f64]) -> Result<CTensor, PbcDftError> {
-        let prep = self.build_tasks(cell)?;
+        let prep = self.tasks(cell)?;
         let (decon, tables) = (&prep.0, &prep.1);
         let dm_p = crate::multigrid::colloc::expand_dm(decon, dm);
         rho_g_from_pair_levels(cell, decon, tables, &dm_p)
@@ -1789,7 +1970,7 @@ impl MultiGridNumInt2 {
     /// # Errors
     /// Propagates task-list / collocation / FFT construction.
     pub fn get_j(&self, cell: &Cell, dm: &[f64]) -> Result<Vec<f64>, PbcDftError> {
-        let prep = self.build_tasks(cell)?;
+        let prep = self.tasks(cell)?;
         let (decon, tables) = (&prep.0, &prep.1);
         let dm_p = crate::multigrid::colloc::expand_dm(decon, dm);
         let rho_g = rho_g_from_pair_levels(cell, decon, tables, &dm_p)?;
@@ -1821,7 +2002,7 @@ impl MultiGridNumInt2 {
         xc_code: &str,
         dm: &[f64],
     ) -> Result<Mg2NrRksResult, PbcDftError> {
-        let prep = self.build_tasks(cell)?;
+        let prep = self.tasks(cell)?;
         let (decon, tables) = (&prep.0, &prep.1);
         let dm_p = crate::multigrid::colloc::expand_dm(decon, dm);
         let rho_g = rho_g_from_pair_levels(cell, decon, tables, &dm_p)?;
@@ -1857,7 +2038,7 @@ impl MultiGridNumInt2 {
         xc_code: &str,
         dm: &[&[f64]; 2],
     ) -> Result<Mg2NrUksResult, PbcDftError> {
-        let prep = self.build_tasks(cell)?;
+        let prep = self.tasks(cell)?;
         let (decon, tables) = (&prep.0, &prep.1);
 
         let dm_p = dm.map(|d| crate::multigrid::colloc::expand_dm(decon, d));
@@ -1921,7 +2102,7 @@ fn pair_level_transfer_bytes(
 }
 
 /// The per-level tracing span both directions of both spin counts open.
-fn pair_level_span(
+pub(crate) fn pair_level_span(
     direction: &'static str,
     level: usize,
     channels: usize,
@@ -1974,7 +2155,7 @@ fn pair_level_span(
 
 /// Transform one level's real-space `rho` to G-space, apply the level's grid
 /// weight, and fold the result into the full-mesh `rho(G)`.
-fn insert_level_rho_g(
+pub(crate) fn insert_level_rho_g(
     rho_r: Vec<f64>,
     lv: &PairLevelTable,
     level: usize,
@@ -1998,7 +2179,7 @@ fn insert_level_rho_g(
 }
 
 /// This level's window of a full-mesh G-space field, back in real space.
-fn level_v_r(
+pub(crate) fn level_v_r(
     vg_full: &CTensor,
     mesh: [usize; 3],
     lv: &PairLevelTable,
@@ -2011,7 +2192,9 @@ fn level_v_r(
 }
 
 /// Every non-empty level, paired with its index.
-fn each_level(tables: &[Option<PairLevelTable>]) -> impl Iterator<Item = (usize, &PairLevelTable)> {
+pub(crate) fn each_level(
+    tables: &[Option<PairLevelTable>],
+) -> impl Iterator<Item = (usize, &PairLevelTable)> {
     tables
         .iter()
         .enumerate()

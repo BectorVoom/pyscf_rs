@@ -807,6 +807,17 @@ pub struct PairSlotBatch {
     pub coords_z: Vec<f64>,
     /// Per padded point: which block owns it.
     pub point_block: Vec<u32>,
+    /// K-03: per padded point, its index in the LEVEL's mesh-order density,
+    /// or [`PAD_POINT`] for a pad point.
+    ///
+    /// Carried here — rather than only on the host — so the forward result
+    /// can be scattered into the level's density ON THE DEVICE
+    /// ([`PairSlotBatchDevice::rho_into_mesh`]) instead of being read back
+    /// per chunk and scattered by the host. The host copy is still kept by
+    /// the caller: the REVERSE direction gathers this chunk's grid weights
+    /// through the same map, and that gather is a host-side pack of a
+    /// host-side field.
+    pub point_global: Vec<u32>,
     /// `block_point0[b]..block_point0[b+1]` — block `b`'s PADDED point range.
     /// `nblocks + 1` entries.
     pub block_point0: Vec<u32>,
@@ -1033,6 +1044,10 @@ pub struct PairSlotBatchDevice {
     uocc: Handle,
     set_off: Handle,
     set_pow: Handle,
+    /// K-03: this chunk's padded-point -> level-mesh index map, resident so
+    /// the forward scatter runs on the device. Empty (`None`) when the batch
+    /// carried no map, in which case `rho_into_mesh` refuses.
+    point_global: Option<Handle>,
     out_rho: Handle,
     out_rho_b: std::sync::OnceLock<Handle>,
     out_integrate: Handle,
@@ -1086,9 +1101,20 @@ pub struct PairOutScratch {
     integrate: Handle,
     kint: Handle,
     kint_b: Handle,
+    /// K-03: the LEVEL's mesh-order density, device-resident across every
+    /// chunk of one forward sweep.
+    mesh: Handle,
+    /// The second spin channel's, allocated on first open-shell use.
+    ///
+    /// Lazy where [`Self::kint_b`] is eager, because this one is `ngrids`
+    /// reals rather than `nkslots`: on the finest level that is the whole FFT
+    /// box, and a closed-shell SCF — the common case — would otherwise carry
+    /// a second copy of it per level for the life of the run, untouched.
+    mesh_b: std::sync::OnceLock<Handle>,
     max_points: usize,
     max_slots: usize,
     nkslots: usize,
+    ngrids: usize,
 }
 
 impl core::fmt::Debug for PairOutScratch {
@@ -1109,6 +1135,7 @@ impl PairOutScratch {
         max_points: usize,
         max_slots: usize,
         nkslots: usize,
+        ngrids: usize,
     ) -> Self {
         let stream = StreamId::current();
         dispatch_backend!(client, c, Rt, {
@@ -1119,11 +1146,80 @@ impl PairOutScratch {
                 integrate: c.empty(max_slots.max(1) * core::mem::size_of::<f64>()),
                 kint: c.empty(nkslots.max(1) * core::mem::size_of::<f64>()),
                 kint_b: c.empty(nkslots.max(1) * core::mem::size_of::<f64>()),
+                mesh: c.empty(ngrids.max(1) * core::mem::size_of::<f64>()),
+                mesh_b: std::sync::OnceLock::new(),
                 max_points,
                 max_slots,
                 nkslots,
+                ngrids,
             }
         })
+    }
+
+    /// K-03: zero the level's device-resident density — the start of a
+    /// forward sweep (`channels` = 1 or 2).
+    ///
+    /// The zero matters for exactly the reason the host route's
+    /// `vec![0.0; ngrids]` did: a grid point no block reaches is never
+    /// written, and must read as `0.0`.
+    ///
+    /// # Errors
+    /// A client of a different backend.
+    pub fn zero_mesh(&self, client: &AlgebraClient, channels: usize) -> Result<(), AlgebraError> {
+        self.check_backend(client)?;
+        self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                launch_zero::<Rt>(c, &self.mesh, self.ngrids);
+                if channels > 1 {
+                    let b = self
+                        .mesh_b
+                        .get_or_init(|| c.empty(self.ngrids.max(1) * core::mem::size_of::<f64>()));
+                    launch_zero::<Rt>(c, b, self.ngrids);
+                }
+            })
+        });
+        Ok(())
+    }
+
+    /// K-03: read the level's density back — ONE `ngrids · 8` B transfer per
+    /// channel for the whole level, in place of one `npoints · 8` B transfer
+    /// per chunk plus a host scatter loop over every chunk's points.
+    ///
+    /// # Errors
+    /// A client of a different backend.
+    pub fn read_mesh(
+        &self,
+        client: &AlgebraClient,
+        channels: usize,
+    ) -> Result<Vec<Vec<f64>>, AlgebraError> {
+        self.check_backend(client)?;
+        Ok(self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                let mut handles = vec![self.mesh.clone()];
+                if channels > 1 {
+                    // `zero_mesh(client, 2)` opens every two-channel sweep,
+                    // so the buffer exists by the time this reads it.
+                    handles.push(
+                        self.mesh_b
+                            .get_or_init(|| {
+                                c.empty(self.ngrids.max(1) * core::mem::size_of::<f64>())
+                            })
+                            .clone(),
+                    );
+                }
+                // One batched read — the runtime drains both handles
+                // together (manual §3, "Batch Read-Backs").
+                c.read(handles)
+                    .into_iter()
+                    .map(|b| bytemuck::cast_slice::<u8, f64>(&b)[..self.ngrids].to_vec())
+                    .collect::<Vec<_>>()
+            })
+        }))
+    }
+
+    /// Grid points of the level this scratch serves.
+    pub fn ngrids(&self) -> usize {
+        self.ngrids
     }
 
     fn check_backend(&self, client: &AlgebraClient) -> Result<(), AlgebraError> {
@@ -1277,6 +1373,11 @@ impl PairSlotBatchDevice {
                 uocc: upload_u32::<Rt>(c, &batch.uocc),
                 set_off: upload_u32::<Rt>(c, &batch.set_off),
                 set_pow: upload_u32::<Rt>(c, &batch.set_pow),
+                point_global: if batch.point_global.is_empty() {
+                    None
+                } else {
+                    Some(upload_u32::<Rt>(c, &batch.point_global))
+                },
                 out_rho: match scratch {
                     Some(sc) => sc.rho.clone(),
                     None => c.empty(batch.npoints().max(1) * core::mem::size_of::<f64>()),
@@ -1340,6 +1441,117 @@ impl PairSlotBatchDevice {
                 bytemuck::cast_slice::<u8, f64>(&bytes[0]).to_vec()
             })
         }))
+    }
+
+    /// K-03: collocate this chunk and scatter the result straight into the
+    /// LEVEL's device-resident density — **no read-back, no host scatter.**
+    ///
+    /// The route this replaces read `npoints · 8` B back per chunk and then
+    /// ran a host loop `rho[point_global[p]] = out[p]` over every padded
+    /// point of every chunk. Neither the arithmetic nor the write set
+    /// changes: the blocks partition the mesh, so each grid index is written
+    /// exactly once, by a plain store. **Bit-identical**, and gated as such
+    /// rather than asserted (`tests/multigrid_device_scatter.rs`).
+    ///
+    /// # Errors
+    /// As [`Self::rho`], plus [`AlgebraError::ShapeMismatch`] when the batch
+    /// carried no `point_global` map or the scratch is sized for a different
+    /// level.
+    pub fn rho_into_mesh(
+        &self,
+        client: &AlgebraClient,
+        set_coef: &[f64],
+        scratch: &PairOutScratch,
+    ) -> Result<(), AlgebraError> {
+        self.check_backend(client)?;
+        self.check_set_coef(set_coef.len())?;
+        let point_global = self.require_point_global()?;
+        let ngrids = scratch.ngrids;
+        self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                let coef = upload::<Rt, f64>(c, set_coef);
+                launch_rho_resident::<Rt>(self, &coef, &self.out_rho, c);
+                launch_scatter::<Rt>(
+                    c,
+                    &self.out_rho,
+                    self.out_rho_cap,
+                    point_global,
+                    &scratch.mesh,
+                    self.npoints,
+                    ngrids,
+                );
+            })
+        });
+        Ok(())
+    }
+
+    /// K-03: [`Self::rho_into_mesh`] for both spin channels in one geometry
+    /// traversal.
+    ///
+    /// # Errors
+    /// As [`Self::rho_into_mesh`].
+    pub fn rho2_into_mesh(
+        &self,
+        client: &AlgebraClient,
+        set_coef: [&[f64]; 2],
+        scratch: &PairOutScratch,
+    ) -> Result<(), AlgebraError> {
+        self.check_backend(client)?;
+        self.check_set_coef(set_coef[0].len())?;
+        self.check_set_coef(set_coef[1].len())?;
+        let point_global = self.require_point_global()?;
+        let ngrids = scratch.ngrids;
+        self.stream.executes(|| {
+            dispatch_backend!(client, c, Rt, {
+                let ca = upload::<Rt, f64>(c, set_coef[0]);
+                let cb = upload::<Rt, f64>(c, set_coef[1]);
+                let out_b = self
+                    .out_rho_b
+                    .get_or_init(|| c.empty(self.npoints.max(1) * core::mem::size_of::<f64>()));
+                launch_rho2_resident::<Rt>(self, &ca, &cb, &self.out_rho, out_b, c);
+                launch_scatter::<Rt>(
+                    c,
+                    &self.out_rho,
+                    self.out_rho_cap,
+                    point_global,
+                    &scratch.mesh,
+                    self.npoints,
+                    ngrids,
+                );
+                let mesh_b = scratch
+                    .mesh_b
+                    .get_or_init(|| c.empty(ngrids.max(1) * core::mem::size_of::<f64>()));
+                launch_scatter::<Rt>(
+                    c,
+                    out_b,
+                    self.npoints,
+                    point_global,
+                    mesh_b,
+                    self.npoints,
+                    ngrids,
+                );
+            })
+        });
+        Ok(())
+    }
+
+    fn check_set_coef(&self, len: usize) -> Result<(), AlgebraError> {
+        if len != self.nsetslots {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("set_coef.len() == nsetslots = {}", self.nsetslots),
+                actual: len.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn require_point_global(&self) -> Result<&Handle, AlgebraError> {
+        self.point_global
+            .as_ref()
+            .ok_or(AlgebraError::ShapeMismatch {
+                expected: "a batch carrying point_global (K-03)".to_string(),
+                actual: "empty".to_string(),
+            })
     }
 
     /// Collocate alpha and beta densities in one geometry traversal.
@@ -1493,6 +1705,40 @@ fn mg_zero_kernel(out: &mut Array<f64>, n: usize) {
     let i = ABSOLUTE_POS;
     if i < n {
         out[i] = 0.0;
+    }
+}
+
+/// K-03: scatter one chunk's forward output into the LEVEL's mesh-order
+/// density, on the device.
+///
+/// `out[point_global[i]] = src[i]` for every real point; pad points
+/// (`point_global[i] == PAD_POINT`) are skipped, exactly as the host loop
+/// this replaces skipped them.
+///
+/// **No atomics, and none are needed.** The chunk's blocks partition the
+/// level's mesh — `grid_blocks`' own contract — so each real grid index is
+/// written by exactly one lane of exactly one chunk. That makes the write a
+/// plain store rather than an accumulate, and it is why this scatter is
+/// bit-identical to the host loop rather than merely equal to it: there is
+/// no summation whose order could change.
+///
+/// One `if` and no `while` — the CPU runtime's MLIR pass aborts on a
+/// `while { if/else }` in a cube fn, a trap this kernel's shape avoids
+/// outright.
+#[cube(launch_unchecked)]
+fn mg_scatter_kernel(
+    src: &Array<f64>,
+    point_global: &Array<u32>,
+    out: &mut Array<f64>,
+    n: usize,
+    #[comptime] pad: u32,
+) {
+    let i = ABSOLUTE_POS;
+    if i < n {
+        let g = point_global[i];
+        if g != pad {
+            out[g as usize] = src[i];
+        }
     }
 }
 
@@ -2294,6 +2540,41 @@ fn launch_zero<R: Runtime>(client: &ComputeClient<R>, h: &Handle, n: usize) {
     }
 }
 
+/// K-03: one chunk's forward output scattered into the level's mesh-order
+/// density, on the device.
+fn launch_scatter<R: Runtime>(
+    client: &ComputeClient<R>,
+    src: &Handle,
+    src_cap: usize,
+    point_global: &Handle,
+    out: &Handle,
+    npoints: usize,
+    ngrids: usize,
+) {
+    if npoints == 0 {
+        return;
+    }
+    // One store per point and nothing else, so the work model is 1.
+    let (count, dim) = launch_1d(client, npoints, 1);
+    unsafe {
+        mg_scatter_kernel::launch_unchecked::<R>(
+            client,
+            count,
+            dim,
+            // SAFETY: `npoints <= src_cap` is the shared-scratch invariant
+            // `new_shared` refuses to violate; every non-pad `point_global`
+            // entry is a level grid index, i.e. `< ngrids`, which
+            // `build_batch_geometry` builds it from; and the kernel's own
+            // `i < n` bounds the lane. Nothing here reads out of range.
+            ArrayArg::from_raw_parts(prefix(src, src_cap, npoints), npoints),
+            ArrayArg::from_raw_parts(point_global.clone(), npoints),
+            ArrayArg::from_raw_parts(out.clone(), ngrids),
+            npoints,
+            PAD_POINT,
+        );
+    }
+}
+
 /// Per-lane work model of the forward kernels, for [`launch_1d`].
 fn forward_work_per_lane(d: &PairSlotBatchDevice, line: usize) -> usize {
     let nblocks = d.nblocks.max(1);
@@ -2683,6 +2964,15 @@ fn validate_batch(b: &PairSlotBatch) -> Result<(), AlgebraError> {
         return Err(shape(
             format!("npoints a multiple of POINT_PAD = {POINT_PAD}"),
             npoints.to_string(),
+        ));
+    }
+    // K-03. `point_global` may be empty — a chunk built before the on-device
+    // scatter existed, or a test constructing the batch by hand — in which
+    // case `rho_into_mesh` refuses and the caller keeps the read-back route.
+    if !b.point_global.is_empty() && b.point_global.len() != npoints {
+        return Err(shape(
+            format!("point_global empty or npoints = {npoints}"),
+            b.point_global.len().to_string(),
         ));
     }
     let nblocks = b.block_point0.len().saturating_sub(1);

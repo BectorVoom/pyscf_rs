@@ -704,9 +704,24 @@ comfortably above it.
 
 ### From 17-12
 
-12. `pp.rs`'s IBZ path is not yet connected to 17-05's `KPoints` (which now
+12. ~~`pp.rs`'s IBZ path is not yet connected to 17-05's `KPoints` (which now
     exists); multigrid v1/v2 are gamma-only and not yet selectable as an SCF
-    `numint`.
+    `numint`.~~ **CLOSED 2026-09-09 by 17-14** —
+    `17-14-KPOINT-MULTIGRID.md`. `MultiGridNumInt2` is k-point-resolved
+    (Γ bit-identical to the route it generalises), supports `kpts_band`, and
+    is selectable as `KsymAdaptedKrks::ni` / `KsymAdaptedKuks::ni`; `pp.rs`
+    gained `get_nuc_kpts`/`get_pp_kpts`. Gate E, k-symmetric: **1.307e-9 Ha**
+    against the reference grid on the same IBZ SCF.
+
+    **v1 (`MultiGridNumInt`) stays gamma-only, and that is a decision, not a
+    gap** — it has no per-image term identity to hang a Bloch phase on, and
+    v2 is the path Phase 18's gradients assert on (§8.10). The refusal is
+    still `MultiGridRequiresGamma`, now reachable only from the v1 arm.
+
+    Re-homed from this item, with reasons, in `17-14`'s own carry-over list:
+    a production-mesh symmetry measurement, the K-03 A/B on a backend with
+    f64, the reverse `v_p` scatter (still host-side), and a `KsymAdaptedKuks`
+    energy gate — which is blocked on §10.9's fixture, not on multigrid.
 
 ### From 17-09 (continued)
 

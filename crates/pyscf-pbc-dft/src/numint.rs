@@ -176,6 +176,31 @@ impl KsNumInt {
         }
     }
 
+    /// The refusals EVERY multigrid route carries, k-general or not: the
+    /// engine collocates on the FFT box, and it has no exchange.
+    fn require_multigrid_inputs_common(
+        grids: &PeriodicGrids,
+        xc_code: &str,
+    ) -> Result<(), PbcDftError> {
+        if !matches!(grids, PeriodicGrids::Uniform(_)) {
+            return Err(PbcDftError::MultiGridRequiresUniformGrid);
+        }
+        if crate::xc::is_hybrid_xc(xc_code)? {
+            return Err(PbcDftError::MultiGridHybridUnsupported(xc_code.to_string()));
+        }
+        Ok(())
+    }
+
+    /// [`Self::require_multigrid_inputs_common`] plus the gamma-point and
+    /// no-band restrictions — **v1 only** since K-01.
+    ///
+    /// `MultiGridNumInt` (v1) collocates one real density on one real
+    /// density matrix and has no Bloch phase anywhere in it; K-01 generalised
+    /// the v2 pair engine (`multigrid::kpts`), not this one, because v2 is
+    /// the shipped fast path and the one Phase 18's gradients assert on
+    /// (`PBC-MASTER-PLAN.md §8.10`). A caller wanting k-points on multigrid
+    /// selects `KsNumInt::multigrid2`; that is a deliberate, stated scope
+    /// line, not an oversight.
     fn require_multigrid_inputs(
         grids: &PeriodicGrids,
         xc_code: &str,
@@ -188,13 +213,20 @@ impl KsNumInt {
         if kpts_band.is_some() {
             return Err(PbcDftError::MultiGridBandUnsupported);
         }
-        if !matches!(grids, PeriodicGrids::Uniform(_)) {
-            return Err(PbcDftError::MultiGridRequiresUniformGrid);
-        }
-        if crate::xc::is_hybrid_xc(xc_code)? {
-            return Err(PbcDftError::MultiGridHybridUnsupported(xc_code.to_string()));
-        }
-        Ok(())
+        Self::require_multigrid_inputs_common(grids, xc_code)
+    }
+
+    /// K-01: is this the plain gamma point with no band list — the case the
+    /// v2 driver's original real-valued entry points handle?
+    ///
+    /// The k-general route is bit-identical here
+    /// (`tests/multigrid_kpts.rs::gamma_is_bit_identical_to_the_gamma_only_route`),
+    /// so this branch is not needed for correctness. It is kept because the
+    /// gamma entry points are public API with their own gates, and routing
+    /// the common case through the code those gates measure keeps the
+    /// measurement and the production path the same code.
+    fn is_plain_gamma(kpts: &[[f64; 3]], kpts_band: Option<&[[f64; 3]]>) -> bool {
+        kpts_band.is_none() && kpts.len() == 1 && kpts[0].iter().all(|&x| x == 0.0)
     }
 
     pub fn nr_rks(
@@ -225,13 +257,54 @@ impl KsNumInt {
                 ))
             }
             Self::MultiGrid2(ni) => {
-                Self::require_multigrid_inputs(grids, xc_code, kpts, kpts_band)?;
-                let out = ni.nr_rks(cell, xc_code, &dms[0][0].re)?;
-                Ok(Self::wrap_mg_rks(
-                    cell, out.nelec, out.exc, out.ecoul, out.veff,
-                ))
+                Self::require_multigrid_inputs_common(grids, xc_code)?;
+                Self::require_single_set(dms.len(), "nr_rks")?;
+                if Self::is_plain_gamma(kpts, kpts_band) {
+                    let out = ni.nr_rks(cell, xc_code, &dms[0][0].re)?;
+                    return Ok(Self::wrap_mg_rks(
+                        cell, out.nelec, out.exc, out.ecoul, out.veff,
+                    ));
+                }
+                // K-01. `dms[0]` is the density at `kpts` — the FULL
+                // sampling set; a k-symmetric caller has already unfolded it
+                // (S-01). `kpts_band` selects the k-list the potential comes
+                // back at, which is how the IBZ-length return the ksymm
+                // drivers need is produced.
+                Self::require_kpt_count(dms[0].len(), kpts.len())?;
+                let out = ni.nr_rks_kpts(cell, xc_code, &dms[0], kpts, kpts_band)?;
+                Ok(KsNrRksResult {
+                    nelec: out.nelec,
+                    exc: out.exc,
+                    vmat: vec![out.veff],
+                    ecoul: Some(out.ecoul),
+                })
             }
         }
+    }
+
+    /// Multigrid is a one-density-set engine: its `rho(G)` is a single
+    /// scalar field and its energy tags are scalars. A caller handing it
+    /// several sets was silently getting set 0 only.
+    fn require_single_set(nset: usize, what: &str) -> Result<(), PbcDftError> {
+        if nset != 1 {
+            return Err(err(format!(
+                "multigrid {what}: one density-matrix set expected, got {nset}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// The k-resolved multigrid needs one density matrix per SAMPLING
+    /// k-point (not per band k-point) — the shape upstream's
+    /// `_eval_rhoG(dm_kpts, kpts)` requires and the shape a wrong unfold
+    /// silently violates.
+    fn require_kpt_count(ndm: usize, nkpts: usize) -> Result<(), PbcDftError> {
+        if ndm != nkpts {
+            return Err(err(format!(
+                "multigrid nr_rks: {ndm} density matrices for {nkpts} sampling k-points"
+            )));
+        }
+        Ok(())
     }
 
     /// The multigrid `nr_rks` return, in `KsNrRksResult` shape — the gamma
@@ -297,11 +370,27 @@ impl KsNumInt {
                 ))
             }
             Self::MultiGrid2(ni) => {
-                Self::require_multigrid_inputs(grids, xc_code, kpts, kpts_band)?;
-                let out = ni.nr_uks(cell, xc_code, &[&dms[0][0][0].re, &dms[1][0][0].re])?;
-                Ok(Self::wrap_mg_uks(
-                    cell, out.nelec, out.exc, out.ecoul, out.veff,
-                ))
+                Self::require_multigrid_inputs_common(grids, xc_code)?;
+                Self::require_single_set(dms[0].len(), "nr_uks")?;
+                Self::require_single_set(dms[1].len(), "nr_uks")?;
+                if Self::is_plain_gamma(kpts, kpts_band) {
+                    let out = ni.nr_uks(cell, xc_code, &[&dms[0][0][0].re, &dms[1][0][0].re])?;
+                    return Ok(Self::wrap_mg_uks(
+                        cell, out.nelec, out.exc, out.ecoul, out.veff,
+                    ));
+                }
+                // K-01 — see the `nr_rks` arm.
+                Self::require_kpt_count(dms[0][0].len(), kpts.len())?;
+                Self::require_kpt_count(dms[1][0].len(), kpts.len())?;
+                let out =
+                    ni.nr_uks_kpts(cell, xc_code, [&dms[0][0], &dms[1][0]], kpts, kpts_band)?;
+                let [va, vb] = out.veff;
+                Ok(KsNrUksResult {
+                    nelec: out.nelec,
+                    exc: out.exc,
+                    vmat: [va, vb],
+                    ecoul: Some(out.ecoul),
+                })
             }
         }
     }
@@ -502,23 +591,47 @@ impl KNumInt {
         let Some(kpts) = self.ksymm() else {
             return Ok(std::borrow::Cow::Borrowed(dms));
         };
-        // S-01: already full-BZ — upstream's `if kpts.kpts.size > 3` guard,
-        // which `unfold_dms` also carries per set. Borrowing here rather than
-        // letting `unfold_dms` clone matters because S-01 makes the ksymm
-        // drivers unfold ONCE and then hand the full-BZ stack to `nr_rks` /
-        // `nr_uks`, whose own unfold must therefore cost nothing at all rather
-        // than a full k-stack copy. A needless round trip would also perturb
-        // the density, which is why upstream guards it too.
-        if dms.iter().all(|s| s.len() == kpts.nkpts()) {
-            return Ok(std::borrow::Cow::Borrowed(dms));
-        }
-        let out: KDms = dms
-            .iter()
-            .map(|s| self.unfold_dms(cell, s, nao))
-            .collect::<Result<_, _>>()?;
-        Ok(std::borrow::Cow::Owned(out))
+        unfold_kdms_sym(kpts, cell, dms, nao)
     }
+}
 
+/// K-01: [`KNumInt::unfold_kdms`] against a `KPoints` handed in explicitly,
+/// rather than one the numint happens to own.
+///
+/// The k-symmetric drivers do the S-01 unfold themselves, ONCE, before
+/// handing the full-BZ stack to both halves — and since K-01 the quadrature
+/// half may be a multigrid, which owns no `KPoints` because the k-resolved
+/// multigrid does not need one (its collocation is over lattice images, not
+/// k-points; see `multigrid::kpts`). Splitting the unfold out of `KNumInt`
+/// is what lets `KsymAdaptedKrks::ni` become a `KsNumInt` without the
+/// multigrid arms having to carry symmetry they never read.
+///
+/// # Errors
+/// As [`KNumInt::unfold_dms`].
+pub fn unfold_kdms_sym<'a>(
+    kpts: &KPoints,
+    cell: &Cell,
+    dms: &'a KDms,
+    nao: usize,
+) -> Result<std::borrow::Cow<'a, KDms>, PbcDftError> {
+    // S-01: already full-BZ — upstream's `if kpts.kpts.size > 3` guard,
+    // which `unfold_dms_sym` also carries per set. Borrowing here rather than
+    // letting it clone matters because S-01 makes the ksymm drivers unfold
+    // ONCE and then hand the full-BZ stack to `nr_rks` / `nr_uks`, whose own
+    // unfold must therefore cost nothing at all rather than a full k-stack
+    // copy. A needless round trip would also perturb the density, which is
+    // why upstream guards it too.
+    if dms.iter().all(|s| s.len() == kpts.nkpts()) {
+        return Ok(std::borrow::Cow::Borrowed(dms));
+    }
+    let out: KDms = dms
+        .iter()
+        .map(|s| unfold_dms_sym(kpts, cell, s, nao))
+        .collect::<Result<_, _>>()?;
+    Ok(std::borrow::Cow::Owned(out))
+}
+
+impl KNumInt {
     /// Unfold IBZ-length MO coefficients and occupations to the full BZ —
     /// upstream's `numint.py:859-863`, the one Group-A site that transforms
     /// the orbitals rather than the density.
@@ -594,6 +707,22 @@ impl KNumInt {
         let Some(kpts) = self.ksymm() else {
             return Ok(dms.clone());
         };
+        unfold_dms_sym(kpts, cell, dms, nao)
+    }
+}
+
+/// K-01: [`KNumInt::unfold_dms`] against an explicit `KPoints` — see
+/// [`unfold_kdms_sym`] for why the split exists.
+///
+/// # Errors
+/// Propagates [`KPoints::transform_dm`] (17-05 Task 3, gated at 1e-12).
+pub fn unfold_dms_sym(
+    kpts: &KPoints,
+    cell: &Cell,
+    dms: &KMats,
+    nao: usize,
+) -> Result<KMats, PbcDftError> {
+    {
         if dms.len() == kpts.nkpts() {
             return Ok(dms.clone());
         }
@@ -617,7 +746,9 @@ impl KNumInt {
             })
             .collect())
     }
+}
 
+impl KNumInt {
     /// Number of sampling k-points.
     pub fn nkpts(&self) -> usize {
         self.kpts.len()

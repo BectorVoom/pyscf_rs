@@ -96,3 +96,49 @@ pub fn get_pp(cell: &Cell) -> Result<Vec<f64>, PbcDftError> {
     let v = pyscf_pbc_df::aftdf::get_pp(&df, &[GAMMA]).map_err(wrap_df)?;
     Ok(v[0].re.clone())
 }
+
+/// K-01: [`get_nuc`] at an arbitrary k-point list.
+///
+/// This is the module doc's "what 17-05 needs to wire up here, once
+/// `KPoints` exists", and it is as small as that note predicted: AFTDF
+/// already accepts an arbitrary k-point list, so the k-general delegation is
+/// the gamma one with the list passed through. **There is no IBZ special
+/// case and none is needed** — an IBZ-restricted caller passes
+/// `kpts.kpts_ibz` here and gets exactly the `nkpts_ibz` matrices upstream's
+/// `multigrid_pair.py` unfolds with `transform_1e_operator`; the unfold, per
+/// D-PBC-26 rule 5, belongs to the caller in `pyscf-pbc-dft`/`pyscf-pbc-scf`
+/// and never to the DF layer.
+///
+/// # Errors
+/// Propagates `Aftdf::new` / `aftdf::get_nuc`.
+pub fn get_nuc_kpts(
+    cell: &Cell,
+    kpts: &[[f64; 3]],
+) -> Result<Vec<pyscf_algebra::CTensor>, PbcDftError> {
+    let kpts = normalise(kpts);
+    let df = Aftdf::new(cell.clone(), &kpts).map_err(wrap_df)?;
+    pyscf_pbc_df::aftdf::get_nuc(&df, &kpts).map_err(wrap_df)
+}
+
+/// K-01: [`get_pp`] at an arbitrary k-point list — see [`get_nuc_kpts`].
+///
+/// # Errors
+/// Propagates `Aftdf::new` / `aftdf::get_pp`.
+pub fn get_pp_kpts(
+    cell: &Cell,
+    kpts: &[[f64; 3]],
+) -> Result<Vec<pyscf_algebra::CTensor>, PbcDftError> {
+    let kpts = normalise(kpts);
+    let df = Aftdf::new(cell.clone(), &kpts).map_err(wrap_df)?;
+    pyscf_pbc_df::aftdf::get_pp(&df, &kpts).map_err(wrap_df)
+}
+
+/// An empty k-list means the gamma point, the convention every k-aware entry
+/// point in this port already uses.
+fn normalise(kpts: &[[f64; 3]]) -> Vec<[f64; 3]> {
+    if kpts.is_empty() {
+        vec![GAMMA]
+    } else {
+        kpts.to_vec()
+    }
+}
