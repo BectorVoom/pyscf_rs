@@ -34,7 +34,8 @@
 mod common;
 
 use pyscf_kernels::multigrid_pair::{
-    PAD_POINT, PairSlotBatchDevice, collocate_pairs_integrate_batched, collocate_pairs_rho_batched,
+    PAD_POINT, PairSlotBatch, PairSlotBatchDevice, collocate_pairs_integrate_batched,
+    collocate_pairs_rho_batched,
 };
 use pyscf_pbc_dft::multigrid::pair::{
     build_pair_level_tables, build_pair_task_list, pairlevel_pass2_with, pairlevel_rho_with,
@@ -354,6 +355,99 @@ fn a_level_over_the_register_bound_falls_back_to_streaming() {
         assert!(v_p.iter().all(|v| v.is_finite()));
     }
     assert!(levels > 0, "the fixture built no level at all");
+}
+
+/// Groups that are set-uniform at width `line`, and groups in total — the
+/// host-side mirror of `reverse_groups`' partition, used only to prove the
+/// gate below is not vacuous.
+fn uniform_group_count(b: &PairSlotBatch, line: usize) -> (usize, usize) {
+    let set_of = |occ: usize| b.instance_set[b.inst_ref[occ] as usize];
+    let (mut uni, mut tot) = (0usize, 0usize);
+    for w in b.block_inst0.windows(2) {
+        let (i0, i1) = (w[0] as usize, w[1] as usize);
+        let mut o = i0;
+        while o < i1 {
+            tot += 1;
+            let s0 = set_of(o);
+            if (1..line).all(|j| set_of((o + j).min(i1 - 1)) == s0) {
+                uni += 1;
+            }
+            o += line;
+        }
+    }
+    (uni, tot)
+}
+
+/// **M-22 — the uniform-group reverse kernel is bit-identical to M-19's
+/// predicated one.**
+///
+/// A group whose N lanes share a term set has lane-uniform monomial powers,
+/// so the specialised kernel runs scalar-bounded power loops instead of six
+/// predicated vector products per slot per point. It performs the same
+/// multiplications by `dx`/`dy`/`dz` in the same order and merely omits the
+/// predicated path's multiplications by exactly `1.0`, so the two must agree
+/// in every bit — a tolerance here would hide the indexing mistake the
+/// partition risks (a group routed to the wrong arm, or a ragged tail whose
+/// clamped lane belongs to another set).
+///
+/// The width is PINNED so the partition the test computes is the partition
+/// the kernel uses, and the uniform count is asserted non-zero: without that,
+/// a fixture with no uniform group would compare the predicated kernel with
+/// itself and pass while testing nothing.
+#[test]
+fn uniform_group_reverse_matches_the_predicated_kernel() {
+    let _env = env_guard();
+    unsafe { std::env::set_var("PYSCF_MG_PAIR_LINE", "8") };
+    let cell = small_silicon();
+    let decon = build_pshells(&cell).expect("build_pshells");
+    let task_list = build_pair_task_list(&cell, &decon).expect("task list");
+    let tables = build_pair_level_tables(&cell, &decon, &task_list).expect("tables");
+    let n = decon.nao_p * decon.nao_p;
+
+    let (mut uni_total, mut grp_total) = (0usize, 0usize);
+    for lv in tables.iter().flatten() {
+        for bl in &lv.batches {
+            let (u, t) = uniform_group_count(&bl.host_batch(lv), 8);
+            uni_total += u;
+            grp_total += t;
+        }
+    }
+    assert!(
+        grp_total > 0,
+        "no level built a batch, so the vector reverse never runs and this \
+         gate cannot see M-22 at all"
+    );
+    assert!(
+        uni_total > 0,
+        "no group is set-uniform at line 8: M-22's arm never fires, so this \
+         gate would be comparing the predicated kernel with itself"
+    );
+    println!(
+        "M-22 precondition: {uni_total}/{grp_total} groups uniform at line 8 ({:.1}%)",
+        100.0 * uni_total as f64 / grp_total as f64
+    );
+
+    for (l, lv) in tables.iter().enumerate() {
+        let Some(lv) = lv.as_ref() else { continue };
+        if lv.batches.is_empty() {
+            continue;
+        }
+        let w = model_weight(lv.ngrids, 0x5EED_3000 + l as u64);
+        let mut arms = Vec::new();
+        for uniform in ["0", "1"] {
+            unsafe { std::env::set_var("PYSCF_MG_PAIR_UNIFORM", uniform) };
+            let mut v = vec![0.0f64; n];
+            pairlevel_pass2_with(lv, &decon, &w, &mut v, true).expect("pass2");
+            arms.push(v);
+        }
+        unsafe { std::env::remove_var("PYSCF_MG_PAIR_UNIFORM") };
+        same_bits(
+            &format!("level {l} pass2: M-22 uniform arm vs M-19 predicated"),
+            &arms[1],
+            &arms[0],
+        );
+    }
+    unsafe { std::env::remove_var("PYSCF_MG_PAIR_LINE") };
 }
 
 /// The batch's own shape, reported: how many launches M-03 replaces, and how

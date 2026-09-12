@@ -976,17 +976,65 @@ pub fn pair_line_size<R: Runtime>(client: &ComputeClient<R>) -> usize {
 /// M-19: the vector reverse kernel's group table for width `line` — per
 /// group its first occurrence; groups tile each block's occurrence range in
 /// order, the last one of a block ragged.
-fn reverse_groups(batch: &PairSlotBatch, line: usize) -> Vec<u32> {
-    let mut grp = Vec::new();
+/// M-22: groups are partitioned UNIFORM-FIRST, and the count of uniform
+/// groups is returned beside the table.
+///
+/// A group is *uniform* when every lane the kernel will read resolves to the
+/// same term set — including the lanes a ragged tail clamps onto the block's
+/// last occurrence, which is exactly the set the kernel reads. Its monomial
+/// powers are then lane-uniform scalars, so the predicated power products
+/// M-19 needs for a mixed group collapse to scalar-bounded loops.
+///
+/// **Reordering the groups is bit-exact.** A group writes only its own
+/// occurrences' slots (`out[occ_slot0[occ] + local]`), which are disjoint
+/// across groups, so no sum's order changes; the device fold reads `out` in
+/// occurrence order afterwards regardless of the order the groups ran in.
+/// Returns `(plain, sorted, n_uniform)`: the groups in their ORIGINAL order,
+/// the same groups reordered uniform-first, and the uniform count.
+///
+/// Both orders are kept because the reordering is itself a change — it alters
+/// the order blocks are visited and therefore the reverse direction's memory
+/// locality. Uploading only the sorted table would make
+/// `PYSCF_MG_PAIR_UNIFORM=0` mean "reorder without the specialised kernel"
+/// instead of "the pre-M-22 launch", and the A/B would silently attribute the
+/// reorder's effect to the kernel.
+fn reverse_groups(batch: &PairSlotBatch, line: usize) -> (Vec<u32>, Vec<u32>, usize) {
+    let set_of = |occ: usize| batch.instance_set[batch.inst_ref[occ] as usize];
+    let mut plain = Vec::new();
+    let mut uniform = Vec::new();
+    let mut mixed = Vec::new();
     for w in batch.block_inst0.windows(2) {
         let (i0, i1) = (w[0] as usize, w[1] as usize);
         let mut o = i0;
         while o < i1 {
-            grp.push(o as u32);
+            plain.push(o as u32);
+            let s0 = set_of(o);
+            let mut same = true;
+            for j in 1..line {
+                if set_of((o + j).min(i1 - 1)) != s0 {
+                    same = false;
+                    break;
+                }
+            }
+            if same {
+                uniform.push(o as u32);
+            } else {
+                mixed.push(o as u32);
+            }
             o += line;
         }
     }
-    grp
+    let n_uniform = uniform.len();
+    uniform.extend(mixed);
+    (plain, uniform, n_uniform)
+}
+
+/// M-22 A/B arm: `PYSCF_MG_PAIR_UNIFORM=0` sends every group through the
+/// M-19 predicated kernel, so the two routes can be compared IN ONE PROCESS
+/// at `to_bits()` equality exactly as `PYSCF_MG_PAIR_REVERSE` compares the
+/// scalar and vector reverses.
+fn reverse_uniform_enabled() -> bool {
+    !std::env::var("PYSCF_MG_PAIR_UNIFORM").is_ok_and(|v| v == "0")
 }
 
 /// Which reverse kernel runs: the M-19 vector-over-occurrences one (default)
@@ -1059,8 +1107,18 @@ pub struct PairSlotBatchDevice {
     /// M-19: the vector reverse kernel's groups — per group, its first
     /// occurrence; a group is `line` consecutive occurrences of one block
     /// (the last group of a block may be ragged).
+    ///
+    /// M-22: ordered UNIFORM-FIRST — `grp_occ0[..n_uniform]` are the groups
+    /// whose lanes all share one term set.
     grp_occ0: Handle,
     ngroups: usize,
+    /// M-22: the same groups reordered uniform-first. Held BESIDE
+    /// `grp_occ0` (one extra `u32` per group) so the kill-switch restores the
+    /// pre-M-22 launch exactly, ORDER INCLUDED, and the A/B arm is a true
+    /// control rather than "the reorder without the kernel".
+    grp_sorted: Handle,
+    /// M-22: how many leading entries of `grp_sorted` are set-uniform.
+    n_uniform: usize,
     /// The vector width this chunk's group table was cut for.
     line: usize,
     /// M-14: the reals the output buffers actually hold. Equal to
@@ -1347,11 +1405,13 @@ impl PairSlotBatchDevice {
     ) -> Result<Self, AlgebraError> {
         Ok(dispatch_backend!(client, c, Rt, {
             let line = pair_line_size::<Rt>(c);
-            let grp_occ0 = reverse_groups(batch, line);
+            let (grp_occ0, grp_sorted, n_uniform) = reverse_groups(batch, line);
             Self {
                 backend: client.kind(),
                 stream,
                 ngroups: grp_occ0.len(),
+                n_uniform,
+                grp_sorted: upload_u32::<Rt>(c, &grp_sorted),
                 grp_occ0: upload_u32::<Rt>(c, &grp_occ0),
                 line,
                 coords_x: upload::<Rt, f64>(c, &batch.coords_x),
@@ -2316,6 +2376,150 @@ fn mg_integrate_vec_kernel<N: Size>(
     }
 }
 
+/// M-22: [`mg_integrate_vec_kernel`] for a group whose N lanes all share one
+/// term set.
+///
+/// The lanes are still different instances — different `eta`, centre and
+/// radius — but their monomial POWERS are the same, so `ix`/`iy`/`iz` are
+/// lane-uniform scalars. That removes, per slot per grid point, the six
+/// predicated vector products M-19 needs (`poly *= dx·m + (1−m)` twice per
+/// axis) and, per lane, the `pw` and `mask` local arrays entirely — which on
+/// the CPU runtime is stack charged per cube ITERATION, not per launch
+/// (`launch_1d_chunked`). 85 % of a level-3 occurrence sits in a same-set run
+/// of 8 or more, so at N = 8 most groups take this path.
+///
+/// **Bit-exact against the predicated kernel.** For a power `p ∈ {0,1,2}` the
+/// predicated form multiplies by `dx` exactly `p` times and by exactly `1.0`
+/// for the remaining `2 − p` steps, in that order; this kernel performs the
+/// same `p` multiplications in the same order and omits the `× 1.0`, which is
+/// the identity on every finite value. The one residue is a `-0.0` the
+/// predicated path turns into `+0.0` (`dx·1 + 0` with `dx = -0.0`) and this
+/// one keeps — a sign of zero no accumulator can observe, exactly as
+/// [`mg_integrate_vec_kernel`]'s own contract already records. Held at
+/// `to_bits()` by `tests/multigrid_batch.rs` through the
+/// `PYSCF_MG_PAIR_UNIFORM=0` arm rather than argued.
+#[cube(launch_unchecked)]
+fn mg_integrate_vec_uniform_kernel<N: Size>(
+    coords_x: &Array<f64>,
+    coords_y: &Array<f64>,
+    coords_z: &Array<f64>,
+    weight: &Array<f64>,
+    grp_occ0: &Array<u32>,
+    inst_block: &Array<u32>,
+    block_point0: &Array<u32>,
+    block_point_end: &Array<u32>,
+    block_inst0: &Array<u32>,
+    inst_ref: &Array<u32>,
+    occ_slot0: &Array<u32>,
+    instance_alpha: &Array<f64>,
+    instance_center: &Array<f64>,
+    instance_radius2: &Array<f64>,
+    instance_set: &Array<u32>,
+    set_off: &Array<u32>,
+    set_pow: &Array<u32>,
+    out: &mut Array<f64>,
+    ngroups: usize,
+    lane0: usize,
+    #[comptime] exp_mode: u32,
+    #[comptime] screen: bool,
+) {
+    let grp = ABSOLUTE_POS + lane0;
+    if grp < ngroups {
+        let o0 = grp_occ0[grp] as usize;
+        let b = inst_block[o0] as usize;
+        let i1 = block_inst0[b + 1] as usize;
+        let g0 = block_point0[b] as usize;
+        let g1 = block_point_end[b] as usize;
+        let zero = Vector::<f64, N>::new(0.0);
+        let one = Vector::<f64, N>::new(1.0);
+        let mut eta = Vector::<f64, N>::empty();
+        let mut cx = Vector::<f64, N>::empty();
+        let mut cy = Vector::<f64, N>::empty();
+        let mut cz = Vector::<f64, N>::empty();
+        let mut rad2 = Vector::<f64, N>::empty();
+        #[unroll]
+        for j in 0..N::value() {
+            let mut occ = o0 + j;
+            if occ >= i1 {
+                occ = i1 - 1;
+            }
+            let u = inst_ref[occ] as usize;
+            eta[j] = instance_alpha[u];
+            cx[j] = instance_center[u * 3];
+            cy[j] = instance_center[u * 3 + 1];
+            cz[j] = instance_center[u * 3 + 2];
+            rad2[j] = instance_radius2[u];
+        }
+        // One set for the whole group — the property that defines it.
+        let s = instance_set[inst_ref[o0] as usize] as usize;
+        let so0 = set_off[s] as usize;
+        let nsl = set_off[s + 1] as usize - so0;
+        let mut acc = Array::<Vector<f64, N>>::new(MAX_SLOTS_PER_INSTANCE);
+        for local in 0..nsl {
+            acc[local] = zero;
+        }
+        for g in g0..g1 {
+            let dx = Vector::<f64, N>::new(coords_x[g]) - cx;
+            let dy = Vector::<f64, N>::new(coords_y[g]) - cy;
+            let dz = Vector::<f64, N>::new(coords_z[g]) - cz;
+            let r2 = dx * dx + dy * dy + dz * dz;
+            let arg = zero - eta * r2;
+            let mut run = true;
+            let mut e = zero;
+            if comptime!(screen) {
+                let mut inside: u32 = 0u32;
+                #[unroll]
+                for j in 0..N::value() {
+                    if r2[j] <= rad2[j] {
+                        inside += 1u32;
+                        e[j] = mg_exp(arg[j], exp_mode);
+                    }
+                }
+                run = inside > 0u32;
+            } else {
+                e = mg_exp_vec::<N>(arg, exp_mode);
+            }
+            if run {
+                let we = Vector::<f64, N>::new(weight[g]) * e;
+                for local in 0..nsl {
+                    let packed = set_pow[so0 + local];
+                    let ix = packed & 255;
+                    let iy = (packed >> 8) & 255;
+                    let iz = (packed >> 16) & 255;
+                    let mut poly = one;
+                    let mut i = 0u32;
+                    while i < ix {
+                        poly *= dx;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iy {
+                        poly *= dy;
+                        i += 1;
+                    }
+                    i = 0u32;
+                    while i < iz {
+                        poly *= dz;
+                        i += 1;
+                    }
+                    acc[local] += poly * we;
+                }
+            }
+        }
+        #[unroll]
+        for j in 0..N::value() {
+            let occ = o0 + j;
+            if occ < i1 {
+                let oo = occ_slot0[occ] as usize;
+                for local in 0..nsl {
+                    let a = acc[local];
+                    out[oo + local] = a[j];
+                }
+            }
+        }
+    }
+}
+
 /// Two-spin twin of [`mg_integrate_vec_kernel`].
 #[cube(launch_unchecked)]
 fn mg_integrate2_vec_kernel<N: Size>(
@@ -2675,6 +2879,12 @@ fn reverse_vec_local_bytes(line: usize, channels: usize) -> usize {
     MAX_SLOTS_PER_INSTANCE * line * (4 + 6 * 8 + channels * 8) + 8 * line * 8
 }
 
+/// M-22: the uniform reverse kernel carries no `pw` and no `mask` — only the
+/// accumulator(s) per element and the five per-lane instance vectors.
+fn reverse_vec_uniform_local_bytes(line: usize, channels: usize) -> usize {
+    MAX_SLOTS_PER_INSTANCE * line * (channels * 8) + 8 * line * 8
+}
+
 fn launch_integrate_resident<R: Runtime>(
     d: &PairSlotBatchDevice,
     weight: &Handle,
@@ -2687,9 +2897,60 @@ fn launch_integrate_resident<R: Runtime>(
     let per_lane = 50 * (d.npoints / d.nblocks.max(1)).max(1);
     let exp_mode = exp_mode_from_env();
     if reverse_vector_enabled() {
+        // M-22: `reverse_groups` ordered the table uniform-first, so each arm
+        // is one contiguous lane range and neither needs a per-lane test.
+        // The uniform arm runs the specialised kernel (scalar-bounded power
+        // loops, no `pw`/`mask` locals — hence its own stack budget); the
+        // remainder runs M-19's predicated kernel unchanged.
+        // OFF selects the ORIGINAL group order and zero uniform groups, which
+        // is the pre-M-22 launch exactly; ON selects the uniform-first table.
+        // The choice is made per LAUNCH, not per upload: the chunk geometry is
+        // cached for the life of the level, so an upload-time switch would
+        // leave both arms of a comparison sharing whichever order was built
+        // first — a gate that passes while testing nothing.
+        let on = reverse_uniform_enabled();
+        let n_uniform = if on { d.n_uniform } else { 0 };
+        let group_table = if on { &d.grp_sorted } else { &d.grp_occ0 };
         for chunk in pyscf_algebra::launch::launch_1d_chunked(
             client,
-            d.ngroups,
+            n_uniform,
+            per_lane * d.line,
+            reverse_vec_uniform_local_bytes(d.line, 1),
+        ) {
+            unsafe {
+                mg_integrate_vec_uniform_kernel::launch_unchecked::<R>(
+                    client,
+                    CubeCount::Static(chunk.count_x, 1, 1),
+                    chunk.dim,
+                    d.line,
+                    ArrayArg::from_raw_parts(d.coords_x.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(weight.clone(), d.npoints),
+                    ArrayArg::from_raw_parts(group_table.clone(), d.ngroups),
+                    ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
+                    ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
+                    ArrayArg::from_raw_parts(d.block_point_end.clone(), d.nblocks),
+                    ArrayArg::from_raw_parts(d.block_inst0.clone(), d.nblocks + 1),
+                    ArrayArg::from_raw_parts(d.inst_ref.clone(), d.ninstances),
+                    ArrayArg::from_raw_parts(d.occ_slot0.clone(), d.ninstances + 1),
+                    ArrayArg::from_raw_parts(d.instance_alpha.clone(), d.nuinstances),
+                    ArrayArg::from_raw_parts(d.instance_center.clone(), d.nuinstances * 3),
+                    ArrayArg::from_raw_parts(d.instance_radius2.clone(), d.nuinstances),
+                    ArrayArg::from_raw_parts(d.instance_set.clone(), d.nuinstances),
+                    ArrayArg::from_raw_parts(d.set_off.clone(), d.nsets + 1),
+                    ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
+                    ArrayArg::from_raw_parts(out.clone(), d.nslots),
+                    n_uniform,
+                    chunk.lane0,
+                    exp_mode,
+                    point_screen_enabled(),
+                );
+            }
+        }
+        for chunk in pyscf_algebra::launch::launch_1d_chunked(
+            client,
+            d.ngroups - n_uniform,
             per_lane * d.line,
             reverse_vec_local_bytes(d.line, 1),
         ) {
@@ -2703,7 +2964,7 @@ fn launch_integrate_resident<R: Runtime>(
                     ArrayArg::from_raw_parts(d.coords_y.clone(), d.npoints),
                     ArrayArg::from_raw_parts(d.coords_z.clone(), d.npoints),
                     ArrayArg::from_raw_parts(weight.clone(), d.npoints),
-                    ArrayArg::from_raw_parts(d.grp_occ0.clone(), d.ngroups),
+                    ArrayArg::from_raw_parts(group_table.clone(), d.ngroups),
                     ArrayArg::from_raw_parts(d.inst_block.clone(), d.ninstances),
                     ArrayArg::from_raw_parts(d.block_point0.clone(), d.nblocks + 1),
                     ArrayArg::from_raw_parts(d.block_point_end.clone(), d.nblocks),
@@ -2718,7 +2979,7 @@ fn launch_integrate_resident<R: Runtime>(
                     ArrayArg::from_raw_parts(d.set_pow.clone(), d.nsetslots),
                     ArrayArg::from_raw_parts(out.clone(), d.nslots),
                     d.ngroups,
-                    chunk.lane0,
+                    n_uniform + chunk.lane0,
                     exp_mode,
                     point_screen_enabled(),
                 );
