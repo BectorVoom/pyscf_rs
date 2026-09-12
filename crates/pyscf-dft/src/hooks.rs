@@ -650,8 +650,12 @@ mod tests {
     fn define_xc_string_form_parses() {
         let hooks = NoKsOverrides;
         let spec = hooks.define_xc_("b3lyp").expect("string form parses");
-        // xcfun b3lyp → hyb=0.2.
-        assert!((spec.hyb().0 - 0.2).abs() < 1e-9);
+        // The default backend is libxc (since 2026-08-30). Like upstream
+        // `libxc.parse_xc`, b3lyp is the single compound id 402 with no
+        // separate HF term; its 0.2 lives inside the libxc functional. The
+        // old `hyb == 0.2` expectation was xcfun's parse.
+        assert_eq!(spec.components(), &[(402, 1.0)]);
+        assert_eq!(spec.hyb(), (0.0, 0.0, 0.0));
     }
 
     /// `define_xc_` callable form returns NotYetImplemented{deferred} (D-02).

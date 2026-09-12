@@ -2500,11 +2500,13 @@ impl EvalGtoDeviceContext {
             .max()
             .unwrap_or(0) as u32;
         let rcut2_host = rcut2_table(rcut2, nbas);
-        let angular_host = if all_s {
-            None
-        } else {
-            Some(build_angular_tables(maxl)?)
-        };
+        // Built for every basis, all-s included (then l = 0 only, a few
+        // words). The s-kernel covers an all-s basis at deriv 0 only; at deriv
+        // 1 it runs the general kernels, which need these tables. Leaving them
+        // out made the K-10 fused path refuse He/STO-3G under PBE
+        // (`he_all_electron_krks_converges_and_integrates`), and the K-09 path
+        // had been rebuilding the same l = 0 tables on every call to cover it.
+        let angular_host = Some(build_angular_tables(maxl)?);
         Ok(dispatch_backend!(client, c, Rt, {
             let angular = angular_host.as_ref().map(|t| AngularDevice {
                 c2s_flat: pyscf_algebra::launch::upload::<Rt, f64>(c, &t.c2s_flat),
@@ -3245,48 +3247,10 @@ pub fn eval_gto_batch_into_image_batch(
             return Ok(());
         }
         let Some(ang) = ctx.angular.as_ref() else {
-            // all-s basis on the deriv1 path: the general tables are needed and
-            // were not built. Build them here (l = 0 only) — a small upload.
-            let t = build_angular_tables(0)?;
-            let tmp = AngularDevice {
-                c2s_flat: pyscf_algebra::launch::upload::<Rt, f64>(c, &t.c2s_flat),
-                cpow_lx: c.create_from_slice(bytemuck::cast_slice(&t.cpow_lx)),
-                cpow_ly: c.create_from_slice(bytemuck::cast_slice(&t.cpow_ly)),
-                cpow_lz: c.create_from_slice(bytemuck::cast_slice(&t.cpow_lz)),
-                ncart_by_l: c.create_from_slice(bytemuck::cast_slice(&t.ncart_by_l)),
-                nsph_by_l: c.create_from_slice(bytemuck::cast_slice(&t.nsph_by_l)),
-                fac1_by_l: pyscf_algebra::launch::upload::<Rt, f64>(c, &t.fac1_by_l),
-                c2s_off_by_l: c.create_from_slice(bytemuck::cast_slice(&t.c2s_off_by_l)),
-                cpow_off_by_l: c.create_from_slice(bytemuck::cast_slice(&t.cpow_off_by_l)),
-                lens: [
-                    t.c2s_flat.len(),
-                    t.cpow_lx.len(),
-                    t.cpow_ly.len(),
-                    t.cpow_lz.len(),
-                    t.ncart_by_l.len(),
-                    t.nsph_by_l.len(),
-                    t.fac1_by_l.len(),
-                    t.c2s_off_by_l.len(),
-                    t.cpow_off_by_l.len(),
-                ],
-            };
-            launch_batched_angular::<Rt>(
-                c,
-                ctx,
-                &tmp,
-                deriv1,
-                coords_h,
-                coords.len(),
-                lane0_h,
-                npts_h,
-                coff_h,
-                ooff_h,
-                out_h,
-                total_out,
-                nimg,
-                lanes,
-            );
-            return Ok(());
+            // `EvalGtoDeviceContext::new` builds the tables for every basis.
+            return Err(PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(
+                "K-09: no angular tables in the context".into(),
+            )));
         };
         launch_batched_angular::<Rt>(
             c,

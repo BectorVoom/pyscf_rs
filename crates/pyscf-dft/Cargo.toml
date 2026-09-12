@@ -99,3 +99,7 @@ tracing-subscriber = { workspace = true }
 # for the SCF chkfile tests. NO new runtime dep (D-05: pyscf-chkfile remains
 # the sole owner of hdf5-metno; pyscf-dft does NOT add an hdf5-metno dep).
 tempfile      = "3"
+# The pointwise libxc oracle (`tests/libxc_pointwise_oracle.rs`) spawns the
+# upstream interpreter and parses one JSON line back, the same shape
+# pyscf-pbc-dft's oracle harness uses. Dev-only: no runtime dep is added.
+serde_json    = { workspace = true }

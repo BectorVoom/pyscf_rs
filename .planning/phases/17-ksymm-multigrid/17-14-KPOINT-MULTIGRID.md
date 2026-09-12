@@ -83,6 +83,47 @@ Cell: `common::diamond()`, mesh pinned `[15,15,15]` unless stated.
 | `multigrid_and_grid_agree_at_the_multigrid_floor` | Gate E, k-symmetric | **`1.3067e-9` Ha** (`e_grid -7.772927281262`, `e_multigrid -7.772927279955`), si, 3 IBZ of 8 BZ |
 | `device_scatter_is_bit_identical_*` | K-03, both routes in one process | **`to_bits()` equal** for RKS Γ (LDA and PBE), RKS k-resolved, and UKS |
 
+## Gate D — against UPSTREAM PySCF 2.12.1
+
+Everything above is **Gate C** (port vs port). Gate D is the separate
+question, and it lives in its own file (`tests/multigrid_kpts_oracle.rs`) so
+the distinction cannot quietly erode. `E_tot` of a converged k-point KRKS,
+same cell, same pinned mesh `[15,15,15]`, `lda,vwn`, diamond:
+
+| k-mesh | upstream FFTDF | this port, grid | this port, MULTIGRID k |
+|---|---|---|---|
+| `[1,1,2]` | `-10.756804832489` | `1.323e-5` | **`1.289e-5`** |
+| `[2,2,2]` | `-11.240948604144` | `2.381e-5` | **`2.374e-5`** |
+| `[1,1,3]` | `-10.817702580812` | `1.738e-5` | **`1.715e-5`** |
+
+Worst `|dE|` **2.374e-5 Ha**, four orders inside the `1e-1` gate.
+
+**The control is what makes this readable.** The port's own GRID numint sits
+`2.381e-5` from the same upstream number on the same fixture, and the
+multigrid sits `2.374e-5` — indistinguishable, and the multigrid is
+marginally CLOSER. So the residual is the port-vs-upstream baseline, not
+something the k-point multigrid path introduces. Both named floors account
+for it: xcfun vs upstream's libxc for `lda,vwn` (~5e-7) and the pinned coarse
+mesh (~1.35e-5 on `KRHF`, the dominant term here).
+
+### Finding: upstream's own multigrid REFUSES k-points
+
+`pyscf.pbc.dft.multigrid.MultiGridNumInt2` on any of the three k-meshes:
+
+```
+NotImplementedError: MultiGridNumInt2 only supports Gamma-point calculations.
+```
+
+So there is **no upstream counterpart to compare this path against** —
+"matches PySCF" can only mean "matches PySCF's reference FFTDF route", which
+is what the table measures. This port's multigrid is k-point-general where
+PySCF 2.12.1's is not; that is a capability beyond upstream, not a port of
+one, and it is recorded here so a later reader does not go looking for the
+upstream number that would make the comparison tighter. It does not exist.
+
+The test asserts the refusal is REPORTED rather than skipped, so if a future
+PySCF gains k-point multigrid, the log says so on the next run.
+
 ### The symmetry gate's control, and why it is a control
 
 `ibz_energy_matches_full_bz_on_multigrid` first asserted `|dE| < 1e-9`

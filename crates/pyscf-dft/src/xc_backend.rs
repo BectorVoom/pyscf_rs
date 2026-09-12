@@ -493,9 +493,9 @@ impl XcBackend {
     ///
     /// # Errors
     /// [`DftError::BackendEval`] on a backend-side failure (unknown name,
-    /// family mismatch, buffer mismatch). The `libxc` backend arm returns
-    /// `BackendEval("libxc UKS eval not yet implemented")` — UKS libxc support
-    /// is deferred (CR-01 scopes the xcfun default path only).
+    /// family mismatch, buffer mismatch). The `libxc` arm refuses MGGA
+    /// (no `lapl`/`tau` inputs here); LDA and GGA are bit-identical to
+    /// PySCF's `eval_xc(..., spin=1)` (`tests/libxc_pointwise_oracle.rs`).
     #[allow(clippy::too_many_arguments)]
     pub fn eval_uks(
         &self,
@@ -1029,7 +1029,7 @@ mod libxc_impl {
                         .evaluate(&func, &input, dord, &mut o)
                         .map_err(|e| DftError::BackendEval(format!("libxc eval LDA: {e:?}")))?;
                     for ip in 0..np {
-                        out.exc[ip] += fac * zk[ip] * rho[ip];
+                        out.exc[ip] += fac * zk[ip];
                         out.vrho[ip] += fac * vrho[ip];
                     }
                 }
@@ -1067,7 +1067,7 @@ mod libxc_impl {
                         .evaluate(&func, &input, dord, &mut o)
                         .map_err(|e| DftError::BackendEval(format!("libxc eval GGA: {e:?}")))?;
                     for ip in 0..np {
-                        out.exc[ip] += fac * zk[ip] * rho[ip];
+                        out.exc[ip] += fac * zk[ip];
                         out.vrho[ip] += fac * vrho[ip];
                         out.vsigma[ip] += fac * vsigma[ip];
                     }
@@ -1100,12 +1100,22 @@ mod libxc_impl {
                         .evaluate(&func, &input, dord, &mut o)
                         .map_err(|e| DftError::BackendEval(format!("libxc eval MGGA: {e:?}")))?;
                     for ip in 0..np {
-                        out.exc[ip] += fac * zk[ip] * rho[ip];
+                        out.exc[ip] += fac * zk[ip];
                         out.vrho[ip] += fac * vrho[ip];
                         out.vsigma[ip] += fac * vsigma[ip];
                     }
                 }
             }
+        }
+        // PySCF's `merge_xc` (`lib/dft/libxc_itrf.c`) sums `fac * zk` per
+        // PARTICLE across the components, and the density multiplies the sum
+        // once, afterwards. Scaling each term by `rho` inside the loop rounds
+        // differently: 1 ulp off on a two-component `pbe,pbe` exc.
+        let (RhoBlock::Lda { rho: total }
+        | RhoBlock::Gga { rho: total, .. }
+        | RhoBlock::Mgga { rho: total, .. }) = rho;
+        for (e, &r) in out.exc.iter_mut().zip(total.iter()) {
+            *e *= r;
         }
         Ok(out)
     }
@@ -1208,7 +1218,7 @@ mod libxc_impl {
                         .evaluate(&func, &input, dord, &mut o)
                         .map_err(|e| DftError::BackendEval(format!("libxc eval LDA/UKS: {e:?}")))?;
                     for ip in 0..np {
-                        out.exc[ip] += fac * zk[ip] * (rho_a[ip] + rho_b[ip]);
+                        out.exc[ip] += fac * zk[ip];
                         out.vrho_a[ip] += fac * vrho[ip * 2];
                         out.vrho_b[ip] += fac * vrho[ip * 2 + 1];
                     }
@@ -1252,7 +1262,7 @@ mod libxc_impl {
                         .evaluate(&func, &input, dord, &mut o)
                         .map_err(|e| DftError::BackendEval(format!("libxc eval GGA/UKS: {e:?}")))?;
                     for ip in 0..np {
-                        out.exc[ip] += fac * zk[ip] * (rho_a[ip] + rho_b[ip]);
+                        out.exc[ip] += fac * zk[ip];
                         out.vrho_a[ip] += fac * vrho[ip * 2];
                         out.vrho_b[ip] += fac * vrho[ip * 2 + 1];
                         out.vsigma_aa[ip] += fac * vsigma[ip * 3];
@@ -1269,6 +1279,11 @@ mod libxc_impl {
                     ));
                 }
             }
+        }
+        // Per-particle sum first, one density scale last — `merge_xc`'s order
+        // (see `libxc_eval`).
+        for ip in 0..np {
+            out.exc[ip] *= rho_a[ip] + rho_b[ip];
         }
         Ok(out)
     }

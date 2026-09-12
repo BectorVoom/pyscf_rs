@@ -1,5 +1,12 @@
 //! FOUND-04: cubecl 0.10.0 lockstep verification across siblings.
 //!
+//! **2026-09-11: the matmul/reduce carve-out below is retired.** cubecl-matmul
+//! and cubecl-reduce never published 0.10.0; the workspace now uses their
+//! successors cubek-matmul / cubek-reduce 0.2.0, which are built on cubecl
+//! 0.10.0, so the graph is a single 0.10.0 stack and `carve_out_active` is
+//! false. The carve-out code stays so a future pre-release pin is still
+//! audited rather than waved through.
+//!
 //! Walks `cargo metadata --format-version 1` (full graph) and asserts:
 //!   * cubecl, cubecl-cpu, cubecl-cuda, cubecl-hip, cubecl-runtime,
 //!     cubecl-wgpu  →  exactly `0.10.0` (top-level pins)

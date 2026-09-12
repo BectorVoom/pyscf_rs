@@ -44,6 +44,23 @@ use pyscf_pbc_gto::Cell;
 
 const MESH: [usize; 3] = [25, 25, 25];
 
+/// Every test in this binary runs on its own thread of the same process, and
+/// the multigrid pair switches are process-wide environment variables that the
+/// kernels read on every launch: `point_screen_is_bounded_and_route_independent`
+/// flips `PYSCF_MG_PAIR_POINT_SCREEN`, `forward_vector_width_is_not_a_variable_of_the_result`
+/// flips `PYSCF_MG_PAIR_LINE`, and `the_batch_is_actually_built` sets
+/// `PYSCF_MG_PAIR_KEEP_HOST`. Run concurrently, a batched-vs-streamed
+/// comparison could take its two routes under different switches -- the radius
+/// screen on for one and off for the other -- and report a difference (5.8e-10
+/// on silicon `pass2`, 6e-14 on diamond `rho`) that changed from run to run and
+/// vanished under `--test-threads=1` (2026-09-11). Every test holds this lock
+/// for its whole body.
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn small_silicon() -> Cell {
     let mut c = common::silicon();
     c.mesh = MESH;
@@ -153,6 +170,7 @@ fn compare(name: &str, cell: &Cell) {
 
 #[test]
 fn batched_and_streamed_launches_agree_bit_for_bit_on_silicon() {
+    let _env = env_guard();
     compare("si", &small_silicon());
 }
 
@@ -171,6 +189,7 @@ fn batched_and_streamed_launches_agree_bit_for_bit_on_silicon() {
 /// the kernels' switch (`0` off, the factor on).
 #[test]
 fn point_screen_is_bounded_and_route_independent() {
+    let _env = env_guard();
     let factor = std::env::var("PYSCF_MG_PAIR_POINT_SCREEN")
         .ok()
         .filter(|v| v != "0" && !v.is_empty())
@@ -238,6 +257,7 @@ fn point_screen_is_bounded_and_route_independent() {
 /// pin is process-wide state.
 #[test]
 fn forward_vector_width_is_not_a_variable_of_the_result() {
+    let _env = env_guard();
     let cell = small_silicon();
     let decon = build_pshells(&cell).expect("build_pshells");
     let task_list = build_pair_task_list(&cell, &decon).expect("task list");
@@ -267,6 +287,7 @@ fn forward_vector_width_is_not_a_variable_of_the_result() {
 
 #[test]
 fn batched_and_streamed_launches_agree_bit_for_bit_on_diamond() {
+    let _env = env_guard();
     compare("diamond", &small_diamond());
 }
 
@@ -306,6 +327,7 @@ fn d_shell_cell() -> Cell {
 /// therefore unusable in release for any basis with d functions.
 #[test]
 fn a_level_over_the_register_bound_falls_back_to_streaming() {
+    let _env = env_guard();
     let cell = d_shell_cell();
     let decon = build_pshells(&cell).expect("build_pshells");
     let task_list = build_pair_task_list(&cell, &decon).expect("task list");
@@ -340,6 +362,7 @@ fn a_level_over_the_register_bound_falls_back_to_streaming() {
 /// count is a property of the mesh, not a contract.
 #[test]
 fn the_batch_is_actually_built() {
+    let _env = env_guard();
     // M-18 takes the host geometry on first upload; this test reads it after
     // the resident copy exists, so keep it.
     unsafe { std::env::set_var("PYSCF_MG_PAIR_KEEP_HOST", "1") };

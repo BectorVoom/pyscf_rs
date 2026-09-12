@@ -27,8 +27,8 @@ pyscf-runtime = { path = "../pyscf-runtime", default-features = false }
 cubecl         = { workspace = true }
 cubecl-runtime = { workspace = true }
 cubecl-cpu     = { workspace = true }
-cubecl-matmul  = { workspace = true }
-cubecl-reduce  = { workspace = true }
+cubek-matmul   = { workspace = true }
+cubek-reduce   = { workspace = true }
 cubecl-wgpu    = { workspace = true, optional = true }
 cubecl-cuda    = { workspace = true, optional = true }
 cubecl-hip     = { workspace = true, optional = true }
