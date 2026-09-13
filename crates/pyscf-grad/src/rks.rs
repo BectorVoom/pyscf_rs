@@ -238,7 +238,7 @@ fn get_hcore(mol: &Mole) -> Result<Vec<f64>, PyscfRsError> {
 fn hcore_deriv(
     mol: &Mole,
     h1: &[f64],
-    aoslices: &[(usize, usize)],
+    aoslices: &[(usize, usize, usize, usize)],
     atm_id: usize,
 ) -> Result<Vec<f64>, PyscfRsError> {
     let nao = mol.nao_nr;
@@ -258,7 +258,7 @@ fn hcore_deriv(
     for (idx, slot) in vrinv.iter_mut().enumerate() {
         *slot = -z * iprinv.values[idx];
     }
-    let (p0, p1) = aoslices[atm_id];
+    let (_, _, p0, p1) = aoslices[atm_id];
     for comp in 0..NCOMP {
         let base = comp * nao * nao;
         for j in p0..p1 {
@@ -513,7 +513,7 @@ pub fn grad_elec(
     let mut de = Vec::with_capacity(rows.len());
     for &ia in &rows {
         let h1ao = hcore_deriv(mol, &h1, &aoslices, ia)?; // [3, nao, nao]
-        let (p0, p1) = aoslices[ia];
+        let (_, _, p0, p1) = aoslices[ia];
         // The grid_response weight-derivative term (zero unless enabled, D-04).
         let extra = g.extra_force(ia)?;
 

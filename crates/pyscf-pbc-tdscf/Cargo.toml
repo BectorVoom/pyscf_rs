@@ -16,6 +16,17 @@ pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
-pyscf-pbc-dft   = { path = "../pyscf-pbc-dft" }
+# 19-02 libxc posture (19-CONTEXT §1.7): developer builds stay libxc-free;
+# release builds pass `--features libxc`. Escalate only if a Gate-A number
+# moves with the feature off.
+pyscf-pbc-dft   = { path = "../pyscf-pbc-dft", default-features = false }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+
+[features]
+libxc = ["pyscf-pbc-dft/libxc"]
+
+[dev-dependencies]
+serde_json      = { workspace = true }
+# 19-06 determinism gate: 1-vs-8-thread bit-identity inside one process.
+rayon           = { workspace = true }

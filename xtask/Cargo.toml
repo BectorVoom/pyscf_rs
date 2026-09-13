@@ -46,6 +46,13 @@ path = "src/bin/check_forbid_lazy_static.rs"
 name = "check-orphan-modules"
 path = "src/bin/check_orphan_modules.rs"
 
+# GRAD-10 workspace extension (19-02 Task 3): exactly one CPHF `pub fn solve`
+# may exist in crates/*/src — `pyscf-grad/src/cphf.rs::solve`. Phase 19
+# supplies k-aware `fvind`s and reuses that solver; a second solver fails this.
+[[bin]]
+name = "check-single-cphf"
+path = "src/bin/check_single_cphf.rs"
+
 [dependencies]
 anyhow         = { workspace = true }
 serde          = { workspace = true }

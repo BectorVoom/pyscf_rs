@@ -179,6 +179,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo run --quiet -p xtask --bin check-dependency-wall
 
+  # GRAD-10 workspace extension (19-02): exactly one CPHF `pub fn solve`.
+  xtask-single-cphf:
+    name: xtask check-single-cphf (GRAD-10)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo run --quiet -p xtask --bin check-single-cphf
+
   # FOUND-04: cubecl 0.10.0 lockstep gate.
   xtask-cubecl-pin:
     name: xtask check-cubecl-pin (FOUND-04 / Pitfall 1)

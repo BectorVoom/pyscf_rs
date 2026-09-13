@@ -21,6 +21,10 @@ pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 # sits strictly below `pyscf-pbc-scf`.
 pyscf-pbc-symm  = { path = "../pyscf-pbc-symm" }
 pyscf-diis      = { path = "../pyscf-diis" }
+# 19-03 (GRAD-10): the single matrix-free Krylov CPHF solver. `cphf.rs` builds
+# k-aware `fvind`s and reuses `pyscf_grad::cphf::solve` — it defines no solver
+# of its own (`check-single-cphf` enforces this workspace-wide).
+pyscf-grad      = { path = "../pyscf-grad" }
 libm            = { workspace = true }
 num-complex     = "0.4.6"
 pyscf-chkfile   = { path = "../pyscf-chkfile" }
@@ -32,3 +36,6 @@ tracing         = { workspace = true }
 pyscf-gto        = { path = "../pyscf-gto" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
 serde_json      = { workspace = true }
+# 19-03 §9.3 precedent (17-09): the 1-vs-8-thread bit-identity gate varies the
+# worker count inside ONE process with an explicit `rayon::ThreadPool`.
+rayon           = { workspace = true }

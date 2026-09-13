@@ -8,10 +8,20 @@ repository.workspace = true
 authors.workspace = true
 description = "gen_grid, numint, KRKS/KUKS/KROKS/KGKS + gamma, DFT+U, multigrid, cdft"
 
+# 19-02 (Phase 19 libxc posture, 19-CONTEXT §1.7): additive opt-in that
+# forwards to `pyscf-dft/libxc`. `default = ["libxc"]` preserves the
+# pre-19-02 behavior for every existing dependent (pyscf-bench); the four
+# Phase-19 response crates take this dep with `default-features = false` and
+# re-expose this feature so developer builds stay fast and release builds turn
+# it on in one place.
+[features]
+default = ["libxc"]
+libxc = ["pyscf-dft/libxc"]
+
 [dependencies]
 pyscf-core      = { path = "../pyscf-core" }
 pyscf-algebra   = { path = "../pyscf-algebra" }
-pyscf-dft       = { path = "../pyscf-dft" }
+pyscf-dft       = { path = "../pyscf-dft", default-features = false }
 pyscf-gto       = { path = "../pyscf-gto" }
 pyscf-grids     = { path = "../pyscf-grids" }
 pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }

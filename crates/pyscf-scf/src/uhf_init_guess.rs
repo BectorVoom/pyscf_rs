@@ -63,7 +63,7 @@ pub fn break_dm_spin_symm(
         // beta density.
         let slices = aoslice_by_atom(mol)?;
         let mut out = vec![0.0_f64; nao * nao];
-        for (p0, p1) in slices {
+        for (_, _, p0, p1) in slices {
             for i in p0..p1 {
                 for j in p0..p1 {
                     out[i * nao + j] = dma[i * nao + j];
@@ -115,7 +115,7 @@ pub fn break_atom_guess_spin_symm(
     let nao = mol.nao_nr;
     let s1e = crate::fock::default_get_ovlp(mol)?;
     let mut out: Vec<f64> = s1e.data.iter().map(|v| v * 1e-2).collect();
-    for (p0, p1) in aoslice_by_atom(mol)? {
+    for (_, _, p0, p1) in aoslice_by_atom(mol)? {
         for i in p0..p1 {
             for j in p0..p1 {
                 out[i * nao + j] = dmb[i * nao + j];

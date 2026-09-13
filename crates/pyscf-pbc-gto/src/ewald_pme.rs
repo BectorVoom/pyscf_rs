@@ -9,18 +9,9 @@
 //!   the C loop `pyscf/lib/pbc/cell.c:get_ewald_direct`;
 //! * `pyscf/pbc/gto/ewald_methods.py:121-176` — `particle_mesh_ewald`.
 //!
-//! # What ships and what does not
-//!
-//! The B-spline machinery and the screened real-space sum are pure arithmetic
-//! and ship in full. [`particle_mesh_ewald`] itself does NOT: its G-space half
-//! is `tools.fft(B * C * tools.ifft(Q))`, and PBC-MASTER-PLAN §8.1 puts the
-//! complex 3-D FFT in Phase 11 plan 11-01 (09-CONTEXT.md lists "Any FFT" as an
-//! explicit Phase 9 non-goal). It therefore returns a clean
-//! [`PyscfRsError::NotYetImplemented`] `{ phase: 11 }` rather than a silently
-//! wrong answer (D-PBC-20). Everything it needs BEFORE the FFT — `ewovrl` via
-//! [`get_ewald_direct`], `ewself`, the charge mesh `Q`, the `B` and `C` arrays —
-//! is implemented and unit-tested here, so plan 11-01 only has to bolt the two
-//! transforms on.
+//! The reciprocal convolution uses the Phase-11 complex FFT machinery.
+//! Phase 18 completes the previously deferred energy path before adding its
+//! gradient, so finite differences exercise the same PME energy definition.
 //!
 //! Note that upstream reaches PME only when `cell.use_particle_mesh_ewald` is
 //! set, which is NOT the default; [`crate::ewald::ewald`]'s shipped 3D path is
@@ -37,7 +28,7 @@
 //! * `idx` — the `(n, nu)` grid indices those weights landed on.
 
 use crate::cell::Cell;
-use pyscf_algebra::oracle_sum;
+use pyscf_algebra::{CTensor, oracle_sum};
 use pyscf_core::{CoreError, PyscfRsError};
 use std::f64::consts::PI;
 
@@ -318,18 +309,12 @@ pub fn pme_charge_mesh(
 
 /// `particle_mesh_ewald(cell, ew_eta, ew_cut, order)` — `ewald_methods.py:121-176`.
 ///
-/// # Deferred to Phase 11 (D-PBC-20)
-///
-/// The G-space half is `tools.fft(B * C * tools.ifft(Q))`. The complex 3-D FFT
-/// lands in PBC-MASTER-PLAN plan 11-01; 09-CONTEXT.md lists "Any FFT" as an
-/// explicit Phase 9 non-goal. This function validates its inputs, runs
-/// everything that precedes the transform, and then returns
-/// [`PyscfRsError::NotYetImplemented`] rather than a wrong number.
+/// The reciprocal term is `.5 * N * dot(Q, fft(B*C*ifft(Q)).real)`.
+/// The inverse transform carries 1/N; the forward transform is unnormalized.
 ///
 /// # Errors
 /// * [`CoreError::InvalidMolecule`] for `dimension != 3` (upstream raises
 ///   `NotImplementedError`);
-/// * [`PyscfRsError::NotYetImplemented`] `{ phase: 11 }` at the FFT;
 /// * propagates [`get_ewald_direct`], [`bspline`] and
 ///   [`crate::gv::get_gv_weights`].
 pub fn particle_mesh_ewald(
@@ -338,6 +323,29 @@ pub fn particle_mesh_ewald(
     ew_cut: Option<f64>,
     order: usize,
 ) -> Result<f64, PyscfRsError> {
+    if cell.mol.natm == 0 && cell.dimension == 3 {
+        return Ok(0.0);
+    }
+    Ok(pme_data(cell, ew_eta, ew_cut, order)?.energy)
+}
+
+/// Shared energy/gradient interpolation state; not a cross-geometry cache.
+pub(crate) struct PmeData {
+    pub energy: f64,
+    pub eta: f64,
+    pub cut: f64,
+    pub mesh: [usize; 3],
+    pub b: [[f64; 3]; 3],
+    pub splines: [Bspline; 3],
+    pub potential: Vec<f64>,
+}
+
+pub(crate) fn pme_data(
+    cell: &Cell,
+    ew_eta: Option<f64>,
+    ew_cut: Option<f64>,
+    order: usize,
+) -> Result<PmeData, PyscfRsError> {
     // ewald_methods.py:123-124
     if cell.dimension != 3 {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
@@ -358,8 +366,8 @@ pub fn particle_mesh_ewald(
     let mesh = cell.cutoff_to_mesh(ke_cutoff)?;
 
     // ewald_methods.py:137-141 — the two terms that need no transform.
-    let _ewovrl = get_ewald_direct(cell, Some(ew_eta), Some(ew_cut))?;
-    let _ewself = crate::ewald::ewald_self(&chargs, ew_eta, cell.dimension, cell.vol());
+    let ewovrl = get_ewald_direct(cell, Some(ew_eta), Some(ew_cut))?;
+    let ewself = crate::ewald::ewald_self(&chargs, ew_eta, cell.dimension, cell.vol());
 
     // ewald_methods.py:143-144 — u = coords . b(norm_to=1).T * mesh
     let b = cell.reciprocal_vectors(1.0)?;
@@ -374,15 +382,15 @@ pub fn particle_mesh_ewald(
     }
 
     // ewald_methods.py:146-148
-    let mx = bspline(&ux, mesh[0], order, 0)?;
-    let my = bspline(&uy, mesh[1], order, 0)?;
-    let mz = bspline(&uz, mesh[2], order, 0)?;
+    let mx = bspline(&ux, mesh[0], order, 1)?;
+    let my = bspline(&uy, mesh[1], order, 1)?;
+    let mz = bspline(&uz, mesh[2], order, 1)?;
 
     // ewald_methods.py:155-159
-    let _q = pme_charge_mesh(&chargs, &mx, &my, &mz, mesh);
+    let q = pme_charge_mesh(&chargs, &mx, &my, &mz, mesh);
 
     // ewald_methods.py:161 — B = |bx|^2 (x) |by|^2 (x) |bz|^2 (real).
-    let _b_axes: [Vec<f64>; 3] = [&mx, &my, &mz].map(|s| {
+    let b_axes: [Vec<f64>; 3] = [&mx, &my, &mz].map(|s| {
         s.b_re
             .iter()
             .zip(&s.b_im)
@@ -392,7 +400,7 @@ pub fn particle_mesh_ewald(
 
     // ewald_methods.py:163-169 — C = weights * coulG * exp(-absG2/(4 eta^2)).
     let gw = crate::gv::get_gv_weights(cell, Some(mesh))?;
-    let _c: Vec<f64> = gw
+    let c: Vec<f64> = gw
         .gv
         .iter()
         .map(|g| {
@@ -405,11 +413,31 @@ pub fn particle_mesh_ewald(
         .collect();
 
     // ewald_methods.py:171-173 — ewg = .5 * prod(mesh) * <Q, fft(B*C*ifft(Q))>
-    Err(PyscfRsError::NotYetImplemented {
-        phase: 11,
-        what: "particle_mesh_ewald's G-space sum needs the complex 3-D FFT \
-               (ewald_methods.py:171-173) — PBC-MASTER-PLAN plan 11-01. \
-               Clear cell.use_particle_mesh_ewald to use the exact Ewald sum.",
+    let unwrap_fft_error = |pyscf_pbc_tools::PbcToolsError::Core(e)| e;
+    let q_tensor = CTensor {
+        re: q.clone(),
+        im: vec![0.0; q.len()],
+    };
+    let mut reciprocal = pyscf_pbc_tools::ifft(&q_tensor, mesh).map_err(unwrap_fft_error)?;
+    for (g, &cg) in c.iter().enumerate() {
+        let z = g % mesh[2];
+        let y = (g / mesh[2]) % mesh[1];
+        let x = g / (mesh[1] * mesh[2]);
+        let factor = b_axes[0][x] * b_axes[1][y] * b_axes[2][z] * cg;
+        reciprocal.re[g] *= factor;
+        reciprocal.im[g] *= factor;
+    }
+    let potential = pyscf_pbc_tools::fft(&reciprocal, mesh).map_err(unwrap_fft_error)?;
+    let terms: Vec<f64> = q.iter().zip(&potential.re).map(|(q, v)| q * v).collect();
+    let ewg = 0.5 * q.len() as f64 * oracle_sum(&terms);
+    Ok(PmeData {
+        energy: ewovrl + ewself + ewg,
+        eta: ew_eta,
+        cut: ew_cut,
+        mesh,
+        b,
+        splines: [mx, my, mz],
+        potential: potential.re,
     })
 }
 

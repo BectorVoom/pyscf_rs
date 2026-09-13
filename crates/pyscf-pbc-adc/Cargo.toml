@@ -16,6 +16,26 @@ pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
-pyscf-pbc-dft   = { path = "../pyscf-pbc-dft" }
+# 19-14 Task 1: the ADC transform reuses the shipped pbc-ao2mo machinery —
+# `ao2mo_block` calls `pyscf_pbc_ao2mo::general` per k-triple; no new
+# 4-index transform is written here.
+pyscf-pbc-ao2mo = { path = "../pyscf-pbc-ao2mo" }
+# 19-02 libxc posture (19-CONTEXT §1.7): developer builds stay libxc-free;
+# release builds pass `--features libxc`.
+pyscf-pbc-dft   = { path = "../pyscf-pbc-dft", default-features = false }
+# 19-15/19-16: the ADC secular matrix is genuinely NON-SYMMETRIC (0.048 on
+# upstream's own matrix — hence davidson_nosym1 upstream), so the dense solve
+# needs a non-symmetric eigensolver.
+# Host-only faer, same justification as 17-02 (pyscf-pbc-symm): faer is not
+# cubecl and touches no device path, so this is not an ALG-06 wall violation.
+faer            = { workspace = true }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+
+[features]
+libxc = ["pyscf-pbc-dft/libxc"]
+
+[dev-dependencies]
+# 19-14 determinism gate: 1-vs-8-thread bit-identity inside one process.
+rayon           = { workspace = true }
+serde_json      = { workspace = true }

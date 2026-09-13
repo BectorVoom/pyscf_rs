@@ -9,6 +9,8 @@ authors.workspace = true
 description = "periodic gradients + stress tensor"
 
 [dependencies]
+pyscf-gto = { path = "../pyscf-gto" }
+pyscf-pbc-symm = { path = "../pyscf-pbc-symm" }
 pyscf-core      = { path = "../pyscf-core" }
 pyscf-algebra   = { path = "../pyscf-algebra" }
 pyscf-grad      = { path = "../pyscf-grad" }
@@ -19,3 +21,6 @@ pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+
+[dev-dependencies]
+pyscf-pbc-gto = { path = "../pyscf-pbc-gto", features = ["test-systems"] }

@@ -16,6 +16,19 @@ pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
-pyscf-pbc-dft   = { path = "../pyscf-pbc-dft" }
+# 19-02 libxc posture (19-CONTEXT §1.7): developer builds stay libxc-free;
+# release builds pass `--features libxc`.
+pyscf-pbc-dft   = { path = "../pyscf-pbc-dft", default-features = false }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+# Complex Padé arithmetic (host-only, not cubecl — same ALG-06 standing as
+# the ADC crate's faer use).
+num-complex     = "0.4.6"
+
+[features]
+libxc = ["pyscf-pbc-dft/libxc"]
+
+[dev-dependencies]
+# 19-10 determinism gate: 1-vs-8-thread bit-identity inside one process.
+rayon           = { workspace = true }
+serde_json      = { workspace = true }

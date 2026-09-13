@@ -301,6 +301,36 @@ pub fn intor_cross_with_images(
     ls: &[[f64; 3]],
     neighbor_list: Option<&NeighborList>,
 ) -> Result<PbcIntorOutput, PyscfRsError> {
+    intor_cross_with_image_weights(intor, cell1, cell2, kpts, opts, ls, neighbor_list, None)
+}
+
+/// Evaluate lattice integrals with an optional real weight for each image.
+///
+/// Weights multiply the Bloch phase before accumulating shell blocks. Arbitrary
+/// weights need not preserve Hermiticity, so weighted calls require `hermi = 0`.
+/// Passing `None` preserves the unweighted accumulation exactly.
+pub fn intor_cross_with_image_weights(
+    intor: &str,
+    cell1: &Cell,
+    cell2: &Cell,
+    kpts: &[[f64; 3]],
+    opts: PbcIntorOpts,
+    ls: &[[f64; 3]],
+    neighbor_list: Option<&NeighborList>,
+    image_weights: Option<&[f64]>,
+) -> Result<PbcIntorOutput, PyscfRsError> {
+    if let Some(weights) = image_weights {
+        if weights.len() != ls.len() || weights.iter().any(|w| !w.is_finite()) {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+                "pbc_intor: image weights must be finite and match the image count".into(),
+            )));
+        }
+        if opts.hermi != 0 {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+                "pbc_intor: image-weighted integrals require hermi = 0".into(),
+            )));
+        }
+    }
     if !cell1.mol._built || !cell2.mol._built {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
             "pbc_intor: both cells must be built".into(),
@@ -366,12 +396,20 @@ pub fn intor_cross_with_images(
     let kflat: Vec<f64> = kpts.iter().flatten().copied().collect();
     let lflat: Vec<f64> = ls.iter().flatten().copied().collect();
     let client = resolve_client("pbc_intor")?;
-    let (expkl_re, expkl_im) =
-        pyscf_kernels::pbc::bloch_phase(&client, &kflat, &lflat).map_err(|e| {
+    let (mut expkl_re, mut expkl_im) = pyscf_kernels::pbc::bloch_phase(&client, &kflat, &lflat)
+        .map_err(|e| {
             PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                 "K-07 bloch_phase failed ({nkpts} kpts x {nimgs} images): {e}"
             )))
         })?;
+    if let Some(weights) = image_weights {
+        for k in 0..nkpts {
+            for (m, &weight) in weights.iter().enumerate() {
+                expkl_re[k * nimgs + m] *= weight;
+                expkl_im[k * nimgs + m] *= weight;
+            }
+        }
+    }
 
     // ── screening ──────────────────────────────────────────────────────
     let owned_nl;

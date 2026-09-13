@@ -1,0 +1,85 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+{"pyscf": "2.12.1", "source": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/grad/test/test_rks_stress.py"}
+test_ovlp (phase18_strain_components.KnownValues.test_ovlp) ... {"line": 43, "residual": 0.0, "bound": 1e-09}
+{"line": 49, "residual": 0.0, "bound": 1e-09}
+{"line": 65, "residual": 5.012890103017753e-11, "bound": 1e-09}
+{"line": 71, "residual": 5.012888715238972e-11, "bound": 1e-09}
+ok
+test_kin (phase18_strain_components.KnownValues.test_kin) ... {"line": 79, "residual": 0.0, "bound": 1e-09}
+{"line": 85, "residual": 0.0, "bound": 1e-09}
+{"line": 101, "residual": 3.746075671884341e-11, "bound": 1e-09}
+{"line": 107, "residual": 3.746078447441903e-11, "bound": 1e-09}
+ok
+test_weight (phase18_strain_components.KnownValues.test_weight) ... {"line": 114, "residual": 3.093601763648479e-13, "bound": 1e-09}
+{"line": 116, "residual": 0.0, "bound": 1e-09}
+ok
+test_coulG (phase18_strain_components.KnownValues.test_coulG) ... {"line": 121, "residual": 1.0174816544861187e-10, "bound": 1e-09}
+{"line": 123, "residual": 3.7788505657943006e-10, "bound": 1e-09}
+ok
+test_eval_ao_cart (phase18_strain_components.KnownValues.test_eval_ao_cart) ... {"line": 140, "residual": 1.216906575507437e-10, "bound": 1e-09}
+{"line": 140, "residual": 1.187214770936862e-10, "bound": 1e-09}
+{"line": 140, "residual": 1.4567369532869634e-10, "bound": 1e-09}
+{"line": 140, "residual": 1.2427614493049077e-10, "bound": 1e-09}
+{"line": 140, "residual": 1.6861003565571409e-10, "bound": 1e-09}
+ok
+test_eval_ao_sph (phase18_strain_components.KnownValues.test_eval_ao_sph) ... {"line": 158, "residual": 8.919212590718928e-11, "bound": 1e-09}
+{"line": 158, "residual": 8.197575951385261e-11, "bound": 1e-09}
+{"line": 158, "residual": 1.2953460526432536e-10, "bound": 1e-09}
+{"line": 158, "residual": 1.250915204753511e-10, "bound": 1e-09}
+{"line": 158, "residual": 1.5638546013718724e-10, "bound": 1e-09}
+ok
+test_eval_ao_deriv1_cart (phase18_strain_components.KnownValues.test_eval_ao_deriv1_cart) ... {"line": 176, "residual": 4.3617931488881823e-10, "bound": 1e-09}
+{"line": 176, "residual": 3.9038994259499304e-10, "bound": 1e-09}
+{"line": 176, "residual": 3.799622838585037e-10, "bound": 1e-09}
+{"line": 176, "residual": 4.231535122301011e-10, "bound": 1e-09}
+{"line": 176, "residual": 9.90842297099448e-10, "bound": 1e-09}
+ok
+test_eval_ao_deriv1_sph (phase18_strain_components.KnownValues.test_eval_ao_deriv1_sph) ... {"line": 194, "residual": 4.138436260348044e-10, "bound": 1e-09}
+{"line": 194, "residual": 3.9038994259499304e-10, "bound": 1e-09}
+{"line": 194, "residual": 3.822038241452219e-10, "bound": 1e-09}
+{"line": 194, "residual": 4.231535122301011e-10, "bound": 1e-09}
+{"line": 194, "residual": 6.701944693654482e-10, "bound": 1e-09}
+ok
+test_eval_ao_grid_response (phase18_strain_components.KnownValues.test_eval_ao_grid_response) ... {"line": 214, "residual": 3.5818303878443203e-10, "bound": 1e-09}
+{"line": 214, "residual": 1.1537060196076254e-10, "bound": 1e-09}
+{"line": 214, "residual": 1.1086331852538933e-10, "bound": 1e-09}
+{"line": 214, "residual": 1.1968825930352978e-10, "bound": 1e-09}
+{"line": 214, "residual": 3.5385627761286287e-10, "bound": 1e-09}
+{"line": 240, "residual": 7.211413133312305e-10, "bound": 1e-09}
+{"line": 240, "residual": 3.173574736337059e-10, "bound": 1e-09}
+{"line": 240, "residual": 2.7629809551399376e-10, "bound": 1e-09}
+{"line": 240, "residual": 2.7674329494686845e-10, "bound": 1e-09}
+{"line": 240, "residual": 5.622766696689041e-10, "bound": 1e-09}
+ok
+test_lattice_vector_derivatives (phase18_strain_components.KnownValues.test_lattice_vector_derivatives) ... {"line": 253, "residual": 0.0, "bound": 1e-09}
+{"line": 257, "residual": 7.599254558954271e-12, "bound": 1e-09}
+{"line": 257, "residual": 1.0072553902062964e-11, "bound": 1e-09}
+{"line": 257, "residual": 1.592870280120451e-11, "bound": 1e-09}
+{"line": 257, "residual": 4.386518925869609e-11, "bound": 1e-09}
+{"line": 257, "residual": 6.040501432380552e-12, "bound": 1e-09}
+{"line": 257, "residual": 2.870927107156973e-11, "bound": 1e-09}
+{"line": 257, "residual": 3.544642357411476e-11, "bound": 1e-09}
+{"line": 257, "residual": 2.697875256529869e-11, "bound": 1e-09}
+{"line": 257, "residual": 1.538325022920617e-11, "bound": 1e-09}
+ok
+test_get_vxc_lda (phase18_strain_components.KnownValues.test_get_vxc_lda) ... {"line": 277, "residual": 6.294786913940698e-10, "bound": 1e-09}
+{"line": 277, "residual": 5.769845712322308e-11, "bound": 1e-09}
+{"line": 277, "residual": 1.0564055741291156e-09, "bound": 1e-09}
+FAIL
+
+======================================================================
+FAIL: test_get_vxc_lda (phase18_strain_components.KnownValues.test_get_vxc_lda)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/grad/test/test_rks_stress.py", line 277, in test_get_vxc_lda
+    assert abs(dat[i,j] - (exc1 - exc2)/2e-5) < 1e-9
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.159s
+
+FAILED (failures=1)

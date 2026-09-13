@@ -20,7 +20,17 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 17 (k-point symmetry + multigrid) — **CLOSED
+**Current focus:** Phase 19 (periodic response + relativistic) — **CLOSED
+2026-09-13**, `.planning/phases/19-periodic-response-relativistic/19-VERIFICATION.md`
+is the authority. Nineteen plans, all shipped with summaries (19-01…19-19).
+Gates A1/A2/B/D/E MET; Gate C MET for AC on a live fixture and for CD/UAC/slow
+on analytic-model arms + oracle-free identities — the three live-vs-upstream GW
+arms are NOT RUN (`.planning/carryovers/19-gw-live-oracle.md`), so ROADMAP's
+Phase-19 box stays `[ ]`. A rollup-time failure in
+`kadc_base::t2_first_order_matches_defining_equation` (test-side sign
+convention vs upstream `_get_epq fac=[1,-1]`) was found and fixed the same day;
+implementation was already correct. Counters below untouched (owned by 20-01
+reconciliation). Previous focus: Phase 17 (k-point symmetry + multigrid) — **CLOSED
 2026-09-07**, `.planning/phases/17-ksymm-multigrid/17-VERIFICATION.md` is the
 authority. Thirteen plans, all started, twelve shipped and measured. 17-09 was
 the last externally blocked plan and BOTH its halves landed once Phase 15

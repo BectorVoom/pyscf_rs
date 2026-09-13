@@ -164,7 +164,7 @@ fn rhf_aoslice_by_atom_partitions_nao() {
     assert_eq!(slices.len(), natm, "one (p0,p1) per atom");
     // Contiguous, non-overlapping, covering [0, nao).
     let mut covered = 0usize;
-    for (p0, p1) in &slices {
+    for (_, _, p0, p1) in &slices {
         assert!(p0 <= p1 && *p1 <= nao, "slice [{p0},{p1}) within [0,{nao})");
         covered += p1 - p0;
     }

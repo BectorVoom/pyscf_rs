@@ -221,15 +221,21 @@ fn ewald_dimension_2_matches_the_recorded_upstream_target() {
     );
 }
 
-/// D-PBC-20 — particle-mesh Ewald needs the Phase 11 FFT.
+/// Phase 18 completes the deferred PME transform using the Phase 11 FFT.
+/// PySCF 2.12.1 `particle_mesh_ewald` on this exact Bohr fixture returns
+/// -28.77104060503665. Its own difference from exact Ewald is 2.7382125e-8:
+/// PME and the direct method must not be assumed identical at cell.precision.
 #[test]
-fn particle_mesh_ewald_defers_to_phase_11() {
+fn particle_mesh_ewald_matches_upstream() {
     let mut cell = bohr_cell(reference("diamond"));
+    let exact = ewald(&cell, None, None).expect("exact Ewald");
     cell.use_particle_mesh_ewald = true;
-    match ewald(&cell, None, None) {
-        Err(PyscfRsError::NotYetImplemented { phase: 11, .. }) => {}
-        other => panic!("expected NotYetImplemented{{phase:11}}, got {other:?}"),
-    }
+    let pme = ewald(&cell, None, None).expect("PME Ewald");
+    println!(
+        "PME {pme:.17}, exact {exact:.17}, residual {:e}",
+        (pme - exact).abs()
+    );
+    assert!((pme - (-28.77104060503665)).abs() < 1e-12);
 }
 
 /// `ewald_methods.py:32-38` — cardinal B-splines are a partition of unity:

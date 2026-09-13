@@ -30,6 +30,36 @@ use cintx_runtime::ExecutionOptions;
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
+/// Phase 18-03: the five derivative families have oracle_covered=false in
+/// cintx. These numeric anchors are therefore from vendored PySCF 2.12.1:
+/// `m.intor_by_shell(symbol, indices, comp=3)` on `fixture()` below.
+/// The nonzero z component checks dispatch as well as component layout.
+#[test]
+fn weighted_derivative_families_match_libcint() {
+    let mol = fixture();
+    for (symbol, indices, z) in [
+        ("int1e_r2_origi_ip2_sph", &[0, 2][..], 0.5288874082734184),
+        ("int1e_r4_origi_ip2_sph", &[0, 2][..], -1.2148497463493122),
+        (
+            "int3c1e_ip1_r2_origk_sph",
+            &[0, 0, 2][..],
+            0.027628288627959664,
+        ),
+        (
+            "int3c1e_ip1_r4_origk_sph",
+            &[0, 0, 2][..],
+            -0.21217588203457874,
+        ),
+        (
+            "int3c1e_ip1_r6_origk_sph",
+            &[0, 0, 2][..],
+            -5.483731626577737,
+        ),
+    ] {
+        assert_matches_libcint(symbol, &eval_at(&mol, symbol, indices), &[0.0, 0.0, z]);
+    }
+}
+
 /// A two-centre fixture with a non-trivial separation, so an `r^n` weight
 /// cannot coincide with the unweighted integral by symmetry.
 ///

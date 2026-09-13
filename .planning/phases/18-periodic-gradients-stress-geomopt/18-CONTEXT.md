@@ -488,33 +488,53 @@ a substrate plan, and the FFTDF gradient-JK plan `§8.10` folded into 18-02.
 
 | plan | content | blocked on |
 |---|---|---|
-| **18-01** | **MEASURE** — every gate floor in §2.3 (A–E), the memory sizings in `18-REVIEW`, and the D-PBC-30 clause-5 fusion question. Restates `ROADMAP:464` and `§8.10`'s 18-07 row. No production Rust. | — |
-| **18-02** | Substrate: `pyscf-pbc-grad` crate surface, `Cell`-aware `verify_fd` + a strain-FD harness, `aoslice_by_atom` → 4-tuple (§1.8), the `mo_coeff`/`mo_occ` DM tag (clause 4), `_contract_vhf_dm` over the existing neighbour list (trap 4) | — |
-| **18-03** | PP + Ewald gradient integrals: `vpploc_part2_nuc_grad`, `vppnl_nuc_grad` (`pp_int.py:300-407, 443-510`), `ewald_nuc_grad` (`ewald_methods.py:101-122, 256-292`); extends `cintx_moment_weighted_available.rs` to the five `_ip1_`/`_ip2` symbols (§1.3) | 18-02 |
-| **18-04** | FFTDF gradient JK: `get_j_e1_kpts` (`fft_jk.py:113`), `get_k_e1_kpts` (`:310`), `FFTDF::{get_jk_e1,get_j_e1,get_k_e1}`; **named refusal on GDF/MDF/RSDF/AFTDF** (§1.2); clauses 3 and 4 | 18-02 |
-| **18-05** | `grad/krhf` (418 l): `grad_elec`, `get_hcore`, `hcore_generator` (trap 1), `grad_nuc`, `GradientsBase`, `as_scanner`/`SCF_GradScanner` | 18-03, 18-04 |
-| **18-06** | `grad/kuhf` (124 l) | 18-05 |
-| **18-07** | `grad/krks` (141 l) + `grad/kuks` (135 l) | 18-06 |
-| **18-08** | `grad/krkspu` (142 l) + `grad/kukspu` (83 l) — `generate_first_order_local_orbitals`, `_hubbard_U_deriv1` | 18-07 |
+| **18-01** | **MEASURE** — the gradient floors: upstream's committed `lib.fp(g)` anchors, the central-difference U-curve, the step-size convention. Gates B and C. **No Rust.** | — |
+| **18-16** | **MEASURE** — the strain floors: Gate A **per tier** (A1/A2/A3), the Parseval residual 18-05 gates against, and Gate E's gamma/v2 floor. **No Rust.** | — |
+| **18-17** | **MEASURE** — three rulings: `_contract_vhf_dm`'s screening default, the peak-RSS sizings, the clause-5 fusion question. **No Rust.** | — |
+| **18-02** | Substrate: `pyscf-pbc-grad` crate surface + `Gradients` trait, `Cell`-aware `verify_fd`, the strain-FD harness | — |
+| **18-21** | **MEASURE** — write the five gates from the measured numbers into `measurements/README.md`, `18-CONTEXT §2.3`, `ROADMAP:464` and `§8.10`, in one pass. **No Rust.** | 18-01, 18-16, 18-17 |
+| **18-18** | Substrate: `aoslice_by_atom` → 4-tuple (§1.8), the tagged density (clause 4a), `_contract_vhf_dm` over the neighbour list, the image-weight hook (clause 2) | 18-17 |
+| **18-03** | PP + Ewald gradient integrals: `vpploc_part2_nuc_grad`, `vppnl_nuc_grad`, `ewald_nuc_grad`; extends `cintx_moment_weighted_available.rs` (§1.3) | 18-02 |
 | **18-09** | **MultiGrid v2 gradient entry points** (§1.1): `get_veff_ip1`, `get_nuc_ip1`, `get_nuc_nuc_grad`, `get_vpploc_part1_ip1`, `vpploc_part1_nuc_grad` | 18-02 |
-| **18-10** | `grad/rhf` (188 l) + `grad/uhf` (103 l) gamma + the `rks`/`uks` thin subclasses; Gate E | 18-09 |
-| **18-11** | **Strain-tensor AO kernel** in `pyscf-kernels` (§1.6): `deriv = 0, 1`, sph + cart; clause 5 | 18-01 |
-| **18-12** | `rks_stress` (462 l) — the base of the other three (§1.5); clauses 1 and 2 | 18-11 |
-| **18-13** | `uks_stress` (246 l), `krks_stress` (404 l), `kuks_stress` (308 l) | 18-12 |
-| **18-14** | `pbc/geomopt/geometric_solver` (246 l) over `pyscf-geomopt`'s BFGS+RFO; both entry points incl. the `optimizer(solver=)` refusal (§1.7). **No lattice DOF.** | 18-05 |
+| **18-11** | **Strain-tensor AO kernel** in `pyscf-kernels` (§1.6): `deriv = 0, 1`, sph + cart; clause 5 | 18-16 |
+| **18-04** | FFTDF gradient JK: `get_j_e1_kpts`, `get_k_e1_kpts`, `FFTDF::{get_jk_e1,get_j_e1,get_k_e1}`; **named refusal on GDF/MDF/RSDF/AFTDF** (§1.2) | 18-02, 18-18 |
+| **18-10** | `grad/rhf` + `grad/uhf` gamma + the `rks`/`uks` thin subclasses; Gate E | 18-09 |
+| **18-12** | `rks_stress` **core**: the eight shared symbols + the closed form that replaces 36 lattice sums (clause 2), the block loop (clause 1) | 18-11 |
+| **18-05** | `grad/krhf` **assembly**: `get_hcore`, `hcore_generator` (trap 1), the no-hoist ruling (clause 7), `grad_elec` | 18-03, 18-04 |
+| **18-20** | `rks_stress` **terms**: `get_vxc` fusion, the PP strain terms, `kernel` + the reported units, Gates A and D | 18-12 |
+| **18-19** | `grad/krhf` **surface**: `GradientsBase`, `get_ovlp`/`grad_nuc`/`make_rdm1e`, `as_scanner`, Gates B and C for KRHF | 18-05 |
+| **18-13** | `uks_stress` (246 l), `krks_stress` (404 l), `kuks_stress` (308 l) | 18-20 |
+| **18-06** | `grad/kuhf` (124 l) | 18-19 |
+| **18-14** | `pbc/geomopt/geometric_solver` (246 l) over `pyscf-geomopt`'s BFGS+RFO; incl. the `optimizer(solver=)` refusal (§1.7). **No lattice DOF.** | 18-19 |
+| **18-07** | `grad/krks` (141 l) + `grad/kuks` (135 l) | 18-06 |
+| **18-08** | `grad/krkspu` (142 l) + `grad/kukspu` (83 l) | 18-07 |
 | **18-15** | Verification rollup: Gates A–E, `FEATURES`, `STATE.md`, `ROADMAP` | all |
 
-**Waves.** Wave 0: 18-01, 18-02. Wave 1: 18-03, 18-04, 18-09, 18-11 (four
-independent tracks). Wave 2: 18-05, 18-10, 18-12. Wave 3: 18-06 → 18-07 →
-18-08, 18-13, 18-14. Wave 4: 18-15.
+**Waves — nine, and every dependency is now strictly earlier.**
+W0 `18-01 18-16 18-17 18-02` · W1 `18-21 18-18 18-03 18-09 18-11` ·
+W2 `18-04 18-10 18-12` · W3 `18-05 18-20` · W4 `18-19 18-13` ·
+W5 `18-06 18-14` · W6 `18-07` · W7 `18-08` · W8 `18-15`.
 
-**The droppable half, if the phase overruns, is the stress tensor**
-(18-11/18-12/18-13). Nothing in Phases 19–20 needs `dE/dε` for correctness, it
-is the only half with no consumer inside the milestone, and it is ordered so
-that dropping it costs nothing already built. Do **not** drop 18-09/18-10
-instead: `grad/rks.py` and `grad/uks.py` are `pyscf.pbc.dft`'s advertised
-`Gradients` attribute (`pbc/dft/rks.py:440`, `pbc/dft/uks.py:164`), so dropping
-them leaves a broken import on the default surface.
+An earlier draft placed `18-06 → 18-07 → 18-08` all in wave 3. A chain cannot
+be one wave; that is corrected here, and the DAG is asserted rather than
+described — every plan's `wave` exceeds the wave of every plan it depends on.
+
+**The droppable half is the stress tensor** (18-11 / 18-12 / 18-20 / 18-13),
+**and the trigger is explicit rather than a judgment call.** Drop it only when
+*both* hold:
+
+1. **18-21 has closed** — the five gates are written, so dropping loses scope
+   and not the phase's correctness story; and
+2. the **wave-4 boundary** is reached with 18-05 or 18-19 still failing Gate C —
+   i.e. the gradient half, which everything downstream needs, is not yet right.
+
+If only (1) holds, keep going. If neither holds, the phase is not overrunning.
+Nothing in Phases 19–20 needs `dE/dε` for correctness, it is the only half with
+no consumer inside the milestone, and it is ordered so dropping it costs nothing
+already built. Do **not** drop 18-09/18-10 instead: `grad/rks.py` and
+`grad/uks.py` are `pyscf.pbc.dft`'s advertised `Gradients` attribute
+(`pbc/dft/rks.py:440`, `pbc/dft/uks.py:164`), so dropping them leaves a broken
+import on the default surface.
 
 **Deliberate non-ports:** an HF stress tensor (§1.5 — does not exist upstream);
 lattice / variable-cell optimization (§1.7 — does not exist upstream); periodic
@@ -523,3 +543,47 @@ module, so the missing cintx Hessian families block nothing here); and the ASE
 `optimizer(solver='ase')` branch, which belongs to Phase 20's `tools/pyscf_ase`
 (`§8.12`, 20-02) and is mirrored here only as the refusal that upstream's own
 `'geometric'` argument produces.
+
+---
+
+## 5. Executing this phase with a Sonnet-class agent
+
+Twenty-one plans, six rules. Each rule removes a way a smaller-context executor
+predictably fails.
+
+1. **Bounded reading.** Every plan's `<context>` block is the *complete* input
+   list. No plan requires exploring the tree to find its own inputs, and where
+   a fact matters it is cited `file:line` inline.
+2. **One concern per plan.** The four largest were split: **18-01 → 18-01 /
+   18-16 / 18-17 / 18-21** (gradient floors / strain floors / sizings /
+   restatement), **18-02 → 18-02 / 18-18** (crate surface / type widening),
+   **18-05 → 18-05 / 18-19** (assembly / driver surface), **18-12 → 18-12 /
+   18-20** (strain core / terms + gates). The two largest remaining are 18-03
+   (203 lines) and 18-04 (220); if a session runs long, checkpoint at a task
+   boundary and record in the SUMMARY which tasks completed.
+3. **Copy a named precedent.** `crates/pyscf-grad/src/verify_fd.rs` for the FD
+   contract, `crates/pyscf-pbc-gto/src/pbc_intor.rs:295` for the lattice sum,
+   17-01's `measurements/README.md` for the measurement format.
+4. **No open judgment.** Three decisions that would otherwise be argued are
+   pinned to a measurement or a trigger: `_contract_vhf_dm`'s default comes
+   from **18-17**, not from upstream's constant; 18-11 fuses the strain kernel
+   only if **18-17** supports it; and the droppable half has the two-condition
+   trigger in §4.
+5. **A binary command per gate.** Every `<verification>` names the command and
+   what counts as success. `cargo test -p <crate> --test <target>` with the
+   target **named** — a bare `--tests` at high parallelism has been OOM-killed
+   in this workspace, and process absence is not success.
+6. **Traps, inlined where they bite.**
+   - `CARGO_TARGET_DIR` must live on `/home`, never `/tmp` (a 16 GB RAM tmpfs).
+   - Never cap memory with `ulimit -v` — it makes every CubeCL launch panic and
+     produces false gate failures. Use `systemd-run --scope -p MemoryMax=`.
+   - **A SIGKILL (exit 137) IS the measurement** — record it as the ceiling and
+     stop, rather than retrying at a smaller shape and reporting that instead.
+   - `rustfmt` only the files you touched; the tree predates the installed
+     rustfmt and a repo-wide format churns unrelated files.
+   - Geometry in **Bohr**: `Unit::Ang` is CODATA-2014 and upstream is
+     CODATA-2010, differing in the 8th digit of every lattice vector.
+
+**If a gate fails, report the measured number and stop.** Do not loosen a
+tolerance to get a green run — an unmeasured gate is the defect this phase was
+written to correct, and 18-21 exists to end it.

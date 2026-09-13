@@ -406,7 +406,7 @@ pub(crate) fn init_guess_by_atom(mol: &Mole) -> Result<Density, PyscfRsError> {
     let mut data = vec![0.0f64; nao * nao];
 
     for (ia, (sym, _xyz)) in mol._atom.iter().enumerate() {
-        let (lo, hi) = slices[ia];
+        let (_, _, lo, hi) = slices[ia];
         let nao_atm = hi - lo;
         if nao_atm == 0 {
             continue; // basis-less atom → zero block.
@@ -484,7 +484,7 @@ pub(crate) fn init_guess_by_huckel(mol: &Mole) -> Result<Density, PyscfRsError> 
     //       [nao, nocc]) with energies orb_E.
     let mut nocc = 0usize;
     for (ia, (sym, _xyz)) in mol._atom.iter().enumerate() {
-        let (lo, hi) = slices[ia];
+        let (_, _, lo, hi) = slices[ia];
         if hi == lo {
             continue;
         }
@@ -506,7 +506,7 @@ pub(crate) fn init_guess_by_huckel(mol: &Mole) -> Result<Density, PyscfRsError> 
     let mut orb_e = vec![0.0f64; nocc];
     let mut iocc = 0usize;
     for (ia, (sym, _xyz)) in mol._atom.iter().enumerate() {
-        let (lo, hi) = slices[ia];
+        let (_, _, lo, hi) = slices[ia];
         let nao_atm = hi - lo;
         if nao_atm == 0 {
             continue;

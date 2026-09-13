@@ -32,6 +32,8 @@ pub mod kpts_mesh;
 // particle-mesh Ewald B-splines (`gto/ewald_methods.py:30-176`). K-05 / K-06
 // live in `pyscf_kernels::pbc::ewald`.
 pub mod ewald;
+pub mod ewald_grad;
+pub use ewald_grad::{ewald_nuc_grad, particle_mesh_ewald_nuc_grad};
 pub mod ewald_pme;
 
 // Phase 10 plan 10-02 — shell-pair neighbor list + lattice-sum screening
@@ -103,7 +105,8 @@ pub use neighborlist::{
 };
 pub use pbc_intor::{
     GAMMA_IMAG_WARN_TOL, KPT_GAMMA_TOL, PBC_INTOR_SHELL_WARN_LIMIT, PbcIntorOpts, PbcIntorOutput,
-    SUPPORTED_INTORS, intor_cross, intor_cross_with_images, is_gamma, lattice_images, pbc_intor,
+    SUPPORTED_INTORS, intor_cross, intor_cross_with_image_weights, intor_cross_with_images, is_gamma,
+    lattice_images, pbc_intor,
 };
 pub use pseudo::{PseudoData, resolve_pseudo};
 pub use supercell::{cell_plus_imgs, super_cell};

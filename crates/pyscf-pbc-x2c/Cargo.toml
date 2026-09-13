@@ -18,3 +18,8 @@ pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
+
+[dev-dependencies]
+serde_json      = { workspace = true }
+# 19-18 determinism gate: 1-vs-8-thread bit-identity inside one process.
+rayon           = { workspace = true }

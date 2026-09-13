@@ -3,4 +3,11 @@
 #![warn(clippy::unwrap_used)]
 
 pub mod error;
+pub mod gradients;
+pub mod tagged_dm;
+pub mod verify_fd;
 pub use error::*;
+pub use gradients::*;
+pub use tagged_dm::TaggedDm;
+pub use verify_fd::*;
+pub mod contract;

@@ -1,0 +1,18 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+F
+======================================================================
+FAIL: test_get_vxc_lda (pyscf.pbc.grad.test.test_rks_stress.KnownValues.test_get_vxc_lda)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/grad/test/test_rks_stress.py", line 277, in test_get_vxc_lda
+    assert abs(dat[i,j] - (exc1 - exc2)/2e-5) < 1e-9
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+
+----------------------------------------------------------------------
+Ran 1 test in 0.104s
+
+FAILED (failures=1)

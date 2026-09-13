@@ -1,0 +1,102 @@
+pyscf plugins found in 
+/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf
+/home/user/Documents/workspace/pyscf_rs/python/pyscf
+When PYTHONPATH is set, it is recommended to load these plugins through the environment variable PYSCF_EXT_PATH
+{"pyscf": "2.12.1", "source": "/home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py"}
+{"suite": "krhf"}
+output file: /dev/null
+test_exxdiv_ewald (pyscf.pbc.grad.test.test_krhf.KnownValues.test_exxdiv_ewald) ... converged SCF energy = -0.178335263194537
+--------------- KRHF gradients ---------------
+         x                y                z
+0 H    -0.0000000000     0.0000000000    -0.2588514377
+1 H     0.0000000000    -0.0000000000     0.2588514377
+----------------------------------------------
+converged SCF energy = -0.553693554880012
+--------------- KRHF gradients ---------------
+         x                y                z
+0 H    -0.0000000000     0.0000000000    -0.2588514377
+1 H     0.0000000000    -0.0000000000     0.2588514377
+----------------------------------------------
+ok
+test_krhf_grad (pyscf.pbc.grad.test.test_krhf.KnownValues.test_krhf_grad) ... WARN: HOMO 1.62856504857 == LUMO 1.62856579948
+{"fingerprint": -0.9017171602587796, "shape": [2, 3]}
+ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.817s
+
+OK
+{"suite": "kuhf"}
+output file: /dev/null
+test_kuhf_grad (pyscf.pbc.grad.test.test_kuhf.KnownValues.test_kuhf_grad) ... {"fingerprint": -0.9017171602698577, "shape": [2, 3]}
+ok
+
+----------------------------------------------------------------------
+Ran 1 test in 0.716s
+
+OK
+{"suite": "krks"}
+output file: /dev/null
+test_gga_grad (pyscf.pbc.grad.test.test_krks.KnownValues.test_gga_grad) ... {"fingerprint": -0.21844074992158397, "shape": [2, 3]}
+ok
+test_hybrid_grad (pyscf.pbc.grad.test.test_krks.KnownValues.test_hybrid_grad) ... {"fingerprint": -0.1954496998434968, "shape": [2, 3]}
+ok
+test_lda_grad (pyscf.pbc.grad.test.test_krks.KnownValues.test_lda_grad) ... {"fingerprint": -0.22166962466256715, "shape": [2, 3]}
+ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 1.367s
+
+OK
+{"suite": "kuks"}
+output file: /dev/null
+test_gga_grad (pyscf.pbc.grad.test.test_kuks.KnownValues.test_gga_grad) ... {"fingerprint": -0.21844074992152607, "shape": [2, 3]}
+ok
+test_hybrid_grad (pyscf.pbc.grad.test.test_kuks.KnownValues.test_hybrid_grad) ... {"fingerprint": -0.1954496998441541, "shape": [2, 3]}
+ok
+test_lda_grad (pyscf.pbc.grad.test.test_kuks.KnownValues.test_lda_grad) ... {"fingerprint": -0.2216696246625611, "shape": [2, 3]}
+ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 1.703s
+
+OK
+{"suite": "krkspu"}
+test_finite_diff_hubbard_U_grad (pyscf.pbc.grad.test.test_krkspu.KnownValues.test_finite_diff_hubbard_U_grad) ... SCF not converged.
+SCF energy = -15.9975114226978
+ok
+test_finite_diff_krkspu_grad (pyscf.pbc.grad.test.test_krkspu.KnownValues.test_finite_diff_krkspu_grad) ... converged SCF energy = -15.939464667887
+--------------- KRKSpU_Scanner gradients ---------------
+         x                y                z
+0 C    -0.3271693152     0.2249694409     0.0589441872
+1 O     0.3271673744    -0.2249705139    -0.0589429173
+----------------------------------------------
+{"fingerprint": -0.4237098257805168, "shape": [2, 3]}
+converged SCF energy = -15.9398889700919
+converged SCF energy = -15.9390386916942
+ok
+test_finite_diff_local_orbitals (pyscf.pbc.grad.test.test_krkspu.KnownValues.test_finite_diff_local_orbitals) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 1.751s
+
+OK
+{"suite": "kukspu"}
+test_finite_diff_hubbard_U_grad (pyscf.pbc.grad.test.test_kukspu.KnownValues.test_finite_diff_hubbard_U_grad) ... SCF not converged.
+SCF energy = -15.9744304628158
+ok
+test_finite_diff_kukspu_grad (pyscf.pbc.grad.test.test_kukspu.KnownValues.test_finite_diff_kukspu_grad) ... converged SCF energy = -15.939464667887
+--------------- KUKSpU_Scanner gradients ---------------
+         x                y                z
+0 C    -0.3271693152     0.2249694409     0.0589441872
+1 O     0.3271673744    -0.2249705139    -0.0589429173
+----------------------------------------------
+{"fingerprint": -0.42370982578052047, "shape": [2, 3]}
+converged SCF energy = -15.9398889700919
+converged SCF energy = -15.9390386916942
+ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 1.968s
+
+OK

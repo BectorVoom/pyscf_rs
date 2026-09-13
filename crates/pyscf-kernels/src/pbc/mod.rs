@@ -15,6 +15,7 @@
 pub mod bloch;
 pub mod eval_ao_k;
 pub mod ewald;
+pub mod multigrid_grad;
 pub mod ft_aopair;
 pub mod gv;
 pub mod struct_factor;

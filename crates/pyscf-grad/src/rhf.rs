@@ -274,7 +274,7 @@ fn get_hcore(mol: &Mole) -> Result<Vec<f64>, PyscfRsError> {
 fn hcore_deriv(
     mol: &Mole,
     h1: &[f64],
-    aoslices: &[(usize, usize)],
+    aoslices: &[(usize, usize, usize, usize)],
     atm_id: usize,
 ) -> Result<Vec<f64>, PyscfRsError> {
     let nao = mol.nao_nr;
@@ -305,7 +305,7 @@ fn hcore_deriv(
     // `(3, nao, nao)` with the COMPONENT axis fastest (pyscf-gto stitches
     // `out[comp + ncomp*i + ncomp*nao*j]`), so element (comp, i, j) lives at
     // `comp + NCOMP*(i + j*nao)` — NOT the component-slowest `comp*nao*nao + …`.
-    let (p0, p1) = aoslices[atm_id];
+    let (_, _, p0, p1) = aoslices[atm_id];
     for comp in 0..NCOMP {
         for i in p0..p1 {
             for j in 0..nao {
@@ -425,7 +425,7 @@ pub fn grad_elec(
     let mut de = Vec::with_capacity(rows.len());
     for &ia in &rows {
         let h1ao = hcore_deriv(mol, &h1, &aoslices, ia)?; // [3, nao, nao]
-        let (p0, p1) = aoslices[ia];
+        let (_, _, p0, p1) = aoslices[ia];
 
         let mut row = [0.0_f64; 3];
         for (comp, slot) in row.iter_mut().enumerate() {
