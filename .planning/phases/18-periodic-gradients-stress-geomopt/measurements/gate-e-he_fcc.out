@@ -1,0 +1,7 @@
+{"pyscf": "2.12.1", "source": "/home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py"}
+{"cell": "he_fcc", "mesh": [59, 59, 59], "nao": 1, "precision": 1e-08}
+{"cell": "he_fcc", "screening_difference": 0.0, "screened_seconds": [0.9548713900003349, 0.9466582000022754, 0.9487753340072231], "unscreened_seconds": [0.951509888007422, 0.9480317039997317, 0.9435476290091174], "screened_over_unscreened": 1.000784393606621}
+{"cell": "he_fcc", "atom": 0, "component": 0, "full_step": 0.0002, "energies": [-3.1221332096686902, -3.1221332096687084], "analytic": 5.071193895714238e-15, "fd": 9.103828801926284e-11, "residual": 9.103321682536713e-11}
+{"cell": "he_fcc", "atom": 0, "component": 1, "full_step": 0.0002, "energies": [-3.1221332096686933, -3.122133209668697], "analytic": 7.470349386365524e-15, "fd": 1.7763568394002505e-11, "residual": 1.775609804461614e-11}
+{"cell": "he_fcc", "atom": 0, "component": 2, "full_step": 0.0002, "energies": [-3.1221332096686902, -3.1221332096686973], "analytic": 8.95050184117676e-15, "fd": 3.552713678800501e-11, "residual": 3.5518186286163834e-11}
+{"cell": "he_fcc", "gamma_fd_max": 9.103321682536713e-11}

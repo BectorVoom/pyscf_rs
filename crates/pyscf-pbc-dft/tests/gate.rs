@@ -22,6 +22,7 @@ mod common;
 
 use common::{GATE, cell_args, he_all_electron, oracle_python, run_python, silicon};
 use pyscf_pbc_df::Fftdf;
+use pyscf_pbc_dft::gen_grid::PeriodicGrids;
 use pyscf_pbc_dft::krks::Krks;
 use pyscf_pbc_dft::kuks::Kuks;
 use pyscf_pbc_gto::{Cell, make_kpts_default};
@@ -44,7 +45,12 @@ fn tight() -> KScfConfig {
 fn krks(cell: Cell, nk: [usize; 3], mesh: [usize; 3], xc: &str) -> Krks {
     let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, mesh).expect("FFTDF");
-    Krks::from_df(Box::new(df), xc).expect("KRKS")
+    let mut mf = Krks::from_df(Box::new(df), xc).expect("KRKS");
+    // The oracle pins BOTH `mf.with_df.mesh = mesh` and `mf.grids.mesh = mesh`
+    // (ORACLE_PY below). `from_df` now defaults the XC grid to `cell.mesh`, as
+    // upstream's `UniformGrids(cell)` does, so the grid half is pinned here too.
+    mf.grids = PeriodicGrids::uniform(mf.cell(), Some(mesh)).expect("XC grid");
+    mf
 }
 
 // ---------------------------------------------------------------------------
@@ -90,8 +96,9 @@ mesh = json.loads(mesh_json)
 mf.with_df.mesh = mesh
 # The XC quadrature grid is a SEPARATE object from the density-fitting grid:
 # `UniformGrids.__init__` seeds `self.mesh = cell.mesh` (pbc/dft/gen_grid.py:72),
-# which `with_df.mesh` does not touch. This port derives both from the one
-# FFTDF mesh, so upstream must be pinned to the same mesh on BOTH or the two
+# which `with_df.mesh` does not touch. The Rust side pins its XC grid to the
+# same mesh explicitly (`mf.grids = ...`, as `Krks::from_df` defaults to
+# cell.mesh like upstream), so the mesh is pinned on BOTH grids or the two
 # sides integrate the exchange-correlation energy on different quadratures --
 # worth ~1e-9 Ha, which swamps everything the gate is trying to measure.
 if hasattr(mf, 'grids'):
@@ -315,10 +322,10 @@ fn kuks_si_222_pbe_matches_upstream() {
     };
     let kpts = make_kpts_default(&cell, [2, 2, 2]).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, MESH_GATE).expect("FFTDF");
-    let got = Kuks::from_df(Box::new(df), "pbe")
-        .expect("KUKS")
-        .kernel(&tight())
-        .expect("KUKS");
+    let mut mf = Kuks::from_df(Box::new(df), "pbe").expect("KUKS");
+    // ORACLE_PY pins `mf.grids.mesh` as well as `mf.with_df.mesh`.
+    mf.grids = PeriodicGrids::uniform(mf.cell(), Some(MESH_GATE)).expect("XC grid");
+    let got = mf.kernel(&tight()).expect("KUKS");
     assert!(got.converged);
     assert_matches(&got, &want, 1e-11, "KUKS Si 2x2x2 PBE");
 }

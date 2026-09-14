@@ -19,8 +19,11 @@ pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
+pyscf-pbc-dft   = { path = "../pyscf-pbc-dft" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
 
 [dev-dependencies]
 pyscf-pbc-gto = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
+pyscf-pbc-dft = { path = "../pyscf-pbc-dft" }
+rayon = { workspace = true }

@@ -92,14 +92,20 @@ use crate::error::PbcDfError;
 /// this port's unported `_RSGDFBuilder`, and now — both of those being done —
 /// only `pyscf_pbc_scf::rsjk`. Read the module docs before assuming an older
 /// reason still applies.
-pub const RS_BUILDER_GAP: &str = "range-separated EXCHANGE (rsjk) — the cintx side is DONE \
-     (ExecutionOptions::range_omega, libcint env[8]; incore::aux_e2 and \
-     incore::fill_2c2e both take an omega, gated by SR + LR == full in \
-     tests/incore.rs) and rsdf_builder::_RSGDFBuilder is ported on top of it \
-     (plan 14-07 7b/7c), but pyscf_pbc_scf::rsjk itself is not: plan 14-08 \
-     Task 4. Finish it rather than substituting the full-range kernel, which \
-     runs, converges, and is a different method — and rsjk is EXACT, so a \
-     wrong answer there lands inside GDF's fitting error and looks plausible";
+pub const RS_BUILDER_GAP: &str = "range-separated EXCHANGE (rsjk) — NOT blocked on \
+     integrals or on the supermole types: cintx honours ExecutionOptions::range_omega \
+     (libcint env[8]) on its scalar int2e route, and ft_ao::RsCell / ExtendedMole + \
+     strip_basis exist (plan 17-10). What is missing is rsjk.py's own SR body (plan \
+     20-06 re-assessment): rsjk.estimate_rcut (rsjk.py:1182); a libcint-shaped \
+     supermole (_atm/_bas/_env of the translated shells, ft_ao.py:614-628); the \
+     Schwarz prescreen PBCVHFnr_int2e_q_cond / PBCVHFnr_sindex (pyscf/lib/pbc/\
+     nr_direct.c:1037/1120) and _qcond_cell0_abstract (rsjk.py:1336); the screened \
+     periodic 4-centre driver PBCVHF_direct_drv + PBCVHF_contract_*_s2kl + \
+     PBCint2e_sph (nr_direct.c:721/511, cint2e.c:330); the BvK dm_translation / \
+     dmindex plumbing (rsjk.py:330-374); and rsjk's long-range composition \
+     (rsjk.py:596-612, 817-1170). Tracked by carryover D-PBC-24 item 5. Do not \
+     substitute the full-range kernel or an unscreened sweep: rsjk is EXACT, so a \
+     wrong answer lands inside GDF's fitting error and looks plausible";
 
 /// `_RSGDFBuilder` — `rsdf_builder.py:59-1096`.
 ///
@@ -145,7 +151,17 @@ pub struct RsGdfBuilder {
 
 impl RsGdfBuilder {
     /// A builder on `cell` at `kpts`, with upstream's defaults.
+    ///
+    /// `omega` starts from `cell.omega` exactly as `_RSGDFBuilder.__init__`
+    /// does (`rsdf_builder.py:83-90`): `0` leaves it for [`Self::build`] to
+    /// guess, and a NEGATIVE `cell.omega` — set by `GDF.range_coulomb`
+    /// (`df.py:515-553`) for the short-range exchange of an RSH functional —
+    /// seeds `omega = -cell.omega`, so the real-space pass and the metric are
+    /// evaluated at the very kernel the cell asks for and the plane-wave
+    /// remainder `coulG(cell.omega) - coulG_SR(omega)` vanishes. A POSITIVE
+    /// `cell.omega` is refused by [`Self::build`] (`:89-90` raises).
     pub fn new(cell: Cell, kpts: &[[f64; 3]]) -> Self {
+        let cell_omega = pyscf_pbc_gto::cutoff::omega(&cell);
         Self {
             cell,
             kpts: if kpts.is_empty() {
@@ -154,7 +170,11 @@ impl RsGdfBuilder {
                 kpts.to_vec()
             },
             auxbasis: None,
-            omega: None,
+            omega: if cell_omega < 0.0 {
+                Some(-cell_omega)
+            } else {
+                None
+            },
             mesh: None,
             ke_cutoff: None,
             exclude_dd_block: false,
@@ -199,6 +219,18 @@ impl RsGdfBuilder {
     /// # Errors
     /// Propagates [`guess_omega`] and the auxiliary-cell build.
     pub fn build(&mut self) -> Result<(), PbcDfError> {
+        // `rsdf_builder.py:89-90` — `raise RuntimeError('RSDF does not support
+        // LR integrals')`. Upstream raises in `__init__`; `new` is infallible
+        // here, so the refusal lands at the first fallible step.
+        if pyscf_pbc_gto::cutoff::omega(&self.cell) > 0.0 {
+            return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                pyscf_core::CoreError::InvalidMolecule(
+                    "RSDF does not support LR integrals (cell.omega > 0; \
+                     rsdf_builder.py:89-90 raises the same way)"
+                        .into(),
+                ),
+            )));
+        }
         // `rsdf_builder.py:137-152`. An omega set by the caller keeps its mesh
         // from `estimate_ke_cutoff_for_omega`; an unset one lets `_guess_omega`
         // balance the real-space and reciprocal-space halves against each other.

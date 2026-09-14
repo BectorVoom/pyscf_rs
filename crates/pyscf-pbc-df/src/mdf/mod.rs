@@ -93,6 +93,9 @@ pub struct Mdf {
     inner: std::sync::OnceLock<Gdf>,
     aft: std::sync::OnceLock<Aftdf>,
     resolved_mesh: std::sync::OnceLock<[usize; 3]>,
+    /// `self._rsh_df` — the range-separated copies [`Mdf::range_coulomb`]
+    /// created, keyed `'%.6f' % omega` (`df.py:523-529`, inherited).
+    rsh_df: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Mdf>>>,
 }
 
 impl Mdf {
@@ -114,7 +117,57 @@ impl Mdf {
             inner: std::sync::OnceLock::new(),
             aft: std::sync::OnceLock::new(),
             resolved_mesh: std::sync::OnceLock::new(),
+            rsh_df: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// `MDF.range_coulomb(omega)` — inherited from `GDF` (`df.py:514-553`):
+    /// a copy whose cell carries `cell.omega = omega`, cached under
+    /// `'%.6f' % omega`. See [`Gdf::range_coulomb`] for why the copy owns an
+    /// attenuated cell rather than flipping a shared one.
+    ///
+    /// **The copy keeps the mesh the parent has at that moment.** Upstream's
+    /// `self.copy().reset()` does not reset `mesh`, and `MDF._make_j3c`
+    /// writes the builder's mesh back into `self.mesh` (`mdf.py:139`) — so an
+    /// already-built MDF hands its fitting mesh to the short-range copy, and an
+    /// unbuilt one hands `None`, letting `_RSMDFBuilder.build` derive it from
+    /// `omega`. This mirrors that with `resolved_mesh` (set once built) falling
+    /// back to the user's `mesh`.
+    ///
+    /// # Errors
+    /// `dimension != 0` with `omega >= 0` — `df.py:520-521` asserts
+    /// `omega < 0`; propagates the cell copy.
+    pub fn range_coulomb(&self, omega: f64) -> Result<std::sync::Arc<Mdf>, PbcDfError> {
+        if self.cell.dimension != 0 && omega >= 0.0 {
+            return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                pyscf_core::CoreError::InvalidMolecule(format!(
+                    "MDF.range_coulomb({omega}): a periodic cell admits only a \
+                     short-range (omega < 0) density-fitting copy (df.py:520-521 \
+                     asserts omega < 0)"
+                )),
+            )));
+        }
+        let key = format!("{omega:.6}");
+        if let Ok(cache) = self.rsh_df.lock()
+            && let Some(m) = cache.get(&key)
+        {
+            return Ok(m.clone());
+        }
+        let mut m = Mdf::new(
+            crate::gdf::jk::cell_with_omega(&self.cell, omega)?,
+            &self.kpts,
+        );
+        m.auxbasis = self.auxbasis.clone();
+        m.mesh = self.resolved_mesh.get().copied().or(self.mesh);
+        m.aosym = self.aosym;
+        m.j_only = self.j_only;
+        m.prefer_ccdf = self.prefer_ccdf;
+        m.exp_to_discard = self.exp_to_discard;
+        let m = std::sync::Arc::new(m);
+        if let Ok(mut cache) = self.rsh_df.lock() {
+            return Ok(cache.entry(key).or_insert(m).clone());
+        }
+        Ok(m)
     }
 
     fn refuse_unsupported(&self) -> Result<(), PbcDfError> {

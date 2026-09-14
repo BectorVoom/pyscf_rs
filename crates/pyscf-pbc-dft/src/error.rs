@@ -18,4 +18,9 @@ pub enum PbcDftError {
 
     #[error("multigrid numerical integration does not support a separate band k-point grid")]
     MultiGridBandUnsupported,
+
+    #[error(
+        "multigrid v2 gradient does not support derivative order {deriv} (LDA/HF need 0, GGA needs 1)"
+    )]
+    MultiGridDerivUnsupported { deriv: u32 },
 }

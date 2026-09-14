@@ -31,6 +31,9 @@ use pyscf_pbc_gto::{
 use std::path::PathBuf;
 use std::process::Command;
 
+mod common;
+use common::systems;
+
 // ---------------------------------------------------------------------------
 // Reference systems, in Bohr
 // ---------------------------------------------------------------------------
@@ -444,12 +447,14 @@ import numpy as np
 from pyscf.pbc import gto
 
 a_json, xyz_json, sym_json, nk_json, intor = sys.argv[1:6]
+dim = int(sys.argv[6]) if len(sys.argv) > 6 else 3
 c = gto.Cell()
 c.a = json.loads(a_json)
 c.atom = [(s, tuple(r)) for s, r in zip(json.loads(sym_json), json.loads(xyz_json))]
 c.basis = 'gth-szv'
 c.pseudo = 'gth-pade'
 c.unit = 'Bohr'
+c.dimension = dim
 c.verbose = 0
 c.build()
 kpts = c.make_kpts(json.loads(nk_json))
@@ -461,9 +466,19 @@ out = {'nao': int(c.nao_nr()), 'nkpts': len(kpts), 'rcut': float(c.rcut),
        're': [], 'im': []}
 for m in mats:
     m = np.asarray(m)
-    out['re'].append(m.real.ravel(order='F').tolist())
-    out['im'].append(np.zeros_like(m.real).ravel().tolist()
-                     if m.dtype != np.complex128 else m.imag.ravel(order='F').tolist())
+    # Component-major F-order per k: concatenate the F-ravel of each component
+    # plane. This matches `PbcIntorOutput` (`(c, i, j)` at `c*ni*nj + i +
+    # j*ni`). A bare `m.ravel(order='F')` would INTERLEAVE the components of a
+    # multi-component family and misalign every element past the first plane.
+    if m.ndim == 3:
+        comps = [m[c] for c in range(m.shape[0])]
+    else:
+        comps = [m]
+    out['re'].append(np.concatenate(
+        [np.asarray(b).real.ravel(order='F') for b in comps]).tolist())
+    out['im'].append(np.concatenate(
+        [np.asarray(b).imag.ravel(order='F') if np.iscomplexobj(b)
+         else np.zeros(b.real.size) for b in comps]).tolist())
 print(json.dumps(out))
 "#;
 
@@ -491,13 +506,332 @@ fn ovlp_matches_upstream_on_diamond_321() {
     compare_with_upstream("int1e_ovlp", [3, 2, 1], 1e-12);
 }
 
+// ---------------------------------------------------------------------------
+// Plan 18-03 Task 2 — the shipped derivative `pbc_intor` families
+// ---------------------------------------------------------------------------
+//
+// `int1e_ipovlp`, `int1e_ipkin`, `int1e_ipnuc` are already in SUPPORTED_INTORS
+// with the `ComponentLeadingFOrder { components: 3 }` layout (plan 10-03 +
+// 18-CONTEXT §1.4). What `tests/pbc_intor.rs:375` does NOT have is the oracle
+// comparison — added here in two tiers for `ipovlp` and `ipkin`:
+//
+// * Tier 1 (always run): `lib.fp` fingerprints of both families on all five
+//   §9.2 reference cells at gamma and at 2×2×2, against vendored PySCF 2.12.1
+//   values at 18-01's measured tolerance. `lib.fp` (`pyscf/lib/misc.py:1260`,
+//   `dot(cos(arange(n)), ravel)`) is the same single-number gate 18-CONTEXT
+//   Gate C uses for gradients — and it is sign-sensitive, so a minus folded
+//   into the wrong layer fails here.
+// * Tier 2 (`#[ignore]`, live): the full elementwise comparison at 1e-10,
+//   reusing the Phase-10 helper generalised to any cell.
+//
+// `int1e_ipnuc` is NOT in either numeric tier, for a measured reason. Its
+// single-pair kernel matches libcint to 4e-16
+// (`ipnuc_kernel_matches_libcint_single_pair` below), but its LATTICE SUM
+// diverges from upstream (diamond gamma fp: port −20.61 vs upstream −13.28;
+// the scalar `int1e_nuc` diverges too: −17.86 vs −8.33). The mechanism is a
+// Phase-10 nuclear-center convention gap, not an 18-03 regression: this
+// port's image-expanded cross basis translates the ket ATOMS, and cintx's
+// nuclear operator sums attraction over all basis atoms — so image nuclei
+// enter the sum — while upstream's C driver (`fill_ints.c:1371`) shifts only
+// the ket basis functions in place and keeps every nucleus in the origin
+// cell. `int1e_ovlp`/`int1e_kin`/`int1e_ipovlp`/`int1e_ipkin` have no nuclear
+// centers and are unaffected (all gated above at ~1e-14). No production path
+// consumes the PBC nuc family — `hcore` uses the FFT `get_nuc`, and
+// `krhf.get_hcore` is pseudo-only and raises otherwise — so this blocks no
+// 18-05 work; the single-atom case (He) matches at ~1e-17 on both sides by
+// translation invariance. Fixing the convention (ghost ket nuclei) belongs to
+// a Phase-10 follow-up with its own gate, not to this plan.
+//
+// The SIGN (`pbc/grad/rhf.py:135` is `return -cell.pbc_intor('int1e_ipovlp')`,
+// `krhf.py:115` is `-np.asarray(...)`): the minus lives in `get_ovlp`, not in
+// `pbc_intor`. Tier 1 pins `pbc_intor`'s own sign against upstream, and
+// `pyscf-pbc-grad/tests/gradient_surface.rs::overlap_has_component_k_layout_and_gradient_sign`
+// pins `get_ovlp == -pbc_intor` elementwise (non-vacuously). A sign folded into
+// the wrong layer fails one of the two.
+
+/// `lib.fp` (`pyscf/lib/misc.py:1260`): `dot(cos(arange(n)), flat)`.
+///
+/// `flat` must already be in upstream ravel order — component-major F-order
+/// per k (each component plane F-raveled, planes concatenated), k-points
+/// concatenated in kpts order (the order `ORACLE_PY` emits below). A bare
+/// `(3, nao, nao)` F-ravel would INTERLEAVE the three derivative components
+/// and misalign every element past the first plane. The summation is
+/// sequential, matching numpy's reduction order.
+fn fp(flat: &[f64]) -> f64 {
+    flat.iter()
+        .enumerate()
+        .map(|(i, v)| (i as f64).cos() * v)
+        .sum()
+}
+
+/// Flatten one `PbcIntorOutput` into `(re, im)` in upstream ravel order.
+fn flatten_f_order(out: &PbcIntorOutput) -> (Vec<f64>, Vec<f64>) {
+    let mut re = Vec::with_capacity(out.nkpts() * out.comp * out.ni * out.nj);
+    let mut im = Vec::with_capacity(out.nkpts() * out.comp * out.ni * out.nj);
+    for k in 0..out.nkpts() {
+        re.extend_from_slice(&out.at(k).re);
+        im.extend_from_slice(&out.at(k).im);
+    }
+    (re, im)
+}
+
+/// (cell, rcut, |Ls|, nao) preconditions for the fingerprint gate: the same
+/// cell, the same truncation, before a single integral is compared.
+fn assert_same_truncation(name: &str, cell: &Cell, rcut: f64, nls: usize, nao: usize) {
+    assert_eq!(cell.mol.nao_nr, nao, "{name}: nao differs");
+    assert!(
+        (cell.rcut - rcut).abs() < 1e-9,
+        "{name}: rcut differs: upstream {rcut} vs {}",
+        cell.rcut
+    );
+    let ls = get_lattice_ls(cell, None, None, true).expect("Ls");
+    assert_eq!(ls.len(), nls, "{name}: |Ls| differs");
+}
+
+/// Tier-1 fingerprints: `(family, mesh, fp_re, fp_im)` per cell.
+///
+/// Measured with vendored PySCF 2.12.1 (`c.pbc_intor(fam, kpts=kpts)`,
+/// F-order ravel per k, k-points concatenated) on the Rust-exact §9.2 cells
+/// (Angstrom inputs × CODATA-2014 1.8897261339213, `unit='Bohr'`,
+/// `precision=1e-8`). `fp_im` at 2×2×2 is ~1e-16 on both sides — asserted with
+/// the same absolute tolerance, so a spurious imaginary part fails.
+#[test]
+fn derivative_families_match_upstream_fingerprints() {
+    const TOL: f64 = 1e-9;
+    // (name, cell, rcut, nls, nao, [(family, mesh, fp_re, fp_im)]).
+    let cells: Vec<(&str, Cell, f64, usize, usize)> = vec![
+        ("diamond", systems::diamond(), 21.31940052177759, 767, 8),
+        ("si", systems::si(), 29.960198598827567, 627, 8),
+        ("lif", systems::lif(), 38.46107083110416, 3511, 6),
+        ("he_fcc", systems::he_fcc(), 16.808894871965055, 429, 1),
+        ("graphene", systems::graphene(), 21.31940052177759, 91, 8),
+    ];
+    // family order: ipovlp, ipkin; mesh order: gamma, 2x2x2.
+    // (`int1e_ipnuc` is excluded — see the finding above.)
+    let want: &[&[(&str, [usize; 3], f64, f64)]] = &[
+        &[
+            ("int1e_ipovlp", [1, 1, 1], 1.1788033115665135, 0.0),
+            (
+                "int1e_ipovlp",
+                [2, 2, 2],
+                -12.473717009394392,
+                3.193281649218033e-16,
+            ),
+            ("int1e_ipkin", [1, 1, 1], 1.668272481365483, 0.0),
+            (
+                "int1e_ipkin",
+                [2, 2, 2],
+                -6.16705662979408,
+                2.2345978487502104e-16,
+            ),
+        ],
+        &[
+            ("int1e_ipovlp", [1, 1, 1], 0.8948715290610317, 0.0),
+            (
+                "int1e_ipovlp",
+                [2, 2, 2],
+                -8.99381985479995,
+                2.4816150634884176e-16,
+            ),
+            ("int1e_ipkin", [1, 1, 1], 0.47871618734378446, 0.0),
+            (
+                "int1e_ipkin",
+                [2, 2, 2],
+                -2.209457010197881,
+                8.340727754435154e-17,
+            ),
+        ],
+        &[
+            ("int1e_ipovlp", [1, 1, 1], -0.24479962683284273, 0.0),
+            (
+                "int1e_ipovlp",
+                [2, 2, 2],
+                -3.576288566466908,
+                9.7556322600452e-17,
+            ),
+            ("int1e_ipkin", [1, 1, 1], 0.4365437831667571, 0.0),
+            (
+                "int1e_ipkin",
+                [2, 2, 2],
+                3.397545698943426,
+                1.5228721521351615e-17,
+            ),
+        ],
+        &[
+            ("int1e_ipovlp", [1, 1, 1], -5.774837862727254e-17, 0.0),
+            (
+                "int1e_ipovlp",
+                [2, 2, 2],
+                -6.416936053875054e-17,
+                -3.046920091433765e-16,
+            ),
+            ("int1e_ipkin", [1, 1, 1], 4.762148935474971e-18, 0.0),
+            (
+                "int1e_ipkin",
+                [2, 2, 2],
+                -3.0073218119185718e-18,
+                2.3564821401262894e-17,
+            ),
+        ],
+        &[
+            ("int1e_ipovlp", [1, 1, 1], -0.8949615965705243, 0.0),
+            (
+                "int1e_ipovlp",
+                [2, 2, 2],
+                0.2060982675164473,
+                -3.429057695400348e-17,
+            ),
+            ("int1e_ipkin", [1, 1, 1], 0.3142984249713081, 0.0),
+            (
+                "int1e_ipkin",
+                [2, 2, 2],
+                1.2189946613969067,
+                7.735163073491235e-18,
+            ),
+        ],
+    ];
+    for ((name, cell, rcut, nls, nao), rows) in cells.iter().zip(want.iter()) {
+        assert_same_truncation(name, cell, *rcut, *nls, *nao);
+        for (fam, mesh, fp_re, fp_im) in rows.iter() {
+            let kpts = make_kpts_default(cell, *mesh).expect("make_kpts");
+            let got = pbc_intor(cell, fam, &kpts, PbcIntorOpts::default()).expect("pbc_intor");
+            assert_eq!(
+                got.comp, 3,
+                "{name} {fam} {mesh:?}: component count changed"
+            );
+            let (re, im) = flatten_f_order(&got);
+            let (gre, gim) = (fp(&re), fp(&im));
+            println!(
+                "{name} {fam} {mesh:?}: fp_re residual = {:e}, fp_im residual = {:e}",
+                (gre - fp_re).abs(),
+                (gim - fp_im).abs()
+            );
+            assert!(
+                (gre - fp_re).abs() < TOL,
+                "{name} {fam} {mesh:?}: fp_re differs by {:e} (tolerance {TOL:e})",
+                (gre - fp_re).abs()
+            );
+            assert!(
+                (gim - fp_im).abs() < TOL,
+                "{name} {fam} {mesh:?}: fp_im differs by {:e} (tolerance {TOL:e})",
+                (gim - fp_im).abs()
+            );
+        }
+    }
+}
+
+/// `int1e_ipovlp` at gamma is the bra derivative of the symmetric overlap, so
+/// it must be real and antisymmetric: `ip[i,j] = -ip[j,i]`. A minus folded
+/// into `pbc_intor` (rather than living in `get_ovlp`) is invisible here — it
+/// is the fingerprint gate above that pins the global sign — but a dispatcher
+/// that returned the symmetric parent, or dropped the imaginary plane without
+/// checking, fails here first.
+#[test]
+fn gamma_ipovlp_is_real_and_antisymmetric() {
+    for (name, cell) in systems::all() {
+        let out = pbc_intor(&cell, "int1e_ipovlp", &[[0.0; 3]], PbcIntorOpts::default())
+            .expect("int1e_ipovlp");
+        assert_eq!(out.comp, 3);
+        assert!(
+            out.max_abs_imag() < 1e-12,
+            "{name}: gamma ipovlp has imaginary part {}",
+            out.max_abs_imag()
+        );
+        let n = out.ni;
+        for c in 0..3 {
+            for i in 0..n {
+                for j in 0..n {
+                    let (a, _) = out.element(0, c, i, j);
+                    let (b, _) = out.element(0, c, j, i);
+                    assert!(
+                        (a + b).abs() < 1e-9,
+                        "{name} comp {c}: ip[{i},{j}] = {a:e} is not the negation of \
+                         ip[{j},{i}] = {b:e}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Tier 2 — the elementwise live comparison for `int1e_ipovlp` and
+/// `int1e_ipkin`, on all five §9.2 reference cells at gamma and 2×2×2.
+/// (`int1e_ipnuc` is excluded — see the finding above.)
+#[test]
+#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+fn derivative_families_match_upstream_all_reference_cells() {
+    for (name, cell) in systems::all() {
+        for fam in ["int1e_ipovlp", "int1e_ipkin"] {
+            for nk in [[1, 1, 1], [2, 2, 2]] {
+                compare_cell_with_upstream(&cell, fam, nk, 1e-10, Some(name));
+            }
+        }
+    }
+}
+
+/// The `int1e_ipnuc` kernel layer, isolated from the lattice sum: a single
+/// shell pair against libcint (vendored PySCF 2.12.1,
+/// `m.intor_by_shell('int1e_ipnuc_sph', (0, 2), comp=3)` on a C2/`gth-szv`
+/// molecule at 2.4 Bohr). This is the half of the `ipnuc` story that IS
+/// correct — the lattice-sum half diverges (see the finding above), and this
+/// test is what localises any future failure to one side or the other.
+#[test]
+fn ipnuc_kernel_matches_libcint_single_pair() {
+    use cintx_core::Representation;
+    use cintx_ops::resolver::Resolver;
+    use cintx_rs::SessionRequest;
+    use cintx_runtime::ExecutionOptions;
+
+    let mol = pyscf_gto::M(MoleBuildArgs {
+        atom: AtomInput::String("C 0 0 0; C 0 0 2.4".into()),
+        basis: BasisInput::Name("gth-szv".into()),
+        unit: Unit::Bohr,
+        ..Default::default()
+    })
+    .expect("fixture builds");
+    let descriptor = Resolver::descriptor_by_symbol("int1e_ipnuc_sph").expect("resolves");
+    let basis = mol.cintx_basis().expect("cintx basis");
+    let shells = basis.shell_tuple_for_indices([0, 2]).expect("shell tuple");
+    let got = SessionRequest::new(
+        descriptor.id,
+        Representation::Spheric,
+        &basis,
+        shells,
+        ExecutionOptions::default(),
+    )
+    .query_workspace()
+    .expect("query_workspace")
+    .evaluate()
+    .expect("evaluate")
+    .tensor
+    .owned_values;
+    let want = [0.0, 0.0, 2.047155911343434];
+    assert_eq!(got.len(), want.len());
+    for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
+        assert!(
+            (g - w).abs() < 1e-12,
+            "int1e_ipnuc_sph[{i}]: cintx {g} vs libcint {w}"
+        );
+    }
+}
+
 fn compare_with_upstream(intor: &str, nk: [usize; 3], tol: f64) {
+    compare_cell_with_upstream(&diamond(), intor, nk, tol, None);
+}
+
+fn compare_cell_with_upstream(
+    cell: &Cell,
+    intor: &str,
+    nk: [usize; 3],
+    tol: f64,
+    label: Option<&str>,
+) {
+    let tag = label.unwrap_or("diamond");
     let Some(py) = oracle_python() else {
         eprintln!("SKIP: {GATE} is not set — upstream oracle not run");
         return;
     };
 
-    let cell = diamond();
     let a: Vec<Vec<f64>> = cell.a.iter().map(|r| r.to_vec()).collect();
     let xyz: Vec<Vec<f64>> = cell.mol.atom_coords().iter().map(|r| r.to_vec()).collect();
     let sym: Vec<String> = cell.mol._atom.iter().map(|(s, _)| s.clone()).collect();
@@ -511,6 +845,7 @@ fn compare_with_upstream(intor: &str, nk: [usize; 3], tol: f64) {
             serde_json::to_string(&sym).unwrap(),
             serde_json::to_string(&nk.to_vec()).unwrap(),
             intor.to_string(),
+            cell.dimension.to_string(),
         ],
     );
 
@@ -581,12 +916,12 @@ fn compare_with_upstream(intor: &str, nk: [usize; 3], tol: f64) {
         }
     }
     println!(
-        "pbc_intor('{intor}', {nk:?}) vs upstream: max |delta| = {worst:e} at k={} element={}",
+        "{tag}: pbc_intor('{intor}', {nk:?}) vs upstream: max |delta| = {worst:e} at k={} element={}",
         worst_at.0, worst_at.1
     );
     assert!(
         worst < tol,
-        "pbc_intor('{intor}') differs from upstream by {worst:e} (tolerance {tol:e}) \
+        "{tag}: pbc_intor('{intor}') differs from upstream by {worst:e} (tolerance {tol:e}) \
          at k={} element={}",
         worst_at.0,
         worst_at.1

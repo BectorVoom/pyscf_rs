@@ -142,9 +142,46 @@ pub const INTOR_LAYOUTS: &[IntorEntry] = &[
         name: "int1e_r4_origi_sph",
         layout: IntorLayout::ScalarFOrder,
     },
+    // ── 1e moment-weighted NUCLEAR DERIVATIVES (Phase 18-03) ─────────────
+    //
+    // `<i| r^n |d/dR_j j>` with the origin on centre i (`origi`), comp = 3
+    // component-leading like every other `ip` family. Consumed by
+    // `pp_int.py:454` (`vppnl_nuc_grad` via `_int_vnl`'s `ppnl_half_ip2`).
+    // cintx ships them behind `unstable-source-api` — see `pyscf-pbc-gto`'s
+    // `gth-pp` feature. `oracle_covered = false`: numeric gate is upstream.
+    IntorEntry {
+        name: "int1e_r2_origi_ip2_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int1e_r4_origi_ip2_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
     IntorEntry {
         name: "int3c1e_sph",
         layout: IntorLayout::ScalarFOrder,
+    },
+    // ── 3-centre 1-electron NUCLEAR DERIVATIVES (Phase 18-03) ─────────────
+    //
+    // `d/dR_bra (ij|P)`, comp = 3 component-leading. Consumed by
+    // `pp_int.py:187` (`vpploc_part2_nuc_grad` via `incore.int3c1e_nuc_grad`).
+    // Same `unstable-source-api` / `oracle_covered = false` posture as the
+    // scalar `origk` half above.
+    IntorEntry {
+        name: "int3c1e_ip1_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int3c1e_ip1_r2_origk_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int3c1e_ip1_r4_origk_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
+    },
+    IntorEntry {
+        name: "int3c1e_ip1_r6_origk_sph",
+        layout: IntorLayout::ComponentLeadingFOrder { components: 3 },
     },
     IntorEntry {
         name: "int3c1e_r2_origk_sph",

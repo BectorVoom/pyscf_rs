@@ -41,7 +41,11 @@ fn tight() -> KScfConfig {
 fn krks(cell: Cell, nk: [usize; 3], xc: &str) -> Krks {
     let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, MESH).expect("FFTDF");
-    Krks::from_df(Box::new(df), xc).expect("KRKS")
+    let mut mf = Krks::from_df(Box::new(df), xc).expect("KRKS");
+    // Pinned to the DF mesh, as before `from_df` defaulted the XC grid to
+    // `cell.mesh`: the comparisons and `converged()`'s grids are all at MESH.
+    mf.grids = PeriodicGrids::uniform(mf.cell(), Some(MESH)).expect("XC grid");
+    mf
 }
 
 /// A converged closed-shell density on `cell` at `nk`, plus the pieces the
@@ -305,10 +309,9 @@ fn kuks_reproduces_krks_on_a_closed_shell_cell() {
         .expect("KRKS");
     let kpts = make_kpts_default(&cell, [2, 2, 2]).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, MESH).expect("FFTDF");
-    let b = Kuks::from_df(Box::new(df), "pbe")
-        .expect("KUKS")
-        .kernel(&tight())
-        .expect("KUKS");
+    let mut b = Kuks::from_df(Box::new(df), "pbe").expect("KUKS");
+    b.grids = PeriodicGrids::uniform(b.cell(), Some(MESH)).expect("XC grid");
+    let b = b.kernel(&tight()).expect("KUKS");
     let d = (a.e_tot - b.e_tot).abs();
     println!("KRKS {:.15}  KUKS {:.15}  delta {d:.3e}", a.e_tot, b.e_tot);
     assert!(d < 1e-9, "KUKS does not reproduce KRKS: delta {d:e}");
@@ -323,10 +326,9 @@ fn kroks_reproduces_krks_on_a_closed_shell_cell() {
         .expect("KRKS");
     let kpts = make_kpts_default(&cell, [2, 2, 2]).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, MESH).expect("FFTDF");
-    let b = Kroks::from_df(Box::new(df), "pbe")
-        .expect("KROKS")
-        .kernel(&tight())
-        .expect("KROKS");
+    let mut b = Kroks::from_df(Box::new(df), "pbe").expect("KROKS");
+    b.grids = PeriodicGrids::uniform(b.cell(), Some(MESH)).expect("XC grid");
+    let b = b.kernel(&tight()).expect("KROKS");
     let d = (a.e_tot - b.e_tot).abs();
     println!("KRKS {:.15}  KROKS {:.15}  delta {d:.3e}", a.e_tot, b.e_tot);
     assert!(d < 1e-9, "KROKS does not reproduce KRKS: delta {d:e}");
@@ -342,10 +344,9 @@ fn kgks_collinear_reproduces_krks() {
         .expect("KRKS");
     let kpts = make_kpts_default(&cell, [2, 2, 2]).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, MESH).expect("FFTDF");
-    let b = Kgks::from_df(Box::new(df), "lda,vwn")
-        .expect("KGKS")
-        .kernel(&tight())
-        .expect("KGKS");
+    let mut b = Kgks::from_df(Box::new(df), "lda,vwn").expect("KGKS");
+    b.grids = PeriodicGrids::uniform(b.cell(), Some(MESH)).expect("XC grid");
+    let b = b.kernel(&tight()).expect("KGKS");
     let d = (a.e_tot - b.e_tot).abs();
     println!("KRKS {:.15}  KGKS {:.15}  delta {d:.3e}", a.e_tot, b.e_tot);
     assert!(d < 1e-8, "KGKS does not reproduce KRKS: delta {d:e}");

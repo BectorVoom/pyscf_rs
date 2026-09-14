@@ -59,7 +59,10 @@
 //! reused verbatim through [`prescreen_exponent`]. That bound carries an
 //! `exp(-theta_abc |P_ab - C|^2)` factor, which is **exact for a neutralised
 //! integrand and only approximate for a charged one** — another reason the
-//! fused cell is the intended argument.
+//! fused cell is the intended argument. The range-separated route is the one
+//! caller that passes charged (unfused) auxiliary functions, always with a
+//! short-range `omega`; for it both screens take the kernel's own range
+//! (`prescreen_exponent_sr` and the widened neighbour list, plan 20-05).
 
 use cintx_core::{BasisSet as CintxBasisSet, Representation};
 use cintx_ops::resolver::Resolver;
@@ -135,6 +138,36 @@ fn prescreen_eps() -> f64 {
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
         .unwrap_or(PRESCREEN_EPS)
+}
+
+/// [`prescreen_exponent`] for the SHORT-range kernel `erfc(omega r)/r`.
+///
+/// The overlap bound's `theta_(ab)c = (a+b)c/(a+b+c)` is the decay of a
+/// NEUTRALISED integrand. A charged auxiliary function under the attenuated
+/// kernel decays with the kernel's own Gaussian folded in,
+/// `theta = 1/(1/(a+b) + 1/c + 1/omega^2)` — the same `theta`
+/// `rsdf_builder::omega::estimate_rcut` uses (`rsdf_builder.py:1470`), and
+/// strictly smaller, so this bound keeps every triple the overlap bound keeps.
+fn prescreen_exponent_sr(
+    a: f64,
+    ra: &[f64; 3],
+    b: f64,
+    rb: &[f64; 3],
+    c: f64,
+    rc: &[f64; 3],
+    omega: f64,
+) -> f64 {
+    let ab = a + b;
+    let mut d2 = 0.0;
+    let mut d2pc = 0.0;
+    for x in 0..3 {
+        let d = ra[x] - rb[x];
+        d2 += d * d;
+        let p = (a * ra[x] + b * rb[x]) / ab;
+        d2pc += (p - rc[x]) * (p - rc[x]);
+    }
+    let theta = 1.0 / (1.0 / ab + 1.0 / c + 1.0 / (omega * omega));
+    (-(a * b / ab * d2 + theta * d2pc)).exp()
 }
 
 /// How many KET images share one cintx `BasisSet` — see
@@ -420,12 +453,31 @@ pub fn aux_e2_intor(
     let aux_rcut: Vec<f64> = (0..nauxbas)
         .map(|k| aux_rcut_atom[shell_atom(&aux.cell.mol, k)])
         .collect();
+    // **A SHORT-range kernel reaches past the functions' own extents.** The
+    // radius above is an overlap radius: right for the fused (neutralised)
+    // cell, whose integrand decays like an overlap, and wrong for the
+    // range-separated route's UNFUSED, charged auxiliary functions under
+    // `erfc(|omega| r)/r`, which interact until the kernel itself dies. That
+    // is the distance `rsdf_builder::omega::estimate_rcut` estimates and the
+    // caller hands in as `rcut` (upstream strips its supermole with exactly
+    // that radius, `rsdf_builder.py:174-179` / `ft_ao.py:631-656`), so for
+    // `omega < 0` the neighbour list is widened to it.
+    //
+    // Measured on He-fcc `sto-3g` 2x2x2 at `omega = -0.33` (plan 20-05): the
+    // overlap radius alone dropped real-space `(ij|P)` contributions of up to
+    // 6.674e-5 against upstream's `_RSGDFBuilder.outcore_auxe2`, invisibly to
+    // any change of `rcut`, and put the short-range `GDF.get_jk(omega)` 1.4e-4
+    // off upstream.
+    let sr_omega = omega.filter(|w| *w < 0.0).map(f64::abs);
     let reach: Vec<Vec<Vec<usize>>> = (0..nauxbas)
         .map(|k| {
             let rp = aux_coords[shell_atom(&aux.cell.mol, k)];
             (0..nbas)
                 .map(|s| {
-                    let rmax = cell_rcut[s] + aux_rcut[k];
+                    let mut rmax = cell_rcut[s] + aux_rcut[k];
+                    if sr_omega.is_some() {
+                        rmax = rmax.max(rcut);
+                    }
                     let rs = coords[shell_atom(&cell.mol, s)];
                     ls.iter()
                         .enumerate()
@@ -480,12 +532,14 @@ pub fn aux_e2_intor(
     // range doubles the Rys roots, so ω sizes the workspace, and cintx rejects
     // a ω that changes between query and evaluate as backend contract drift.
     //
-    // The image list and the Gaussian prescreen below are still the full-range
-    // ones. Both are conservative under either branch — short range decays
-    // faster than 1/r and long range shares its tail — so this is correct and
-    // merely keeps more triples than short range needs. Tightening it is
-    // `rsdf_builder::omega::estimate_rcut`'s job, at the caller, through the
-    // `rcut` argument.
+    // The image list comes from the caller's `rcut`. For `omega < 0` the
+    // neighbour list and the Gaussian prescreen are WIDENED to the attenuated
+    // kernel (see `sr_omega` above and [`prescreen_exponent_sr`]): an earlier
+    // reading of this comment held the overlap-shaped screens "conservative
+    // under either branch", which is true for the neutralised fused cell and
+    // false for the range-separated route's charged auxiliary functions —
+    // plan 20-05 measured the difference at 6.674e-5 in `(ij|P)`. `omega > 0`
+    // has no caller and keeps the overlap screens.
     let opts = ExecutionOptions {
         range_omega: omega,
         ..ExecutionOptions::default()
@@ -620,7 +674,11 @@ pub fn aux_e2_intor(
                     let cmax = ca * cb * cck.abs();
                     for &mj in &reach[k][jsh] {
                         let bj = [rj[0] + ls[mj][0], rj[1] + ls[mj][1], rj[2] + ls[mj][2]];
-                        if prescreen_exponent(ea, &ai, eb, &bj, ck, &rp) * cmax < eps {
+                        let bound = match sr_omega {
+                            None => prescreen_exponent(ea, &ai, eb, &bj, ck, &rp),
+                            Some(w) => prescreen_exponent_sr(ea, &ai, eb, &bj, ck, &rp, w),
+                        };
+                        if bound * cmax < eps {
                             continue;
                         }
                         triples.push((mj, ish, jsh, k));

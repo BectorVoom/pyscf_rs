@@ -33,17 +33,50 @@ status: |
     gap, not an accuracy one.
   * rsdf_helper.py's prescreen (get_q_cond, the Schwarz bound). Its absence
     keeps MORE primitives than upstream, which is the conservative direction.
-  * rsjk (14-08 Task 4) — BLOCKED ON PHASE 17, NOT ON CINTX. range_omega was
-    necessary but NOT sufficient. rsjk.py:150-200 builds its short-range half
-    from ft_ao._RangeSeparatedCell + ft_ao.ExtendedMole.strip_basis (the
-    supermole this port defers to Phase 17 under D-PBC-21/23), and _get_jk_sr
-    (:267-436) then drives a SCREENED periodic 4-centre int2e over that
-    supermole (PBCVHF_direct_drv1, indexed by supmol.bas_mask). **This port has
-    no periodic 4-centre int2e driver of any kind** — `grep int2e` across
-    pyscf-pbc-* finds only a doc comment. Unlike RSDF, there is no degenerate
-    all-compact simplification available: the screening IS the algorithm, and an
-    unscreened sweep over BvK images is not merely slower but infeasible.
-    Sequence it after Phase 17's supermole, and size it as its own plan.
+  * rsjk (14-08 Task 4) — STILL BLOCKED. RE-ASSESSED by plan 20-06
+    (2026-09-13; table in .planning/phases/20-pbc-python-bindings/
+    20-06-SUMMARY.md). NOT blocked on cintx (range_omega honoured on the
+    scalar int2e route incl. sr_rys_roots_host for rys_order > 3; the
+    quartet-BATCH route refuses omega, cintx-rs/src/api.rs:3405) and NOT
+    blocked on the Phase-17 supermole TYPES: ft_ao._RangeSeparatedCell ->
+    crates/pyscf-pbc-df/src/ft_ao/rs_cell.rs:117 (in_rsjk honoured),
+    ExtendedMole.from_cell/strip_basis -> ft_ao/supmol.rs:96/:179. The old
+    "blocked on Phase 17" claim is stale. What is missing is rsjk.py's OWN
+    short-range body; each needs a new host in crates/pyscf-pbc-scf/src/
+    rsjk/ (or pyscf-pbc-df/src/ft_ao/ for 2):
+      1 rsjk.estimate_rcut (rsjk.py:1182-1261; used :184). Absent —
+        rsdf_builder::estimate_rcut is the 3-centre one (different).
+      2 libcint-shaped supermole: _atm/_bas/_env (or a cintx BasisSet) of the
+        translated shells, PTR_EXPCUTOFF, omega=-w (ft_ao.py:614-628,
+        rsjk.py:185-187). supmol.rs:57 is COMPACT (bas_mask/seg_loc/seg2sh
+        only) — it never materialises shells an int2e can be called on.
+      3 Schwarz/overlap prescreen: PBCVHFnr_int2e_q_cond
+        (pyscf/lib/pbc/nr_direct.c:1037), PBCVHFnr_sindex (:1120), qindex
+        assembly + dd mask (rsjk.py:208-235), _qcond_cell0_abstract
+        (rsjk.py:1336), _sort_qcond_cell0 (:255). Absent.
+      4 screened periodic 4-centre driver: PBCVHF_direct_drv / _nodddd
+        (nr_direct.c:721/:855), PBCVHF_contract_{j,k,jk}_{s1,s2kl} (:38-530),
+        approx_bvk_rcond0 / PBCapprox_bvk_rcond (:531/:591), PBCint2e_sph
+        (pyscf/lib/pbc/cint2e.c:330). Absent; no correct-but-slow fallback
+        (the screening IS the algorithm; unscreened BvK sweep infeasible —
+        upstream supmol_sr has 98 shells on He-fcc sto-3g 2x2x2, 2094 on
+        diamond gth-szv 2x2x2).
+      5 BvK DM plumbing: k2gamma.kpts_to_kmesh / double_translation_indices
+        (k2gamma.py:39/:104), sc_dm transform, NP_absmax dmindex
+        (rsjk.py:330-374). Absent.
+      6 LR half as rsjk composes it: coulG - coulG_SR + pi/w^2 G0 term
+        (rsjk.py:596-612), _ExtendedMoleFT (rsdf_builder.py:1312),
+        dm_factor / _mo_k2gamma K path (rsjk.py:817-1170), _purify (:1172).
+        aft_jk::get_j_kpts/get_k_kpts(omega) exist but compute a different
+        thing (full image list, single-kernel coulG).
+    ALSO FOUND by 20-06 and FIXED: RangeSeparatedJkBuilder::guess_omega
+    returned rsdf_builder._guess_omega's omega (He-fcc 2x2x2 0.73936/mesh 11);
+    rsjk.py uses its own _guess_omega (:1263) / estimate_ke_cutoff_for_omega
+    (:1293) / estimate_omega_for_ke_cutoff (:1306) -> upstream 1.312754030266949
+    / mesh 15. Now ported in crates/pyscf-pbc-scf/src/rsjk.rs, gated at 1e-12 in
+    tests/rsjk.rs. Refusals rsjk.rs build/get_jk stay; RS_BUILDER_GAP
+    (crates/pyscf-pbc-df/src/rsdf_builder/mod.rs) names items 1-6.
+    Size items 1-5 as their own plan (>= a phase-sized port of nr_direct.c).
 autonomous: false
 must_haves:
   truths:

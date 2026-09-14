@@ -32,7 +32,7 @@
 //! inputs.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 
 use pyscf_algebra::CTensor;
 use pyscf_pbc_gto::{
@@ -90,18 +90,48 @@ pub struct Fftdf {
     pub max_memory: f64,
     /// Cached `(nao, ngrids)` AO tables, keyed by the k-point list.
     ao_cache: Mutex<HashMap<Vec<[u64; 3]>, Arc<AoKpts>>>,
-    /// W-01: `get_coulG(dk)` and `expmikr(dk)`, keyed on the wrapped `dk =
-    /// kpt2 - kpt1` (bit pattern), `omega` and the exxdiv actually applied
-    /// INSIDE the k-pair loop (never `Ewald` — see [`Fftdf::coulg_and_expmikr`]).
-    /// Both quantities are invariant across the whole SCF for a fixed
-    /// `(dk, omega, exxdiv)`, and a Monkhorst-Pack mesh has only `Nk` distinct
-    /// `dk` values (not `Nk^2`) because `kpts[i] - kpts[j]` is bit-identical
-    /// for every pair sharing the same `(i - j) mod Nk`.
-    coulg_expmikr_cache: Mutex<HashMap<CoulgKey, Arc<(Vec<f64>, Option<CTensor>)>>>,
+    /// W-01: `get_coulG(dk)` keyed on the RAW `dk` bits plus `omega` and the
+    /// exxdiv actually applied INSIDE the k-pair loop (never `Ewald` on the
+    /// energy path; passed through on the gradient path — see
+    /// [`Fftdf::coulg_and_expmikr`]).
+    ///
+    /// 18-04 (D-PBC-31 clause 9) re-keyed this on the wrapped k-difference
+    /// class ([`crate::ao_cache::kdiff_index`]) on the premise that `coulG` is
+    /// class-invariant. It is not, per grid point: `dk -> dk + b` reorders the
+    /// `G + k` array, so the class key served `+b1/2`'s table to `-b1/2` and
+    /// moved `KRHF` on diamond `[2,1,1]` by 0.184 Ha
+    /// (`kscf::supercell_equivalence_holds`, found and reverted in Phase 20 —
+    /// `20-pbc-python-bindings/measurements/kscf-supercell-regression.md`).
+    /// Re-introducing the class key needs the per-class permutation, not a
+    /// shared table.
+    coulg_cache: Mutex<HashMap<CoulgKey, Arc<Vec<f64>>>>,
+    /// The `expmikr(dk) = exp(-i dk·r)` phase tables, keyed on the RAW `dk`
+    /// bits. Unlike `coulG`, the phase depends on the unwrapped
+    /// representative, so it keeps its own map. These builds are `O(ngrids)`
+    /// trigonometry, not `get_coulG` calls, and are not counted below.
+    expmikr_cache: Mutex<HashMap<[u64; 3], Option<Arc<CTensor>>>>,
+    /// How many `get_coulG` builds the W-01 cache has performed on this
+    /// builder. The 18-04 gate asserts this reads `nkpts` (not `nkpts²`) over
+    /// a full `get_k_e1_kpts` call — the cache is counted, not assumed. Not
+    /// cleared by [`Fftdf::reset`]; use [`Fftdf::reset_coulg_build_count`].
+    coulg_builds: AtomicUsize,
+}
+
+/// One cached `coulG` + phase pair. The two halves carry separate `Arc`s
+/// because they are keyed differently (class index vs raw `dk`) — cloning the
+/// tuple per pair would deep-copy `ngrids` doubles on every one of the `Nk^2`
+/// pairs, which is exactly the per-pair work W-01 exists to stop paying
+/// (S-04: borrow through the `Arc`s).
+#[derive(Debug, Clone)]
+pub struct CoulgEntry {
+    /// `get_coulG(dk)`, shared by every pair in the k-difference class.
+    pub coulg: Arc<Vec<f64>>,
+    /// `expmikr(dk)`, `None` on the diagonal — specific to the raw `dk`.
+    pub expmikr: Option<Arc<CTensor>>,
 }
 
 /// `(dk.to_bits(), omega.to_bits(), exxdiv)` — see
-/// [`Fftdf::coulg_expmikr_cache`].
+/// [`Fftdf::coulg_cache`].
 type CoulgKey = ([u64; 3], Option<u64>, Option<ExxDiv>);
 
 /// Upstream's `lib.param.MAX_MEMORY` default, in MB, overridable through
@@ -150,7 +180,9 @@ impl Fftdf {
             grids,
             max_memory: default_max_memory(),
             ao_cache: Mutex::new(HashMap::new()),
-            coulg_expmikr_cache: Mutex::new(HashMap::new()),
+            coulg_cache: Mutex::new(HashMap::new()),
+            expmikr_cache: Mutex::new(HashMap::new()),
+            coulg_builds: AtomicUsize::new(0),
         })
     }
 
@@ -233,27 +265,53 @@ impl Fftdf {
         Ok(block)
     }
 
-    /// Drop the AO cache and the `get_coulG`/`expmikr` cache (W-01) — call
-    /// after mutating `cell` or `mesh`.
+    /// Drop the AO cache and the W-01 `coulG`/`expmikr` caches — call after
+    /// mutating `cell` or `mesh`. The [`Fftdf::coulg_build_count`] counter is
+    /// NOT cleared here; it has its own reset so a gate can count builds
+    /// across several calls.
     pub fn reset(&self) {
         if let Ok(mut c) = self.ao_cache.lock() {
             c.clear();
         }
-        if let Ok(mut c) = self.coulg_expmikr_cache.lock() {
+        if let Ok(mut c) = self.coulg_cache.lock() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.expmikr_cache.lock() {
             c.clear();
         }
     }
 
+    /// How many `get_coulG` builds the W-01 cache has performed (cache misses
+    /// that computed, not lookups). The 18-04 clause-9 gate asserts this.
+    pub fn coulg_build_count(&self) -> usize {
+        self.coulg_builds.load(Ordering::Relaxed)
+    }
+
+    /// Zero [`Fftdf::coulg_build_count`].
+    pub fn reset_coulg_build_count(&self) {
+        self.coulg_builds.store(0, Ordering::Relaxed);
+    }
+
     /// `get_coulG(dk)` and the phase table `expmikr(dk) = exp(-i dk.r)` on
-    /// `self.grids.coords`, memoised on `(dk, omega, exxdiv)` — `fft_jk.py`'s
-    /// `get_k_kpts` rebuilds both from scratch on every one of the `Nk^2`
-    /// `(k1, k2)` pairs even though neither depends on the density matrix or
-    /// on which pair produced this particular `dk` (W-01, §2.4 of
-    /// KRKS-OPTIMISATION-PLAN.md). `exxdiv` here is the value ACTUALLY passed
-    /// to `get_coulG` inside the pair loop — `fft_jk::get_k_kpts` already maps
-    /// `Some(ExxDiv::Ewald) | None` to `None` before calling this (the Ewald
-    /// probe-charge correction is applied once, after the loop, at `G+k = 0`),
-    /// so `exxdiv` here is never `Some(ExxDiv::Ewald)`.
+    /// `self.grids.coords`, memoised — `fft_jk.py`'s `get_k_kpts` rebuilds
+    /// both from scratch on every one of the `Nk^2` `(k1, k2)` pairs even
+    /// though neither depends on the density matrix or on which pair produced
+    /// this particular `dk` (W-01, §2.4 of KRKS-OPTIMISATION-PLAN.md).
+    ///
+    /// The two halves are keyed differently (D-PBC-31 clause 9): `coulG` on
+    /// the k-difference index (the wrapped class — `Nk^2 → Nk` builds), the
+    /// phase on the raw `dk` (it depends on the representative). Both are
+    /// still computed from the raw `dk`, exactly as before, so a hit returns
+    /// the same bytes the pre-18-04 cache returned.
+    ///
+    /// `exxdiv` here is the value ACTUALLY passed to `get_coulG` inside the
+    /// pair loop. `fft_jk::get_k_kpts` maps `Some(ExxDiv::Ewald) | None` to
+    /// `None` before calling this (the Ewald probe-charge correction is
+    /// applied once, after the loop, at `G+k = 0`); the gradient
+    /// `get_k_e1_kpts` passes `exxdiv` through unchanged (including `Ewald` —
+    /// upstream's gradient tail has no `_ewald_exxdiv_for_G0`), so `exxdiv`
+    /// here CAN be `Some(ExxDiv::Ewald)` on the gradient route. The key
+    /// carries it either way, so the two routes never share an entry.
     ///
     /// # Errors
     /// Propagates [`get_coulg`].
@@ -264,30 +322,84 @@ impl Fftdf {
         exxdiv: Option<ExxDiv>,
         kpts: &[[f64; 3]],
         gv: &[[f64; 3]],
-    ) -> Result<Arc<(Vec<f64>, Option<CTensor>)>, PbcDfError> {
-        let key: CoulgKey = (
-            [dk[0].to_bits(), dk[1].to_bits(), dk[2].to_bits()],
-            omega.map(f64::to_bits),
-            exxdiv,
-        );
-        if let Ok(c) = self.coulg_expmikr_cache.lock() {
-            if let Some(v) = c.get(&key) {
-                return Ok(Arc::clone(v));
-            }
+    ) -> Result<Arc<CoulgEntry>, PbcDfError> {
+        let raw_key = [dk[0].to_bits(), dk[1].to_bits(), dk[2].to_bits()];
+        // Keyed on the RAW `dk` bits, not `kdiff_index`: `get_coulG` is NOT
+        // invariant per grid point under `dk -> dk + b` (the reciprocal shift
+        // reorders the `G + k` array), so a wrapped-class key served `+b1/2`'s
+        // table to `-b1/2` and moved KRHF on diamond [2,1,1] by 0.184 Ha
+        // (20-VERIFICATION, measurements/kscf-supercell-regression.md).
+        let class_key: CoulgKey = (raw_key, omega.map(f64::to_bits), exxdiv);
+        if let Ok(c) = self.coulg_cache.lock()
+            && let Ok(e) = self.expmikr_cache.lock()
+            && let (Some(coulg), Some(expmikr)) = (c.get(&class_key), e.get(&raw_key))
+        {
+            return Ok(Arc::new(CoulgEntry {
+                coulg: Arc::clone(coulg),
+                expmikr: expmikr.clone(),
+            }));
         }
-        let coulg = get_coulg(
-            &self.cell,
-            CoulGArgs {
-                k: dk,
-                exxdiv,
-                kpts: Some(kpts),
-                mesh: Some(self.mesh),
-                gv: Some(gv),
-                wrap_around: true,
-                omega,
-            },
-        )?;
-        let expmikr = if is_zero(&dk) {
+        let coulg = if let Ok(c) = self.coulg_cache.lock() {
+            if let Some(v) = c.get(&class_key) {
+                Arc::clone(v)
+            } else {
+                drop(c);
+                let built = get_coulg(
+                    &self.cell,
+                    CoulGArgs {
+                        k: dk,
+                        exxdiv,
+                        kpts: Some(kpts),
+                        mesh: Some(self.mesh),
+                        gv: Some(gv),
+                        wrap_around: true,
+                        omega,
+                    },
+                )?;
+                let built = Arc::new(built);
+                self.coulg_builds.fetch_add(1, Ordering::Relaxed);
+                if let Ok(mut c) = self.coulg_cache.lock() {
+                    c.insert(class_key, Arc::clone(&built));
+                }
+                built
+            }
+        } else {
+            Arc::new(get_coulg(
+                &self.cell,
+                CoulGArgs {
+                    k: dk,
+                    exxdiv,
+                    kpts: Some(kpts),
+                    mesh: Some(self.mesh),
+                    gv: Some(gv),
+                    wrap_around: true,
+                    omega,
+                },
+            )?)
+        };
+        let expmikr: Option<Arc<CTensor>> = if let Ok(e) = self.expmikr_cache.lock() {
+            if let Some(v) = e.get(&raw_key) {
+                v.clone()
+            } else {
+                drop(e);
+                let built = self.build_expmikr(dk).map(Arc::new);
+                if let Ok(mut e) = self.expmikr_cache.lock() {
+                    e.insert(raw_key, built.clone());
+                }
+                built
+            }
+        } else {
+            self.build_expmikr(dk).map(Arc::new)
+        };
+        Ok(Arc::new(CoulgEntry { coulg, expmikr }))
+    }
+
+    /// `expmikr(dk) = exp(-i dk.r)` on the grid, `None` when `dk` is zero —
+    /// the `is_zero(kpt1-kpt2)` branch (`fft_jk.py:386-387`), which is also
+    /// what lets the gradient loop skip the whole-array phase multiply on the
+    /// diagonal (D-PBC-31 clause 11).
+    fn build_expmikr(&self, dk: [f64; 3]) -> Option<CTensor> {
+        if is_zero(&dk) {
             None
         } else {
             let ngrids = self.grids.coords.len();
@@ -299,12 +411,7 @@ impl Fftdf {
                 im[g] = ph.sin();
             }
             Some(CTensor::from_planes(re, im))
-        };
-        let entry = Arc::new((coulg, expmikr));
-        if let Ok(mut c) = self.coulg_expmikr_cache.lock() {
-            c.insert(key, Arc::clone(&entry));
         }
-        Ok(entry)
     }
 
     /// Contract a REAL local potential on the grid into `nao x nao` matrices:
@@ -527,6 +634,42 @@ impl PeriodicDf for Fftdf {
             None
         };
         Ok(JkResult { vj, vk })
+    }
+
+    /// `FFTDF.get_jk_e1` — the only density-fitting route in PySCF 2.12.1
+    /// that has a gradient (`fft.py:324-328`). Refuses a carried k-pair flag
+    /// (clause 4b); see the inherent method in `crate::fft_jk_grad`.
+    fn get_jk_e1(
+        &self,
+        dms: &[KMats],
+        kpts: &[[f64; 3]],
+        opts: JkOpts<'_>,
+        mo: Option<&crate::fft_jk_grad::TaggedMo>,
+    ) -> Result<crate::fft_jk_grad::GradJkResult, PbcDfError> {
+        self.get_jk_e1(dms, kpts, opts, mo)
+    }
+
+    /// `FFTDF.get_j_e1` (`fft.py:330-333`).
+    fn get_j_e1(
+        &self,
+        dms: &[KMats],
+        kpts: &[[f64; 3]],
+        kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<crate::fft_jk_grad::GradMats, PbcDfError> {
+        self.get_j_e1(dms, kpts, kpts_band)
+    }
+
+    /// `FFTDF.get_k_e1` (`fft.py:335-340`).
+    fn get_k_e1(
+        &self,
+        dms: &[KMats],
+        kpts: &[[f64; 3]],
+        kpts_band: Option<&[[f64; 3]]>,
+        exxdiv: Option<ExxDiv>,
+        omega: Option<f64>,
+        mo: Option<&crate::fft_jk_grad::TaggedMo>,
+    ) -> Result<crate::fft_jk_grad::GradMats, PbcDfError> {
+        self.get_k_e1(dms, kpts, kpts_band, exxdiv, omega, mo)
     }
 
     fn ao2mo(

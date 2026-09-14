@@ -1,0 +1,10 @@
+{"pyscf": "2.12.1", "source": "/home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py"}
+{"cell": "si", "mesh": [35, 35, 35], "nao": 8, "precision": 1e-08}
+{"cell": "si", "screening_difference": 0.0, "screened_seconds": [3.699936502001947, 3.800701593994745, 3.7282517150015337], "unscreened_seconds": [3.771426050006994, 3.731352942006197, 3.814896698007942], "screened_over_unscreened": 0.988552252004151}
+{"cell": "si", "atom": 0, "component": 0, "full_step": 0.0002, "energies": [-7.184507346626792, -7.1845073466279405], "analytic": 5.35788551714133e-09, "fd": 5.74207348336131e-09, "residual": 3.8418796621997935e-10}
+{"cell": "si", "atom": 0, "component": 1, "full_step": 0.0002, "energies": [-7.184507346626825, -7.184507346627908], "analytic": 5.357892395417778e-09, "fd": 5.413447468072263e-09, "residual": 5.555507265448537e-11}
+{"cell": "si", "atom": 0, "component": 2, "full_step": 0.0002, "energies": [-7.184507346626793, -7.184507346627924], "analytic": 5.35789787018903e-09, "fd": 5.653255641391297e-09, "residual": 2.953577712022672e-10}
+{"cell": "si", "atom": 1, "component": 0, "full_step": 0.0002, "energies": [-7.184507346630845, -7.184507346624136], "analytic": -3.356022209438427e-08, "fd": -3.354649891207373e-08, "residual": 1.372318231053789e-11}
+{"cell": "si", "atom": 1, "component": 1, "full_step": 0.0002, "energies": [-7.184507346630886, -7.1845073466241525], "analytic": -3.356022000398757e-08, "fd": -3.366640299873325e-08, "residual": 1.0618299474567913e-10}
+{"cell": "si", "atom": 1, "component": 2, "full_step": 0.0002, "energies": [-7.1845073466308484, -7.184507346624131], "analytic": -3.3560215214564394e-08, "fd": -3.3586466940960236e-08, "residual": 2.6251726395841764e-11}
+{"cell": "si", "gamma_fd_max": 3.8418796621997935e-10}

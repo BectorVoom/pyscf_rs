@@ -656,26 +656,28 @@ pub fn get_k_kpts_band(
     Ok(vk)
 }
 
-/// `GDF.get_jk` — the [`crate::traits::PeriodicDf`] entry point.
+/// `GDF.get_jk` — the [`crate::traits::PeriodicDf`] entry point
+/// (`df.py:459-490`).
+///
+/// A non-zero `opts.omega` takes upstream's RSH branch — see [`get_jk_rsh`].
 ///
 /// # Errors
 /// Propagates [`get_j_kpts`] / [`get_k_kpts`] (or their band-k-point
 /// counterparts, which rebuild `_cderi` over the union k-set — plan 17-10
-/// Task 4, closing what was `NotYetImplemented { phase: 17 }`).
+/// Task 4, closing what was `NotYetImplemented { phase: 17 }`), and
+/// [`get_jk_rsh`].
 pub fn get_jk(
     df: &Gdf,
     dms: &[KMats],
     kpts: &[[f64; 3]],
     opts: crate::traits::JkOpts<'_>,
 ) -> Result<crate::traits::JkResult, PbcDfError> {
-    if opts.omega.is_some() {
-        return Err(PbcDfError::Core(
-            pyscf_core::PyscfRsError::NotYetImplemented {
-                phase: 14,
-                what: "GDF.get_jk(omega) — the range-separated kernel needs \
-                       GDF.range_coulomb (df.py:515-553), plan 14-07",
-            },
-        ));
+    // `df.py:461` — `if omega is not None and omega != 0`. An `omega` of
+    // exactly zero is the plain Coulomb request upstream too.
+    if let Some(omega) = opts.omega
+        && omega != 0.0
+    {
+        return get_jk_rsh(df, dms, kpts, opts, omega);
     }
     if opts.kpts_band.is_some() && !crate::df_jk::band_is_kpts(opts.kpts_band, kpts) {
         let kpts_band = opts.kpts_band.expect("checked Some above");
@@ -712,6 +714,134 @@ pub fn get_jk(
             None
         },
     })
+}
+
+/// `cell.omega = omega` on a copy of `cell` — the assignment
+/// `range_coulomb` makes for the length of its `with` block (`df.py:533-534`,
+/// `aft.py:566-567`; the property writes `_env[PTR_RANGE_OMEGA]`,
+/// `gto/mole.py`). Every `get_coulG(..., omega=None)` on the copy then reads
+/// the attenuated kernel, and `madelung(cell, kpts)` the attenuated probe
+/// charge — which an EXPLICIT `omega` argument would NOT do (`pbc.py:480-484`
+/// switches the probe to full range), so the RSH routes below must thread
+/// omega through the cell, never through `JkOpts::omega` a second time.
+///
+/// # Errors
+/// [`PbcDfError::Core`] when the cell's `_env` has no global-parameter slots
+/// (an unbuilt cell).
+pub(crate) fn cell_with_omega(cell: &Cell, omega: f64) -> Result<Cell, PbcDfError> {
+    let slot = pyscf_gto::PTR_RANGE_OMEGA;
+    if cell.mol._env.len() <= slot {
+        return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(format!(
+                "cell.omega = {omega}: _env has {} slots, need > {slot} (cell not built)",
+                cell.mol._env.len()
+            )),
+        )));
+    }
+    let mut c = cell.clone();
+    c.mol._env[slot] = omega;
+    Ok(c)
+}
+
+/// The AFTDF that `GDF.get_jk` and `MDF.get_jk` swap in for a LONG-range
+/// request (`df.py:470-474`, `mdf.py:190-194`):
+///
+/// ```python
+/// mydf = aft.AFTDF(cell, self.kpts)
+/// ke_cutoff = aft.estimate_ke_cutoff_for_omega(cell, omega)
+/// mydf.mesh = cell.cutoff_to_mesh(ke_cutoff)
+/// with mydf.range_coulomb(omega) as rsh_df: ...
+/// ```
+///
+/// `AFTDF.range_coulomb` (`aft.py:552-582`) only sets `cell.omega`, and the
+/// fresh `AFTDF` has no cached `_rsh_df`, so the copy it yields is this object
+/// on a cell carrying `omega`. The mesh is estimated on the ORIGINAL cell,
+/// before `cell.omega` is set, exactly as upstream orders it (the estimator
+/// takes `omega` explicitly either way). No MDF plane-wave edge screen: the
+/// substitute is a plain `AFTDF`, not the `MDF` object.
+///
+/// # Errors
+/// Propagates [`cell_with_omega`], `cutoff_to_mesh` and the AFTDF build.
+pub(crate) fn rsh_aftdf(
+    cell: &Cell,
+    df_kpts: &[[f64; 3]],
+    omega: f64,
+) -> Result<crate::aftdf::Aftdf, PbcDfError> {
+    let ke_cutoff = crate::rsdf_builder::estimate_ke_cutoff_for_omega(cell, omega, None);
+    let mesh = cell.cutoff_to_mesh(ke_cutoff)?;
+    crate::aftdf::Aftdf::with_mesh(cell_with_omega(cell, omega)?, df_kpts, mesh)
+}
+
+/// `GDF.get_jk(..., omega)` for `omega != 0` — upstream's RSH branch,
+/// `df.py:461-479`, mirrored branch for branch:
+///
+/// * `omega > 0` on a 2-D/3-D cell without `inf_vacuum` — **AFTDF** at the
+///   omega-derived mesh ([`rsh_aftdf`]). Upstream's own comment: "AFT is
+///   computationally more efficient than GDF if the Coulomb attenuation tends
+///   to the long-range role", and "changing to AFT integrator may cause small
+///   difference to the GDF integrator" — so this is NOT a fitted answer, and
+///   it is gated against upstream's AFTDF result, not against plain GDF.
+/// * otherwise `mydf = self` and [`Gdf::range_coulomb`], which admits only
+///   `omega < 0` on a periodic cell; the SHORT-range copy is built through
+///   `_RSGDFBuilder` on a cell carrying `cell.omega = omega`.
+///
+/// The inner call passes `omega = None`, as upstream does: the range
+/// separation now lives in the cell.
+///
+/// # Errors
+/// * `omega > 0` where upstream's `range_coulomb` asserts `omega < 0`;
+/// * [`pyscf_core::PyscfRsError::NotYetImplemented`] where upstream would run
+///   `_CCGDFBuilder` on the attenuated cell — `prefer_ccdf = true`, or a
+///   long-range request on a 0-D cell (`df.py:304`: "For long-range integrals
+///   _CCGDFBuilder is the only option"). Neither is ported for `cell.omega != 0`,
+///   and a plain-Coulomb answer is never substituted;
+/// * propagates the AFTDF or range-separated GDF build.
+pub fn get_jk_rsh(
+    df: &Gdf,
+    dms: &[KMats],
+    kpts: &[[f64; 3]],
+    opts: crate::traits::JkOpts<'_>,
+    omega: f64,
+) -> Result<crate::traits::JkResult, PbcDfError> {
+    let inner = crate::traits::JkOpts {
+        omega: None,
+        ..opts
+    };
+    let cell = &df.cell;
+    if omega > 0.0
+        && cell.dimension >= 2
+        && cell.low_dim_ft_type != pyscf_pbc_gto::LowDimFtType::InfVacuum
+    {
+        let aft = rsh_aftdf(cell, &df.kpts, omega)?;
+        return crate::aft_jk::get_jk(&aft, dms, kpts, inner);
+    }
+    if omega > 0.0 && cell.dimension == 0 {
+        return Err(PbcDfError::Core(
+            pyscf_core::PyscfRsError::NotYetImplemented {
+                phase: 20,
+                what: "GDF.get_jk(omega > 0) on a 0-D cell — upstream builds the \
+                       long-range tensor with _CCGDFBuilder on cell.omega > 0 \
+                       (df.py:304-306), which this port has not ported",
+            },
+        ));
+    }
+    if cell.dimension != 0 && omega > 0.0 {
+        // `df.py:520-521` asserts before anything is built.
+        df.range_coulomb(omega)?;
+    }
+    if df.prefer_ccdf {
+        return Err(PbcDfError::Core(
+            pyscf_core::PyscfRsError::NotYetImplemented {
+                phase: 20,
+                what: "GDF.get_jk(omega < 0) with prefer_ccdf = true — upstream \
+                       builds the short-range tensor with _CCGDFBuilder on \
+                       cell.omega < 0 (df.py:304-306); only the default \
+                       _RSGDFBuilder route is ported for an attenuated cell",
+            },
+        ));
+    }
+    let rsh = df.range_coulomb(omega)?;
+    get_jk(&rsh, dms, kpts, inner)
 }
 
 /// The `aosym` a J-only build needs. J touches only the diagonal `(k, k)`

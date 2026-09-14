@@ -32,10 +32,11 @@ fn tight() -> KScfConfig {
 fn converged(cell: &Cell, nk: [usize; 3], xc: &str) -> (Vec<[f64; 3]>, KDms, PeriodicGrids) {
     let kpts = make_kpts_default(cell, nk).expect("k-mesh");
     let df = Fftdf::with_mesh(cell.clone(), &kpts, MESH).expect("FFTDF");
-    let r = Krks::from_df(Box::new(df), xc)
-        .expect("KRKS")
-        .kernel(&tight())
-        .expect("KRKS");
+    let mut mf = Krks::from_df(Box::new(df), xc).expect("KRKS");
+    // The density is later integrated on `grids` at MESH; keep the SCF's XC
+    // grid there too (`from_df` now defaults it to `cell.mesh`, as upstream).
+    mf.grids = PeriodicGrids::uniform(cell, Some(MESH)).expect("XC grid");
+    let r = mf.kernel(&tight()).expect("KRKS");
     assert!(r.converged);
     let grids = PeriodicGrids::uniform(cell, Some(MESH)).expect("grids");
     (kpts, r.dm, grids)

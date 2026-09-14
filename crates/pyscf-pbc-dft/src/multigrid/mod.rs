@@ -14,6 +14,11 @@ pub mod tasks;
 // 4) and the assembled driver (Task 5).
 pub mod pair;
 pub mod pp;
+// Plan 18-09 — v2 gradient entry points (§1.1): `get_veff_ip1`,
+// `get_nuc_ip1`, `get_nuc_nuc_grad` (pair_grad) and
+// `get_vpploc_part1_ip1`, `vpploc_part1_nuc_grad` (pp_grad).
+pub mod pair_grad;
+pub mod pp_grad;
 pub mod utils;
 
 // K-01 — the k-point-resolved layer over the v2 pair engine (phase 17

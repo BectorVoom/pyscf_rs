@@ -132,8 +132,18 @@ pub fn particle_mesh_ewald_nuc_grad(
     Ok(result)
 }
 
-/// Upstream dispatcher. The 2D truncated-Coulomb branch is unsupported in
-/// PySCF 2.12.1 ewald_methods.py:274-290; inf_vacuum is the supported alternative.
+/// Upstream dispatcher (`ewald_methods.py:256-293`).
+///
+/// * `dimension == 3 && use_particle_mesh_ewald` → [`particle_mesh_ewald_nuc_grad`]
+///   (`:266-267`) — the branch every 3-D reference cell takes once the flag is
+///   on; the flag defaults off both here and upstream (`cell.py:1317`).
+/// * Otherwise → the direct + G-space sum (`:269-292`). `dimension == 2` with a
+///   truncated-Coulomb `low_dim_ft_type` raises upstream (`:288-290`); with
+///   `inf_vacuum` upstream REACHES `:274-288` but crashes inside it —
+///   `get_Gv_weights` returns a per-grid weight array for the non-uniform base
+///   and `:287` passes it to `ctypes.c_double` (`TypeError`). There is no
+///   oracle for that branch, so this port refuses it loudly rather than
+///   shipping un-gated physics.
 pub fn ewald_nuc_grad(
     cell: &Cell,
     eta: Option<f64>,
@@ -143,6 +153,14 @@ pub fn ewald_nuc_grad(
         return Err(PyscfRsError::NotYetImplemented {
             phase: 18,
             what: "2D truncated-Coulomb Ewald nuclear gradient (unsupported upstream)",
+        });
+    }
+    if cell.dimension == 2 {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 18,
+            what: "2D inf_vacuum Ewald nuclear gradient (upstream 2.12.1 crashes \
+                   with TypeError on this branch: per-grid weights array passed \
+                   to ctypes.c_double at ewald_methods.py:287 — no oracle exists)",
         });
     }
     if cell.dimension == 3 && cell.use_particle_mesh_ewald {
@@ -193,7 +211,10 @@ pub fn ewald_nuc_grad(
         let mut fi = fr.clone();
         for (g, v) in gv.iter().enumerate() {
             let g2 = oracle_sum(&v.map(|x| x * x));
-            if g2 == 0.0 {
+            // cell.c:149-175 — `if (G2 < 1e-12) continue`. NOT `== 0`: the
+            // Coulomb factor diverges on any near-zero vector, and the G=0
+            // term of the nuclear gradient is identically zero anyway.
+            if g2 < 1e-12 {
                 continue;
             }
             let factor = 4.0 * PI * gw.weights / g2 * (-g2 / (4.0 * eta * eta)).exp();

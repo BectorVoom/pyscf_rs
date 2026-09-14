@@ -819,7 +819,11 @@ fn run_jk(args: &[String]) {
     // FFT plan cache, and gives us a converged density matrix to drive the
     // direct get_j_kpts/get_k_kpts timing below.
     let df_for_scf = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
-    let krks = Krks::from_df(Box::new(df_for_scf), &xc).expect("KRKS");
+    let mut krks = Krks::from_df(Box::new(df_for_scf), &xc).expect("KRKS");
+    // `from_df` defaults the XC grid to `cell.mesh` (upstream's
+    // `UniformGrids(cell)`); this harness has always timed XC on `--mesh`, so
+    // pin it — `cell_by_name` does not set `cell.mesh`.
+    krks.grids = pyscf_pbc_dft::gen_grid::PeriodicGrids::uniform(&cell, Some(mesh)).expect("grids");
     let cfg = KScfConfig {
         conv_tol: 1e-9,
         max_cycle: 40,
@@ -832,7 +836,9 @@ fn run_jk(args: &[String]) {
     // spin doubling rather than of two different caches.
     let (result, full_kernel_ms) = if driver == "kuks" {
         let df_u = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
-        let kuks = Kuks::from_df(Box::new(df_u), &xc).expect("KUKS");
+        let mut kuks = Kuks::from_df(Box::new(df_u), &xc).expect("KUKS");
+        kuks.grids =
+            pyscf_pbc_dft::gen_grid::PeriodicGrids::uniform(&cell, Some(mesh)).expect("grids");
         let (r, ms) = time_ms(|| kuks.kernel(&cfg).expect("KUKS kernel"));
         // Warm the shared KRKS caches too, so the stage timings below are warm.
         let _ = krks.kernel(&cfg).expect("KRKS kernel");

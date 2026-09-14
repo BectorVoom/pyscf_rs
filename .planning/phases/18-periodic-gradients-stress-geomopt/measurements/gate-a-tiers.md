@@ -26,7 +26,16 @@ a claim that the unmodified upstream suite passes.
 | A3 | 1e-8 | 3.4214315824954156e-9 |
 
 A1 still has little margin on this environment. These are upstream-fixture
-measurements only; the port reference cells, Parseval and Gate E remain pending.
+measurements only; the port reference cells remain for 18-11/18-12/18-13 to
+re-measure. The Parseval residual (18-16 Task 1.2) and Gate E (18-16 Task 2)
+are recorded separately:
+
+- [parseval.md](parseval.md) (+ raw [parseval.out](parseval.out)) — clause-7
+  fused-`hcore` `|real-space − G-space|` relative, all three forms, per
+  reference cell. Explicitly NOT bit-identity.
+- [gate-e-gamma.md](gate-e-gamma.md) (+ raw `gate-e-<cell>.out`) —
+  `pbc/grad/rhf.py` gamma (multigrid-v2) `verify_fd` residual per reference
+  cell. Not comparable to Gate B.
 The original failure and stop below are retained as historical evidence.
 
 ```bash

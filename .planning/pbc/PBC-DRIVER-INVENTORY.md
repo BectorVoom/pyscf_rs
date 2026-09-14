@@ -2,6 +2,16 @@
 
 **Companion to** `PBC-MASTER-PLAN.md`. **186 modules, ~78,000 lines.**
 
+> **THE `St` (STATUS) COLUMN IS UNMAINTAINED — this document is a SCOPE MAP
+> ONLY.** Recorded 2026-09-13 by plan 20-01: all 167 table rows still read
+> `[ ]` (zero `[x]`, zero `[~]`) although Phases 9-12, 14, 15, 17 and 19 are
+> closed and 13, 16 and 18 are partly implemented. Do NOT cite this column as
+> the status of any module. Status authorities are each phase's
+> `*-VERIFICATION.md` and the phase rows of `.planning/ROADMAP.md`; the
+> measured floors are in
+> `.planning/phases/20-pbc-python-bindings/measurements/README.md`. The
+> upstream-file, Rust-target and phase columns remain the scope record.
+
 Columns:
 - **Upstream** — the file under `pyscf/pbc/` to port (line count).
 - **Rust target** — the file to create.

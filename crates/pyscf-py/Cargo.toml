@@ -62,5 +62,30 @@ pyscf-ccsd    = { path = "../pyscf-ccsd" }
 # pulls libxc — xcfun is the default XC backend for pyscf-grad's KS terms).
 pyscf-grad    = { path = "../pyscf-grad" }
 pyscf-geomopt = { path = "../pyscf-geomopt" }
-ndarray       = { workspace = true }
+# Plan 20-07 (complex k-resolved NumPy boundary): `numpy_io.rs` converts the
+# planar `pyscf_algebra::CTensor { re, im }` (D-PBC-02) to/from interleaved
+# numpy `complex128`. Already in the tree transitively (pyscf-scf, pyscf-gto);
+# named directly so the boundary does not depend on a PBC crate for the type.
+pyscf-algebra = { path = "../pyscf-algebra" }
+# Plan 20-08 (nested `_native.pbc.*`): the periodic crates whose bindings land in
+# 20-09 … 20-15. All stay pyo3-free (D-PBC-14) — pyscf-py is the sole pyo3 crate.
+# `pyscf-pbc-dft` is deliberately ABSENT: 20-13 adds it and owns its libxc
+# posture. None of these edges changes the `cargo tree -p pyscf-py | grep -c
+# libxc` count (547 before and after, 20-EXECUTION-NOTES D-20-B).
+pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
+pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
+pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
+pyscf-pbc-symm  = { path = "../pyscf-pbc-symm" }
+pyscf-pbc-lib   = { path = "../pyscf-pbc-lib" }
+pyscf-pbc-tools = { path = "../pyscf-pbc-tools" }
+pyscf-pbc-mp    = { path = "../pyscf-pbc-mp" }
+pyscf-pbc-cc    = { path = "../pyscf-pbc-cc" }
+pyscf-pbc-ci    = { path = "../pyscf-pbc-ci" }
+pyscf-pbc-ao2mo = { path = "../pyscf-pbc-ao2mo" }
+# Added early by 20-09/20-10 (orchestrator Step 0a), bound by 20-13. Default
+# features (`libxc`, D-20-B) — libxc is already in the tree through pyscf-dft.
+# Added once so the dependency set (and feature unification) changes once:
+# every change re-fingerprints `rmath` -> all libxc kernels (~65 min rebuild).
+pyscf-pbc-dft   = { path = "../pyscf-pbc-dft" }
+ndarray      = { workspace = true }
 thiserror     = { workspace = true }

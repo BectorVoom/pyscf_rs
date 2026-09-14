@@ -72,6 +72,7 @@ mod common;
 
 use common::{GATE, cell_args, h2_stretched_spin0, li_atom_spin1, oracle_python, run_python};
 use pyscf_pbc_df::Fftdf;
+use pyscf_pbc_dft::gen_grid::PeriodicGrids;
 use pyscf_pbc_dft::kuks::Kuks;
 use pyscf_pbc_gto::{Cell, make_kpts_default};
 use pyscf_pbc_scf::{KScfConfig, KScfResult, Kuhf};
@@ -132,7 +133,12 @@ fn tight() -> KScfConfig {
 fn kuks(cell: Cell, nk: [usize; 3], xc: &str) -> Kuks {
     let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, MESH_GATE).expect("FFTDF");
-    Kuks::from_df(Box::new(df), xc).expect("KUKS")
+    let mut mf = Kuks::from_df(Box::new(df), xc).expect("KUKS");
+    // The oracle pins `mf.grids.mesh = mesh` as well as `mf.with_df.mesh`;
+    // `from_df` defaults the XC grid to `cell.mesh` (upstream's
+    // `UniformGrids(cell)`), so the grid is pinned explicitly here too.
+    mf.grids = PeriodicGrids::uniform(mf.cell(), Some(MESH_GATE)).expect("XC grid");
+    mf
 }
 
 // ---------------------------------------------------------------------------

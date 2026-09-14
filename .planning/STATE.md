@@ -3,14 +3,26 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Periodic Boundary Conditions
 status: in_progress
-last_updated: "2026-09-07T12:00:00.000Z"
-last_activity: 2026-09-07
+last_updated: "2026-09-13T20:30:00.000Z"
+last_activity: 2026-09-13
+# Counters reconciled 2026-09-13 by plan 20-01. Counting rule, scope = the
+# v2.0 milestone named above (phase directories 09-* … 20-* under
+# .planning/phases/):
+#   total_phases     = number of those phase directories (09…20)          = 12
+#   completed_phases = v2.0 ROADMAP rows ticked [x] (9,10,11,12,14,15,17)  = 7
+#   total_plans      = count of *-PLAN.md files in those directories       = 119
+#   completed_plans  = count of *-SUMMARY.md files in those directories   = 68
+#                      (includes 20-01-SUMMARY.md; phases 10-12 predate
+#                       per-plan files, so they contribute 0 to both)
+#   percent          = round(100 * completed_plans / total_plans)          = 57
+# Reproduce: ls -d .planning/phases/{09,1[0-9],20}-* | wc -l ;
+#   ls .planning/phases/{09,1[0-9],20}-*/*-PLAN.md | wc -l ; same for -SUMMARY.md
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 48
-  completed_plans: 48
-  percent: 100
+  total_phases: 12
+  completed_phases: 7
+  total_plans: 119
+  completed_plans: 68
+  percent: 57
 ---
 
 # Project State
@@ -20,7 +32,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
-**Current focus:** Phase 19 (periodic response + relativistic) — **CLOSED
+**Current focus:** Phase 20 (PBC Python bindings + oracle enforcement) —
+**IN PROGRESS 2026-09-13**, `.planning/phases/20-pbc-python-bindings/`
+(`20-CONTEXT.md`, `20-EXECUTION-NOTES.md`; 18 plans). 20-01 reconciled the gates:
+ROADMAP Phase 14/15/17 boxes ticked from their verifications, 13 and 16 left
+`[ ]` (their verifications do not claim closure), Phase 18 recorded IN PROGRESS
+(paused), the Phase-20 gate restated as the `pyscf._native.pbc` identity
+contract, and the v2.0 floor table written to
+`.planning/phases/20-pbc-python-bindings/measurements/README.md`. Counters in
+the front-matter reconciled (rule stated there). Previous focus: Phase 19
+(periodic response + relativistic) — **CLOSED
 2026-09-13**, `.planning/phases/19-periodic-response-relativistic/19-VERIFICATION.md`
 is the authority. Nineteen plans, all shipped with summaries (19-01…19-19).
 Gates A1/A2/B/D/E MET; Gate C MET for AC on a live fixture and for CD/UAC/slow

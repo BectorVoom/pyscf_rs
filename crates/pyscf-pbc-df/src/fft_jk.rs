@@ -434,14 +434,14 @@ pub fn get_k_kpts_opts(
             // matrix or on which `(k1,k2)` pair produced this `dk` — so they
             // are hoisted into a cache on `Fftdf` that survives the whole SCF
             // instead of being rebuilt on every one of the `Nk^2` pairs.
-            // S-04: hold the cached `Arc` and BORROW its contents. Cloning the
+            // S-04: hold the cached `Arc`s and BORROW their contents. Cloning the
             // tuple deep-copied `coulG` (`ngrids` f64) plus `expmikr` (two
             // `ngrids` planes) on EVERY one of the `Nk^2` pairs — 715 KiB per
             // pair at `MESH_GATE`, ~45 MiB per `get_k_kpts` — which is exactly
             // the pair-invariant work W-01 built this cache to stop paying.
             // Bit-exact: the same bytes, read in place instead of copied.
             let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, &gv)?;
-            let (coulg, expmikr) = (&entry.0, entry.1.as_ref());
+            let (coulg, expmikr) = (entry.coulg.as_slice(), entry.expmikr.as_deref());
 
             // fft_jk.py:283-296 — the AO block loop.
             let mut p0 = 0usize;
@@ -516,7 +516,10 @@ pub fn get_k_kpts_opts(
 
 /// `ao_dms[j, g] = sum_l dm[j, l] conj(ao2T[l, g])` — upstream's
 /// `lib.dot(dms[i,k2], ao2T.conj())` (`fft_jk.py:264`).
-fn dm_times_conj_ao(dm: &CTensor, ao2t: &CTensor, nao: usize, ngrids: usize) -> CTensor {
+///
+/// Shared with the gradient K path (`fft_jk_grad`), whose untagged
+/// `ao_dms` is the same contraction against the value ket table.
+pub(crate) fn dm_times_conj_ao(dm: &CTensor, ao2t: &CTensor, nao: usize, ngrids: usize) -> CTensor {
     // W-02b: `j` indexes disjoint output rows; the reduction over `l` stays
     // serial and ascending inside each of them.
     let mut re = vec![0.0_f64; nao * ngrids];
@@ -782,10 +785,10 @@ fn kk_symmetric_pair_loop(
                 Some(ExxDiv::Ewald) | None => None,
                 other => other,
             };
-            // S-04: borrow through the cached `Arc`; see the twin comment in
+            // S-04: borrow through the cached `Arc`s; see the twin comment in
             // `get_k_kpts_opts`. Same bytes, no per-pair deep copy.
             let entry = df.coulg_and_expmikr(dk, omega, inner_exxdiv, kpts, gv)?;
-            let (coulg, expmikr) = (&entry.0, entry.1.as_ref());
+            let (coulg, expmikr) = (entry.coulg.as_slice(), entry.expmikr.as_deref());
 
             // The ONE transform this pair pays for.
             let rho1 = build_rho1(

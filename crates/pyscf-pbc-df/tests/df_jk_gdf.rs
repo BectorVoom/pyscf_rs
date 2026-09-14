@@ -181,26 +181,60 @@ fn get_jk_through_the_trait_object() {
     assert!(only_j.vj.is_some() && only_j.vk.is_none());
 }
 
-/// `omega` (the range-separated kernel) needs `GDF.range_coulomb`, which is
-/// plan 14-07. It must be refused, not silently ignored — an ignored `omega`
-/// gives a plausible full-range answer to an RSH functional.
+/// Was `omega_is_refused` (plan 14-04). Plan 20-05 replaced the refusal with
+/// upstream's RSH branch (gated against upstream in `tests/gdf_omega.rs`); what
+/// the refusal protected is still asserted here, offline: a set `omega` must
+/// NEVER quietly return the full-range answer, and the attenuated
+/// `_CCGDFBuilder` route this port has not ported stays a named refusal.
 #[test]
-fn omega_is_refused() {
+fn omega_is_honoured_not_ignored() {
     let (d, k) = built(common::he_all_electron(), [1, 1, 1]);
     let nao = d.cell.mol.nao_nr;
     let dms = vec![model_dm(nao, 1)];
-    let e = d
+    let full = d.get_jk(&dms, &k, JkOpts::hermitian()).expect("full range");
+    // A LARGE omega, so that both halves carry a macroscopic share of the
+    // kernel on this dense cell: at `|omega| = 0.2` the long-range G != 0 tail
+    // of He-fcc is ~1e-9 and the short-range matrix sits that close to the
+    // full one — a legitimate answer that a "differs from full range" check
+    // cannot tell from an ignored omega.
+    for omega in [1.0, -1.0] {
+        let rsh = d
+            .get_jk(
+                &dms,
+                &k,
+                JkOpts {
+                    omega: Some(omega),
+                    ..JkOpts::hermitian()
+                },
+            )
+            .unwrap_or_else(|e| panic!("omega = {omega}: {e}"));
+        for (label, a, b) in [("vj", &full.vj, &rsh.vj), ("vk", &full.vk, &rsh.vk)] {
+            let (a, b) = (
+                &a.as_ref().expect("full")[0][0],
+                &b.as_ref().expect("rsh")[0][0],
+            );
+            let diff =
+                a.re.iter()
+                    .zip(b.re.iter())
+                    .fold(0.0_f64, |w, (x, y)| w.max((x - y).abs()));
+            assert!(
+                diff > 1e-3,
+                "{label} at omega = {omega} equals the full-range matrix to {diff:e}"
+            );
+        }
+    }
+
+    let mut cc = Gdf::new(d.cell.clone(), &k);
+    cc.prefer_ccdf = true;
+    let e = cc
         .get_jk(
             &dms,
             &k,
             JkOpts {
-                omega: Some(0.2),
+                omega: Some(-1.0),
                 ..JkOpts::hermitian()
             },
         )
-        .expect_err("omega is 14-07");
-    assert!(
-        format!("{e}").contains("omega") || format!("{e}").contains("14-07"),
-        "got: {e}"
-    );
+        .expect_err("the attenuated _CCGDFBuilder route is not ported");
+    assert!(format!("{e}").contains("_CCGDFBuilder"), "got: {e}");
 }

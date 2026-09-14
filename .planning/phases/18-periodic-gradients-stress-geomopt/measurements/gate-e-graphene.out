@@ -1,0 +1,2 @@
+{"pyscf": "2.12.1", "source": "/home/user/Documents/workspace/pyscf_rs/pyscf/__init__.py"}
+{"cell": "graphene", "mesh": [45, 45, 351], "nao": 8, "precision": 1e-08}

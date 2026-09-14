@@ -3,7 +3,10 @@
 #![warn(clippy::unwrap_used)]
 
 pub mod error;
+pub mod gamma_rhf;
+pub mod gamma_uhf;
 pub mod gradients;
+pub mod stress;
 pub mod tagged_dm;
 pub mod verify_fd;
 pub use error::*;

@@ -65,6 +65,7 @@ use cintx_core::{BasisSet as CintxBasisSet, Representation};
 use cintx_ops::resolver::Resolver;
 use cintx_rs::{EvaluationContext, SessionRequest};
 use cintx_runtime::ExecutionOptions;
+use pyscf_algebra::oracle_sum;
 use pyscf_core::{CoreError, ParsedAtom, ParsedBasis, PyscfRsError, ShellSpec};
 use std::collections::HashMap;
 
@@ -83,6 +84,23 @@ pub const PART2_INTORS: [&str; 5] = [
     "int3c1e_r2_origk",
     "int3c1e_r4_origk",
     "int3c1e_r6_origk",
+];
+
+/// The BRA-derivative (`ip1`) operator per `C_n` term — `pp_int.py:187-188`,
+/// indexed by `cn` exactly like [`PART2_INTORS`]. Index 0 is never used by
+/// [`vpploc_part2_nuc_grad`], whose loop runs `cn = 1..=4`; it is listed so the
+/// indexing matches upstream's tuple exactly.
+///
+/// These are cintx `unstable-source-api` symbols: the `gth-pp` feature
+/// (default-on) enables them, and `oracle_covered = false` means the numeric
+/// gate is upstream PySCF, not cintx's own oracle — the same posture
+/// `Cargo.toml:68-70` records for the scalar half.
+pub const PART2_IP1_INTORS: [&str; 5] = [
+    "int3c2e_ip1",
+    "int3c1e_ip1",
+    "int3c1e_ip1_r2_origk",
+    "int3c1e_ip1_r4_origk",
+    "int3c1e_ip1_r6_origk",
 ];
 
 /// The threshold of the Gaussian-product prescreen — see the module docs.
@@ -483,4 +501,321 @@ pub fn prescreen_exponent(
     let e1 = a * b / ab * d2;
     let e2 = ab * c / (ab + c) * d2pc;
     (-(e1 + e2)).exp()
+}
+
+// ---------------------------------------------------------------------------
+// `vpploc_part2_nuc_grad` — plan 18-03, Task 3.
+// ---------------------------------------------------------------------------
+
+/// `vpploc_part2_nuc_grad(cell, dm, kpts=None)` — `pp_int.py:171-208`.
+///
+/// The nuclear gradient of [`get_pp_loc_part2`]'s short-range matrix,
+/// contracted with the real symmetric density matrix `dm` (F-order
+/// `nao x nao`, the same layout [`get_pp_loc_part2_gamma`] returns):
+///
+/// ```text
+/// grad[A, c] = -2 · Σ_cn Σ_{P ∈ cn} Σ_{mi, ish, mj, jsh}
+///              Σ_{a ∈ ish, b ∈ jsh} B_cn[c, a, b] · dm[oi+a, oj+b]
+///              · (δ_{A, atom(ish)} − δ_{A, atom(P)})
+/// ```
+///
+/// where `B_cn` is the `ip1` (bra-derivative) 3-centre block scaled by the
+/// auxiliary's [`VlocAux::rescale_from_unit_norm`].
+///
+/// Three facts transcribed literally from the C driver
+/// (`fill_ints_screened.c:595-707`, `contract_3c1e_ipik_dm_gs1`) and
+/// `pp_int.py:207`, which must not drift:
+///
+/// 1. The loop visits every ORDERED `(ish, jsh)` pair (`aosym='s1'`), so the
+///    bra-derivative blocks of the two orderings supply the two orbital-centre
+///    derivatives; no `ip2` family is needed.
+/// 2. Each triple's contraction lands on the BRA shell's atom with `+` and on
+///    the AUXILIARY shell's atom with `−` (translational invariance moves the
+///    ket-plus-aux share onto the aux centre).
+/// 3. The whole `(natm, 3)` array is scaled by `-2` (`pp_int.py:207`).
+///
+/// The triple enumeration (neighbour-list reach, `KET_CHUNK` basis batching,
+/// Gaussian-product prescreen) is the SAME code shape as [`accumulate_cn`]'s —
+/// the image list `ls` is derived once for the whole `cn = 1..=4` sweep
+/// (`pp_int.py:190`). `intor_cross_with_images` cannot serve this sum: it
+/// builds two-cell cross bases for the arity-2 `SUPPORTED_INTORS` families,
+/// while this is an arity-3 `[bra | ket-images | auxiliaries]` sum.
+///
+/// # Errors
+/// * [`PyscfRsError::NotYetImplemented`] for non-gamma `kpts` — upstream
+///   `pp_int.py:178-179` raises `NotImplementedError` there too ("k-point
+///   sampling not available"); only the gamma callers (`pbc/grad/rhf.py:66`,
+///   `pbc/grad/uhf.py:64`) exist.
+/// * [`CoreError::InvalidMolecule`] when `dm` is not `nao x nao`, or on a
+///   cintx failure — most likely the `gth-pp` feature being off, which makes
+///   `int3c1e_ip1_r{2,4,6}_origk` unavailable.
+pub fn vpploc_part2_nuc_grad(
+    cell: &Cell,
+    dm: &[f64],
+    kpts: &[[f64; 3]],
+) -> Result<Vec<[f64; 3]>, PyscfRsError> {
+    if kpts.iter().any(|k| !crate::pbc_intor::is_gamma(k)) {
+        return Err(PyscfRsError::NotYetImplemented {
+            phase: 18,
+            what: "vpploc_part2_nuc_grad away from the gamma point: upstream \
+                   pp_int.py:178-179 raises NotImplementedError (k-point \
+                   sampling not available)",
+        });
+    }
+    let nao = cell.mol.nao_nr;
+    if dm.len() != nao * nao {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "vpploc_part2_nuc_grad: dm has {} elements, expected nao x nao = {}",
+            dm.len(),
+            nao * nao
+        ))));
+    }
+    let natm = cell.mol.natm;
+    let mut grad = vec![[0.0_f64; 3]; natm];
+    if cell.pseudo.is_none() || nao == 0 || natm == 0 {
+        return Ok(grad);
+    }
+
+    // pp_int.py:190 — ONE image list for every C_n term.
+    let ls = crate::lattice::get_lattice_ls_default(cell)?;
+    let cell_rcut = cell.rcut_by_shells(None);
+
+    for cn in 1..=4usize {
+        let aux = fake_cell_vloc(cell, cn)?;
+        if aux.is_empty() {
+            continue;
+        }
+        accumulate_cn_grad(cell, dm, &aux, cn, &ls, &cell_rcut, &mut grad)?;
+    }
+    for row in grad.iter_mut() {
+        for c in 0..3 {
+            row[c] *= -2.0;
+        }
+    }
+    Ok(grad)
+}
+
+/// One `C_n` term's gradient contribution — the derivative sibling of
+/// [`accumulate_cn`]. The screening domain (`reach`, `used`, prescreen) is
+/// deliberately the same enumeration: a triple the energy drops must not
+/// reappear here, and vice versa.
+fn accumulate_cn_grad(
+    cell: &Cell,
+    dm: &[f64],
+    aux: &[VlocAux],
+    cn: usize,
+    ls: &[[f64; 3]],
+    cell_rcut: &[f64],
+    grad: &mut [[f64; 3]],
+) -> Result<(), PyscfRsError> {
+    let nao = cell.mol.nao_nr;
+    let nbas = cell.mol.nbas;
+    let coords = cell.mol.atom_coords();
+    let naux = aux.len();
+
+    let aux_rcut: Vec<f64> = aux
+        .iter()
+        .map(|a| {
+            pgf_rcut(
+                0,
+                a.alpha,
+                a.coeff.abs(),
+                EPS_PPL,
+                0.0,
+                crate::cutoff::RCUT_MAX_CYCLE,
+                crate::cutoff::RCUT_EPS,
+            )
+        })
+        .collect();
+
+    let shell_atom = |s: usize| -> usize {
+        use pyscf_core::raw_layout::{ATOM_OF, BAS_SLOTS};
+        cell.mol._bas[s * BAS_SLOTS + ATOM_OF] as usize
+    };
+
+    let reach: Vec<Vec<Vec<usize>>> = (0..naux)
+        .map(|k| {
+            let rp = coords[aux[k].atom];
+            (0..nbas)
+                .map(|s| {
+                    let rmax = cell_rcut[s] + aux_rcut[k];
+                    let rs = coords[shell_atom(s)];
+                    ls.iter()
+                        .enumerate()
+                        .filter(|(_, l)| {
+                            let d = [
+                                rs[0] + l[0] - rp[0],
+                                rs[1] + l[1] - rp[1],
+                                rs[2] + l[2] - rp[2],
+                            ];
+                            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < rmax
+                        })
+                        .map(|(m, _)| m)
+                        .collect()
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut used: Vec<usize> = reach
+        .iter()
+        .flatten()
+        .flatten()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    used.sort_unstable();
+    if used.is_empty() {
+        return Ok(());
+    }
+
+    let diffuse: Vec<(f64, f64)> = (0..nbas).map(|s| most_diffuse(cell, s)).collect();
+
+    let aux_atoms: Vec<ParsedAtom> = aux.iter().map(|a| cell.mol._atom[a.atom].clone()).collect();
+    let mut aux_basis: HashMap<String, ParsedBasis> = HashMap::new();
+    for a in aux {
+        let key = crate::pseudo::normalise_symbol(&cell.mol._atom[a.atom].0);
+        aux_basis.entry(key).or_insert_with(|| ParsedBasis {
+            shells: vec![ShellSpec {
+                l: 0,
+                exponents: vec![a.alpha],
+                coeffs: vec![vec![1.0]],
+            }],
+        });
+    }
+
+    let intor = PART2_IP1_INTORS[cn];
+    let descriptor = Resolver::descriptor_by_symbol(&pyscf_gto::add_suffix(intor, cell.mol.cart))
+        .map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx-ops resolver does not know '{intor}': {e}. The `gth-pp` feature \
+                     (cintx `unstable-source-api`) must be on for the ip1/origk family."
+        )))
+    })?;
+    let representation = if cell.mol.cart {
+        Representation::Cart
+    } else {
+        Representation::Spheric
+    };
+    let opts = ExecutionOptions::default();
+    let ctx = EvaluationContext::new();
+
+    let (probe, probe_nbas, probe_naux) = build_basis(cell, ls, &[0, 0], &aux_atoms, &aux_basis)?;
+    if probe_nbas != nbas || probe_naux != naux {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "vpploc_part2_nuc_grad: basis layout mismatch (shells {probe_nbas} vs {nbas}, \
+             auxiliaries {probe_naux} vs {naux})"
+        ))));
+    }
+    let pmeta = probe.meta();
+    let ao_off: Vec<usize> = (0..nbas)
+        .map(|s| pmeta.shell_offset(s).unwrap_or(0))
+        .collect();
+    let ao_cnt: Vec<usize> = (0..nbas).map(|s| pmeta.ao_count(s).unwrap_or(0)).collect();
+    drop(probe);
+
+    // --- The double lattice sum, bra image outer (same nest as energy). ---
+    let mut triples: Vec<(usize, usize, usize, usize)> = Vec::new();
+    for &mi in &used {
+        triples.clear();
+        for k in 0..naux {
+            let rp = coords[aux[k].atom];
+            let ck = aux[k].alpha;
+            for ish in 0..nbas {
+                if ao_cnt[ish] == 0 || !reach[k][ish].contains(&mi) {
+                    continue;
+                }
+                let ri = coords[shell_atom(ish)];
+                let ai = [ri[0] + ls[mi][0], ri[1] + ls[mi][1], ri[2] + ls[mi][2]];
+                let (ea, ca) = diffuse[ish];
+                for jsh in 0..nbas {
+                    if ao_cnt[jsh] == 0 {
+                        continue;
+                    }
+                    let rj = coords[shell_atom(jsh)];
+                    let (eb, cb) = diffuse[jsh];
+                    let cmax = ca * cb * aux[k].coeff.abs();
+                    for &mj in &reach[k][jsh] {
+                        let bj = [rj[0] + ls[mj][0], rj[1] + ls[mj][1], rj[2] + ls[mj][2]];
+                        if prescreen_exponent(ea, &ai, eb, &bj, ck, &rp) * cmax < PRESCREEN_EPS {
+                            continue;
+                        }
+                        triples.push((mj, ish, jsh, k));
+                    }
+                }
+            }
+        }
+        if triples.is_empty() {
+            continue;
+        }
+        triples.sort_unstable();
+
+        let mut cursor = 0usize;
+        while cursor < triples.len() {
+            let mut kets: Vec<usize> = Vec::with_capacity(KET_CHUNK);
+            let start = cursor;
+            while cursor < triples.len() && kets.len() < KET_CHUNK {
+                let mj = triples[cursor].0;
+                if kets.last() != Some(&mj) {
+                    if kets.len() == KET_CHUNK {
+                        break;
+                    }
+                    kets.push(mj);
+                }
+                cursor += 1;
+            }
+            let mut shifts: Vec<usize> = Vec::with_capacity(1 + kets.len());
+            shifts.push(mi);
+            shifts.extend_from_slice(&kets);
+            let (basis, _, _) = build_basis(cell, ls, &shifts, &aux_atoms, &aux_basis)?;
+            let aux_shell0 = shifts.len() * nbas;
+
+            for &(mj, ish, jsh, k) in &triples[start..cursor] {
+                let p = kets.iter().position(|m| *m == mj).expect("ket in chunk");
+                let di = ao_cnt[ish];
+                let dj = ao_cnt[jsh];
+                // Component-leading [3, di, dj]: element (c, a, b) at
+                // c*di*dj + a + b*di — the `ComponentLeadingFOrder{3}` layout.
+                let block = eval3c(
+                    &basis,
+                    &ctx,
+                    descriptor.id,
+                    representation,
+                    &opts,
+                    ish,
+                    (1 + p) * nbas + jsh,
+                    aux_shell0 + k,
+                    3 * di * dj,
+                    intor,
+                )?;
+                // contract_3c1e_ipik_dm_gs1: t[c] = Σ_{a,b} B[c,a,b]·dm,
+                // grad[atom(ish)] += t, grad[atom(aux)] −= t.
+                let scale = aux[k].rescale_from_unit_norm();
+                let oi = ao_off[ish];
+                let oj = ao_off[jsh];
+                let ia = shell_atom(ish);
+                let ka = aux[k].atom;
+                let mut t = [0.0_f64; 3];
+                for c in 0..3 {
+                    let mut terms = Vec::with_capacity(di * dj);
+                    for jj in 0..dj {
+                        for ii in 0..di {
+                            terms.push(
+                                scale
+                                    * block[c * di * dj + ii + jj * di]
+                                    * dm[(oi + ii) + (oj + jj) * nao],
+                            );
+                        }
+                    }
+                    t[c] = oracle_sum(&terms);
+                }
+                for c in 0..3 {
+                    grad[ia][c] += t[c];
+                    grad[ka][c] -= t[c];
+                }
+            }
+        }
+    }
+    Ok(())
 }

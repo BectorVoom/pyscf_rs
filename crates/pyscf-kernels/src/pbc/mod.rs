@@ -11,11 +11,15 @@
 //! Phase 10 plan 10-04 adds K-08 (`eval_ao_k_accumulate`).
 
 //! Phase 13 plan 13-01 adds K-15 (`ft_aopair`) — the largest new kernel in v2.0.
+//!
+//! Phase 18 plan 18-11 adds the strain-tensor AO derivative collocation
+//! (`strain_ao`) — the stress half's only new cubecl kernel.
 
 pub mod bloch;
 pub mod eval_ao_k;
 pub mod ewald;
 pub mod multigrid_grad;
+pub mod strain_ao;
 pub mod ft_aopair;
 pub mod gv;
 pub mod struct_factor;
@@ -26,5 +30,9 @@ pub use eval_ao_k::{AO_IMAGE_BATCH_MAX, AoImageBatch, AoKAccumulator, eval_ao_k_
 pub use ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use ft_aopair::{FtAopairTables, ft_aopair};
 pub use gv::gv;
+pub use strain_ao::{
+    Deriv2AoOutput, StrainAoOutput, eval_ao_deriv2, eval_strain_ao, strain_block_map, strain_comp,
+    strain_nblocks, strain_scale,
+};
 pub use struct_factor::struct_factor;
 pub use zhadamard::zhadamard;

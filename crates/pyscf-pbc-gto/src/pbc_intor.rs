@@ -275,6 +275,17 @@ pub const SUPPORTED_INTORS: &[&str] = &[
     "int1e_ipovlp",
     "int1e_ipkin",
     "int1e_ipnuc",
+    // Plan 18-03 — the `_int_vnl` derivative halves of `pp_int.py:454`
+    // (`vppnl_nuc_grad` via `ppnl_half_ip2`): `<p_0| r^n |d/dR j>` with the
+    // origin on the projector centre. Same `ComponentLeadingFOrder { 3 }`
+    // layout as the `ip` families above, resolved through
+    // `pyscf_gto::layout_table`; same `gth-pp` (`unstable-source-api`) gate
+    // and `oracle_covered = false` posture as the scalar `origi` half.
+    // `int1e_ipovlp` doubles as the rank-0 derivative half (negated to turn
+    // its bra derivative into the ket derivative `_int_vnl` needs —
+    // `pp_int.py:457-460`), so it needs no new symbol.
+    "int1e_r2_origi_ip2",
+    "int1e_r4_origi_ip2",
     // Plan 14-01: `incore.fill_2c2e` is `auxcell.pbc_intor('int2c2e', ...)` —
     // the auxiliary metric of every Gaussian density fitting builder. It is an
     // arity-2 two-electron operator, so it goes through the same lattice sum as

@@ -24,9 +24,12 @@ pub mod vloc;
 pub mod vloc_part2;
 // Plan 10-06 — the non-local part.
 pub mod vnl;
+// Plan 18-03 — the non-local nuclear gradient.
+pub mod vnl_grad;
 
 pub use vloc_part2::{
-    EPS_PPL, PART2_INTORS, PRESCREEN_EPS, get_pp_loc_part2, get_pp_loc_part2_gamma,
+    EPS_PPL, PART2_INTORS, PART2_IP1_INTORS, PRESCREEN_EPS, get_pp_loc_part2,
+    get_pp_loc_part2_gamma, vpploc_part2_nuc_grad,
 };
 
 pub use vloc::{
@@ -37,6 +40,8 @@ pub use vloc::{
 pub use vnl::{
     FakeCellVnl, HlBlock, MAX_NPROJ, PLI_FAC, VNL_INTORS, fake_cell_vnl, get_pp_nl, int_vnl,
 };
+
+pub use vnl_grad::{VNL_IP2_INTORS, contract_ppnl_nuc_grad, int_vnl_ip2, vppnl_nuc_grad};
 
 /// Parsed GTH pseudopotential data for one cell, keyed by ELEMENT SYMBOL
 /// (upper-cased alphabetic prefix, matching `Mole::_basis`' convention).

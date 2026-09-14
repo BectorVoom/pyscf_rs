@@ -152,6 +152,143 @@ fn deriv_count(eval_name: &str) -> u32 {
     eval_name.matches("ip").count() as u32
 }
 
+/// Parse the 18-11 strain-tensor eval names
+/// (`GTOval_{sph,cart}_deriv{0,1}_strain_tensor` — the `feval` family
+/// `rks_stress.py:137-140` selects). Returns `(spherical, deriv)`.
+///
+/// Anything else containing `strain_tensor` (`deriv >= 2`, misspellings) is
+/// `None`: the caller turns that into the Task-4 named refusal, never a
+/// fall-through to the non-strain family (the R-14 shape).
+fn parse_strain_eval_name(eval_name: &str) -> Option<(bool, u32)> {
+    match eval_name {
+        "GTOval_sph_deriv0_strain_tensor" => Some((true, 0)),
+        "GTOval_cart_deriv0_strain_tensor" => Some((false, 0)),
+        "GTOval_sph_deriv1_strain_tensor" => Some((true, 1)),
+        "GTOval_cart_deriv1_strain_tensor" => Some((false, 1)),
+        _ => None,
+    }
+}
+
+/// `PYSCF_PBC_STRAIN_SCREEN`, read per call. `0`/`false`/`no`/`off`
+/// disables the 18-11 bounding-box screen; anything else, including unset,
+/// leaves it on. Off is the bisection switch (the screen drops terms, so it
+/// is the first thing to rule out when a strain result moves).
+fn strain_screen_enabled() -> bool {
+    !std::env::var("PYSCF_PBC_STRAIN_SCREEN").is_ok_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+/// The 18-11 strain branch of [`eval_ao_kpts_with_images`]: drive
+/// `pyscf_kernels::pbc::eval_strain_ao` and reshape to the
+/// `(3, 3, comp, ngrids, nao)`-per-k-point table
+/// `_eval_ao_strain_derivatives` produces (`rks_stress.py:143-146`).
+///
+/// The image list is rebuilt here with `estimate_rcut_for_eval(cell,
+/// deriv+1)` — one derivative order above the output, so conservative —
+/// rather than reusing the caller's `ls`: the lattice range is
+/// order-dependent, and a value-order list would under-converge the
+/// gradient/hessian tails. `EvalAoKptsOutput.comp` is the flat strain-block
+/// count `9*comp` (`grid_ao.c:442`); block `b = (x*3+y)*comp+c` reshapes to
+/// `[x, y, c]` C-order exactly as upstream's
+/// `out.reshape(3,3,comp,ngrids,-1)`.
+///
+/// # Errors
+/// As [`eval_ao_kpts`], plus the Task-4 named refusal for `deriv >= 2`.
+fn eval_strain_ao_kpts(
+    cell: &Cell,
+    eval_name: &str,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+) -> Result<EvalAoKptsOutput, PyscfRsError> {
+    let Some((spherical, deriv)) = parse_strain_eval_name(eval_name) else {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "eval_ao_kpts: refusing strain_tensor eval name {eval_name:?}: only \
+             GTOval_{{sph,cart}}_deriv{{0,1}}_strain_tensor have an upstream caller \
+             (rks_stress.py:137-140); deriv >= 2 has no oracle and must not fall \
+             through to the non-strain family (18-11 Task 4)"
+        ))));
+    };
+    let ngrids = coords.len();
+    let nkpts = kpts.len();
+    let _call_span = tracing::info_span!(
+        "pbc_eval_ao_strain",
+        nkpts = nkpts as u64,
+        ngrids = ngrids as u64,
+        deriv = deriv as u64,
+        spherical = spherical,
+    )
+    .entered();
+
+    let client = select_backend()
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts: backend selection failed: {e}"
+            )))
+        })?
+        .client;
+
+    let rcut = estimate_rcut_for_eval(cell, deriv + 1)?;
+    let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
+    // `discard = false` — same superset argument as the value path (module docs).
+    let ls = crate::lattice::get_lattice_ls(cell, Some(rmax), None, false)?;
+    let atom_coords = cell.mol.atom_coords();
+    let out = pyscf_kernels::pbc::eval_strain_ao(
+        &client,
+        coords,
+        kpts,
+        &ls,
+        &cell.mol._atm,
+        &cell.mol._bas,
+        &cell.mol._env,
+        &atom_coords,
+        deriv,
+        spherical,
+        Some(&rcut),
+        strain_screen_enabled(),
+    )
+    .map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "eval_ao_kpts: strain collocation failed for {eval_name:?}: {e}"
+        )))
+    })?;
+    let blocks = pyscf_kernels::pbc::strain_nblocks(deriv).map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "eval_ao_kpts: strain block count for {eval_name:?}: {e}"
+        )))
+    })?;
+
+    // One CTensor per k, dropping the imaginary plane at gamma
+    // (eval_gto.py:157-158) — same as the value path.
+    let gamma: Vec<bool> = kpts.iter().map(is_gamma).collect();
+    let mut kaos = Vec::with_capacity(nkpts);
+    for (k, is_g) in gamma.iter().enumerate() {
+        let (re, im) = match (out.re.get(k), out.im.get(k)) {
+            (Some(re), Some(im)) => (
+                re.clone(),
+                if *is_g {
+                    vec![0.0; re.len()]
+                } else {
+                    im.clone()
+                },
+            ),
+            _ => (Vec::new(), Vec::new()),
+        };
+        kaos.push(CTensor::from_planes(re, im));
+    }
+
+    Ok(EvalAoKptsOutput {
+        kaos,
+        ngrids: out.ngrids,
+        nao: out.nao,
+        comp: blocks,
+        gamma,
+    })
+}
+
 /// `cell.pbc_eval_gto(eval_name, coords, kpts)` — `eval_gto.py:32-167`.
 ///
 /// `eval_name` is a MOLECULAR name (`"GTOval_sph"`, `"GTOval_sph_deriv1"`, …);
@@ -219,6 +356,13 @@ pub fn eval_ao_kpts_with_images(
             )))
         })?
         .client;
+
+    // 18-11: the strain-tensor family bypasses the value path entirely —
+    // different image list (order-dependent rcut), different kernel, and a
+    // refusal (not a fall-through) for anything outside the four names.
+    if eval_name.contains("strain_tensor") {
+        return eval_strain_ao_kpts(cell, eval_name, coords, kpts);
+    }
 
     // K-07 — the same `exp(+i k·L)` table the 1-electron driver uses.
     let kflat: Vec<f64> = kpts.iter().flatten().copied().collect();

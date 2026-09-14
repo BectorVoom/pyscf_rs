@@ -97,10 +97,11 @@ fn cached_accessor_matches_the_uncached_formula() {
                     .expect("coulg_and_expmikr");
 
                 assert_eq!(
-                    got.0, want_coulg,
+                    got.coulg.as_slice(),
+                    want_coulg.as_slice(),
                     "coulG mismatch at dk={dk:?} omega={omega:?}"
                 );
-                match (&got.1, &want_expmikr) {
+                match (&got.expmikr, &want_expmikr) {
                     (None, None) => {}
                     (Some(g), Some(w)) => {
                         assert_eq!(g.re, w.re, "expmikr.re mismatch at dk={dk:?}");

@@ -87,10 +87,35 @@ impl Krks {
 
     /// `KRKS` over an explicitly configured density-fitting object.
     ///
+    /// The XC grid is the uniform grid on **`cell.mesh`**, never the DF's
+    /// mesh — see the comment in the body. A caller that pins a DF mesh and
+    /// wants the XC quadrature on it too (upstream's `mf.grids.mesh = mesh`)
+    /// must assign [`Krks::grids`] explicitly.
+    ///
     /// # Errors
     /// Propagates the grid construction.
     pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
-        let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
+        // Upstream's default XC grid follows the CELL, whatever DF is attached:
+        // `KohnShamDFT.__init__` sets `self.grids = gen_grid.UniformGrids(self.cell)`
+        // (pyscf/pbc/dft/rks.py:272) and `UniformGrids.__init__` seeds
+        // `self.mesh = cell.mesh` (pyscf/pbc/dft/gen_grid.py:72). Assigning
+        // `mf.with_df = df.GDF(...)` or setting `mf.with_df.mesh` does not
+        // touch it. The only upstream paths that move the grid off `cell.mesh`
+        // are explicit and not modelled by this constructor:
+        // * `mf.density_fit()` / `rs_density_fit()` / `mix_density_fit()`
+        //   replace it with `BeckeGrids` (rks.py:110-121, `_patch_df_beckegrids`),
+        //   and `jk_method('RS...')` likewise (rks.py:315-321);
+        // * `multigrid_numint(mesh)` sets `_numint.mesh` (krks.py:284-290),
+        //   whose default is again `cell.mesh` (multigrid.py:1804) — and the
+        //   multigrid `KsNumInt` arms here never read `grids` for their mesh.
+        // Low-dimensional cells take no special case: `UniformGrids` still
+        // reads `cell.mesh`. Previously this took `with_df.mesh()`, which for
+        // GDF is the RS long-range mesh ([13,13,13] vs cell.mesh [35,35,35] on
+        // si 2x2x2) and cost 1.432e-06 Ha in `exc` (Phase 20-04,
+        // measurements/gdf-ksymm-bisect.md). `None` resolves through
+        // `cell.try_mesh()`, the same resolution `Fftdf::new` uses, so
+        // `Krks::new` is unchanged.
+        let grids = PeriodicGrids::uniform(with_df.cell(), None)?;
         let ni = KsNumInt::grid(with_df.kpts());
         Ok(Self {
             with_df,

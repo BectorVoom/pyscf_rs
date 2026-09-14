@@ -183,4 +183,54 @@ pub trait PeriodicDf: std::fmt::Debug + Send + Sync {
             )),
         )))
     }
+
+    /// `get_jk_e1` — the two-electron half of a k-point gradient (plan 18-04).
+    ///
+    /// Exists ONLY on FFTDF (`pyscf/pbc/df/fft.py:324-340`); every other
+    /// route inherits this default, which is a NAMED refusal, never a
+    /// fallback to another route. `FFTDF` overrides it with the real port.
+    fn get_jk_e1(
+        &self,
+        _dms: &[KMats],
+        _kpts: &[[f64; 3]],
+        _opts: JkOpts<'_>,
+        _mo: Option<&crate::fft_jk_grad::TaggedMo>,
+    ) -> Result<crate::fft_jk_grad::GradJkResult, PbcDfError> {
+        Err(crate::fft_jk_grad::grad_route_refusal(
+            self.name(),
+            "get_jk_e1",
+        ))
+    }
+
+    /// `get_j_e1` — the Coulomb half (`fft.py:330-333`). Named refusal by
+    /// default; `FFTDF` overrides it.
+    fn get_j_e1(
+        &self,
+        _dms: &[KMats],
+        _kpts: &[[f64; 3]],
+        _kpts_band: Option<&[[f64; 3]]>,
+    ) -> Result<crate::fft_jk_grad::GradMats, PbcDfError> {
+        Err(crate::fft_jk_grad::grad_route_refusal(
+            self.name(),
+            "get_j_e1",
+        ))
+    }
+
+    /// `get_k_e1` — the exchange half (`fft.py:335-340`). Named refusal by
+    /// default; `FFTDF` overrides it.
+    #[allow(clippy::too_many_arguments)]
+    fn get_k_e1(
+        &self,
+        _dms: &[KMats],
+        _kpts: &[[f64; 3]],
+        _kpts_band: Option<&[[f64; 3]]>,
+        _exxdiv: Option<ExxDiv>,
+        _omega: Option<f64>,
+        _mo: Option<&crate::fft_jk_grad::TaggedMo>,
+    ) -> Result<crate::fft_jk_grad::GradMats, PbcDfError> {
+        Err(crate::fft_jk_grad::grad_route_refusal(
+            self.name(),
+            "get_k_e1",
+        ))
+    }
 }

@@ -112,12 +112,80 @@ pub(crate) fn check_exxdiv(exxdiv: Option<pyscf_pbc_gto::ExxDiv>) -> Result<(), 
     Ok(())
 }
 
+/// `MDF.get_jk(..., omega)` — upstream's RSH branch, `mdf.py:181-199`,
+/// mirrored branch for branch:
+///
+/// * `omega > 0` and (`dimension >= 2` **or** `low_dim_ft_type !=
+///   'inf_vacuum'`) — **AFTDF** at the omega-derived mesh
+///   ([`crate::gdf::jk::rsh_aftdf`]). The condition is `or` here where
+///   `GDF.get_jk` has `and` (`df.py:470-471`); that is upstream's text and it
+///   is kept as written. Upstream's own caveat: "changing to AFT integrator may
+///   cause small difference to the MDF integrator".
+/// * otherwise `mydf = self` and [`Mdf::range_coulomb`], which admits only
+///   `omega < 0` on a periodic cell (so `omega == 0` is an error, as upstream's
+///   `assert omega < 0` makes it). The short-range copy runs `_RSMDFBuilder`
+///   on a cell carrying `cell.omega = omega`, and its plane-wave half reads the
+///   same attenuated `coulG` through `MDF.weighted_coulG`.
+///
+/// # Errors
+/// * `omega >= 0` where upstream's `range_coulomb` asserts `omega < 0`;
+/// * [`pyscf_core::PyscfRsError::NotYetImplemented`] where upstream would run
+///   `_CCMDFBuilder` on the attenuated cell (`prefer_ccdf = true` — this port's
+///   `Mdf` default — or a long-range request on a 0-D cell, `mdf.py:126`);
+/// * propagates the AFTDF or range-separated MDF build.
+pub fn get_jk_rsh(
+    df: &Mdf,
+    dms: &[KMats],
+    kpts: &[[f64; 3]],
+    opts: JkOpts<'_>,
+    omega: f64,
+) -> Result<JkResult, PbcDfError> {
+    let inner = JkOpts {
+        omega: None,
+        ..opts
+    };
+    let cell = &df.cell;
+    if omega > 0.0
+        && (cell.dimension >= 2 || cell.low_dim_ft_type != pyscf_pbc_gto::LowDimFtType::InfVacuum)
+    {
+        let aft = crate::gdf::jk::rsh_aftdf(cell, &df.kpts, omega)?;
+        return crate::aft_jk::get_jk(&aft, dms, kpts, inner);
+    }
+    if cell.dimension != 0 && omega >= 0.0 {
+        // `df.py:520-521` asserts before anything is built.
+        df.range_coulomb(omega)?;
+    }
+    if omega > 0.0 {
+        return Err(PbcDfError::Core(
+            pyscf_core::PyscfRsError::NotYetImplemented {
+                phase: 20,
+                what: "MDF.get_jk(omega > 0) on a 0-D inf_vacuum cell — upstream \
+                       builds the long-range tensor with _CCMDFBuilder on \
+                       cell.omega > 0 (mdf.py:126-128), which this port has not ported",
+            },
+        ));
+    }
+    if df.prefer_ccdf {
+        return Err(PbcDfError::Core(
+            pyscf_core::PyscfRsError::NotYetImplemented {
+                phase: 20,
+                what: "MDF.get_jk(omega < 0) with prefer_ccdf = true — upstream \
+                       builds the short-range tensor with _CCMDFBuilder on \
+                       cell.omega < 0 (mdf.py:126-128); only the _RSMDFBuilder \
+                       route (prefer_ccdf = false, upstream's default) is ported \
+                       for an attenuated cell",
+            },
+        ));
+    }
+    let rsh = df.range_coulomb(omega)?;
+    get_jk(&rsh, dms, kpts, inner)
+}
+
 /// `MDF.get_jk` — the [`crate::traits::PeriodicDf`] entry point
 /// (`mdf.py:180-215`).
 ///
 /// # Errors
-/// Propagates both halves; refuses `omega`, which upstream reaches through
-/// `range_coulomb` and an AFTDF substitution (plan 14-07 owns it). `kpts_band`
+/// Propagates both halves, and [`get_jk_rsh`] for a set `omega`. `kpts_band`
 /// was closed by plan 17-10 Task 4 — both halves now rebuild what they need
 /// (GDF's `_cderi` over the k-point union; AFTDF needs no rebuild at all,
 /// since its FT loop takes an arbitrary k-point list directly).
@@ -127,15 +195,10 @@ pub fn get_jk(
     kpts: &[[f64; 3]],
     opts: JkOpts<'_>,
 ) -> Result<JkResult, PbcDfError> {
-    if opts.omega.is_some() {
-        return Err(PbcDfError::Core(
-            pyscf_core::PyscfRsError::NotYetImplemented {
-                phase: 14,
-                what: "MDF.get_jk(omega) — upstream SWAPS THE BUILDER for an AFTDF at \
-                       a range-separated ke_cutoff (mdf.py:186-205), which is not the \
-                       same integrator; plan 14-07 owns the omega machinery",
-            },
-        ));
+    // `mdf.py:181` — `if omega is not None`. Unlike `GDF.get_jk`, a zero
+    // omega is NOT the plain request here; see [`get_jk_rsh`].
+    if let Some(omega) = opts.omega {
+        return get_jk_rsh(df, dms, kpts, opts, omega);
     }
     if opts.kpts_band.is_some() && !crate::df_jk::band_is_kpts(opts.kpts_band, kpts) {
         let kpts_band = opts.kpts_band.expect("checked Some above");

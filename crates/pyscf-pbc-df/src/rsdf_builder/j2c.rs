@@ -135,13 +135,25 @@ pub fn get_2c2e(
     // error in the converged KRHF energy — five orders above upstream's
     // 5.222e-10 GDF/RSDF gap. With it, the two agree.
     // `rsdf_builder.py:274` passes `precision = auxcell.precision**1.5`;
-    // `mdf.py:265` passes NONE, i.e. `auxcell.precision`. A SMALLER precision
-    // gives a LARGER radius, so RSGDF's is the more conservative of the two and
-    // is used for both — matching `mdf.py`'s looser value was MEASURED worse
-    // (He-fcc 2x2x2 RSMDF: 1.160e-6 at `**1.5`, 1.324e-6 at `precision`), which
-    // is what a truncated analytic sum looks like. The radius feeds a real-space
-    // sum whose truncation no mesh can compensate, so erring long is right.
-    let precision = auxcell.cell.precision.powf(1.5);
+    // `mdf.py:264` passes NONE, i.e. `auxcell.precision`. Each scheme now uses
+    // its OWN upstream value.
+    //
+    // History: RSGDF's tighter value used to be applied to both, because
+    // matching `mdf.py`'s looser one was measured WORSE at the time (He-fcc
+    // 2x2x2 RSMDF at [7,7,7]: 1.160e-6 at `**1.5`, 1.324e-6 at `precision`).
+    // Both numbers sat three orders above the metric's own effect and were
+    // measured while `incore::int3c::aux_e2_intor` still screened the
+    // short-range real-space tensor with an OVERLAP radius (fixed by plan
+    // 20-05), so they did not isolate this choice. Isolated — short-range
+    // `MDF.get_jk(omega = -0.33)` on the same system, same [7,7,7] mesh — the
+    // port sat 2.155e-8 off upstream at `**1.5` against 1.791e-9 once upstream
+    // itself was run at `**1.5`: the radius is what separates the two, so the
+    // mixed scheme takes `mdf.py`'s.
+    let precision = if mixed {
+        auxcell.cell.precision
+    } else {
+        auxcell.cell.precision.powf(1.5)
+    };
     let mut aux_sr = auxcell.clone();
     aux_sr.cell.rcut =
         crate::rsdf_builder::omega::estimate_rs_2c2e_rcut(&auxcell.cell, omega, Some(precision));

@@ -6,6 +6,23 @@ use pyscf_algebra::{CTensor, oracle_sum};
 use pyscf_core::{CoreError, PyscfRsError};
 use pyscf_pbc_gto::{Cell, NeighborList};
 
+/// Default screening switch for `_contract_vhf_dm` at the gamma-gradient
+/// call sites (`gamma_rhf`, `gamma_uhf`).
+///
+/// Named by 18-17 Task 1 (`measurements/sizings.md` §Task 1): direct
+/// `_contract_vhf_dm` calls with a dense deterministic dm (`A+A.T`,
+/// least-screenable input), screen True vs False, give
+/// `max|de_screened − de_unscreened| = 0.0` — bitwise-identical output — on
+/// all five reference cells (diamond, si, lif, he_fcc, graphene). The wall
+/// ratio favouring unscreened (5–73×) is pure per-call
+/// `build_neighbor_list_for_shlpairs` construction overhead dominating a
+/// sub-ms contraction at `nao ≤ 8`, not the contraction cost, and does not
+/// transfer to production sizes. Ruling: keep upstream's
+/// `SCREEN_VHF_DM_CONTRA = True` (`pbc/grad/rhf.py:30`). Both branches stay
+/// (the neighbour list already exists); the Gate-E finite-difference gate
+/// runs against this screened default.
+pub const SCREEN_VHF_DM_CONTRACT: bool = true;
+
 fn invalid(message: &str) -> PyscfRsError {
     CoreError::InvalidMolecule(format!("contract_vhf_dm: {message}")).into()
 }

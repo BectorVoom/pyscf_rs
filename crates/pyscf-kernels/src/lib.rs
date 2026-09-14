@@ -44,6 +44,10 @@ pub use multigrid_pair::{
 };
 pub use pbc::ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use pbc::gv::gv;
+pub use pbc::strain_ao::{
+    Deriv2AoOutput, StrainAoOutput, eval_ao_deriv2, eval_strain_ao, strain_block_map, strain_comp,
+    strain_nblocks, strain_scale,
+};
 pub use pbc::struct_factor::struct_factor;
 pub use pbc::zhadamard::zhadamard;
 pub use scalar::{DeviceScalar, KernelScalar};

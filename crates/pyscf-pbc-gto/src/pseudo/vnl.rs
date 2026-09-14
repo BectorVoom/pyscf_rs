@@ -193,6 +193,28 @@ fn build_projector_cell(cell: &Cell, rank: usize) -> Result<Option<Cell>, PyscfR
         .as_ref()
         .expect("caller checked cell.pseudo is Some");
 
+    // Whether each atom carries at least one channel reaching this rank.
+    // Atoms without projectors (e.g. Li in LiF — a purely local GTH potential)
+    // are DROPPED from the projector cell: upstream's fake cell keeps them with
+    // zero shells (`pp_int.py:577-624` builds `_bas` from channels only), but a
+    // zero-shell element is rejected at `Mole` build time (it would otherwise
+    // silently contribute no AOs). The shells — the only thing `_int_vnl`'s
+    // `shls_slice` and this port's `intor_cross` consume — are identical either
+    // way; `HlBlock.atom` still indexes the REAL cell.
+    let keeps: Vec<bool> = cell
+        .mol
+        ._atom
+        .iter()
+        .map(|(label, _)| {
+            pseudo
+                .get(label)
+                .is_some_and(|pp| pp.projectors.iter().any(|proj| proj.nproj > rank))
+        })
+        .collect();
+    if !keeps.iter().any(|k| *k) {
+        return Ok(None);
+    }
+
     // Per-ELEMENT shells. Every atom of an element carries the same channels, so
     // the element-keyed basis reproduces upstream's per-atom loop exactly.
     let mut per_element: HashMap<String, pyscf_gto::BasisInput> = HashMap::new();
@@ -221,7 +243,14 @@ fn build_projector_cell(cell: &Cell, rank: usize) -> Result<Option<Cell>, PyscfR
         return Ok(None);
     }
 
-    let atoms: Vec<(String, [f64; 3])> = cell.mol._atom.clone();
+    let atoms: Vec<(String, [f64; 3])> = cell
+        .mol
+        ._atom
+        .iter()
+        .zip(keeps.iter())
+        .filter(|(_, k)| **k)
+        .map(|((label, xyz), _)| (label.clone(), *xyz))
+        .collect();
     // Upstream's fake cell is `cell.copy(deep=False)` with `_bas` swapped, so it
     // INHERITS `rcut`, `precision`, `mesh` rather than re-estimating them from
     // the (much more compact) projector basis. `_int_vnl:629` then takes

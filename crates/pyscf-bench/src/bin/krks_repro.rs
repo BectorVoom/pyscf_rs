@@ -27,6 +27,7 @@
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
 use pyscf_pbc_df::Fftdf;
+use pyscf_pbc_dft::gen_grid::PeriodicGrids;
 use pyscf_pbc_dft::krks::Krks;
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs, make_kpts_default};
 use pyscf_pbc_scf::KScfConfig;
@@ -81,7 +82,9 @@ fn run_one(nk: [usize; 3], mesh: [usize; 3], xc: &str) -> Run {
     let cell = silicon();
     let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
     let df = Fftdf::with_mesh(cell, &kpts, mesh).expect("FFTDF");
-    let mf = Krks::from_df(Box::new(df), xc).expect("KRKS");
+    let mut mf = Krks::from_df(Box::new(df), xc).expect("KRKS");
+    // As `tests/gate.rs::krks`: the gate's oracle pins `mf.grids.mesh` too.
+    mf.grids = PeriodicGrids::uniform(mf.cell(), Some(mesh)).expect("XC grid");
     let r = mf.kernel(&tight()).expect("KRKS kernel");
     Run {
         e_tot: r.e_tot,

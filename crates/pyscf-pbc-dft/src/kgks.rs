@@ -57,10 +57,18 @@ impl Kgks {
 
     /// `KGKS` over an explicit density-fitting object.
     ///
+    /// The XC grid is the uniform grid on **`cell.mesh`**, not the DF's mesh;
+    /// a caller pinning both assigns [`Kgks::grids`] explicitly.
+    ///
     /// # Errors
     /// Propagates the grid construction.
     pub fn from_df(with_df: Box<dyn PeriodicDf>, xc: &str) -> Result<Self, PbcDftError> {
-        let grids = PeriodicGrids::uniform(with_df.cell(), Some(with_df.mesh()))?;
+        // Upstream: `self.grids = gen_grid.UniformGrids(self.cell)`
+        // (pyscf/pbc/dft/rks.py:272, inherited by `KGKS(rks.KohnShamDFT, ...)`, kgks.py:128) and
+        // `self.mesh = cell.mesh` (pyscf/pbc/dft/gen_grid.py:72) — independent
+        // of `with_df.mesh`. Full rationale and the upstream exceptions
+        // (BeckeGrids via density_fit, multigrid_numint) at `Krks::from_df`.
+        let grids = PeriodicGrids::uniform(with_df.cell(), None)?;
         let ni = KNumInt2C::new(with_df.kpts());
         Ok(Self {
             hf: Kghf::from_df(with_df),

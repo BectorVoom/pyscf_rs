@@ -72,7 +72,12 @@ gth-pp = ["cintx-rs/unstable-source-api"]
 [dev-dependencies]
 # Self dev-dependency: turns on `test-systems` for this crate's own integration
 # tests without duplicating the system definitions into `tests/`.
-pyscf-pbc-gto = { path = ".", features = ["test-systems"] }
+# `default-features = false` is load-bearing: without it this edge re-enables
+# the package defaults (in particular `gth-pp`) under `cargo test
+# --no-default-features`, and the R-14 refusal test in
+# `tests/cintx_moment_weighted_available.rs` could never observe the
+# feature-off state it exists to pin (18-03 Task 1).
+pyscf-pbc-gto = { path = ".", features = ["test-systems"], default-features = false }
 cintx-core    = { path = "../../../cintx/crates/cintx-core" }
 cintx-ops     = { path = "../../../cintx/crates/cintx-ops" }
 cintx-rs      = { path = "../../../cintx/crates/cintx-rs" }

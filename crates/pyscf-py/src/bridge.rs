@@ -413,3 +413,153 @@ fn mole_from_upstream_attrs(bound: &Bound<'_, PyAny>) -> PyResult<Option<Mole>> 
     .map(Some)
     .map_err(pyscf_to_py)
 }
+
+// -----------------------------------------------------------------------
+// Plan 20-09 — the periodic analogue of `extract_mole_from_pyany`.
+// -----------------------------------------------------------------------
+
+/// Extract a built `pyscf_pbc_gto::Cell` from any Python object, so a native
+/// `Cell`, an upstream PySCF `Cell`, or anything carrying one can drive a Rust
+/// periodic driver.
+///
+/// Paths, tried in order (mirroring [`extract_mole_from_pyany`]):
+///   1. a native `pyscf._native.pbc.gto.Cell` (or Python subclass) — its built
+///      Rust cell, cloned (`ValueError` if it is not built);
+///   2. an object with a `.cell` attribute (a DF object, a mean-field object) —
+///      recurse on it;
+///   3. a JSON string from `pyscf._native.pbc.gto.dumps` — `pyscf_pbc_gto::loads`;
+///   4. an upstream PySCF `Cell` — rebuilt from its BOHR quantities
+///      (`lattice_vectors()`, `atom_coords()`, `_atom` symbols) plus `basis`
+///      (a name or a `{element: name}` dict), `pseudo` (a name or `None`),
+///      `mesh`, `precision`, `dimension`, `low_dim_ft_type`, `ke_cutoff`,
+///      `exp_to_discard`, `charge`, `spin`, `cart` and the symmetry/rcut flags.
+///      `rcut` is NOT copied: it is re-estimated from `precision`, exactly as the
+///      Rust fixtures that gate against upstream do. Upstream's JSON `dumps()` is
+///      a different schema from `pyscf_pbc_gto::dumps` and is not parsed.
+pub fn extract_cell_from_pyany(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+) -> PyResult<pyscf_pbc_gto::Cell> {
+    use crate::pbc::gto::PyCell;
+    if let Ok(c) = obj.cast::<PyCell>() {
+        return Ok(c.borrow().inner()?.clone());
+    }
+    if let Ok(s) = obj.extract::<String>() {
+        return pyscf_pbc_gto::loads(&s).map_err(pyscf_to_py);
+    }
+    if obj.hasattr("lattice_vectors")? && obj.hasattr("atom_coords")? {
+        return cell_from_upstream_attrs(obj);
+    }
+    if obj.hasattr("cell")? {
+        let inner = obj.getattr("cell")?;
+        if !inner.is(obj) {
+            return extract_cell_from_pyany(py, &inner);
+        }
+    }
+    Err(pyo3::exceptions::PyTypeError::new_err(
+        "expected a pyscf.pbc.gto.Cell (native or upstream), an object with a .cell, \
+         or a pyscf._native.pbc.gto.dumps JSON string",
+    ))
+}
+
+fn cell_from_upstream_attrs(obj: &Bound<'_, PyAny>) -> PyResult<pyscf_pbc_gto::Cell> {
+    use crate::pbc::convert::{extract_kpts, extract_mat3, extract_usize3};
+    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
+    use std::collections::HashMap;
+
+    let a = extract_mat3(
+        &obj.call_method0("lattice_vectors")?,
+        "cell.lattice_vectors()",
+    )?;
+    let (coords, _) = extract_kpts(&obj.call_method0("atom_coords")?)?;
+    let atom_list: Vec<Bound<'_, PyAny>> = obj.getattr("_atom")?.extract()?;
+    if atom_list.len() != coords.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "cell._atom and cell.atom_coords() disagree in length; build the upstream cell first",
+        ));
+    }
+    let mut atoms = Vec::with_capacity(coords.len());
+    for (item, xyz) in atom_list.iter().zip(coords) {
+        let sym: String = item.get_item(0)?.extract()?;
+        atoms.push((sym, xyz));
+    }
+    let basis_obj = obj.getattr("basis")?;
+    let basis = if let Ok(name) = basis_obj.extract::<String>() {
+        BasisInput::Name(name)
+    } else if let Ok(d) = basis_obj.extract::<HashMap<String, String>>() {
+        BasisInput::PerElement(
+            d.into_iter()
+                .map(|(k, v)| (k, BasisInput::Name(v)))
+                .collect(),
+        )
+    } else {
+        return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "extract_cell_from_pyany: only basis NAMES (str or {element: name}) are bound",
+        ));
+    };
+    let pseudo_obj = obj.getattr("pseudo")?;
+    let pseudo = if pseudo_obj.is_none() {
+        None
+    } else {
+        Some(pseudo_obj.extract::<String>().map_err(|_| {
+            pyo3::exceptions::PyNotImplementedError::new_err(
+                "extract_cell_from_pyany: only a single pseudopotential NAME is bound",
+            )
+        })?)
+    };
+    let get_opt_f64 = |name: &str| -> PyResult<Option<f64>> {
+        match obj.getattr(name) {
+            Ok(v) if !v.is_none() => v.extract().map(Some),
+            _ => Ok(None),
+        }
+    };
+    let get_or = |name: &str, default: bool| -> bool {
+        obj.getattr(name)
+            .and_then(|v| v.extract::<bool>())
+            .unwrap_or(default)
+    };
+    let mesh = match obj.getattr("mesh") {
+        Ok(v) if !v.is_none() => Some(extract_usize3(&v, "cell.mesh")?),
+        _ => None,
+    };
+    let low_dim_ft_type = match obj.getattr("low_dim_ft_type") {
+        Ok(v) if !v.is_none() => {
+            let s: String = v.extract()?;
+            if s == "inf_vacuum" {
+                pyscf_pbc_gto::LowDimFtType::InfVacuum
+            } else {
+                pyscf_pbc_gto::LowDimFtType::None
+            }
+        }
+        _ => pyscf_pbc_gto::LowDimFtType::None,
+    };
+    let args = pyscf_pbc_gto::CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(atoms),
+            basis,
+            charge: obj.getattr("charge").and_then(|v| v.extract()).unwrap_or(0),
+            spin: obj.getattr("spin").and_then(|v| v.extract()).unwrap_or(0),
+            cart: get_or("cart", false),
+            unit: Unit::Bohr,
+            ..Default::default()
+        },
+        a: pyscf_pbc_gto::ALattice::Matrix(a),
+        mesh,
+        ke_cutoff: get_opt_f64("ke_cutoff")?,
+        rcut: None,
+        precision: get_opt_f64("precision")?.unwrap_or(pyscf_pbc_gto::DEFAULT_PRECISION),
+        dimension: obj
+            .getattr("dimension")
+            .and_then(|v| v.extract())
+            .unwrap_or(3),
+        low_dim_ft_type,
+        fractional: false,
+        exp_to_discard: get_opt_f64("exp_to_discard")?,
+        use_particle_mesh_ewald: get_or("use_particle_mesh_ewald", false),
+        space_group_symmetry: get_or("space_group_symmetry", false),
+        symmorphic: get_or("symmorphic", false),
+        use_loose_rcut: get_or("use_loose_rcut", false),
+        pseudo,
+    };
+    pyscf_pbc_gto::Cell::build(args).map_err(pyscf_to_py)
+}

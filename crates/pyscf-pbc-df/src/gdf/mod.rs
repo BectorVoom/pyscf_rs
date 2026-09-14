@@ -111,6 +111,9 @@ pub struct Gdf {
     /// Built lazily for the same reason; it stops at `(omega, mesh, ke_cutoff)`
     /// and does no 3-centre work.
     rs_builder: std::sync::OnceLock<crate::rsdf_builder::RsGdfBuilder>,
+    /// `self._rsh_df` — the range-separated copies [`Gdf::range_coulomb`]
+    /// created, keyed `'%.6f' % omega` as upstream (`df.py:523-529`).
+    rsh_df: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Gdf>>>,
 }
 
 impl Gdf {
@@ -138,7 +141,60 @@ impl Gdf {
             rs_rcut: None,
             rs_mesh: None,
             rs_builder: std::sync::OnceLock::new(),
+            rsh_df: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// `GDF.range_coulomb(omega)` — `df.py:514-553`: the temporary density
+    /// fitting object whose cell carries `cell.omega = omega`, cached in
+    /// `self._rsh_df` under `'%.6f' % omega`.
+    ///
+    /// Upstream yields `self.copy().reset()` and flips `cell.omega` (and
+    /// `auxcell.omega`) on the SHARED cell for the duration of the `with`
+    /// block. This port's `Cell` is owned, so the copy owns a cell with
+    /// `_env[PTR_RANGE_OMEGA] = omega` instead — the same observable state,
+    /// without a mutation to restore. The copy's `cderi` is built lazily over
+    /// that cell: [`crate::rsdf_builder::RsGdfBuilder::new`] seeds its
+    /// `omega = -cell.omega` (`rsdf_builder.py:83-90`), and every
+    /// `get_coulG(omega=None)` downstream reads the attenuated kernel.
+    ///
+    /// # Errors
+    /// `dimension != 0` with `omega >= 0` — upstream's `assert omega < 0`
+    /// (`df.py:520-521`); propagates [`crate::gdf::jk::cell_with_omega`].
+    pub fn range_coulomb(&self, omega: f64) -> Result<std::sync::Arc<Gdf>, PbcDfError> {
+        if self.cell.dimension != 0 && omega >= 0.0 {
+            return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+                pyscf_core::CoreError::InvalidMolecule(format!(
+                    "GDF.range_coulomb({omega}): a periodic cell admits only a \
+                     short-range (omega < 0) density-fitting copy (df.py:520-521 \
+                     asserts omega < 0)"
+                )),
+            )));
+        }
+        let key = format!("{omega:.6}");
+        if let Ok(cache) = self.rsh_df.lock()
+            && let Some(g) = cache.get(&key)
+        {
+            return Ok(g.clone());
+        }
+        let mut g = Gdf::new(jk::cell_with_omega(&self.cell, omega)?, &self.kpts);
+        g.auxbasis = self.auxbasis.clone();
+        g.exp_to_discard = self.exp_to_discard;
+        g.aosym = self.aosym;
+        g.j_only = self.j_only;
+        g.prefer_ccdf = self.prefer_ccdf;
+        g.j2c_eig_always = self.j2c_eig_always;
+        g.exclude_dd_block = self.exclude_dd_block;
+        g.rs_rcut = self.rs_rcut;
+        g.rs_mesh = self.rs_mesh;
+        // `rsh_df._dataname = f'{self._dataname}-sr/{key}'` — the SR tensor
+        // is a different dataset; this port keeps it in memory only.
+        g.cderi_to_save = None;
+        let g = std::sync::Arc::new(g);
+        if let Ok(mut cache) = self.rsh_df.lock() {
+            return Ok(cache.entry(key).or_insert(g).clone());
+        }
+        Ok(g)
     }
 
     /// A `GDF` whose `cderi` is ALREADY built — upstream's

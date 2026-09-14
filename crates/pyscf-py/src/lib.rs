@@ -12,6 +12,8 @@
 //!         ├── RKS (PyRKS — #[pyclass(subclass)])
 //!         ├── UKS (PyUKS — #[pyclass(subclass)])
 //!         └── NumInt (PyNumIntView — read-only precision view, D-08)
+//!     └── pbc (NESTED, plan 20-08; each child also in sys.modules)
+//!         └── gto, scf, dft, df, symm, lib, tools, mp, cc, ci (empty until 20-09..20-15)
 //!
 //! Algebra wall: pyscf-py is the ONLY workspace crate (besides pyscf-oracle
 //! dev-deps) that depends on pyo3. The chemistry crates (pyscf-scf, -diis,
@@ -35,6 +37,7 @@ pub mod grad;
 pub mod gto;
 pub mod mp;
 pub mod numpy_io;
+pub mod pbc;
 pub mod scf;
 
 use pyo3::prelude::*;
@@ -63,6 +66,10 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // `mol.copy(); mol.basis = aux; mol.build()` rebuild pattern). FOUND-02
     // stays intact: pyscf-core holds only a `fn(&mut Mole)` pointer.
     pyscf_gto::register_mole_builder();
+
+    // Plan 20-07 — private `_roundtrip_*` / `_planes` hooks over the complex
+    // k-resolved numpy boundary; driven by test_complex_boundary.py.
+    crate::numpy_io::register_selftest(m)?;
 
     // BIND-02 — `scf` submodule containing PyRHF/PyUHF/PyGHF.
     let scf_mod = PyModule::new(py, "scf")?;
@@ -113,5 +120,40 @@ fn _native(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::geomopt::register(py, &geomopt_mod)?;
     m.add_submodule(&geomopt_mod)?;
 
+    // Plan 20-08 — the NESTED periodic tree `_native.pbc.{gto,scf,dft,df,symm,
+    // lib,tools,mp,cc,ci}`, all empty until 20-09 … 20-15. Unlike the seven flat
+    // submodules above, each is also registered in `sys.modules` under its full
+    // dotted name so `import pyscf._native.pbc.scf` resolves (see pbc/mod.rs).
+    crate::pbc::register(py, m)?;
+
+    // Orchestrator Step 0b (found by 20-08, D4) — the seven FLAT submodules above
+    // were reachable only by attribute, so `from pyscf._native.dft import RKS`
+    // (python/pyscf/dft/__init__.py) raised "'pyscf._native' is not a package"
+    // whenever the overlay was imported by statement. Enter each (and the two
+    // nested geomopt shims) in `sys.modules` under its full dotted name — the
+    // same step 3 `pbc::register` uses. `__name__` stays the short name the
+    // molecular surface has always reported.
+    register_flat_in_sys_modules(py, m)?;
+
+    Ok(())
+}
+
+/// The flat `_native.<name>` submodules, entered in `sys.modules` as
+/// `pyscf._native.<name>` (and `geomopt`'s two solver shims one level deeper).
+pub const FLAT_SUBMODULES: [&str; 7] = ["scf", "gto", "dft", "mp", "cc", "grad", "geomopt"];
+
+fn register_flat_in_sys_modules(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {
+    let sys_modules = PyModule::import(py, "sys")?.getattr("modules")?;
+    for name in FLAT_SUBMODULES {
+        let child = root.getattr(name)?;
+        sys_modules.set_item(format!("pyscf._native.{name}"), &child)?;
+        if name == "geomopt" {
+            for shim in ["geometric_solver", "berny_solver"] {
+                if let Ok(s) = child.getattr(shim) {
+                    sys_modules.set_item(format!("pyscf._native.geomopt.{shim}"), &s)?;
+                }
+            }
+        }
+    }
     Ok(())
 }

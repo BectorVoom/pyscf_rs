@@ -549,7 +549,7 @@ jobs:
       # The oracle imports upstream `pyscf` via PyO3 (`--features python`) and
       # compares it against pyscf-rs in-process — install the reference.
       - name: Install upstream PySCF (oracle reference)
-        run: pip install "numpy>=1.26" "pyscf>=2.5"
+        run: pip install "numpy>=1.26" "pyscf==2.12.1"
       # The ONLY MP2 `--features python` invocation. Exercises the five MP2
       # numeric oracle arms vs upstream PySCF now that cintx#11 ERIs land.
       - name: cargo test --features python (MP2 numeric oracle vs upstream)
@@ -645,7 +645,7 @@ jobs:
       # The oracle imports upstream `pyscf` via PyO3 (`--features python`) and
       # compares it against pyscf-rs in-process — install the reference.
       - name: Install upstream PySCF (oracle reference)
-        run: pip install "numpy>=1.26" "pyscf>=2.5"
+        run: pip install "numpy>=1.26" "pyscf==2.12.1"
       # The ONLY CCSD `--features python` invocation. Exercises the six CCSD
       # numeric oracle arms once their live Python dispatch wiring lands. For
       # now this compiles the python-enabled oracle surface and leaves the
@@ -872,7 +872,7 @@ jobs:
       # via PyO3 (`--features python`) and compares it against pyscf-rs in-process
       # — install the references.
       - name: Install upstream PySCF + geomeTRIC (oracle references)
-        run: pip install "numpy>=1.26" "pyscf>=2.5" "geometric>=1.0"
+        run: pip install "numpy>=1.26" "pyscf==2.12.1" "geometric>=1.0"
       # The ONLY grad/geomopt `--features python` invocation. Exercises the eight
       # grad/geomopt numeric oracle arms (nuc_grad_* byte-identity <=1e-7 Ha/Bohr
       # + geomopt_h2o trajectory parity) vs upstream once their live Python

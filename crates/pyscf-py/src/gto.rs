@@ -83,6 +83,52 @@ impl PyMole {
         self.inner.nao_nr
     }
 
+    /// Number of atoms (upstream `mol.natm` property). Plan 20-09: part of the
+    /// `Mole` surface a periodic `Cell` re-exposes through its `Deref`.
+    #[getter]
+    fn natm(&self) -> usize {
+        self.inner.natm
+    }
+
+    /// Number of shells (upstream `mol.nbas` property).
+    #[getter]
+    fn nbas(&self) -> usize {
+        self.inner.nbas
+    }
+
+    /// Electron count (upstream `mol.nelectron` property). For a periodic
+    /// cell's molecular half this is already the pseudopotential valence count.
+    #[getter]
+    fn nelectron(&self) -> usize {
+        self.inner.nelectron
+    }
+
+    /// Nuclear charges, `int32` (upstream `mol.atom_charges()`).
+    fn atom_charges<'py>(&self, py: Python<'py>) -> Bound<'py, numpy::PyArray1<i32>> {
+        numpy::PyArray1::from_vec(py, self.inner.atom_charges())
+    }
+
+    /// Atom coordinates in Bohr, `(natm, 3)` (upstream `mol.atom_coords()`).
+    fn atom_coords<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
+        let rows: Vec<Vec<f64>> = self
+            .inner
+            .atom_coords()
+            .iter()
+            .map(|r| r.to_vec())
+            .collect();
+        numpy::PyArray2::from_vec2(py, &rows).map_err(|e| PyValueError::new_err(e.to_string()))
+    }
+
+    /// Element label of atom `ia` as given in the input (upstream
+    /// `mol.atom_symbol(ia)`).
+    fn atom_symbol(&self, ia: usize) -> PyResult<String> {
+        self.inner
+            ._atom
+            .get(ia)
+            .map(|(s, _)| s.clone())
+            .ok_or_else(|| PyValueError::new_err(format!("atom index {ia} out of range")))
+    }
+
     /// 2-component (spinor) AO count, `n2c = Σ 2·(2l+1)·nctr` (F-03 T1).
     fn nao_2c(&self) -> usize {
         self.inner.nao_2c

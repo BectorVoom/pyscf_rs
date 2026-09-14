@@ -1,6 +1,6 @@
 # Phase 2 oracle harness prerequisites (W0-T6).
 #
-# Upstream PySCF + the standard scientific-Python stack. pyscf>=2.6 covers
+# Upstream PySCF + the standard scientific-Python stack. PySCF 2.12.1 covers
 # the moleintor / mole / basis surface plan 02-02..04 ports against; pytest>=7
 # is the runner; numpy>=1.26 is what the rest of the stack expects.
 #
@@ -10,6 +10,12 @@
 #
 # Phase 4 (DFT) may add scipy, h5py for chkfile interop; Phase 6 (CCSD)
 # might pin numpy more tightly. Track those bumps in the per-phase plans.
-pyscf>=2.6
+#
+# The upstream PySCF is pinned EXACTLY (plan 20-02). A floating lower bound
+# resolved to 2.14.0, and PySCF 2.14 rewrote `pbc.df.fft_jk.get_k_kpts` to fold
+# `exxdiv='ewald'` into `get_coulG`, moving the periodic exchange matrix K by
+# ~1e-5 against the 2.12.1 tree that every Rust PBC oracle test asserts
+# (`version == "2.12.1"`). Never float this pin; match ci.yml's pins.
+pyscf==2.12.1
 pytest>=7
 numpy>=1.26
