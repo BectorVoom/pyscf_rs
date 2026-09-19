@@ -136,7 +136,7 @@ impl Krhf {
                 f.im[i] += vj[0][k].im[i] - 0.5 * vk[0][k].im[i];
             }
         }
-        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), kpts_band)?, nao);
+        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp_scf(self.cell(), kpts_band)?, nao);
         eig_channel(&fock, &s1e, nao)
     }
 }
@@ -193,7 +193,7 @@ impl KOverrideHooks for Krhf {
     fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         Ok(to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
+            pyscf_pbc_gto::get_ovlp_scf(self.cell(), self.kpts())?,
             nao,
         ))
     }

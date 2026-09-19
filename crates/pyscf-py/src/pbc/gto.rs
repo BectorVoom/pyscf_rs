@@ -32,13 +32,15 @@ use std::sync::OnceLock;
 
 use numpy::ndarray::Array3;
 use numpy::{IntoPyArray, PyArray1};
-use pyo3::exceptions::{PyAttributeError, PyNotImplementedError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyAttributeError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::types::{PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
 use pyscf_pbc_gto::{
-    ALattice, BravaisLattice, Cell, CellBuildArgs, CoulGArgs, ExxDiv, KPath, LowDimFtType,
+    ALattice, BravaisLattice, Cell, CellBuildArgs, CoulGArgs, KPath, LowDimFtType,
 };
 
 use crate::errors::pyscf_to_py;
@@ -89,23 +91,33 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[derive(Debug, Clone)]
 enum AtomSpec {
     Text(String),
+    /// Canonical Bohr labels of an already-built cell (`from_cell`) — re-fed
+    /// verbatim, no symbol normalisation.
     Tuples(Vec<(String, [f64; 3])>),
+    /// A user list (`[['He', (x, y, z)], ('C', x, y, z), 'O 0 0 1', …]`,
+    /// `mole.py:393-401`), flattened to `(label, [x, y, z])`. Fed as
+    /// `AtomInput::TupleVec`, whose labels go through the same `atom_symbol`
+    /// normalisation as the string form (`format_atom.rs:51-57` vs `:129`).
+    List(Vec<(String, Vec<f64>)>),
 }
 
+/// `cell.pseudo` as given: a name, or an upstream per-element dict
+/// (`mole.py:2575-2591`, keys matched EXACTLY against the `_atom` labels,
+/// `elements.py:1146` `_symbol`; a `'default'` key covers every atom,
+/// `mole.py:3954-3964`).
 #[derive(Debug, Clone)]
-enum BasisSpec {
+enum PseudoSpec {
     Name(String),
     PerElement(Vec<(String, String)>),
-    /// The parsed per-element basis of an already-built cell (supercells,
-    /// `loads`) — re-fed bit-identically, exactly as `super_cell` does.
-    Parsed(HashMap<String, pyscf_core::ParsedBasis>),
 }
 
 #[derive(Debug, Clone)]
 struct CellInput {
     atom: AtomSpec,
-    basis: BasisSpec,
-    pseudo: Option<String>,
+    /// `BasisInput::PerElement(Parsed)` for a cell rebuilt from a built one
+    /// (supercells, `loads`) — re-fed bit-identically, as `super_cell` does.
+    basis: BasisInput,
+    pseudo: Option<PseudoSpec>,
     a: Option<ALattice>,
     unit: String,
     mesh: Option<[usize; 3]>,
@@ -130,7 +142,7 @@ impl Default for CellInput {
     fn default() -> Self {
         Self {
             atom: AtomSpec::Text(String::new()),
-            basis: BasisSpec::Name("sto-3g".into()),
+            basis: BasisInput::Name("sto-3g".into()),
             pseudo: None,
             a: None,
             unit: "angstrom".into(),
@@ -161,20 +173,9 @@ impl CellInput {
         let atom = match &self.atom {
             AtomSpec::Text(s) => AtomInput::String(s.clone()),
             AtomSpec::Tuples(t) => AtomInput::Tuples(t.clone()),
+            AtomSpec::List(t) => AtomInput::TupleVec(t.clone()),
         };
-        let basis = match &self.basis {
-            BasisSpec::Name(n) => BasisInput::Name(n.clone()),
-            BasisSpec::PerElement(v) => BasisInput::PerElement(
-                v.iter()
-                    .map(|(k, n)| (k.clone(), BasisInput::Name(n.clone())))
-                    .collect(),
-            ),
-            BasisSpec::Parsed(p) => BasisInput::PerElement(
-                p.iter()
-                    .map(|(k, pb)| (k.clone(), BasisInput::Parsed(pb.clone())))
-                    .collect(),
-            ),
-        };
+        let basis = self.basis.clone();
         let a = self.a.clone().ok_or_else(|| {
             PyValueError::new_err("cell.a (the lattice vectors) must be set before build()")
         })?;
@@ -201,22 +202,58 @@ impl CellInput {
             space_group_symmetry: self.space_group_symmetry,
             symmorphic: self.symmorphic,
             use_loose_rcut: self.use_loose_rcut,
-            pseudo: self.pseudo.clone(),
+            pseudo: self.pseudo_name()?,
         })
+    }
+
+    /// The single pseudopotential name handed to `CellBuildArgs::pseudo`.
+    ///
+    /// `CellBuildArgs` carries ONE name (`types.rs` `pseudo: Option<String>`),
+    /// resolved for every element of the cell (`pseudo/mod.rs` `resolve_pseudo`).
+    /// A per-element dict is that same cell exactly when every entry names the
+    /// same pseudopotential and every atom the name form would give a
+    /// pseudopotential is a key (checked after the build, [`check_pseudo_dict`]).
+    /// A dict naming DIFFERENT pseudopotentials per element has no single-name
+    /// equivalent and is refused.
+    fn pseudo_name(&self) -> PyResult<Option<String>> {
+        match &self.pseudo {
+            None => Ok(None),
+            Some(PseudoSpec::Name(n)) => Ok(Some(n.clone())),
+            Some(PseudoSpec::PerElement(v)) => {
+                let Some((_, first)) = v.first() else {
+                    return Ok(None);
+                };
+                if v.iter().any(|(_, n)| !n.eq_ignore_ascii_case(first)) {
+                    return Err(PyNotImplementedError::new_err(format!(
+                        "cell.pseudo: a per-element dict naming different pseudopotentials \
+                         ({:?}) is not bound — pyscf_pbc_gto::CellBuildArgs::pseudo carries a \
+                         single name (plan 20-19 B)",
+                        v.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>()
+                    )));
+                }
+                Ok(Some(first.clone()))
+            }
+        }
     }
 
     /// Inputs that rebuild `cell` bit-identically: Cartesian Bohr atoms, the
     /// parsed basis, the Bohr lattice, and the resolved mesh/rcut pinned.
     fn from_cell(cell: &Cell) -> Self {
         let basis = if cell.mol._basis.is_empty() {
-            BasisSpec::Name(cell.mol.basis.clone())
+            BasisInput::Name(cell.mol.basis.clone())
         } else {
-            BasisSpec::Parsed(cell.mol._basis.clone())
+            BasisInput::PerElement(
+                cell.mol
+                    ._basis
+                    .iter()
+                    .map(|(k, pb)| (k.clone(), BasisInput::Parsed(pb.clone())))
+                    .collect(),
+            )
         };
         Self {
             atom: AtomSpec::Tuples(cell.mol._atom.clone()),
             basis,
-            pseudo: cell.pseudo_name.clone(),
+            pseudo: cell.pseudo_name.clone().map(PseudoSpec::Name),
             a: Some(ALattice::Matrix(cell.a)),
             unit: "bohr".into(),
             mesh: Some(cell.mesh),
@@ -239,65 +276,302 @@ impl CellInput {
     }
 }
 
+/// An atom label as upstream `_atom_symbol` accepts it (`elements.py:1192-1199`):
+/// a string, or a nuclear charge (int, or an all-digit string) mapped through
+/// `ELEMENTS`. Letter case / suffixes are left to `pyscf-gto`'s `atom_symbol`.
+fn atom_label(sym: &Bound<'_, PyAny>) -> PyResult<String> {
+    fn by_charge(z: i64) -> PyResult<String> {
+        usize::try_from(z)
+            .ok()
+            .and_then(|z| pyscf_core::elements::ELEMENTS.get(z))
+            .map(|s| s.to_string())
+            .ok_or_else(|| PyValueError::new_err(format!("no element with nuclear charge {z}")))
+    }
+    if let Ok(s) = sym.extract::<String>() {
+        let t = s.trim();
+        if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) {
+            return by_charge(
+                t.parse()
+                    .map_err(|_| PyValueError::new_err(format!("bad nuclear charge {t:?}")))?,
+            );
+        }
+        return Ok(s);
+    }
+    if !sym.is_instance_of::<PyFloat>()
+        && let Ok(z) = sym.extract::<i64>()
+    {
+        return by_charge(z);
+    }
+    Err(PyTypeError::new_err(
+        "an atom symbol must be a string or a nuclear charge",
+    ))
+}
+
+/// `cell.atom` — a string, or upstream's list form (`mole.py:393-401`):
+/// every entry is either a string `'He 0 0 0'` (commas allowed), a
+/// `[symbol, x, y, z]` sequence (entry[1] a Python int/float), or a
+/// `[symbol, (x, y, z)]` sequence — lists and tuples alike.
 fn extract_atom(v: &Bound<'_, PyAny>) -> PyResult<AtomSpec> {
     if let Ok(s) = v.extract::<String>() {
         return Ok(AtomSpec::Text(s));
     }
-    let items: Vec<Bound<'_, PyAny>> = v.extract().map_err(|_| {
-        PyTypeError::new_err("cell.atom must be a string or a list of (symbol, (x, y, z))")
-    })?;
-    let mut out = Vec::with_capacity(items.len());
-    for it in items {
-        let (sym, xyz): (String, [f64; 3]) = it
-            .extract()
-            .or_else(|_| {
-                let t: (String, Vec<f64>) = it.extract()?;
-                if t.1.len() != 3 {
-                    return Err(PyValueError::new_err(
-                        "atom coordinates must have 3 entries",
-                    ));
-                }
-                Ok((t.0, [t.1[0], t.1[1], t.1[2]]))
-            })
-            .map_err(|_| {
-                PyTypeError::new_err("each cell.atom entry must be (symbol, (x, y, z))")
-            })?;
-        out.push((sym, xyz));
+    let bad = || {
+        PyTypeError::new_err(
+            "cell.atom must be a string or a list of 'Sym x y z' / [symbol, (x, y, z)] / \
+             [symbol, x, y, z] entries",
+        )
+    };
+    let mut out = Vec::new();
+    for it in v.try_iter().map_err(|_| bad())? {
+        let it = it?;
+        if let Ok(line) = it.extract::<String>() {
+            // mole.py:395-397 — str2atm(atom.replace(',', ' ')), '#' lines skipped
+            if line.trim_start().starts_with('#') {
+                continue;
+            }
+            let line = line.replace(',', " ");
+            let tok: Vec<&str> = line.split_whitespace().collect();
+            if tok.len() < 4 {
+                return Err(PyValueError::new_err(format!(
+                    "Coordinates error in {line:?}"
+                )));
+            }
+            let mut xyz = Vec::with_capacity(3);
+            for t in &tok[1..4] {
+                xyz.push(t.parse::<f64>().map_err(|_| {
+                    PyValueError::new_err(format!("Failed to parse geometry {line:?}"))
+                })?);
+            }
+            out.push((atom_label(&PyString::new(it.py(), tok[0]).into_any())?, xyz));
+            continue;
+        }
+        let n = it.len().map_err(|_| bad())?;
+        if n < 2 {
+            return Err(bad());
+        }
+        let label = atom_label(&it.get_item(0)?)?;
+        let second = it.get_item(1)?;
+        // mole.py:399 — isinstance(atom[1], (int, float)) → atom[1:4]
+        let xyz: Vec<f64> =
+            if second.is_instance_of::<PyInt>() || second.is_instance_of::<PyFloat>() {
+                (1..n.min(4))
+                    .map(|i| it.get_item(i)?.extract::<f64>())
+                    .collect::<PyResult<_>>()?
+            } else {
+                second
+                    .try_iter()
+                    .map_err(|_| bad())?
+                    .map(|x| x?.extract::<f64>())
+                    .collect::<PyResult<_>>()?
+            };
+        if xyz.len() != 3 {
+            return Err(PyValueError::new_err(format!(
+                "atom {label:?}: coordinates must have 3 entries, got {}",
+                xyz.len()
+            )));
+        }
+        out.push((label, xyz));
     }
-    Ok(AtomSpec::Tuples(out))
+    Ok(AtomSpec::List(out))
 }
 
-fn extract_basis(v: &Bound<'_, PyAny>) -> PyResult<BasisSpec> {
+/// A 1-D float sequence (list, tuple or ndarray row).
+fn f64_seq(x: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+    x.try_iter()?.map(|v| v?.extract::<f64>()).collect()
+}
+
+/// `isinstance(x, (numpy.integer, int))` — an integer that is not a float.
+fn is_py_int(x: &Bound<'_, PyAny>) -> bool {
+    !x.is_instance_of::<PyFloat>() && !x.is_instance_of::<PyString>() && x.extract::<i64>().is_ok()
+}
+
+/// A basis given as a string (`gto/basis/__init__.py:658-691`): a name, or —
+/// when it spans lines — basis-set text, CP2K when it mentions `GTH`,
+/// NWChem otherwise.
+fn basis_from_str(s: String) -> BasisInput {
+    if s.contains('\n') {
+        if s.contains("GTH") {
+            BasisInput::Cp2kText(s)
+        } else {
+            BasisInput::NwchemText(s)
+        }
+    } else {
+        BasisInput::Name(s)
+    }
+}
+
+/// One element's basis in upstream's internal list format
+/// (`mole.py:418-503`): `[[l, (e, c1, …), …], [l, kappa, (e, c1, …), …], …]`,
+/// or a list of such lists (concatenated). Mirrors what upstream does to it
+/// before `make_env`: empty shells dropped and shells stably sorted by `l`
+/// (`format_basis`, `mole.py:457-464`), primitive rows sorted descending
+/// (`make_bas_env`, `mole.py:995-1000`). Normalisation (`gto_norm` +
+/// `_nomalize_contracted_ao`) is `pyscf-gto`'s `make_env.rs`, shared with
+/// every other basis form.
+fn shells_from_list(what: &str, raw: &Bound<'_, PyAny>) -> PyResult<pyscf_core::ParsedBasis> {
+    let items: Vec<Bound<'_, PyAny>> = raw.try_iter()?.collect::<PyResult<_>>()?;
+    // mole.py:490-492 — a str member or a non-int head means a list of bases.
+    let internal = !items.iter().any(|x| x.is_instance_of::<PyString>())
+        && items
+            .first()
+            .map(|b| b.get_item(0).map(|h| is_py_int(&h)).unwrap_or(false))
+            .unwrap_or(true);
+    let mut shells: Vec<pyscf_core::ShellSpec> = Vec::new();
+    if !internal {
+        for sub in &items {
+            if sub.is_instance_of::<PyString>() {
+                return Err(PyNotImplementedError::new_err(format!(
+                    "{what}: a basis list mixing basis NAMES with shells is not bound (plan 20-19 B)"
+                )));
+            }
+            shells.extend(shells_from_list(what, sub)?.shells);
+        }
+    } else {
+        for b in &items {
+            let n = b.len()?;
+            if n == 0 {
+                continue; // `[b for b in _basis if b]`
+            }
+            let l: i64 = b.get_item(0)?.extract()?;
+            let l = u8::try_from(l)
+                .map_err(|_| PyValueError::new_err(format!("{what}: bad angular momentum {l}")))?;
+            let mut start = 1;
+            if n > 1 && is_py_int(&b.get_item(1)?) {
+                let kappa: i64 = b.get_item(1)?.extract()?;
+                if kappa != 0 {
+                    return Err(PyNotImplementedError::new_err(format!(
+                        "{what}: kappa = {kappa} shells are not bound (the non-relativistic \
+                         _bas has KAPPA_OF = 0, make_env.rs)"
+                    )));
+                }
+                start = 2;
+            }
+            let mut rows: Vec<Vec<f64>> = (start..n)
+                .map(|i| f64_seq(&b.get_item(i)?))
+                .collect::<PyResult<_>>()?;
+            if rows.is_empty() {
+                return Err(PyValueError::new_err(format!(
+                    "{what}: shell with l={l} has no primitives"
+                )));
+            }
+            let width = rows[0].len();
+            if width < 2 || rows.iter().any(|r| r.len() != width) {
+                return Err(PyValueError::new_err(format!(
+                    "{what}: every primitive of a shell must be (exponent, c1, c2, …) of one length"
+                )));
+            }
+            // `sorted(b[1:], reverse=True)` — lexicographic on the rows, stable.
+            rows.sort_by(|x, y| {
+                y.iter()
+                    .zip(x)
+                    .map(|(a, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .find(|o| o.is_ne())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let exponents = rows.iter().map(|r| r[0]).collect();
+            let coeffs = (1..width)
+                .map(|c| rows.iter().map(|r| r[c]).collect())
+                .collect();
+            shells.push(pyscf_core::ShellSpec {
+                l,
+                exponents,
+                coeffs,
+            });
+        }
+    }
+    shells.sort_by_key(|s| s.l);
+    Ok(pyscf_core::ParsedBasis { shells })
+}
+
+/// One element's basis value: a string or an internal-format shell list.
+fn basis_value(what: &str, v: &Bound<'_, PyAny>) -> PyResult<BasisInput> {
     if let Ok(s) = v.extract::<String>() {
-        return Ok(BasisSpec::Name(s));
+        return Ok(basis_from_str(s));
+    }
+    if v.try_iter().is_ok() {
+        return Ok(BasisInput::Parsed(shells_from_list(what, v)?));
+    }
+    Err(PyTypeError::new_err(format!(
+        "{what} must be a basis name, basis text or a shell list"
+    )))
+}
+
+/// `cell.basis` — a name (or basis text), a shell list applied to every atom
+/// (`mole.py:3955-3957`), or a `{element: name | shell list}` dict (a
+/// `'default'` key covers the rest, resolved by `format_basis.rs`).
+fn extract_basis(v: &Bound<'_, PyAny>) -> PyResult<BasisInput> {
+    if let Ok(d) = v.cast::<PyDict>() {
+        let mut out = HashMap::new();
+        for (k, val) in d.iter() {
+            let k = atom_label(&k)?;
+            let entry = basis_value(&format!("cell.basis[{k:?}]"), &val)?;
+            out.insert(k, entry);
+        }
+        return Ok(BasisInput::PerElement(out));
+    }
+    basis_value("cell.basis", v)
+}
+
+/// `cell.pseudo` — `None`, a name, or a `{element: name}` dict.
+fn extract_pseudo(v: &Bound<'_, PyAny>) -> PyResult<Option<PseudoSpec>> {
+    if v.is_none() {
+        return Ok(None);
+    }
+    if let Ok(s) = v.extract::<String>() {
+        return Ok(Some(PseudoSpec::Name(s)));
     }
     if let Ok(d) = v.cast::<PyDict>() {
         let mut out = Vec::new();
         for (k, val) in d.iter() {
-            let k: String = k.extract()?;
+            let k = atom_label(&k)?;
             let n: String = val.extract().map_err(|_| {
                 PyNotImplementedError::new_err(format!(
-                    "cell.basis[{k:?}]: only basis NAMES are bound (plan 20-09); explicit shell lists are not"
+                    "cell.pseudo[{k:?}]: only pseudopotential NAMES are bound; parsed GTH \
+                     parameter lists are not (plan 20-19 B)"
                 ))
             })?;
             out.push((k, n));
         }
-        return Ok(BasisSpec::PerElement(out));
+        return Ok(Some(PseudoSpec::PerElement(out)));
     }
     Err(PyTypeError::new_err(
-        "cell.basis must be a name or a {element: name} dict",
+        "cell.pseudo must be None, a pseudopotential name or a {element: name} dict",
     ))
 }
 
-fn extract_pseudo(v: &Bound<'_, PyAny>) -> PyResult<Option<String>> {
-    if v.is_none() {
-        return Ok(None);
+/// After a build with the collapsed name ([`CellInput::pseudo_name`]), check a
+/// per-element dict really describes that cell: upstream gives a
+/// pseudopotential only to atoms whose label is a key (`mole.py:2586-2591`)
+/// or to every atom under `'default'`.
+fn check_pseudo_dict(spec: &Option<PseudoSpec>, cell: &Cell) -> PyResult<()> {
+    let Some(PseudoSpec::PerElement(v)) = spec else {
+        return Ok(());
+    };
+    if v.iter().any(|(k, _)| k == "default") {
+        return Ok(());
     }
-    v.extract::<String>().map(Some).map_err(|_| {
-        PyNotImplementedError::new_err(
-            "cell.pseudo: only a single pseudopotential NAME (e.g. 'gth-pade') is bound (plan 20-09)",
-        )
-    })
+    for (label, _) in &cell.mol._atom {
+        let keyed = v.iter().any(|(k, _)| k == label);
+        let has_pp = cell.pseudo.as_ref().and_then(|p| p.get(label)).is_some();
+        if has_pp && !keyed {
+            return Err(PyNotImplementedError::new_err(format!(
+                "cell.pseudo: atom {label:?} is not a key of the pseudo dict, so upstream keeps it \
+                 all-electron while other elements carry a pseudopotential; that mixed cell \
+                 is not bound (pyscf_pbc_gto::CellBuildArgs::pseudo is one name for every \
+                 element, plan 20-19 B)"
+            )));
+        }
+        if keyed && !has_pp {
+            return Err(PyRuntimeError::new_err(format!(
+                "cell.pseudo: pseudopotential {:?} has no entry for atom {label:?}",
+                v.iter()
+                    .find(|(k, _)| k == label)
+                    .map(|(_, n)| n.as_str())
+                    .unwrap_or("")
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn extract_lattice(v: &Bound<'_, PyAny>) -> PyResult<ALattice> {
@@ -354,6 +628,31 @@ pub struct PyCell {
     input: CellInput,
     built: Option<Cell>,
     mol_view: OnceLock<Py<PyMole>>,
+    /// The Python objects last assigned to `atom` / `basis` / `pseudo`,
+    /// returned as-is by the getters (upstream stores the attribute verbatim).
+    user_inputs: UserInputs,
+    /// `cell.output` — the log file path (`mole.py:2536-2549`).
+    output: Option<String>,
+    /// `cell.stdout` — `sys.stdout` until `build()` opens `output`.
+    stdout: Option<Py<PyAny>>,
+}
+
+#[derive(Default)]
+struct UserInputs {
+    atom: Option<Py<PyAny>>,
+    basis: Option<Py<PyAny>>,
+    pseudo: Option<Py<PyAny>>,
+}
+
+impl UserInputs {
+    fn clone_ref(&self, py: Python<'_>) -> Self {
+        let c = |o: &Option<Py<PyAny>>| o.as_ref().map(|x| x.clone_ref(py));
+        Self {
+            atom: c(&self.atom),
+            basis: c(&self.basis),
+            pseudo: c(&self.pseudo),
+        }
+    }
 }
 
 impl PyCell {
@@ -363,6 +662,9 @@ impl PyCell {
             input: CellInput::from_cell(&cell),
             built: Some(cell),
             mol_view: OnceLock::new(),
+            user_inputs: UserInputs::default(),
+            output: None,
+            stdout: None,
         }
     }
 
@@ -377,7 +679,11 @@ impl PyCell {
     }
 
     fn do_build(&mut self) -> PyResult<()> {
-        let cell = Cell::build(self.input.to_args()?).map_err(pyscf_to_py)?;
+        let mut cell = Cell::build(self.input.to_args()?).map_err(pyscf_to_py)?;
+        check_pseudo_dict(&self.input.pseudo, &cell)?;
+        // cell.py:1770-1772 — lattice symmetry (and the enlarged auto mesh), 20-14.
+        crate::pbc::symm::ensure_lattice_symmetry(&mut cell)
+            .map_err(crate::pbc::symm::pbc_symm_to_py)?;
         self.built = Some(cell);
         self.mol_view = OnceLock::new();
         Ok(())
@@ -420,14 +726,40 @@ impl PyCell {
                 self.input.verbose = v.extract()?;
                 return Ok(());
             }
+            // mole.py:2517 — a plain attribute; build() opens it
+            "output" => {
+                self.output = if v.is_none() {
+                    None
+                } else {
+                    Some(v.extract()?)
+                };
+                return Ok(());
+            }
+            "stdout" => {
+                self.stdout = if v.is_none() {
+                    None
+                } else {
+                    Some(v.clone().unbind())
+                };
+                return Ok(());
+            }
             // upstream build() flags with no analogue here
-            "dump_input" | "parse_arg" | "output" | "max_memory" | "stdout" => return Ok(()),
+            "dump_input" | "parse_arg" | "max_memory" => return Ok(()),
             _ => {}
         }
         match key {
-            "atom" => self.input.atom = extract_atom(v)?,
-            "basis" => self.input.basis = extract_basis(v)?,
-            "pseudo" => self.input.pseudo = extract_pseudo(v)?,
+            "atom" => {
+                self.input.atom = extract_atom(v)?;
+                self.user_inputs.atom = Some(v.clone().unbind());
+            }
+            "basis" => {
+                self.input.basis = extract_basis(v)?;
+                self.user_inputs.basis = Some(v.clone().unbind());
+            }
+            "pseudo" => {
+                self.input.pseudo = extract_pseudo(v)?;
+                self.user_inputs.pseudo = Some(v.clone().unbind());
+            }
             "a" => self.input.a = Some(extract_lattice(v)?),
             "unit" => {
                 let s: String = v.extract()?;
@@ -458,6 +790,13 @@ impl PyCell {
         Ok(())
     }
 
+    fn stdout_obj(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match &self.stdout {
+            Some(s) => Ok(s.clone_ref(py)),
+            None => Ok(py.import("sys")?.getattr("stdout")?.unbind()),
+        }
+    }
+
     fn mol_view(&self, py: Python<'_>) -> PyResult<Py<PyMole>> {
         let cell = self.inner()?;
         if let Some(m) = self.mol_view.get() {
@@ -467,6 +806,43 @@ impl PyCell {
         let _ = self.mol_view.set(m.clone_ref(py));
         Ok(m)
     }
+}
+
+/// `mole.py:2535-2549` — before anything is parsed, open `cell.output` as
+/// `cell.stdout` unless that file is already the stream, announcing it on
+/// `sys.stdout` when `verbose > QUIET`.
+fn open_output(slf: &Bound<'_, PyCell>) -> PyResult<()> {
+    let py = slf.py();
+    let Some(output) = slf.borrow().output.clone() else {
+        return Ok(());
+    };
+    let stdout = PyCell::stdout_obj(&slf.borrow(), py)?;
+    let name = stdout.bind(py).getattr("name").ok();
+    if let Some(name) = name
+        && name.extract::<String>().is_ok_and(|n| n == output)
+    {
+        return Ok(());
+    }
+    let builtins = py.import("builtins")?;
+    if slf.borrow().input.verbose > 0 {
+        let os_path = py.import("os.path")?;
+        let msg = if os_path.call_method1("isfile", (&output,))?.is_truthy()? {
+            format!("overwrite output file: {output}")
+        } else {
+            format!("output file: {output}")
+        };
+        builtins.call_method1("print", (msg,))?;
+    }
+    let path = if output == "/dev/null" {
+        py.import("os")?.getattr("devnull")?.extract::<String>()?
+    } else {
+        output
+    };
+    let kw = PyDict::new(py);
+    kw.set_item("encoding", "utf-8")?;
+    let f = builtins.call_method("open", (path, "w"), Some(&kw))?;
+    slf.borrow_mut().stdout = Some(f.unbind());
+    Ok(())
 }
 
 fn resolve_kpts_arg(
@@ -548,6 +924,9 @@ impl PyCell {
             input: CellInput::default(),
             built: None,
             mol_view: OnceLock::new(),
+            user_inputs: UserInputs::default(),
+            output: None,
+            stdout: None,
         };
         if let Some(kw) = kwargs {
             for (k, v) in kw.iter() {
@@ -573,6 +952,7 @@ impl PyCell {
                 slf.borrow_mut().apply(&k, &v)?;
             }
         }
+        open_output(slf)?;
         slf.borrow_mut().do_build()?;
         Ok(slf.clone())
     }
@@ -591,10 +971,33 @@ impl PyCell {
 
     /// Forward the [`MOLE_SURFACE`] names to `cell.mol` — the Python image of
     /// `impl Deref for Cell { type Target = Mole }`.
-    fn __getattr__(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+    ///
+    /// 20-18: any other public name goes through upstream's method-style
+    /// constructor lookup (`cell.KRKS(xc=, kpts=)`, `cell.KRHF()`, …;
+    /// `pyscf/pbc/gto/cell.py:1407-1511`), ported in Python as
+    /// `pyscf.pbc.gto._cell_methods.cell_method`. It returns `NotImplemented`
+    /// when the name is not a method, and the `AttributeError` below is raised.
+    fn __getattr__(slf: &Bound<'_, Self>, name: &str) -> PyResult<Py<PyAny>> {
+        let py = slf.py();
         if MOLE_SURFACE.contains(&name) {
-            let mol = self.mol_view(py)?;
+            let mol = slf.borrow().mol_view(py)?;
             return Ok(mol.bind(py).getattr(name)?.unbind());
+        }
+        if !name.starts_with('_') && name != "get_hcore" {
+            // cell.py:1411-1416 skips private names; the borrow is released
+            // before Python runs, so the constructors may borrow the cell.
+            // Without the overlay (`pyscf.pbc.gto._cell_methods` not importable,
+            // e.g. `_native` used under the vendored tree) the name is simply
+            // not an attribute; errors raised by the lookup itself propagate.
+            if let Ok(lookup) = py
+                .import("pyscf.pbc.gto._cell_methods")
+                .and_then(|m| m.getattr("cell_method"))
+            {
+                let v = lookup.call1((slf, name))?;
+                if !v.is(py.NotImplemented()) {
+                    return Ok(v.unbind());
+                }
+            }
         }
         if name == "get_hcore" {
             return Err(PyAttributeError::new_err(
@@ -622,9 +1025,15 @@ impl PyCell {
 
     #[getter]
     fn atom(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        if let Some(o) = &self.user_inputs.atom {
+            return Ok(o.clone_ref(py));
+        }
         Ok(match &self.input.atom {
             AtomSpec::Text(s) => s.clone().into_pyobject(py)?.into_any().unbind(),
             AtomSpec::Tuples(t) => PyList::new(py, t.iter().map(|(s, x)| (s.clone(), x.to_vec())))?
+                .into_any()
+                .unbind(),
+            AtomSpec::List(t) => PyList::new(py, t.iter().map(|(s, x)| (s.clone(), x.clone())))?
                 .into_any()
                 .unbind(),
         })
@@ -636,16 +1045,12 @@ impl PyCell {
 
     #[getter]
     fn basis(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        if let Some(o) = &self.user_inputs.basis {
+            return Ok(o.clone_ref(py));
+        }
         Ok(match &self.input.basis {
-            BasisSpec::Name(s) => s.clone().into_pyobject(py)?.into_any().unbind(),
-            BasisSpec::PerElement(v) => {
-                let d = PyDict::new(py);
-                for (k, n) in v {
-                    d.set_item(k, n)?;
-                }
-                d.into_any().unbind()
-            }
-            BasisSpec::Parsed(_) => {
+            BasisInput::Name(s) => s.clone().into_pyobject(py)?.into_any().unbind(),
+            _ => {
                 let text = self
                     .built
                     .as_ref()
@@ -661,8 +1066,21 @@ impl PyCell {
     }
 
     #[getter]
-    fn pseudo(&self) -> Option<String> {
-        self.input.pseudo.clone()
+    fn pseudo(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        if let Some(o) = &self.user_inputs.pseudo {
+            return Ok(o.clone_ref(py));
+        }
+        Ok(match &self.input.pseudo {
+            None => py.None(),
+            Some(PseudoSpec::Name(n)) => n.clone().into_pyobject(py)?.into_any().unbind(),
+            Some(PseudoSpec::PerElement(v)) => {
+                let d = PyDict::new(py);
+                for (k, n) in v {
+                    d.set_item(k, n)?;
+                }
+                d.into_any().unbind()
+            }
+        })
     }
     #[setter]
     fn set_pseudo(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -841,6 +1259,27 @@ impl PyCell {
         self.apply("use_loose_rcut", v)
     }
 
+    /// `cell.output` — the log file `build()` opens as `cell.stdout`
+    /// (`mole.py:2536-2549`); `None` logs to `sys.stdout`.
+    #[getter]
+    fn output(&self) -> Option<String> {
+        self.output.clone()
+    }
+    #[setter]
+    fn set_output(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.apply("output", v)
+    }
+
+    /// `cell.stdout` — `sys.stdout` unless `build()` opened `cell.output`.
+    #[getter]
+    fn stdout(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.stdout_obj(py)
+    }
+    #[setter]
+    fn set_stdout(&mut self, v: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.apply("stdout", v)
+    }
+
     #[getter]
     fn verbose(&self) -> i64 {
         self.input.verbose
@@ -892,27 +1331,46 @@ impl PyCell {
     }
 
     /// Monkhorst-Pack mesh (`kpts_mesh.rs:47`), absolute k-points `(nkpts, 3)`.
+    /// With `space_group_symmetry` or `time_reversal_symmetry` the mesh is handed
+    /// to `pyscf._native.pbc.symm.make_kpts` and a `KPoints` is returned, as
+    /// upstream's `cell.make_kpts` does (`cell.py:874-883`, plan 20-14).
     #[pyo3(signature = (nks, wrap_around = false, with_gamma_point = true, scaled_center = None,
                         space_group_symmetry = false, time_reversal_symmetry = false))]
+    #[allow(clippy::too_many_arguments)]
     fn make_kpts<'py>(
-        &self,
-        py: Python<'py>,
+        slf: &Bound<'py, Self>,
         nks: &Bound<'py, PyAny>,
         wrap_around: bool,
         with_gamma_point: bool,
         scaled_center: Option<&Bound<'py, PyAny>>,
         space_group_symmetry: bool,
         time_reversal_symmetry: bool,
-    ) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
-        make_kpts_impl(
+    ) -> PyResult<Py<PyAny>> {
+        let py = slf.py();
+        let (k, cell_symm) = {
+            let this = slf.borrow();
+            let cell = this.inner()?;
+            let k = make_kpts_impl(py, cell, nks, wrap_around, with_gamma_point, scaled_center)?;
+            (k, cell.space_group_symmetry)
+        };
+        if !(space_group_symmetry || time_reversal_symmetry) {
+            return Ok(k.into_any().unbind());
+        }
+        if space_group_symmetry && !cell_symm {
+            return Err(PyRuntimeError::new_err(
+                "Using k-point symmetry now requires cell to be built with space group symmetry \
+                 info:\ncell.space_group_symmetry = True\ncell.symmorphic = False\ncell.build()",
+            ));
+        }
+        let (kv, _) = extract_kpts(k.as_any())?;
+        Ok(crate::pbc::symm::kpoints_for_cell(
             py,
-            self.inner()?,
-            nks,
-            wrap_around,
-            with_gamma_point,
-            scaled_center,
-            space_group_symmetry || time_reversal_symmetry,
-        )
+            slf.as_any(),
+            &kv,
+            space_group_symmetry,
+            time_reversal_symmetry,
+        )?
+        .into_any())
     }
 
     /// Electrons over `nkpts` k-points — valence counts for GTH atoms
@@ -1043,11 +1501,14 @@ impl PyCell {
     }
 
     /// An independent copy (built state included).
-    fn copy(&self) -> Self {
+    fn copy(&self, py: Python<'_>) -> Self {
         PyCell {
             input: self.input.clone(),
             built: self.built.clone(),
             mol_view: OnceLock::new(),
+            user_inputs: self.user_inputs.clone_ref(py),
+            output: self.output.clone(),
+            stdout: self.stdout.as_ref().map(|s| s.clone_ref(py)),
         }
     }
 
@@ -1072,15 +1533,7 @@ fn make_kpts_impl<'py>(
     wrap_around: bool,
     with_gamma_point: bool,
     scaled_center: Option<&Bound<'py, PyAny>>,
-    symmetry: bool,
 ) -> PyResult<Bound<'py, numpy::PyArray2<f64>>> {
-    if symmetry {
-        return Err(PyNotImplementedError::new_err(
-            "make_kpts(space_group_symmetry/time_reversal_symmetry=True) returns a KPoints \
-             object, which lives in pyscf.pbc.symm (pyscf_pbc_symm::kpts::make_kpts, plan 20-14); \
-             build the plain mesh here and pass it there",
-        ));
-    }
     let nks = extract_usize3(nks, "nks")?;
     let center = match extract_kpts_opt(scaled_center)? {
         None => None,
@@ -1171,9 +1624,11 @@ fn cell_ref<'a>(cell: &'a PyRef<'_, PyCell>) -> PyResult<&'a Cell> {
 /// `pyscf.pbc.gto.M(**kwargs)` — construct and build (`cell.rs:749`).
 #[pyfunction(name = "M", signature = (**kwargs))]
 fn make_cell(py: Python<'_>, kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<Py<PyCell>> {
-    let mut c = PyCell::new(kwargs)?;
-    c.do_build()?;
-    Py::new(py, c)
+    let c = Py::new(py, PyCell::new(kwargs)?)?;
+    let b = c.bind(py);
+    open_output(b)?;
+    b.borrow_mut().do_build()?;
+    Ok(c)
 }
 
 /// `make_kpts(cell, nks, wrap_around, with_gamma_point, scaled_center)`.
@@ -1193,7 +1648,6 @@ fn make_kpts<'py>(
         wrap_around,
         with_gamma_point,
         scaled_center,
-        false,
     )
 }
 
@@ -1287,20 +1741,7 @@ fn get_coulg<'py>(
 ) -> PyResult<Bound<'py, PyArray1<f64>>> {
     let c = cell_ref(&cell)?;
     let k = extract_kpts_opt(k)?.map_or([0.0; 3], |(v, _)| v[0]);
-    let exxdiv = match exx {
-        None => None,
-        Some(v) if v.is_none() => None,
-        Some(v) => match v.extract::<String>() {
-            Ok(s) => ExxDiv::parse(&s),
-            Err(_) => {
-                if v.extract::<bool>().unwrap_or(false) {
-                    Some(ExxDiv::Ewald)
-                } else {
-                    None
-                }
-            }
-        },
-    };
+    let exxdiv = crate::pbc::tools::extract_exxdiv(exx)?;
     let mesh = match mesh {
         Some(m) if !m.is_none() => Some(extract_usize3(m, "mesh")?),
         _ => None,

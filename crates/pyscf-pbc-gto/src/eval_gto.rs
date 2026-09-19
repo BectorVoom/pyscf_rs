@@ -27,13 +27,21 @@
 //!
 //! # Image list
 //!
-//! `eval_gto.py:137` uses a grid-edge-aware `get_lattice_Ls` that keeps images
-//! able to reach the GRID BOX rather than another atom. This port instead calls
-//! [`crate::lattice::get_lattice_ls`] with `discard = false`, whose raw
-//! `cartesian_prod` box is a SUPERSET of upstream's mask: it can only add
-//! numerically-negligible images, never drop a needed one, so the Bloch sum
-//! stays converged for grid points anywhere in the cell (which
-//! `bloch_periodicity_holds` pins).
+//! `eval_gto.py:136-138,192-257`: the EVAL-variant `get_lattice_Ls` at
+//! `max(_estimate_rcut(...))` — clamped per-axis bounds, the grid-edge wrap
+//! filter, and a stable norm sort at the call site. This is NOT the generic
+//! tools-variant list: on the He-fcc gate cell the eval list has 246 images
+//! where the tools list has 343 at the same cutoff, and the C screener assumes
+//! distance-sorted `Ls` (`grid_ao.c:58-62`). An earlier revision used the tools
+//! list with `discard = false` as a "superset"; the extra far images carry
+//! ~1e-13 of un-`upstream` tail mass on the He gate, so the superset argument
+//! holds for convergence but not for oracle parity.
+//!
+//! The per-`rcut` radii come from [`estimate_rcut_for_eval`]. Upstream's C
+//! driver additionally skips, per grid block, images whose minimum distance
+//! exceeds the shell `rcut` (`grid_ao.c:386`); that block-granular skip is not
+//! replicated here yet (see the `get_nuc` parity notes), so expect residual
+//! tail-level differences against `pbc_eval_gto` at fixed precision.
 //!
 //! # AO screening (W-09, `.planning/pbc/KRKS-OPTIMISATION-PLAN.md`)
 //!
@@ -111,14 +119,17 @@ impl EvalAoKptsOutput {
 
 /// `_estimate_rcut(cell, deriv)` — `eval_gto.py:171-192`.
 ///
-/// One radius per shell: how far that shell's most diffuse primitive reaches
-/// before falling under the grid-weighted precision. `deriv` is the number of
-/// `ip` factors in the eval name (upstream counts the substring `'ip'`).
+/// One radius per shell: how far that shell's slowest-decaying primitive
+/// reaches before falling under the grid-weighted precision. `deriv` is the
+/// number of `ip` factors in the eval name (upstream counts the substring
+/// `'ip'`). The primitive set comes from the `mole.py` `diffuse` selector
+/// ([`PgtoOp::Diffuse`]) — the same call `eval_gto.py:173` makes — not the
+/// cell-local min-exponent one that sizes `cell.rcut`.
 ///
 /// # Errors
 /// [`CoreError::InvalidMolecule`] when `rcut` has to be estimated and cannot.
 pub fn estimate_rcut_for_eval(cell: &Cell, deriv: u32) -> Result<Vec<f64>, PyscfRsError> {
-    let (es, cs) = extract_pgto_params(cell, PgtoOp::Min);
+    let (es, cs) = extract_pgto_params(cell, PgtoOp::Diffuse);
     let ls: Vec<f64> = (0..cell.mol.nbas)
         .map(|i| crate::cutoff::bas_angular(cell, i) as f64)
         .collect();
@@ -313,8 +324,14 @@ pub fn eval_ao_kpts(
     }
     let rcut = estimate_rcut_for_eval(cell, deriv_count(eval_name))?;
     let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
-    // `discard = false` — see the module docs on the image list.
-    let ls = crate::lattice::get_lattice_ls(cell, Some(rmax), None, false)?;
+    // eval_gto.py:136-138 — the EVAL-variant image list at `max(rcut)`,
+    // sorted by norm (stable). The sort is load-bearing, not cosmetic: the C
+    // screener assumes distance-sorted `Ls` (`grid_ao.c:58-62`), and the
+    // per-image accumulation runs in this order.
+    let mut ls = crate::lattice::get_lattice_ls_eval(cell, rmax)?;
+    ls.sort_by(|a, b| {
+        pyscf_pbc_tools::mat3::norm3(a).total_cmp(&pyscf_pbc_tools::mat3::norm3(b))
+    });
     eval_ao_kpts_with_images(cell, eval_name, coords, kpts, &ls)
 }
 
@@ -495,9 +512,12 @@ pub fn eval_ao_kpts_with_images(
             }
             let grid = pyscf_kernels::AoGridDevice::new(&client, &flat, ngrids);
             let _ = ctx;
+            let resident = ao_resident_enabled() && qmax <= pyscf_kernels::RESIDENT_ACC_VECS;
             fused = Some(FusedState {
                 grid,
-                cap,
+                cap: if resident { usize::MAX } else { cap },
+                resident,
+                qmax,
                 images: Vec::with_capacity(cap),
                 pr: Vec::with_capacity(cap * nkpts),
                 pi: Vec::with_capacity(cap * nkpts),
@@ -737,7 +757,11 @@ pub fn eval_ao_kpts_with_images(
     // K-10: the ragged last fused batch.
     if let (Some(f), Some(ctx)) = (fused.as_mut(), eval_ctx.as_ref()) {
         if !f.images.is_empty() {
-            flush_fused(&client, ctx, f, &mut acc, nkpts, n, deriv1, nimgs)?;
+            if f.resident {
+                flush_resident(&client, ctx, f, &mut acc, nkpts, n, deriv1)?;
+            } else {
+                flush_fused(&client, ctx, f, &mut acc, nkpts, n, deriv1, nimgs)?;
+            }
         }
     }
     // K-09: the ragged last batch (A-06: its staged images evaluated first).
@@ -786,9 +810,15 @@ pub fn eval_ao_kpts_with_images(
     // (eval_gto.py:157-158).
     let gamma: Vec<bool> = kpts.iter().map(is_gamma).collect();
     let mut kaos = Vec::with_capacity(nkpts);
-    for (k, is_g) in gamma.iter().enumerate() {
-        let (re, im) = match planes.get(k) {
-            Some((re, im)) => (re.clone(), if *is_g { vec![0.0; n] } else { im.clone() }),
+    // BAND-07: the planes are moved, not cloned — a full second copy of the
+    // table (2.9 GB at 40 k-points of a gth-dzvp deriv1 grid) bought nothing.
+    let mut planes = planes.into_iter();
+    for is_g in &gamma {
+        let (re, im) = match planes.next() {
+            Some((re, im)) => {
+                let im = if *is_g { vec![0.0; n] } else { im };
+                (re, im)
+            }
             None => (Vec::new(), Vec::new()),
         };
         kaos.push(CTensor::from_planes(re, im));
@@ -834,6 +864,10 @@ fn image_batch_capacity(block_len: usize) -> usize {
 struct FusedState {
     grid: pyscf_kernels::AoGridDevice,
     cap: usize,
+    /// BAND-06: stage EVERY image and fold them in one resident launch at
+    /// the end (`cap` is then unbounded); `qmax` sizes its k-tiles.
+    resident: bool,
+    qmax: usize,
     images: Vec<pyscf_kernels::FusedImage>,
     pr: Vec<f64>,
     pi: Vec<f64>,
@@ -849,6 +883,59 @@ fn ao_fuse_enabled() -> bool {
             "0" | "false" | "no" | "off"
         )
     })
+}
+
+/// `PYSCF_PBC_AO_RESIDENT`, per call. `0`/`false`/`no`/`off` pins the batched
+/// K-10 path (BAND-06's bit-identity reference); anything else, including
+/// unset, folds every image in one resident launch.
+fn ao_resident_enabled() -> bool {
+    !std::env::var("PYSCF_PBC_AO_RESIDENT").is_ok_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+/// BAND-06: every staged image in one resident launch into a fresh accumulator.
+fn flush_resident(
+    client: &AlgebraClient,
+    ctx: &pyscf_kernels::EvalGtoDeviceContext,
+    f: &mut FusedState,
+    acc: &mut Option<pyscf_kernels::pbc::AoKAccumulator>,
+    nkpts: usize,
+    n: usize,
+    deriv1: bool,
+) -> Result<(), PyscfRsError> {
+    let span = tracing::info_span!("pbc_eval_ao_k08_accumulate", images = f.images.len() as u64);
+    let _entered = span.enter();
+    let accumulator = acc.get_or_insert_with(|| {
+        pyscf_kernels::pbc::AoKAccumulator::zeros_point_major(client, nkpts, n)
+    });
+    if !skip_k08_for_measurement() {
+        pyscf_kernels::eval_ao_k_resident(
+            client,
+            ctx,
+            &f.grid,
+            deriv1,
+            &f.images,
+            &f.pr,
+            &f.pi,
+            accumulator,
+            nkpts,
+            SCREEN_BLKSIZE,
+            f.qmax,
+        )
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts: BAND-06 resident launch failed: {e}"
+            )))
+        })?;
+    }
+    f.images.clear();
+    f.pr.clear();
+    f.pi.clear();
+    Ok(())
 }
 
 /// `PYSCF_PBC_AO_FUSE_BATCH=<n>` caps the fused batch (measurement dial).

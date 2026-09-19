@@ -3851,6 +3851,243 @@ fn eval_ao_k_fused_kernel<N: Size>(
     }
 }
 
+/// BAND-06: fold `nb` staged images (`vals[j·qtot + q]`, image ids `idx[j]`)
+/// into the lane's accumulators, each `(q, k-vector)` in one register pass
+/// over the images in order.
+#[allow(clippy::too_many_arguments)]
+#[cube]
+fn resident_fold<N: Size>(
+    vals: &Array<f64>,
+    idx: &Array<u32>,
+    nb: usize,
+    qtot: usize,
+    nkt: usize,
+    kv0: usize,
+    nkv: usize,
+    pr: &Array<Vector<f64, N>>,
+    pi: &Array<Vector<f64, N>>,
+    acc_re: &mut Array<Vector<f64, N>>,
+    acc_im: &mut Array<Vector<f64, N>>,
+) {
+    for q in 0..qtot {
+        for t in 0..nkt {
+            let kv = kv0 + t;
+            let mut re = acc_re[q * nkt + t];
+            let mut im = acc_im[q * nkt + t];
+            for j in 0..nb {
+                let m = idx[j] as usize;
+                let v = Vector::<f64, N>::new(vals[j * qtot + q]);
+                re += pr[m * nkv + kv] * v;
+                im += pi[m * nkv + kv] * v;
+            }
+            acc_re[q * nkt + t] = re;
+            acc_im[q * nkt + t] = im;
+        }
+    }
+}
+
+/// BAND-06 — K-10 with the k-accumulators resident in the lane: ALL images
+/// in one launch per k-tile, written once. See [`eval_ao_k_resident`].
+#[allow(clippy::too_many_arguments)]
+#[cube(launch_unchecked)]
+fn eval_ao_k_resident_kernel<N: Size>(
+    coords: &Array<f64>,
+    lvec: &Array<f64>,
+    keep: &Array<u32>,
+    pr: &Array<Vector<f64, N>>,
+    pi: &Array<Vector<f64, N>>,
+    env: &Array<f64>,
+    bas: &Array<i32>,
+    atm: &Array<i32>,
+    ao_loc: &Array<i32>,
+    c2s_flat: &Array<f64>,
+    cpow_lx: &Array<i32>,
+    cpow_ly: &Array<i32>,
+    cpow_lz: &Array<i32>,
+    ncart_by_l: &Array<i32>,
+    nsph_by_l: &Array<i32>,
+    fac1_by_l: &Array<f64>,
+    c2s_off_by_l: &Array<i32>,
+    cpow_off_by_l: &Array<i32>,
+    rcut2: &Array<f64>,
+    out_re: &mut Array<Vector<f64, N>>,
+    out_im: &mut Array<Vector<f64, N>>,
+    ngrids: usize,
+    nbas: usize,
+    nao: usize,
+    nkv: usize,
+    kv0: usize,
+    nkt: usize,
+    nimg: usize,
+    nblocks: usize,
+    blk: usize,
+    atm_slots: usize,
+    bas_slots: usize,
+    atom_of: usize,
+    ang_of: usize,
+    nprim_of: usize,
+    nctr_of: usize,
+    ptr_exp: usize,
+    ptr_coeff: usize,
+    ptr_coord: usize,
+    lane0: usize,
+    #[comptime] deriv1: bool,
+    #[comptime] exp_mode: u32,
+) {
+    // `lane0`: chunked on the CPU runtime — `vals` and `present` are stack per
+    // iteration there (`launch_1d_chunked`).
+    let tid = ABSOLUTE_POS + lane0;
+    if tid < ngrids * nbas {
+        let g = tid % ngrids;
+        let shell = tid / ngrids;
+        let x = coords[g];
+        let y = coords[g + ngrids];
+        let z = coords[g + 2 * ngrids];
+        let block = g / blk;
+
+        let bas_row = shell * bas_slots;
+        let lu = bas[bas_row + ang_of] as usize;
+        let nctr = bas[bas_row + nctr_of] as usize;
+        let nsph_l = nsph_by_l[lu] as usize;
+        let ao_off = ao_loc[shell] as usize;
+        let qn = nctr * nsph_l;
+        let mut comp = 1usize;
+        if comptime!(deriv1) {
+            comp = 4usize;
+        }
+        let qtot = comp * qn;
+
+        // Values of up to `bcap` kept images, then ONE register pass per
+        // `(q, k-vector)` over them — the fused kernel's blocking, with the
+        // accumulator in the lane instead of in the planes.
+        let mut vals = Array::<f64>::new(FUSED_VALS_CAP);
+        let mut idx = Array::<u32>::new(AO_FUSED_BATCH_MAX);
+        let mut acc_re = Array::<Vector<f64, N>>::new(RESIDENT_ACC_VECS);
+        let mut acc_im = Array::<Vector<f64, N>>::new(RESIDENT_ACC_VECS);
+        let zero = Vector::<f64, N>::new(0.0);
+        for i in 0..qtot * nkt {
+            acc_re[i] = zero;
+            acc_im[i] = zero;
+        }
+        let mut bcap = FUSED_VALS_CAP / qtot;
+        if bcap > AO_FUSED_BATCH_MAX {
+            bcap = AO_FUSED_BATCH_MAX;
+        }
+        // Every image in ONE pass, the lane's `Q x nkt` accumulators held
+        // locally: per `(k, p)` the additions are the fused kernel's, image
+        // by image in order from `+0.0`, so the planes are bit-identical to
+        // it — without its per-batch read-modify-write of the whole
+        // `nkpts x n` accumulator. A block-screened image adds exact zeros
+        // there and is skipped here (`x + (±0.0) == x` for any `x` that is
+        // not `-0.0`, and an accumulator started at `+0.0` never is).
+        let mut nb = 0usize;
+        for m in 0..nimg {
+            if keep[m * nblocks + block] != 0u32 {
+                let gx = x - lvec[m * 3];
+                let gy = y - lvec[m * 3 + 1];
+                let gz = z - lvec[m * 3 + 2];
+                if comptime!(deriv1) {
+                        eval_gto_deriv1_values(
+                            gx,
+                            gy,
+                            gz,
+                            shell,
+                            nb * qtot,
+                            &mut vals,
+                            env,
+                            bas,
+                            atm,
+                            c2s_flat,
+                            cpow_lx,
+                            cpow_ly,
+                            cpow_lz,
+                            ncart_by_l,
+                            nsph_by_l,
+                            fac1_by_l,
+                            c2s_off_by_l,
+                            cpow_off_by_l,
+                            rcut2,
+                            atm_slots,
+                            bas_slots,
+                            atom_of,
+                            ang_of,
+                            nprim_of,
+                            nctr_of,
+                            ptr_exp,
+                            ptr_coeff,
+                            ptr_coord,
+                            exp_mode,
+                        );
+                    } else {
+                        eval_gto_general_values(
+                            gx,
+                            gy,
+                            gz,
+                            shell,
+                            nb * qtot,
+                            &mut vals,
+                            env,
+                            bas,
+                            atm,
+                            c2s_flat,
+                            cpow_lx,
+                            cpow_ly,
+                            cpow_lz,
+                            ncart_by_l,
+                            nsph_by_l,
+                            fac1_by_l,
+                            c2s_off_by_l,
+                            cpow_off_by_l,
+                            rcut2,
+                            atm_slots,
+                            bas_slots,
+                            atom_of,
+                            ang_of,
+                            nprim_of,
+                            nctr_of,
+                            ptr_exp,
+                            ptr_coeff,
+                            ptr_coord,
+                            exp_mode,
+                        );
+                    }
+                idx[nb] = m as u32;
+                nb += 1;
+                if nb == bcap {
+                    resident_fold(
+                        &vals, &idx, nb, qtot, nkt, kv0, nkv, pr, pi, &mut acc_re, &mut acc_im,
+                    );
+                    nb = 0;
+                }
+            }
+        }
+        if nb > 0 {
+            resident_fold(
+                &vals, &idx, nb, qtot, nkt, kv0, nkv, pr, pi, &mut acc_re, &mut acc_im,
+            );
+        }
+        // The planes start zeroed and this launch owns its `(p, k-tile)`
+        // cells outright, so a store is the whole accumulate.
+        for c in 0..comp {
+            for c_idx in 0..nctr {
+                for msph in 0..nsph_l {
+                    let q = c * qn + c_idx * nsph_l + msph;
+                    let p = c * ngrids * nao + g + (ao_off + c_idx * nsph_l + msph) * ngrids;
+                    for t in 0..nkt {
+                        out_re[p * nkv + kv0 + t] = acc_re[q * nkt + t];
+                        out_im[p * nkv + kv0 + t] = acc_im[q * nkt + t];
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/// The per-lane accumulator of [`eval_ao_k_resident_kernel`], in k-VECTORS per
+/// plane: `Q · nkt <= RESIDENT_ACC_VECS`, the host tiles k to fit.
+pub const RESIDENT_ACC_VECS: usize = 512;
+
 /// The most images one fused batch may hold.
 pub const AO_FUSED_BATCH_MAX: usize = 32;
 
@@ -4026,6 +4263,176 @@ pub fn eval_ao_k_fused_batch(
     });
     Ok(())
 }
+
+/// BAND-06 — [`eval_ao_k_fused_batch`] over EVERY image at once with the
+/// k-accumulators resident in each lane ([`eval_ao_k_resident_kernel`]): the
+/// planes are written once per k-tile instead of read-modified-written once
+/// per image batch, which at many k-points (a band path) was most of the AO
+/// pass. Bit-identical to the fused path.
+///
+/// `acc` must be freshly zeroed (the kernel STORES), `images` is the whole
+/// image list; `pr`/`pi` are `images.len() · nkpts`, image-major; `qmax` is
+/// [`fused_values_per_image`] of the basis.
+///
+/// # Errors
+/// As [`eval_ao_k_fused_batch`], and when a shell's `Q` exceeds the lane
+/// arrays ([`FUSED_VALS_CAP`], [`RESIDENT_ACC_VECS`]).
+#[allow(clippy::too_many_arguments)]
+pub fn eval_ao_k_resident(
+    client: &AlgebraClient,
+    ctx: &EvalGtoDeviceContext,
+    grid: &AoGridDevice,
+    deriv1: bool,
+    images: &[FusedImage],
+    pr: &[f64],
+    pi: &[f64],
+    acc: &mut crate::pbc::AoKAccumulator,
+    nkpts: usize,
+    blk: usize,
+    qmax: usize,
+) -> Result<(), PyscfRsError> {
+    let err = |msg: String| PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(msg));
+    let nimg = images.len();
+    if nimg == 0 {
+        return Ok(());
+    }
+    if ctx.all_s && !deriv1 {
+        return Err(err(
+            "K-10: all-s basis at deriv 0 keeps the s-kernel path".into()
+        ));
+    }
+    let ang = ctx
+        .angular
+        .as_ref()
+        .ok_or_else(|| err("K-10: no angular tables in the context".into()))?;
+    let ngrids = grid.ngrids;
+    let comp = if deriv1 { 4 } else { 1 };
+    let n = comp * ngrids * ctx.nao;
+    let (acc_nkpts, acc_n) = acc.shape();
+    if !acc.is_point_major() {
+        return Err(err(
+            "K-10: the fused kernel needs a point-major accumulator (`AoKAccumulator::zeros_point_major`)"
+                .into(),
+        ));
+    }
+    if acc_nkpts != nkpts || acc_n != n || pr.len() != nimg * nkpts || pi.len() != nimg * nkpts {
+        return Err(err(format!(
+            "K-10: accumulator ({acc_nkpts}, {acc_n}) vs ({nkpts}, {n}); pr {} pi {} for {nimg} images",
+            pr.len(),
+            pi.len()
+        )));
+    }
+    if qmax == 0 || qmax > FUSED_VALS_CAP || qmax > RESIDENT_ACC_VECS {
+        return Err(err(format!(
+            "BAND-06: Q = {qmax} exceeds the lane arrays ({FUSED_VALS_CAP} values, {RESIDENT_ACC_VECS} accumulators)"
+        )));
+    }
+    let nblocks = ngrids.div_ceil(blk.max(1)).max(1);
+    let mut keep: Vec<u32> = Vec::with_capacity(nimg * nblocks);
+    let mut lvec: Vec<f64> = Vec::with_capacity(3 * nimg);
+    for (m, img) in images.iter().enumerate() {
+        lvec.extend_from_slice(&img.l);
+        if img.keep_blocks.is_empty() {
+            keep.extend(std::iter::repeat_n(1u32, nblocks));
+        } else if img.keep_blocks.len() == nblocks {
+            keep.extend_from_slice(&img.keep_blocks);
+        } else {
+            return Err(err(format!(
+                "K-10: image {m} has {} keep flags for {nblocks} blocks",
+                img.keep_blocks.len()
+            )));
+        }
+    }
+    let lanes = ngrids * ctx.nbas;
+    if lanes == 0 || nkpts == 0 {
+        return Ok(());
+    }
+    let (re_h, im_h) = acc.planes();
+    let [env_len, bas_len, atm_len, ao_loc_len, rcut2_len] = ctx.lens;
+    let al = ang.lens;
+    // Per lane: the images' evaluations plus `2 · Q · nkpts · nimg` multiply-adds.
+    let per_lane =
+        nimg * (if deriv1 {
+            EVAL_GTO_DERIV1_WORK_PER_LANE
+        } else {
+            EVAL_GTO_GENERAL_WORK_PER_LANE
+        }) + 2 * comp * 9 * nkpts * nimg;
+    dispatch_backend!(client, c, Rt, {
+        let lvec_h = pyscf_algebra::launch::upload::<Rt, f64>(c, &lvec);
+        let keep_h = c.create_from_slice(bytemuck::cast_slice(&keep));
+        let pr_h = pyscf_algebra::launch::upload::<Rt, f64>(c, pr);
+        let pi_h = pyscf_algebra::launch::upload::<Rt, f64>(c, pi);
+        // K-10v: the widest vector the device likes for f64 that divides nkpts.
+        let line = pyscf_algebra::launch::line_size_for::<Rt, f64>(c, nkpts);
+        let nkv = nkpts / line;
+        let local_bytes = FUSED_VALS_CAP * core::mem::size_of::<f64>()
+            + AO_FUSED_BATCH_MAX * core::mem::size_of::<u32>()
+            + 2 * RESIDENT_ACC_VECS * line * core::mem::size_of::<f64>();
+        // k-tiles so the widest shell's `Q · nkt` fits the accumulator.
+        let nkt_max = (RESIDENT_ACC_VECS / qmax).max(1);
+        // SAFETY: every handle length is its slice's length; the kernel
+        // guards `tid < ngrids·nbas`; the two planes are the only `&mut`.
+        let mut kv0 = 0usize;
+        while kv0 < nkv {
+            let nkt = nkt_max.min(nkv - kv0);
+            for chunk in pyscf_algebra::launch::launch_1d_chunked(c, lanes, per_lane, local_bytes) {
+                unsafe {
+                    eval_ao_k_resident_kernel::launch_unchecked::<Rt>(
+                        c,
+                        CubeCount::Static(chunk.count_x, 1, 1),
+                        chunk.dim,
+                        line,
+                        ArrayArg::from_raw_parts(grid.handle.clone(), 3 * ngrids),
+                        ArrayArg::from_raw_parts(lvec_h.clone(), 3 * nimg),
+                        ArrayArg::from_raw_parts(keep_h.clone(), nimg * nblocks),
+                        ArrayArg::from_raw_parts(pr_h.clone(), nimg * nkpts),
+                        ArrayArg::from_raw_parts(pi_h.clone(), nimg * nkpts),
+                        ArrayArg::from_raw_parts(ctx.env.clone(), env_len),
+                        ArrayArg::from_raw_parts(ctx.bas.clone(), bas_len),
+                        ArrayArg::from_raw_parts(ctx.atm.clone(), atm_len),
+                        ArrayArg::from_raw_parts(ctx.ao_loc.clone(), ao_loc_len),
+                        ArrayArg::from_raw_parts(ang.c2s_flat.clone(), al[0]),
+                        ArrayArg::from_raw_parts(ang.cpow_lx.clone(), al[1]),
+                        ArrayArg::from_raw_parts(ang.cpow_ly.clone(), al[2]),
+                        ArrayArg::from_raw_parts(ang.cpow_lz.clone(), al[3]),
+                        ArrayArg::from_raw_parts(ang.ncart_by_l.clone(), al[4]),
+                        ArrayArg::from_raw_parts(ang.nsph_by_l.clone(), al[5]),
+                        ArrayArg::from_raw_parts(ang.fac1_by_l.clone(), al[6]),
+                        ArrayArg::from_raw_parts(ang.c2s_off_by_l.clone(), al[7]),
+                        ArrayArg::from_raw_parts(ang.cpow_off_by_l.clone(), al[8]),
+                        ArrayArg::from_raw_parts(ctx.rcut2.clone(), rcut2_len),
+                        ArrayArg::from_raw_parts(re_h.clone(), nkpts * n),
+                        ArrayArg::from_raw_parts(im_h.clone(), nkpts * n),
+                        ngrids,
+                        ctx.nbas,
+                        ctx.nao,
+                        nkv,
+                        kv0,
+                        nkt,
+                        nimg,
+                        nblocks,
+                        blk.max(1),
+                        ATM_SLOTS,
+                        BAS_SLOTS,
+                        ATOM_OF,
+                        ANG_OF,
+                        NPRIM_OF,
+                        NCTR_OF,
+                        PTR_EXP,
+                        PTR_COEFF,
+                        PTR_COORD,
+                        chunk.lane0,
+                        deriv1,
+                        ctx.exp_mode,
+                    );
+                }
+            }
+            kv0 += nkt;
+        }
+    });
+    Ok(())
+}
+
 
 /// Whether [`eval_gto_sph_into_target`] / [`eval_gto_sph_deriv1_into_target`]
 /// can serve this basis on the device: every shell `l <= 4`, at least one

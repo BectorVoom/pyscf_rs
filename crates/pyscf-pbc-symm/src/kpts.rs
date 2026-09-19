@@ -36,7 +36,7 @@ use pyscf_pbc_lib::kpts_helper::{KPT_DIFF_TOL, round_to_fbz};
 use crate::error::PbcSymmError;
 use crate::group::{PgElement, PointGroup, Representation};
 use crate::space_group::SPGElement;
-use crate::symmetry::{DmatSet, Symmetry};
+use crate::symmetry::{DmatSet, Symmetry, make_dmats};
 
 /// Sentinel used by upstream's `bz2bz_ks` for "this op maps this k-point
 /// outside the mesh". Upstream stores it as `-1` in an integer array; this
@@ -2087,10 +2087,28 @@ impl KPoints {
     /// order and [`pyscf_algebra::oracle_sum`] reduction used by the scalar
     /// path, making the result independent of the Rayon worker count.
     ///
+    /// # The `l = 1` matrices do not depend on the basis
+    ///
+    /// `Symmetry` builds `Dmats` only up to the basis' highest angular
+    /// momentum (`symmetry.py:83-86`, `make_Dmats`), which is what the AO
+    /// rotations need. The density GRADIENT is a Cartesian vector whatever the
+    /// basis, so on an s-only cell (`Dmats[iop] = [D^0]`) the `l = 1` block is
+    /// built here from `op.a2r(cell).rot` through [`make_dmats`] with
+    /// `l_max = Some(1)` — upstream's own widening argument
+    /// (`symmetry.py:85-86`; `Symmetry.build` passes it for an `auxcell`,
+    /// `:199-205`) — which is bit-for-bit the block a cell whose basis carries
+    /// p functions stores (20-13 D4). When the stored set already reaches
+    /// `l = 1` it is used unchanged.
+    ///
+    /// # Errors
+    /// As [`Self::symmetrize_density`], plus the `a2r` conversion when the
+    /// `l = 1` block has to be built.
+    ///
     /// # Panics
     /// If any component does not match the mesh.
     pub fn symmetrize_density_vec(
         &self,
+        cell: &Cell,
         rho: [&[f64]; 3],
         ibz_k_idx: usize,
         mesh: [usize; 3],
@@ -2102,6 +2120,18 @@ impl KPoints {
         let permutation = self.density_grid_permutation(ibz_k_idx, mesh)?;
         let star = &self.stars_ops[ibz_k_idx];
         debug_assert_eq!(permutation.len(), star.len() * ngrids);
+        // One `l = 1` block per star operation, in star order.
+        let l1: Vec<std::borrow::Cow<'_, Vec<Vec<f64>>>> = star
+            .iter()
+            .map(|&iop| match self.dmats().get(iop).and_then(|d| d.get(1)) {
+                Some(d) => Ok(std::borrow::Cow::Borrowed(d)),
+                None => {
+                    let rot = self.ops()[iop].a2r(cell)?.rot;
+                    let (mut built, _) = make_dmats(cell, &[rot], Some(1));
+                    Ok(std::borrow::Cow::Owned(built.swap_remove(0).swap_remove(1)))
+                }
+            })
+            .collect::<Result<_, PbcSymmError>>()?;
 
         const CHUNK: usize = 4096;
         let mut out: [Vec<f64>; 3] = std::array::from_fn(|_| vec![0.0; ngrids]);
@@ -2116,9 +2146,8 @@ impl KPoints {
                 let g0 = chunk * CHUNK;
                 for local in 0..dst_x.len() {
                     let g = g0 + local;
-                    for (op_pos, &iop) in star.iter().enumerate() {
+                    for (op_pos, d) in l1.iter().enumerate() {
                         let src = permutation[op_pos * ngrids + g] as usize;
-                        let d = &self.dmats()[iop][1];
                         for row in 0..3 {
                             terms[row][op_pos] = d[row][0] * rho[0][src]
                                 + d[row][1] * rho[1][src]

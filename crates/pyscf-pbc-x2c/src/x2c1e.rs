@@ -23,7 +23,13 @@ use crate::sfx2c1e::{LIGHT_SPEED, hcore_fw, xmatrix};
 /// spins (closed-shell spinor structure). Returns the row-major `2nao × 2nao`
 /// block-diagonal `[h1e, h1e]` Hamiltonian. With explicit spin-orbit blocks,
 /// use [`x2c1e_hcore_so`] (refused until the spinor integrals land).
-pub fn x2c1e_hcore(t: &[f64], v: &[f64], w: &[f64], s: &[f64], nao: usize) -> Result<Vec<f64>, PbcX2cError> {
+pub fn x2c1e_hcore(
+    t: &[f64],
+    v: &[f64],
+    w: &[f64],
+    s: &[f64],
+    nao: usize,
+) -> Result<Vec<f64>, PbcX2cError> {
     x2c1e_hcore_at_c(t, v, w, s, nao, LIGHT_SPEED)
 }
 

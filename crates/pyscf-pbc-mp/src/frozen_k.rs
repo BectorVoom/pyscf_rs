@@ -33,11 +33,7 @@ impl KCount {
     }
 }
 
-fn list_for(
-    frozen: &FrozenK,
-    k: usize,
-    nk: usize,
-) -> Result<Option<&[usize]>, PbcMpError> {
+fn list_for(frozen: &FrozenK, k: usize, nk: usize) -> Result<Option<&[usize]>, PbcMpError> {
     match frozen {
         FrozenK::Uniform(Frozen::None) => Ok(None),
         FrozenK::Uniform(Frozen::List(v)) => Ok(Some(v)),

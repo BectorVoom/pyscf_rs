@@ -116,7 +116,7 @@ fn mo_route_matches_dm_route_diamond() {
 /// meaningful rep count takes real wall-clock, and a timing number is not a
 /// pass/fail signal `cargo test`'s default run should gate on.
 #[test]
-#[ignore = "timing, not correctness — run explicitly: cargo test -p pyscf-pbc-df \
+#[ignore = "T3: timing, not correctness — run explicitly: cargo test -p pyscf-pbc-df \
             --release --test gdf_mo_k -- --ignored --nocapture"]
 fn mo_route_wall_clock_vs_dm_route_diamond() {
     let cell = common::diamond();

@@ -16,7 +16,10 @@ use pyscf_algebra::oracle_sum;
 /// Pure host arithmetic; no cubecl (host-loop pattern, D-PBC-29 clause 2).
 pub fn imag_grid(nomega: usize, omega0: f64) -> Result<(Vec<f64>, Vec<f64>), PbcGwError> {
     if nomega == 0 {
-        return Err(PbcGwError::ShapeMismatch { expected: 1, got: 0 });
+        return Err(PbcGwError::ShapeMismatch {
+            expected: 1,
+            got: 0,
+        });
     }
     let (xs, ws) = gauss_legendre(nomega);
     let mut omegas = Vec::with_capacity(nomega);
@@ -41,7 +44,10 @@ pub fn polarizability_diag(
     omegas: &[f64],
 ) -> Result<Vec<f64>, PbcGwError> {
     if e_ia.len() != f_ia.len() {
-        return Err(PbcGwError::ShapeMismatch { expected: e_ia.len(), got: f_ia.len() });
+        return Err(PbcGwError::ShapeMismatch {
+            expected: e_ia.len(),
+            got: f_ia.len(),
+        });
     }
     let mut out = Vec::with_capacity(omegas.len());
     for &w in omegas {

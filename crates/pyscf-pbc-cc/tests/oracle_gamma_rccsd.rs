@@ -96,7 +96,7 @@ fn check(out: &str, tag: &str, failures: &mut Vec<String>, got: &ZArr, name: &st
 /// **The seven chemists' blocks, the nine intermediates, `update_amps`,
 /// `energy` and `init_amps`, at Γ and at a SHIFTED k-point.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn rccsd_equations_match_upstream() {
     let Some(out) = emit("gamma_rccsd") else {
         return;
@@ -186,7 +186,7 @@ fn rccsd_equations_match_upstream() {
 
 /// **The converged `e_corr`, and the `mbpt2` short-circuit.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn rccsd_e_corr_matches_upstream() {
     let Some(out) = emit("gamma_rccsd") else {
         return;
@@ -266,7 +266,7 @@ fn rccsd_e_corr_matches_upstream() {
 /// expressions (seven chemists' blocks against seven k-point ones) on two
 /// separate SCFs, and what the number measures is that they agree at all.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn gamma_shim_and_krccsd_at_one_kpoint_agree() {
     let Some(out) = emit("gamma_rccsd") else {
         return;
@@ -315,7 +315,7 @@ fn gamma_shim_and_krccsd_at_one_kpoint_agree() {
 /// mesh, and a correlation energy compared across two mean fields inherits
 /// that.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn gamma_shim_runs_on_this_ports_own_mean_field() {
     let Some(out) = emit("gamma_rccsd") else {
         return;

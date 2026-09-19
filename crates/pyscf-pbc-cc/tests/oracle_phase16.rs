@@ -57,7 +57,7 @@ const IMDS_BLOCK: f64 = 1e-6;
 /// transposition slips in — the 14-05 `decompose_j2c` class of defect
 /// (`16-CONTEXT §3.4`). Everything downstream inherits it silently.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn eris_blocks_match_upstream() {
     let Some(out) = emit("eris") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -113,7 +113,7 @@ fn eris_blocks_match_upstream() {
 /// the intermediate arithmetic from the iteration, so a failure here names one
 /// function instead of "the energy is wrong".
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn intermediates_and_update_amps_match_upstream() {
     let Some(out) = emit("imds") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -213,7 +213,7 @@ fn intermediates_and_update_amps_match_upstream() {
 /// **G1** — `KRCCSD e_corr` vs upstream, FFTDF, diamond `gth-szv` `[1,1,2]`,
 /// mesh `[15,15,15]`, `cell.precision = 1e-8`, `conv_tol = 1e-9`.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn krccsd_e_corr_matches_upstream_fftdf() {
     let Some(out) = emit("krccsd") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -264,7 +264,7 @@ fn krccsd_e_corr_matches_upstream_fftdf() {
 /// formula twice with no convergence noise between. This port is held to the
 /// same **1e-13 relative**.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn ccsd_t_fast_equals_slow_and_matches_upstream() {
     let Some(out) = emit("triples") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -374,7 +374,7 @@ fn ccsd_t_fast_equals_slow_and_matches_upstream() {
 /// `KGCCSD` and `KRCCSD` differ by `4.95e-9` on this fixture, so `16-07`'s
 /// plan-time `1e-10` would fail a correct implementation.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn kgccsd_matches_upstream() {
     let Some(out) = emit("kgccsd") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -543,7 +543,7 @@ fn kgccsd_matches_upstream() {
 /// that does not name its route is untestable, which is why this one exists
 /// rather than a single "matches upstream" number.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn krccsd_e_corr_matches_upstream_gdf() {
     let Some(out) = emit("eris_gdf") else { return };
     let cell = common::diamond([15, 15, 15]);
@@ -637,7 +637,7 @@ fn krccsd_e_corr_matches_upstream_gdf() {
 /// survive an end-to-end comparison. 16-06 made the same argument and then
 /// needed it.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn kgccsd_eom_intermediates_match_upstream() {
     let Some(out) = emit("kgccsd") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -772,7 +772,7 @@ fn kgccsd_eom_intermediates_match_upstream() {
 /// `(nkpts·nocc)²` array, so a port that stored the full square would agree on
 /// every matvec and still be wrong here.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn kgccsd_eom_ip_and_ea_match_upstream() {
     let Some(out) = emit("kgccsd_eom_ip") else {
         return;
@@ -941,7 +941,7 @@ fn kgccsd_eom_ip_and_ea_match_upstream() {
 /// `5.1e-7`, and its own test suite asserts EOM roots at 3 decimals
 /// (`test_krccsd.py:359-366`). A tighter gate would fail a correct solver.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn kgccsd_eom_roots_match_upstream() {
     let Some(out) = emit("kgccsd_eom_ip") else {
         return;
@@ -1078,7 +1078,7 @@ fn kgccsd_eom_roots_match_upstream() {
 /// assumption two modules share is still an assumption until something checks
 /// it.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn kgccsd_eom_ee_matches_upstream() {
     let Some(out) = emit("kgccsd_eom_ip") else {
         return;
@@ -1220,7 +1220,7 @@ fn eom_ee_koopmans_refuses_and_says_where() {
 /// (`kintermediates_rhf.py:382-383`, `:424-426`) — an error confined to a `W2`
 /// half would move `Wovvo` and leave `Wovoo` right, and vice versa.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn krccsd_eom_intermediates_match_upstream() {
     let Some(out) = emit("krccsd_eom") else {
         return;
@@ -1322,7 +1322,7 @@ fn krccsd_eom_intermediates_match_upstream() {
 /// line above it, and this compares the result on a FIXED synthetic vector for
 /// every `kshift`.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn krccsd_eom_ip_and_ea_match_upstream() {
     let Some(out) = emit("krccsd_eom") else {
         return;
@@ -1417,7 +1417,7 @@ fn krccsd_eom_ip_and_ea_match_upstream() {
 /// On UPSTREAM's own converged `t1`/`t2`, so the comparison is the eigensolve
 /// and not two CCSD convergences. Gate `1e-5`, as for the spin-orbital roots.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn krccsd_eom_roots_match_upstream() {
     let Some(out) = emit("krccsd_eom") else {
         return;
@@ -1492,10 +1492,7 @@ fn krccsd_eom_roots_match_upstream() {
         &imds,
         &padding,
         kc,
-        &eom::EomOpts {
-            left: true,
-            ..opts
-        },
+        &eom::EomOpts { left: true, ..opts },
     )
     .expect_err("the LEFT EE must refuse");
     let msg = e.to_string();

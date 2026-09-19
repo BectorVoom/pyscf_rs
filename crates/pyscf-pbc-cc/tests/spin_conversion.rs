@@ -6,10 +6,10 @@
 //! silent, because every wrong version still has the right shape.
 
 use pyscf_algebra::CTensor;
+use pyscf_pbc_cc::ZArr;
 use pyscf_pbc_cc::kccsd::{
     restricted_t2_to_aa, spatial2spin_t1, spatial2spin_t2, spin2spatial_t1, spin2spatial_t2,
 };
-use pyscf_pbc_cc::ZArr;
 use pyscf_pbc_lib::get_kconserv;
 
 fn lattice() -> [[f64; 3]; 3] {
@@ -71,8 +71,16 @@ fn t1_forward_places_the_spin_blocks_where_orbspin_says() {
     // occupied 0 is alpha, 1 is beta; virtual 0 is alpha, 1 is beta.
     assert_eq!(s.at(&[0, 0, 0]).unwrap(), (3.0, 0.0), "alpha -> (o0, v0)");
     assert_eq!(s.at(&[0, 1, 1]).unwrap(), (-5.0, 0.0), "beta -> (o1, v1)");
-    assert_eq!(s.at(&[0, 0, 1]).unwrap(), (0.0, 0.0), "no alpha-beta leakage");
-    assert_eq!(s.at(&[0, 1, 0]).unwrap(), (0.0, 0.0), "no beta-alpha leakage");
+    assert_eq!(
+        s.at(&[0, 0, 1]).unwrap(),
+        (0.0, 0.0),
+        "no alpha-beta leakage"
+    );
+    assert_eq!(
+        s.at(&[0, 1, 0]).unwrap(),
+        (0.0, 0.0),
+        "no beta-alpha leakage"
+    );
 }
 
 /// `spin2spatial(spatial2spin(x)) == x` for `t2`'s three blocks.
@@ -91,8 +99,7 @@ fn t2_roundtrip_recovers_the_three_spin_blocks() {
     let t2ab = ramp(&[nk, nk, nk, no, no, nv, nv], 40.0);
     let t2bb = ramp(&[nk, nk, nk, no, no, nv, nv], 90.0);
 
-    let spin = spatial2spin_t2(&t2aa, &t2ab, &t2bb, &os, &kc, nocc, nvir)
-        .expect("spatial2spin_t2");
+    let spin = spatial2spin_t2(&t2aa, &t2ab, &t2bb, &os, &kc, nocc, nvir).expect("spatial2spin_t2");
     assert_eq!(spin.shape(), &[nk, nk, nk, nocc, nocc, nvir, nvir]);
     let (a, b, c) = spin2spatial_t2(&spin, &os, &kc, nocc).expect("spin2spatial_t2");
     assert_eq!(a, t2aa, "the aa block does not survive the round trip");
@@ -113,8 +120,7 @@ fn the_lifted_t2_is_antisymmetric() {
     // A RESTRICTED t2 lifted the way `kccsd.py:231-236` does.
     let t2 = ramp(&[nk, nk, nk, no, no, nv, nv], 3.0);
     let t2aa = restricted_t2_to_aa(&t2, &kc).expect("restricted_t2_to_aa");
-    let spin =
-        spatial2spin_t2(&t2aa, &t2, &t2aa, &os, &kc, nocc, nvir).expect("spatial2spin_t2");
+    let spin = spatial2spin_t2(&t2aa, &t2, &t2aa, &os, &kc, nocc, nvir).expect("spatial2spin_t2");
 
     let mut worst = 0.0_f64;
     for ki in 0..nk {

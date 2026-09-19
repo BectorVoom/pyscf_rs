@@ -16,8 +16,8 @@ use pyscf_pbc_adc::types::AdcConfig;
 use serde_json::Value;
 
 fn fixture() -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/kadc_he2.json");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kadc_he2.json");
     serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture must exist")).unwrap()
 }
 
@@ -49,14 +49,24 @@ fn eris_of(v: &Value) -> KadcEris {
         im: flat(&v["blocks"][name]["im"]),
     };
     KadcEris::from_blocks(
-        nk, no, nv,
-        ct("oooo"), ct("oovv"), ct("ovoo"), ct("ovov"), ct("ovvv"), ct("ovvo"),
+        nk,
+        no,
+        nv,
+        ct("oooo"),
+        ct("oovv"),
+        ct("ovoo"),
+        ct("ovov"),
+        ct("ovvv"),
+        ct("ovvo"),
     )
     .expect("fixture blocks must fit")
 }
 
 fn max_diff(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f64::max)
 }
 
 /// M_ab vs upstream get_imds.
@@ -75,8 +85,16 @@ fn m_ab_matches_upstream() {
         let base = k * nv * nv;
         let rr = flat(&v["M_ab"]["re"])[base..base + nv * nv].to_vec();
         let ri = flat(&v["M_ab"]["im"])[base..base + nv * nv].to_vec();
-        assert!(max_diff(&m.m_ab[k].re, &rr) < 1e-9, "M_ab[{k}].re deviates {:e}", max_diff(&m.m_ab[k].re, &rr));
-        assert!(max_diff(&m.m_ab[k].im, &ri) < 1e-9, "M_ab[{k}].im deviates {:e}", max_diff(&m.m_ab[k].im, &ri));
+        assert!(
+            max_diff(&m.m_ab[k].re, &rr) < 1e-9,
+            "M_ab[{k}].re deviates {:e}",
+            max_diff(&m.m_ab[k].re, &rr)
+        );
+        assert!(
+            max_diff(&m.m_ab[k].im, &ri) < 1e-9,
+            "M_ab[{k}].im deviates {:e}",
+            max_diff(&m.m_ab[k].im, &ri)
+        );
     }
 }
 
@@ -94,7 +112,10 @@ fn gate_d_ea_roots() {
     let cfg = AdcConfig::default();
     let roots = kernel_ea(&m, &eris, &e_occ, &e_vir, &kc, 0, &cfg).expect("EA must solve");
     assert_eq!(roots.energies.len(), 3);
-    assert!(roots.energies.windows(2).all(|w| w[0] <= w[1]), "roots must be sorted");
+    assert!(
+        roots.energies.windows(2).all(|w| w[0] <= w[1]),
+        "roots must be sorted"
+    );
     assert!(roots.converged);
     let eref = flat(&v["ea_roots"]);
     let d = max_diff(&roots.energies, &eref[..3]);
@@ -109,7 +130,7 @@ fn gate_d_ea_roots() {
 /// (0.94 off). Porting `get_trans_moments` is outside the roots gate (19-01
 /// Gate D covers roots); this arm records the deferred observable.
 #[test]
-#[ignore = "extended: needs get_trans_moments + ADC-norm renormalization (19-15/19-16 follow-up)"]
+#[ignore = "T1: extended: needs get_trans_moments + ADC-norm renormalization (19-15/19-16 follow-up)"]
 fn gate_d_ip_spec_factors() {
     use pyscf_pbc_adc::ip::{build_m_ij, kernel_ip};
     let v = fixture();
@@ -119,8 +140,8 @@ fn gate_d_ip_spec_factors() {
     let e_vir: Vec<Vec<f64>> = vec![flat(&v["e_vir"][0]), flat(&v["e_vir"][1])];
     let amps = t2_first_order(&eris, &e_occ, &e_vir, &kc).expect("t2 must build");
     let m = build_m_ij(&amps, &eris, &e_occ, &kc).expect("M_ij must build");
-    let roots = kernel_ip(&m, &eris, &e_occ, &e_vir, &kc, 0, &AdcConfig::default())
-        .expect("IP must solve");
+    let roots =
+        kernel_ip(&m, &eris, &e_occ, &e_vir, &kc, 0, &AdcConfig::default()).expect("IP must solve");
     let pref = flat(&v["ip_spec"]);
     let dp = max_diff(&roots.spec_factors, &pref[..3]);
     assert!(dp < 5e-4, "IP spec factors deviate {dp:e}");
@@ -141,8 +162,14 @@ fn ea_deterministic_across_thread_counts() {
             .expect("EA must solve")
             .energies
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b.iter()) {

@@ -67,7 +67,10 @@ impl std::fmt::Display for ResponseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ResponseError::KshiftWithRangeSeparation => {
-                write!(f, "non-zero kshift with range separation (omega != 0) is not implemented")
+                write!(
+                    f,
+                    "non-zero kshift with range separation (omega != 0) is not implemented"
+                )
             }
             ResponseError::KshiftNeedsFittedJk => {
                 write!(f, "non-zero kshift is only supported by GDF/RSDF")

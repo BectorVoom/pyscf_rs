@@ -155,7 +155,7 @@ fn point_screen_is_inert_without_the_block_screen() {
 }
 
 #[test]
-#[ignore = "child process for the A-04 gate"]
+#[ignore = "T1: child process for the A-04 gate"]
 fn emit_ao_bits() {
     let path = std::env::var_os("PYSCF_AO_STAGE_OUTPUT").expect("child output path");
     let basis = std::env::var("PYSCF_AO_POINT_BASIS").unwrap_or_else(|_| "gth-szv".into());

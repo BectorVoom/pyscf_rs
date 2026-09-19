@@ -45,40 +45,74 @@ fn flatten(v: &Value, out: &mut Vec<f64>) {
 }
 
 fn max_diff(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f64::max)
 }
 
 fn cfg(singlet: bool, nroots: usize) -> TdaConfig {
-    TdaConfig { nroots, conv_tol: 1e-9, max_cycle: 50, singlet, tda: true, kshift: 0 }
+    TdaConfig {
+        nroots,
+        conv_tol: 1e-9,
+        max_cycle: 50,
+        singlet,
+        tda: true,
+        kshift: 0,
+    }
 }
 
 /// A/B build vs upstream's get_ab (singlet), element-wise.
 #[test]
 fn build_ab_matches_upstream_get_ab() {
     let v = fixture();
-    let (nocc, nmo) = (v["nocc"].as_u64().unwrap() as usize, v["nmo"].as_u64().unwrap() as usize);
-    let (a, b) = build_ab(&get(&v, "eri"), &get(&v, "e_ia"), nocc, nmo, true, 1.0)
-        .expect("build must run");
+    let (nocc, nmo) = (
+        v["nocc"].as_u64().unwrap() as usize,
+        v["nmo"].as_u64().unwrap() as usize,
+    );
+    let (a, b) =
+        build_ab(&get(&v, "eri"), &get(&v, "e_ia"), nocc, nmo, true, 1.0).expect("build must run");
     let (ar, br) = (get(&v["tda_sing"], "a"), get(&v["tda_sing"], "b"));
     assert_eq!(a.len(), ar.len());
-    assert!(max_diff(&a, &ar) < 1e-10, "A deviates {:e}", max_diff(&a, &ar));
-    assert!(max_diff(&b, &br) < 1e-10, "B deviates {:e}", max_diff(&b, &br));
+    assert!(
+        max_diff(&a, &ar) < 1e-10,
+        "A deviates {:e}",
+        max_diff(&a, &ar)
+    );
+    assert!(
+        max_diff(&b, &br) < 1e-10,
+        "B deviates {:e}",
+        max_diff(&b, &br)
+    );
 }
 
 /// Gate A1: TDA singlet roots, sorted, counted, at upstream's 4dp (eV).
 #[test]
 fn gate_a_tda_singlet() {
     let v = fixture();
-    let (nocc, nmo) = (v["nocc"].as_u64().unwrap() as usize, v["nmo"].as_u64().unwrap() as usize);
-    let r = kernel_rhf_tda(&get(&v, "eri"), &get(&v, "e_ia"), nocc, nmo, 1.0, &cfg(true, 2))
-        .expect("TDA must run");
+    let (nocc, nmo) = (
+        v["nocc"].as_u64().unwrap() as usize,
+        v["nmo"].as_u64().unwrap() as usize,
+    );
+    let r = kernel_rhf_tda(
+        &get(&v, "eri"),
+        &get(&v, "e_ia"),
+        nocc,
+        nmo,
+        1.0,
+        &cfg(true, 2),
+    )
+    .expect("TDA must run");
     assert_eq!(r.energies.len(), 2);
     assert!(r.energies[0] <= r.energies[1], "roots must be sorted");
     assert_eq!(r.kshift, 0);
     assert!(r.converged);
     let eref = get(&v["tda_sing"], "e");
     let d_ev = max_diff(
-        &r.energies.iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
+        &r.energies
+            .iter()
+            .map(|x| x * HARTREE2EV)
+            .collect::<Vec<_>>(),
         &eref[..2].iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
     );
     assert!(d_ev < 5e-5, "TDA singlet deviates {d_ev:e} eV");
@@ -88,14 +122,27 @@ fn gate_a_tda_singlet() {
 #[test]
 fn gate_a_tda_triplet() {
     let v = fixture();
-    let (nocc, nmo) = (v["nocc"].as_u64().unwrap() as usize, v["nmo"].as_u64().unwrap() as usize);
-    let r = kernel_rhf_tda(&get(&v, "eri"), &get(&v, "e_ia"), nocc, nmo, 1.0, &cfg(false, 2))
-        .expect("TDA must run");
+    let (nocc, nmo) = (
+        v["nocc"].as_u64().unwrap() as usize,
+        v["nmo"].as_u64().unwrap() as usize,
+    );
+    let r = kernel_rhf_tda(
+        &get(&v, "eri"),
+        &get(&v, "e_ia"),
+        nocc,
+        nmo,
+        1.0,
+        &cfg(false, 2),
+    )
+    .expect("TDA must run");
     assert_eq!(r.energies.len(), 2);
     assert!(r.energies[0] <= r.energies[1]);
     let eref = get(&v["tda_trip"], "e");
     let d_ev = max_diff(
-        &r.energies.iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
+        &r.energies
+            .iter()
+            .map(|x| x * HARTREE2EV)
+            .collect::<Vec<_>>(),
         &eref[..2].iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
     );
     assert!(d_ev < 5e-5, "TDA triplet deviates {d_ev:e} eV");
@@ -105,7 +152,10 @@ fn gate_a_tda_triplet() {
 #[test]
 fn gate_a_tdhf_singlet() {
     let v = fixture();
-    let (nocc, nmo) = (v["nocc"].as_u64().unwrap() as usize, v["nmo"].as_u64().unwrap() as usize);
+    let (nocc, nmo) = (
+        v["nocc"].as_u64().unwrap() as usize,
+        v["nmo"].as_u64().unwrap() as usize,
+    );
     let mut c = cfg(true, 2);
     c.tda = false;
     let r = kernel_rhf_tdhf(&get(&v, "eri"), &get(&v, "e_ia"), nocc, nmo, 1.0, &c)
@@ -114,7 +164,10 @@ fn gate_a_tdhf_singlet() {
     assert!(r.energies[0] <= r.energies[1]);
     let eref = get(&v["tdhf_sing"], "e");
     let d_ev = max_diff(
-        &r.energies.iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
+        &r.energies
+            .iter()
+            .map(|x| x * HARTREE2EV)
+            .collect::<Vec<_>>(),
         &eref[..2].iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
     );
     assert!(d_ev < 5e-5, "TDHF singlet deviates {d_ev:e} eV");
@@ -124,8 +177,19 @@ fn gate_a_tdhf_singlet() {
 #[test]
 fn tda_and_tdhf_differ() {
     let v = fixture();
-    let (nocc, nmo) = (v["nocc"].as_u64().unwrap() as usize, v["nmo"].as_u64().unwrap() as usize);
-    let a = kernel_rhf_tda(&get(&v, "eri"), &get(&v, "e_ia"), nocc, nmo, 1.0, &cfg(true, 2)).unwrap();
+    let (nocc, nmo) = (
+        v["nocc"].as_u64().unwrap() as usize,
+        v["nmo"].as_u64().unwrap() as usize,
+    );
+    let a = kernel_rhf_tda(
+        &get(&v, "eri"),
+        &get(&v, "e_ia"),
+        nocc,
+        nmo,
+        1.0,
+        &cfg(true, 2),
+    )
+    .unwrap();
     let mut c = cfg(true, 2);
     c.tda = false;
     let b = kernel_rhf_tdhf(&get(&v, "eri"), &get(&v, "e_ia"), nocc, nmo, 1.0, &c).unwrap();
@@ -137,13 +201,29 @@ fn tda_and_tdhf_differ() {
 fn tda_deterministic_across_thread_counts() {
     let run = || {
         let v = fixture();
-        let (nocc, nmo) = (v["nocc"].as_u64().unwrap() as usize, v["nmo"].as_u64().unwrap() as usize);
-        kernel_rhf_tda(&get(&v, "eri"), &get(&v, "e_ia"), nocc, nmo, 1.0, &cfg(true, 3))
-            .expect("TDA must run")
-            .energies
+        let (nocc, nmo) = (
+            v["nocc"].as_u64().unwrap() as usize,
+            v["nmo"].as_u64().unwrap() as usize,
+        );
+        kernel_rhf_tda(
+            &get(&v, "eri"),
+            &get(&v, "e_ia"),
+            nocc,
+            nmo,
+            1.0,
+            &cfg(true, 3),
+        )
+        .expect("TDA must run")
+        .energies
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b.iter()) {

@@ -36,8 +36,8 @@ use pyscf_core::Unit;
 use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
 use pyscf_pbc_dft::multigrid::pair::MultiGridNumInt2;
 use pyscf_pbc_grad::contract::SCREEN_VHF_DM_CONTRACT;
-use pyscf_pbc_grad::gamma_rhf::{GammaCoulombEngine, GammaRhfGradients, GammaRksGradients};
 use pyscf_pbc_grad::gamma_rhf::gamma_make_rdm1e;
+use pyscf_pbc_grad::gamma_rhf::{GammaCoulombEngine, GammaRhfGradients, GammaRksGradients};
 use pyscf_pbc_grad::{Gradients, verify_fd};
 use pyscf_pbc_gto::test_systems::he_fcc;
 use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs};
@@ -84,17 +84,12 @@ fn h2_densities() -> (Vec<f64>, Vec<f64>) {
 
 fn trace_dot(a: &[f64], b: &[f64]) -> f64 {
     assert_eq!(a.len(), b.len());
-    oracle_sum(
-        &a.iter()
-            .zip(b)
-            .map(|(x, y)| x * y)
-            .collect::<Vec<f64>>(),
-    )
+    oracle_sum(&a.iter().zip(b).map(|(x, y)| x * y).collect::<Vec<f64>>())
 }
 
 fn intor_plane(cell: &Cell, intor: &str) -> Vec<f64> {
-    let out = pyscf_pbc_gto::pbc_intor(cell, intor, &GAMMA, Default::default())
-        .expect("intor evaluates");
+    let out =
+        pyscf_pbc_gto::pbc_intor(cell, intor, &GAMMA, Default::default()).expect("intor evaluates");
     assert_eq!(out.kmats.len(), 1);
     out.kmats[0].re.clone()
 }
@@ -111,19 +106,15 @@ fn intor_plane(cell: &Cell, intor: &str) -> Vec<f64> {
 /// unscaled on both sides. The Coulomb+XC piece comes from `nr_rks` at the
 /// same fixed dm (18-09: at fixed dm `veff` has no (b) piece — the chain
 /// rule closes through the functional derivative).
-fn fixed_energy(
-    ni: &MultiGridNumInt2,
-    xc: &str,
-    dm: &[f64],
-    dme: &[f64],
-    cell: &Cell,
-) -> f64 {
+fn fixed_energy(ni: &MultiGridNumInt2, xc: &str, dm: &[f64], dme: &[f64], cell: &Cell) -> f64 {
     let kin = intor_plane(cell, "int1e_kin");
     let ovlp = intor_plane(cell, "int1e_ovlp");
     let vnuc =
         pyscf_pbc_dft::multigrid::pp::get_nuc(cell).expect("AFTDF nuclear attraction builds");
     let nr = ni.nr_rks(cell, xc, dm).expect("nr_rks evaluates");
-    let enuc = cell.energy_nuc().expect("Ewald nuclear repulsion evaluates");
+    let enuc = cell
+        .energy_nuc()
+        .expect("Ewald nuclear repulsion evaluates");
     oracle_sum(&[
         trace_dot(dm, &kin),
         trace_dot(dm, &vnuc),
@@ -155,7 +146,12 @@ fn refusals_are_named() {
 
     // rhf.py:42-47 — a numint that is not MultiGridNumInt2.
     let err = expect_err_msg(
-        GammaRhfGradients::new(&cell, GammaCoulombEngine::Other("FFTDF"), dm.clone(), dme.clone()),
+        GammaRhfGradients::new(
+            &cell,
+            GammaCoulombEngine::Other("FFTDF"),
+            dm.clone(),
+            dme.clone(),
+        ),
         "non-multigrid numint must be refused",
     );
     assert!(
@@ -177,7 +173,10 @@ fn refusals_are_named() {
     let grad = GammaRhfGradients::new(&cell, engine, dm, dme)
         .expect("gamma body builds")
         .with_atmlst(vec![99]);
-    let err = expect_err_msg(grad.electronic_gradient(), "out-of-range atmlst must be refused");
+    let err = expect_err_msg(
+        grad.electronic_gradient(),
+        "out-of-range atmlst must be refused",
+    );
     assert!(
         err.contains("atmlst"),
         "refusal must name atmlst, got: {err}"
@@ -195,10 +194,13 @@ fn he_fcc_single_atom_gradient_is_translation_noise() {
         cell.atom_pseudo(0).is_some(),
         "he_fcc must exercise the pseudo branch"
     );
-    assert!(SCREEN_VHF_DM_CONTRACT, "18-17 Task 1: the default ships screened");
+    assert!(
+        SCREEN_VHF_DM_CONTRACT,
+        "18-17 Task 1: the default ships screened"
+    );
     let engine = GammaCoulombEngine::MultiGridV2(&ni());
-    let grad = GammaRhfGradients::new(&cell, engine, vec![2.0], vec![-0.7])
-        .expect("he_fcc body builds");
+    let grad =
+        GammaRhfGradients::new(&cell, engine, vec![2.0], vec![-0.7]).expect("he_fcc body builds");
     let de = grad.electronic_gradient().expect("he_fcc gradient runs");
     assert_eq!(de.len(), 1);
     let worst = max_abs(&de);
@@ -265,8 +267,14 @@ fn fd_gate_hf_on_gamma_path() {
         max_abs(&analytic) > 1e-6,
         "the H2 gate must be non-vacuous, got {analytic:?}"
     );
-    let report = verify_fd(&cell, &analytic, |c| Ok(fixed_energy(&ni(), "HF", &dm, &dme, c)), DISP, GATE_E_TOL)
-        .expect("verify_fd runs");
+    let report = verify_fd(
+        &cell,
+        &analytic,
+        |c| Ok(fixed_energy(&ni(), "HF", &dm, &dme, c)),
+        DISP,
+        GATE_E_TOL,
+    )
+    .expect("verify_fd runs");
     println!(
         "18-10 Gate E (rhf/HF/h2) worst |analytic-FD| = {:.3e}",
         report.max_abs_diff

@@ -383,7 +383,7 @@ fn bisect_arms(
 /// Task 1 in isolation, and the cheapest discriminating fact: which XC grid
 /// each arm of the failing gate is handed. No 3-centre build.
 #[test]
-#[ignore = "T3: 20-04 bisect diagnostic -- fixture non-vacuity and per-arm XC grid, no GDF build"]
+#[ignore = "T1: 20-04 bisect diagnostic -- fixture non-vacuity and per-arm XC grid, no GDF build"]
 fn bisect_fixture_and_arm_grids() {
     let (cell, kpts) = fixture();
     let gdf = Gdf::new(cell.clone(), &kpts.kpts);

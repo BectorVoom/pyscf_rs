@@ -99,6 +99,9 @@ fn numint_blksize_override() -> Option<usize> {
 /// Upstream's block-loop cap, `BLKSIZE * 2400` (`numint.py:1290`).
 const MAX_BLOCK: usize = BLKSIZE * 2400;
 
+/// The most bytes one band-k AO block may hold in [`KNumInt::band_vmats`].
+pub const BAND_AO_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+
 /// `(nelec, excsum, vmat)` — what `nr_rks` returns.
 #[derive(Debug, Clone)]
 pub struct NrKResult {
@@ -513,8 +516,19 @@ pub struct KNumInt {
     /// the imaginary part silently (`numint.py:361`, `.real`); this port keeps
     /// the residue so a caller can assert on it.
     last_imag: std::cell::Cell<f64>,
-    ao_cache: Mutex<HashMap<AoKey, Arc<EvalAoKptsOutput>>>,
+    ao_cache: KNumIntCache,
 }
+
+/// A shareable handle on a [`KNumInt`]'s AO cache (BAND-04).
+///
+/// The Python bindings rebuild the Rust driver on every call; holding this
+/// handle across calls and [`KNumInt::adopt_ao_cache`]-ing it into each new
+/// driver keeps the SCF's AO tables alive for `get_bands`, `get_veff`, … The
+/// cache is keyed by grid coordinates, k-points and derivative order but NOT
+/// by the cell, so the holder must invalidate it when the cell changes.
+#[derive(Debug, Clone, Default)]
+pub struct KNumIntCache(Arc<Mutex<HashMap<AoKey, Arc<EvalAoKptsOutput>>>>);
+
 
 impl KNumInt {
     /// A `KNumInt` over `kpts` (empty = gamma).
@@ -529,7 +543,7 @@ impl KNumInt {
             kset: KSet::Full,
             max_memory: default_max_memory(),
             last_imag: std::cell::Cell::new(0.0),
-            ao_cache: Mutex::new(HashMap::new()),
+            ao_cache: KNumIntCache::default(),
         }
     }
 
@@ -759,9 +773,20 @@ impl KNumInt {
         self.last_imag.get()
     }
 
+    /// A handle on this driver's AO cache, shared, not copied.
+    pub fn ao_cache_handle(&self) -> KNumIntCache {
+        self.ao_cache.clone()
+    }
+
+    /// Use `cache` as this driver's AO cache from now on. The caller vouches
+    /// that it was filled for the same cell (see [`KNumIntCache`]).
+    pub fn adopt_ao_cache(&mut self, cache: &KNumIntCache) {
+        self.ao_cache = cache.clone();
+    }
+
     /// Drop the AO cache — call after the cell or the grid changes.
     pub fn reset(&self) {
-        if let Ok(mut c) = self.ao_cache.lock() {
+        if let Ok(mut c) = self.ao_cache.0.lock() {
             c.clear();
         }
     }
@@ -801,7 +826,7 @@ impl KNumInt {
             coords.len(),
             coord_hash(coords),
         );
-        if let Ok(c) = self.ao_cache.lock()
+        if let Ok(c) = self.ao_cache.0.lock()
             && let Some(v) = c.get(&key)
         {
             return Ok(Arc::clone(v));
@@ -811,7 +836,7 @@ impl KNumInt {
         // budget so the Vxc scratch still fits (the same rule `Fftdf` uses).
         let bytes = 16.0 * (out.comp * out.ngrids * out.nao * kpts.len()) as f64;
         if bytes < 0.25 * self.max_memory * 1e6
-            && let Ok(mut c) = self.ao_cache.lock()
+            && let Ok(mut c) = self.ao_cache.0.lock()
         {
             c.insert(key, Arc::clone(&out));
         }
@@ -1223,6 +1248,7 @@ impl KNumInt {
                 if ty == XcType::Gga {
                     let grad = kp
                         .symmetrize_density_vec(
+                            cell,
                             [
                                 per_k[set][ik].row(1),
                                 per_k[set][ik].row(2),
@@ -1430,6 +1456,115 @@ impl KNumInt {
         band.iter()
             .map(|b| self.kpts.iter().position(|k| same(k, b)))
             .collect()
+    }
+
+    // -----------------------------------------------------------------
+    // Band structure (BAND-02)
+    // -----------------------------------------------------------------
+
+    /// The weighted XC potential of the SCF density on the whole grid — the
+    /// `wv` `nr_rks`/`nr_uks` contract with the band AO table — and the total
+    /// BZ-averaged density `rho` (row 0, both spins summed).
+    ///
+    /// `dms` holds one channel (restricted) or two (alpha, beta), each at the
+    /// sampling k-points. Returns `wv[spin][var][g]`. The SCF-k AO table comes
+    /// from the cache the SCF filled, so after `kernel()` this costs no AO
+    /// evaluation.
+    ///
+    /// # Errors
+    /// Under k-symmetry (the caller takes the `nr_*` route there), on a channel
+    /// count other than 1 or 2, and as [`KNumInt::nr_uks`].
+    pub fn band_xc_weights(
+        &self,
+        cell: &Cell,
+        grids: &PeriodicGrids,
+        xc_code: &str,
+        dms: &[&KMats],
+    ) -> Result<(Vec<Vec<Vec<f64>>>, Vec<f64>), PbcDftError> {
+        if self.ksymm().is_some() {
+            return Err(err("band_xc_weights: k-symmetric numint takes the nr_* route"));
+        }
+        if dms.is_empty() || dms.len() > 2 {
+            return Err(err("band_xc_weights: one or two spin channels"));
+        }
+        let ty = XcType::of(xc_code)?;
+        let coords = grids.coords()?;
+        let weights = grids.weights()?;
+        let ngrids = coords.len();
+        let nvar = ty.nvar();
+        let mut wvs: Vec<Vec<Vec<f64>>> = vec![vec![Vec::with_capacity(ngrids); nvar]; dms.len()];
+        let mut rho_total: Vec<f64> = Vec::with_capacity(ngrids);
+        let mut sc = Scratch::default();
+        self.last_imag.set(0.0);
+        for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
+            let w = &weights[p0..p1];
+            let ao = self.eval_ao(cell, &coords[p0..p1], &self.kpts, ty)?;
+            let rhos: Vec<RhoEff> = dms
+                .iter()
+                .map(|dm| self.eval_rho_into(&ao, dm, ty, &mut sc))
+                .collect::<Result<_, _>>()?;
+            let out = if rhos.len() == 1 {
+                eval_xc_eff_rks(xc_code, &rhos[0])?
+            } else {
+                eval_xc_eff_uks(xc_code, &rhos[0], &rhos[1])?
+            };
+            for (s, wv) in wvs.iter_mut().enumerate() {
+                for (dst, src) in wv.iter_mut().zip(weighted(&out, s, w)) {
+                    dst.extend(src);
+                }
+            }
+            for g in 0..p1 - p0 {
+                rho_total.push(rhos.iter().map(|r| r.row(0)[g]).sum());
+            }
+        }
+        Ok((wvs, rho_total))
+    }
+
+    /// `V[s][k] = Σ_g ao_k^† (Σ_n wv[s][n] ao_k^(n)) + h.c.` at `kpts_band` —
+    /// the band-k contraction of `nr_rks`/`nr_uks`, for several weight sets
+    /// over ONE band AO evaluation.
+    ///
+    /// The band AO table is evaluated in grid blocks sized under
+    /// [`BAND_AO_BUDGET_BYTES`] and never cached: a band path is used once, and
+    /// at 40+ k-points its full table outgrows the AO cache anyway (then the
+    /// memoised route evaluated it twice per call).
+    ///
+    /// # Errors
+    /// Propagates the AO evaluation.
+    pub fn band_vmats(
+        &self,
+        cell: &Cell,
+        grids: &PeriodicGrids,
+        kpts_band: &[[f64; 3]],
+        xc_code: &str,
+        wvs: &[Vec<Vec<f64>>],
+    ) -> Result<Vec<KMats>, PbcDftError> {
+        let ty = XcType::of(xc_code)?;
+        let coords = grids.coords()?;
+        let ngrids = coords.len();
+        let nao = cell.mol.nao_nr;
+        let nk = kpts_band.len().max(1);
+        let per_point = 16 * ty.ncomp() * nao.max(1) * nk;
+        let blk = ((BAND_AO_BUDGET_BYTES / per_point) / BLKSIZE).max(1) * BLKSIZE;
+        let mut out: Vec<KMats> =
+            vec![vec![CTensor::zeros(nao * nao); kpts_band.len()]; wvs.len()];
+        let mut sc = Scratch::default();
+        let mut p0 = 0;
+        while p0 < ngrids {
+            let p1 = (p0 + blk).min(ngrids);
+            let ao = eval_ao_kpts(cell, ty.eval_gto_name(), &coords[p0..p1], kpts_band)?;
+            for (m, wv) in out.iter_mut().zip(wvs) {
+                let block: Vec<Vec<f64>> = wv.iter().map(|v| v[p0..p1].to_vec()).collect();
+                self.accumulate_vxc_into(m, &ao, &block, ty, &mut sc, None);
+            }
+            p0 = p1;
+        }
+        for set in out.iter_mut() {
+            for m in set.iter_mut() {
+                add_conj_transpose(m, nao);
+            }
+        }
+        Ok(out)
     }
 
     // -----------------------------------------------------------------

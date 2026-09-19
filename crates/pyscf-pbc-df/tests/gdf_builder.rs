@@ -474,7 +474,7 @@ fn cderi_fingerprint_matches_upstream_he() {
 /// an opt-in acceptance run rather than a per-commit gate. The performance work
 /// is a named carry-over in `14-02-SUMMARY.md`.
 #[test]
-#[ignore = "slow — one diamond aux_e2 over the fused cell is minutes"]
+#[ignore = "T3: slow — one diamond aux_e2 over the fused cell is minutes"]
 fn cderi_fingerprint_matches_upstream_diamond() {
     cderi_gate(
         "diamond gamma",
@@ -657,7 +657,7 @@ print(json.dumps({
 /// provably inert there (`measurements/ddblock.py` measures its effect as
 /// exactly 0) and the gate has no escape hatch.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn helium_fused_j3c_and_j2c_match_upstream() {
     use pyscf_pbc_df::gdf_builder::j3c::outcore_auxe2;
     use pyscf_pbc_df::incore::int3c::KptPair;

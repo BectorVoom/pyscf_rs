@@ -7,3 +7,9 @@ verbatim against pyscf-rs.
 from pyscf._native.scf import UHF  # type: ignore[attr-defined]
 
 __all__ = ["UHF"]
+
+# 20-19 A: names this shim does not bind come from the upstream `scf/uhf.py` it
+# shadows, executed as `pyscf.scf._upstream_uhf` (silent; pyscf/_passthrough.py).
+from pyscf._passthrough import module_getattr as _module_getattr  # noqa: E402
+
+__getattr__ = _module_getattr(__name__)

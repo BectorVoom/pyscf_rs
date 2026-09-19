@@ -34,6 +34,7 @@ cubecl-cuda    = { workspace = true, optional = true }
 cubecl-hip     = { workspace = true, optional = true }
 wgpu           = { workspace = true, optional = true }
 faer           = { workspace = true }
+lapack_rs      = { workspace = true }
 bytemuck       = { workspace = true }
 thiserror      = { workspace = true }
 tracing        = { workspace = true }

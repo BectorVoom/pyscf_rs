@@ -17,3 +17,16 @@ precision setter — `PYSCF_DTYPE` is the single source of truth for switching.
 from pyscf._native.dft import RKS, UKS  # type: ignore[attr-defined]
 
 __all__ = ["RKS", "UKS"]
+
+# 20-19 A: fall through to upstream PySCF for submodules (`extend_path`) and for
+# top-level names this overlay does not bind (`__getattr__`, pyscf/_passthrough.py).
+# Silent (not a PBC family); the native names above stay module globals, so
+# `pyscf.dft.<native name> is pyscf._native.dft.<native name>` is unchanged.
+import pkgutil as _pkgutil  # noqa: E402
+
+__path__ = _pkgutil.extend_path(__path__, __name__)
+del _pkgutil
+
+from pyscf._passthrough import package_getattr as _package_getattr  # noqa: E402
+
+__getattr__ = _package_getattr(globals(), ("pyscf._native.dft",))

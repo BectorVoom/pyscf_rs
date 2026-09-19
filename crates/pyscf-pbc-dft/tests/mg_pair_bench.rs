@@ -27,7 +27,7 @@ use pyscf_pbc_dft::multigrid::pair::{
 use pyscf_pbc_dft::multigrid::tasks::build_pshells;
 
 #[test]
-#[ignore = "an instrument, not a gate — run with --ignored --nocapture"]
+#[ignore = "T2: an instrument, not a gate — run with --ignored --nocapture"]
 fn mg_pair_bench() {
     let mesh: usize = std::env::var("PYSCF_MG_BENCH_MESH")
         .ok()

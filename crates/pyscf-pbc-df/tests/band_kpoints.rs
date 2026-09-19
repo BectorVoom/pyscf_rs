@@ -170,7 +170,7 @@ fn worst_dev(got: &[KMats], key_re: &str, key_im: &str, want: &serde_json::Value
 /// in the sampling mesh. `GDF.get_jk` at band k-points — was
 /// `NotYetImplemented { phase: 17 }`, `gdf/jk.rs:243-253`.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn gdf_get_jk_at_band_kpoints_matches_upstream() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping the upstream oracle", common::GATE);
@@ -227,7 +227,7 @@ fn gdf_get_jk_at_band_kpoints_matches_upstream() {
 /// the asymmetric bra(band)/ket(sample) contraction on BOTH halves (GDF's
 /// rebuilt `cderi` and AFTDF's native band support).
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn mdf_get_jk_at_band_kpoints_matches_upstream() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping the upstream oracle", common::GATE);

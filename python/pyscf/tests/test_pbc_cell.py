@@ -370,8 +370,14 @@ def test_refusal_pbc_intor_outside_family_and_spinor():
 
 
 def test_make_kpts_with_symmetry_points_at_pbc_symm():
-    with pytest.raises(NotImplementedError, match="symm"):
+    # Restated by 20-14 (was: NotImplementedError until pbc.symm existed).
+    # Upstream's own check (cell.py:876-881) on a cell built without symmetry,
+    # and a pbc.symm.KPoints once the cell carries it.
+    with pytest.raises(RuntimeError, match="space_group_symmetry"):
         diamond().make_kpts([2, 2, 2], space_group_symmetry=True)
+    import pyscf._native.pbc.symm as nsymm
+    kp = diamond(space_group_symmetry=True).make_kpts([2, 2, 2], space_group_symmetry=True)
+    assert isinstance(kp, nsymm.KPoints)
 
 
 def test_get_coulG_3d_runs():
@@ -423,3 +429,207 @@ def test_extract_cell_from_pyany_upstream_shape_and_json():
         assert (bits(a) == bits(b)).all()
     with pytest.raises(TypeError):
         ndf.FFTDF(object(), kpts)
+
+
+# ── 20-19 B: upstream input spellings build the same Cell as the string form ─
+#
+# Each alternative spelling must give a cell BITWISE equal to its string-form
+# twin: atom coordinates, nao/nbas, the parsed per-element shells (`dumps`),
+# the lattice-summed overlap and (for pseudopotentials) charges and Ewald.
+
+def _same_cell(c, ref, charges=True):
+    assert c.nao_nr() == ref.nao_nr() and c.nbas == ref.nbas and c.natm == ref.natm
+    assert [c.atom_symbol(i) for i in range(c.natm)] == [ref.atom_symbol(i) for i in range(ref.natm)]
+    assert (bits(c.mol.atom_coords()) == bits(ref.mol.atom_coords())).all()
+    assert (bits(c.pbc_intor("int1e_ovlp")) == bits(ref.pbc_intor("int1e_ovlp"))).all()
+    assert c.mesh == ref.mesh
+    assert (bits(np.array([c.rcut])) == bits(np.array([ref.rcut]))).all()
+    pc, pr = json.loads(c.dumps()), json.loads(ref.dumps())
+    assert _find(pc, "basis_per_element") == _find(pr, "basis_per_element")
+    if charges:
+        assert c.atom_charges().tolist() == ref.atom_charges().tolist()
+        assert (bits(np.array([c.energy_nuc()])) == bits(np.array([ref.energy_nuc()]))).all()
+
+
+def _find(d, key):
+    if isinstance(d, str) and d.startswith("{"):
+        d = json.loads(d)  # the molecular half is packed as a nested JSON string
+    if isinstance(d, dict):
+        if key in d:
+            return d[key]
+        for v in d.values():
+            r = _find(v, key)
+            if r is not None:
+                return r
+    return None
+
+
+def test_dumps_carries_the_parsed_shells():
+    assert _find(json.loads(helium().dumps()), "basis_per_element")
+
+
+DIAMOND_STR = f"C 0 0 0; C {Q_C!r} {Q_C!r} {Q_C!r}"
+
+
+@pytest.mark.parametrize("atom", [
+    [["C", [0, 0, 0]], ["C", [Q_C, Q_C, Q_C]]],             # lists of lists
+    [["C", (0.0, 0.0, 0.0)], ("C", np.array([Q_C] * 3))],    # tuple coords / ndarray
+    [["C", 0, 0, 0], ("C", Q_C, Q_C, Q_C)],                  # flat [sym, x, y, z]
+    ["C 0 0 0", f"C, {Q_C!r}, {Q_C!r}, {Q_C!r}"],            # string entries
+    [[6, (0, 0, 0)], ["6", (Q_C, Q_C, Q_C)]],                # nuclear charges
+    [["c", (0, 0, 0)], ["C", (Q_C, Q_C, Q_C)]],              # symbol case
+])
+def test_list_form_atoms_match_the_string_form_bitwise(atom):
+    ref = ngto.M(a=fcc(H_C), atom=DIAMOND_STR, basis="gth-szv", pseudo="gth-pade", unit="Bohr")
+    c = ngto.Cell()
+    c.a = fcc(H_C)
+    c.atom = atom
+    assert c.atom is atom  # stored verbatim, as upstream
+    c.basis = "gth-szv"
+    c.pseudo = "gth-pade"
+    c.unit = "Bohr"
+    c.build()
+    _same_cell(c, ref)
+
+
+def test_bad_atom_entries_raise():
+    for bad in ([["C", (0, 0)]], [["C"]], ["C 0 0"], [[None, (0, 0, 0)]]):
+        with pytest.raises((TypeError, ValueError)):
+            ngto.Cell(atom=bad)
+
+
+@pytest.mark.parametrize("pseudo", [{"C": "gth-pade"}, {"C": "GTH-PADE"}, {"default": "gth-pade"}])
+def test_per_element_pseudo_dict_matches_the_name(pseudo):
+    ref = diamond()
+    c = ngto.M(a=fcc(H_C), atom=[("C", (0, 0, 0)), ("C", (Q_C, Q_C, Q_C))],
+               basis="gth-szv", pseudo=pseudo, unit="Bohr")
+    assert c.pseudo is pseudo
+    assert c.atom_charges().tolist() == [4, 4]
+    assert c.atom_pseudo(1) == ref.atom_pseudo(1)
+    _same_cell(c, ref)
+
+
+def test_per_element_pseudo_dict_li_gth_pbe_q3():
+    # tools/test/test_k2gamma.py spelling
+    a = "1.755 1.755 -1.755; 1.755 -1.755 1.755; -1.755 1.755 1.755"
+    ref = ngto.M(a=a, atom="Li 0 0 0", basis="gth-szv", pseudo="GTH-PBE-q3", verbose=0)
+    c = ngto.M(a=a, atom="Li 0 0 0", basis="gth-szv", pseudo={"Li": "GTH-PBE-q3"}, verbose=0)
+    assert c.atom_charges().tolist() == [3]
+    _same_cell(c, ref)
+
+
+def test_pseudo_dicts_without_a_single_name_equivalent_refuse():
+    sic = dict(a=fcc(4.1), atom=[("Si", (0, 0, 0)), ("C", (2.05, 2.05, 2.05))],
+               basis="gth-szv", unit="Bohr")
+    # different pseudopotentials per element: one name cannot carry it
+    with pytest.raises(NotImplementedError, match="different pseudopotentials"):
+        ngto.M(pseudo={"Si": "gth-pade", "C": "gth-blyp"}, **sic)
+    # upstream keeps C all-electron here; the single-name cell would not
+    with pytest.raises(NotImplementedError, match="not a key"):
+        ngto.M(pseudo={"Si": "gth-pade"}, **sic)
+    with pytest.raises(NotImplementedError, match="parsed GTH"):
+        ngto.Cell(pseudo={"Si": [[2], 0.4, 1, [-1.0]]})
+
+
+STO3G_HE = [0, [6.36242139, 0.15432897], [1.15892300, 0.53532814], [0.31364979, 0.44463454]]
+
+
+@pytest.mark.parametrize("basis", [
+    {"He": [STO3G_HE]},
+    [STO3G_HE],                                                     # applies to every atom
+    {"He": [[0, (0.31364979, 0.44463454), (6.36242139, 0.15432897),  # primitives re-sorted
+             (1.158923, 0.53532814)]]},
+    {"He": [[0, 0, [6.36242139, 0.15432897], [1.158923, 0.53532814],  # kappa = 0
+             [0.31364979, 0.44463454]]]},
+    {"He": [[STO3G_HE]]},                                           # list of shell lists
+    {"default": [STO3G_HE]},
+    {"He": [[0] + [np.array(r) for r in STO3G_HE[1:]]]},            # ndarray primitive rows
+])
+def test_explicit_shell_lists_match_the_named_basis_bitwise(basis):
+    ref = helium()
+    c = ngto.Cell(a=fcc(H_HE), atom=[("He", (0, 0, 0))], unit="Bohr")
+    c.basis = basis
+    assert c.basis is basis
+    c.build()
+    _same_cell(c, ref)
+
+
+def test_explicit_shells_are_sorted_by_l_and_mix_with_names():
+    # [[1, p], [0, s]] builds the same _bas as [[0, s], [1, p]] (format_basis sorts by l)
+    s, p = [0, (1.2, 1.0)], [1, (0.6, 1.0)]
+    kw = dict(a=fcc(H_HE), atom="He 0 0 0; He 1.4 1.4 1.4", unit="Bohr")
+    c1 = ngto.M(basis={"He": [p, s]}, **kw)
+    c2 = ngto.M(basis={"He": [s, p]}, **kw)
+    assert c1.nao_nr() == 8
+    _same_cell(c1, c2)
+    mixed = dict(a=fcc(H_C), atom=[("C", (0, 0, 0)), ("He", (Q_C, Q_C, Q_C))],
+                 basis={"C": "gth-szv", "He": [s, p]}, unit="Bohr")
+    dc = ngto.M(**mixed)
+    assert dc.nao_nr() == 8 and dc.atom_charges().tolist() == [6, 2]
+    # gth-pade covers He too, so {'C': 'gth-pade'} (He all-electron upstream) has
+    # no single-name equivalent here
+    with pytest.raises(NotImplementedError, match="not a key"):
+        ngto.M(pseudo={"C": "gth-pade"}, **mixed)
+    with pytest.raises(NotImplementedError, match="kappa"):
+        ngto.Cell(basis=[[1, -1, (1.0, 1.0)]])
+    with pytest.raises(NotImplementedError, match="mixing"):
+        ngto.Cell(basis={"He": ["sto-3g", [s]]})
+
+
+EXPLICIT_ORACLE = textwrap.dedent(
+    """
+    import json, sys
+    import numpy as np
+    import pyscf
+    from pyscf.pbc import gto
+    a, atom, basis = json.loads(sys.argv[1])
+    cell = gto.M(a=a, atom=atom, basis=basis, unit='Bohr', verbose=0)
+    s = cell.pbc_intor('int1e_ovlp')
+    print(json.dumps({"version": pyscf.__version__, "nao": int(cell.nao_nr()),
+                      "bas": cell._bas[:, :4].tolist(), "s": s.ravel().tolist()}))
+    """
+)
+
+
+def test_explicit_shell_list_matches_upstream():
+    # cc/test/test_kuccsd_openshell.py spelling, H chain in a cubic box
+    a = [[3.37, 0, 0], [0, 3.37, 0], [0, 0, 3.37]]
+    atom = [["H", [0, 0, 0]], ["H", [1.68506866, 1.68506866, 1.68506866]]]
+    basis = [[0, [1.0, 1.0]], [0, [0.5, 1.0]], [1, [0.8, 1.0]]]
+    env = dict(os.environ, PYTHONPATH=REPO)
+    proc = subprocess.run([sys.executable, "-c", EXPLICIT_ORACLE, json.dumps([a, atom, basis])],
+                          cwd=REPO, env=env, capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, proc.stderr
+    up = json.loads([ln for ln in proc.stdout.splitlines() if ln.startswith("{")][-1])
+    assert up["version"] == "2.12.1"
+    c = ngto.M(a=a, atom=atom, basis=basis, unit="Bohr", verbose=0)
+    assert c.nao_nr() == up["nao"] == 10
+    assert c.nbas == len(up["bas"])
+    s = np.asarray(c.pbc_intor("int1e_ovlp"))
+    assert abs(s.ravel() - np.array(up["s"])).max() < 1e-10
+
+
+def test_output_opens_the_log_file_as_stdout(tmp_path, capsys):
+    import io
+
+    c = ngto.Cell(a=fcc(H_HE), atom="He 0 0 0", unit="Bohr", verbose=0)
+    assert c.output is None and c.stdout is sys.stdout
+    c.output = "/dev/null"  # test_newton / test_mulliken_meta spelling
+    assert c.output == "/dev/null"
+    c.build()
+    assert c.stdout.name == os.devnull and not c.stdout.closed
+    c.stdout.close()  # what upstream tearDownModule does
+
+    log = tmp_path / "cell.log"
+    c2 = ngto.M(a=fcc(H_HE), atom="He 0 0 0", unit="Bohr", output=str(log), verbose=4)
+    assert log.exists() and c2.stdout.name == str(log)
+    assert f"output file: {log}" in capsys.readouterr().out
+    first = c2.stdout
+    c2.build()  # mole.py:2538 — already the stream: not reopened
+    assert c2.stdout is first
+    first.close()
+
+    buf = io.StringIO()
+    c3 = ngto.Cell(a=fcc(H_HE), atom="He 0 0 0", unit="Bohr", verbose=0, stdout=buf)
+    c3.build()
+    assert c3.stdout is buf

@@ -78,7 +78,10 @@ pub fn ah_step(
     max_step: f64,
 ) -> Result<(Vec<f64>, f64), PbscfNewtonError> {
     if g.len() != dim || dim == 0 {
-        return Err(PbscfNewtonError::Shape { expected: dim, got: g.len() });
+        return Err(PbscfNewtonError::Shape {
+            expected: dim,
+            got: g.len(),
+        });
     }
     // Materialize H column by column (dense-AH path, test sizes).
     let mut h = vec![0.0f64; dim * dim];
@@ -162,7 +165,10 @@ impl std::fmt::Display for PbscfNewtonError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PbscfNewtonError::Shape { expected, got } => {
-                write!(f, "newton_ah: shape mismatch (expected {expected}, got {got})")
+                write!(
+                    f,
+                    "newton_ah: shape mismatch (expected {expected}, got {got})"
+                )
             }
             PbscfNewtonError::Hop(e) => write!(f, "newton_ah: hop failed: {e}"),
             PbscfNewtonError::AsymmetricHop { asym } => {
@@ -173,7 +179,10 @@ impl std::fmt::Display for PbscfNewtonError {
             }
             PbscfNewtonError::Algebra(e) => write!(f, "newton_ah algebra: {e}"),
             PbscfNewtonError::NotConverged { cycles, grad_norm } => {
-                write!(f, "newton_ah: no convergence in {cycles} cycles (|g|={grad_norm:e})")
+                write!(
+                    f,
+                    "newton_ah: no convergence in {cycles} cycles (|g|={grad_norm:e})"
+                )
             }
         }
     }
@@ -217,7 +226,10 @@ pub fn kernel_newton(
     for cycle in 0..cfg.max_macro {
         let g = model.gradient();
         if g.len() != dim {
-            return Err(PbscfNewtonError::Shape { expected: dim, got: g.len() });
+            return Err(PbscfNewtonError::Shape {
+                expected: dim,
+                got: g.len(),
+            });
         }
         let grad_norm = oracle_sum(&g.iter().map(|x| x * x).collect::<Vec<_>>()).sqrt();
         if grad_norm < cfg.conv_tol_grad {
@@ -226,9 +238,9 @@ pub fn kernel_newton(
         let (dx, _scale) = ah_step(&g, &|x| model.hop(x), dim, 0.0, cfg.max_step)?;
         model.apply_step(&dx);
     }
-    let grad_norm = oracle_sum(
-        &model.gradient().iter().map(|x| x * x).collect::<Vec<_>>(),
-    )
-    .sqrt();
-    Err(PbscfNewtonError::NotConverged { cycles: cfg.max_macro, grad_norm })
+    let grad_norm = oracle_sum(&model.gradient().iter().map(|x| x * x).collect::<Vec<_>>()).sqrt();
+    Err(PbscfNewtonError::NotConverged {
+        cycles: cfg.max_macro,
+        grad_norm,
+    })
 }

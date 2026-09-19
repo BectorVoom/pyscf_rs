@@ -164,7 +164,7 @@ impl Kuhf {
         let vj = r.vj.ok_or_else(|| missing("vj"))?;
         let vk = r.vk.ok_or_else(|| missing("vk"))?;
 
-        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), kpts_band)?, nao);
+        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp_scf(self.cell(), kpts_band)?, nao);
         let mut es = Vec::with_capacity(2 * kpts_band.len());
         let mut cs = Vec::with_capacity(2 * kpts_band.len());
         for s in 0..2 {
@@ -199,7 +199,7 @@ impl KOverrideHooks for Kuhf {
     fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         Ok(to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
+            pyscf_pbc_gto::get_ovlp_scf(self.cell(), self.kpts())?,
             nao,
         ))
     }

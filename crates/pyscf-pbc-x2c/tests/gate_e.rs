@@ -18,16 +18,37 @@ use pyscf_pbc_x2c::sfx2c1e::{hcore_fw, renorm_r, sfx2c1e_hcore_at_c, xmatrix};
 use pyscf_pbc_x2c::x2c1e::{x2c1e_hcore_at_c, x2c1e_hcore_so};
 use serde_json::Value;
 
-fn fixture() -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, usize, usize, f64) {
+fn fixture() -> (
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    Vec<f64>,
+    usize,
+    usize,
+    f64,
+) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/x2c_h2_gamma_c4.json");
     let v: Value =
         serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture must exist")).unwrap();
     let get = |k: &str| -> Vec<f64> {
-        v[k].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
+        v[k].as_array()
+            .unwrap()
+            .iter()
+            .map(|x| x.as_f64().unwrap())
+            .collect()
     };
     (
-        get("t"), get("v"), get("w"), get("s"), get("contr"), get("h1x"), get("h1"),
+        get("t"),
+        get("v"),
+        get("w"),
+        get("s"),
+        get("contr"),
+        get("h1x"),
+        get("h1"),
         v["nao_x"].as_u64().unwrap() as usize,
         v["nao"].as_u64().unwrap() as usize,
         v["c"].as_f64().unwrap(),
@@ -52,7 +73,10 @@ fn contract(hx: &[f64], contr: &[f64], nx: usize, n: usize) -> Vec<f64> {
 }
 
 fn max_abs_diff(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f64::max)
 }
 
 /// Gate E: this port's transform on upstream's blocks matches upstream's h1.
@@ -95,7 +119,11 @@ fn renorm_is_identity_on_equal_metrics() {
     for i in 0..nx {
         for j in 0..nx {
             let want = if i == j { 1.0 } else { 0.0 };
-            assert!((r[i * nx + j] - want).abs() < 1e-10, "R[{i},{j}] = {}", r[i * nx + j]);
+            assert!(
+                (r[i * nx + j] - want).abs() < 1e-10,
+                "R[{i},{j}] = {}",
+                r[i * nx + j]
+            );
         }
     }
 }
@@ -205,7 +233,10 @@ fn x2c1e_is_doubled_sfx2c1e_on_real_blocks() {
     for i in 0..nx {
         for j in 0..nx {
             assert_eq!(h2[i * 2 * nx + j].to_bits(), h1[i * nx + j].to_bits());
-            assert_eq!(h2[(nx + i) * 2 * nx + nx + j].to_bits(), h1[i * nx + j].to_bits());
+            assert_eq!(
+                h2[(nx + i) * 2 * nx + nx + j].to_bits(),
+                h1[i * nx + j].to_bits()
+            );
             assert_eq!(h2[i * 2 * nx + nx + j].to_bits(), 0.0f64.to_bits());
             assert_eq!(h2[(nx + i) * 2 * nx + j].to_bits(), 0.0f64.to_bits());
         }
@@ -226,8 +257,14 @@ fn x2c_deterministic_across_thread_counts() {
         let (t, v, w, s, _c, _h1x, _h1, nx, _n, c) = fixture();
         sfx2c1e_hcore_at_c(&t, &v, &w, &s, nx, c).expect("transform must run")
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(&run), pool8.install(&run));
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b.iter()) {

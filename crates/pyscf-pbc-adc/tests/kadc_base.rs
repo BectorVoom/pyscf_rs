@@ -15,7 +15,7 @@
 
 use pyscf_algebra::CTensor;
 use pyscf_pbc_adc::amplitudes::{adc2_energy, t2_first_order};
-use pyscf_pbc_adc::kadc_ao2mo::{build_incore, KadcEris};
+use pyscf_pbc_adc::kadc_ao2mo::{KadcEris, build_incore};
 use pyscf_pbc_adc::kadc_rhf::KadcDriver;
 use pyscf_pbc_adc::types::AdcLevel;
 

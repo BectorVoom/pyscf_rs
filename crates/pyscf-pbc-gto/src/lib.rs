@@ -45,7 +45,9 @@ pub mod neighborlist;
 pub mod pbc_intor;
 
 // Phase 10 plan 10-04 — periodic AO evaluation (`eval_ao_kpts`, K-08).
+pub mod c2s_tables;
 pub mod eval_gto;
+pub mod eval_gto_upstream;
 
 // Phase 10 plan 10-07 — `get_ovlp` / `get_hcore` assembly.
 pub mod hcore;
@@ -77,6 +79,7 @@ pub use dumps_loads::{CellPack, dumps, loads, pack, unpack};
 pub use eval_gto::{
     EvalAoKptsOutput, estimate_rcut_for_eval, eval_ao_kpts, eval_ao_kpts_with_images,
 };
+pub use eval_gto_upstream::eval_ao_kpts_upstream;
 pub use ewald::{
     EWALD_G0_SENTINEL, EWALD_R_MIN, ewald, ewald_g_space, ewald_real_space, ewald_self,
     get_ewald_params,
@@ -89,7 +92,10 @@ pub use grids::UniformGrids;
 pub use gv::{
     GvWeights, fftfreq, fftfreq_scaled, get_gv, get_gv_weights, get_si, get_uniform_grids,
 };
-pub use hcore::{HcoreParts, get_hcore, get_hcore_parts, get_ovlp, get_t};
+pub use hcore::{
+    HcoreParts, SCF_OVLP_PRECISION_FACTOR, get_hcore, get_hcore_parts, get_ovlp, get_ovlp_scf,
+    get_t,
+};
 pub use kpath::{BravaisLattice, KPath, band_path, band_path_from_segments, detect_lattice};
 pub use kpts_mesh::{
     KCONSERV_TOL, KIdx, KPT_DIFF_TOL, Kconserv, Kconserv3, UniqueKpts, WITH_GAMMA, WRAP_AROUND,
@@ -97,16 +103,16 @@ pub use kpts_mesh::{
     make_kpts, make_kpts_default, member, round_to_fbz, unique,
 };
 pub use lattice::{
-    check_lattice_sum_range, get_lattice_ls, get_lattice_ls_default, get_monkhorst_pack_size,
-    get_monkhorst_pack_size_default, lattice_sum_dimension,
+    check_lattice_sum_range, get_lattice_ls, get_lattice_ls_default, get_lattice_ls_eval,
+    get_monkhorst_pack_size, get_monkhorst_pack_size_default, lattice_sum_dimension,
 };
 pub use neighborlist::{
     NeighborList, NeighborPair, build_neighbor_list, build_neighbor_list_for_shlpairs,
 };
 pub use pbc_intor::{
     GAMMA_IMAG_WARN_TOL, KPT_GAMMA_TOL, PBC_INTOR_SHELL_WARN_LIMIT, PbcIntorOpts, PbcIntorOutput,
-    SUPPORTED_INTORS, intor_cross, intor_cross_with_image_weights, intor_cross_with_images, is_gamma,
-    lattice_images, pbc_intor,
+    SUPPORTED_INTORS, intor_cross, intor_cross_with_image_weights, intor_cross_with_images,
+    is_gamma, lattice_images, pbc_intor,
 };
 pub use pseudo::{PseudoData, resolve_pseudo};
 pub use supercell::{cell_plus_imgs, super_cell};

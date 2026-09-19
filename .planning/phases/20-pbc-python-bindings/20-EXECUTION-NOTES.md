@@ -35,7 +35,7 @@ deviation in the plan's SUMMARY.
 * Never `CARGO_TARGET_DIR` under `/tmp` (16 GB RAM tmpfs). Never `ulimit -v`;
   use `systemd-run --user --scope -p MemoryMax=16G` if a cap is needed.
 * `rustfmt --edition 2024 <only the files you touched>`; never `cargo fmt`.
-* Oracle is `pyscf==2.12.1` exactly (`.venv` has it; vendored tree at `pyscf/`).
+* Oracle is `pyscf==2.12.1` exactly — the VENDORED tree at `pyscf/`. **Correction (python-suite-triage, 2026-09-14): `.venv/site-packages` holds pyscf 2.14.0**; oracle subprocesses get 2.12.1 only because they run from the repo root / pin `PYTHONPATH` to the vendored tree. Always pin `PYTHONPATH` and assert the version.
 * Code navigation: use the CodeGraph MCP tool `codegraph_explore` before
   grep/Read (user instruction for this phase).
 
@@ -73,3 +73,23 @@ deviation in the plan's SUMMARY.
   energy bit-identical to HEAD (−10.531064341456); `fft_jk_grad` 6 passed. Any
   Phase-18 exchange-gradient number measured with the class key must be
   re-measured by Phase 18.
+
+## 4. Closing (20-18 rollup, 2026-09-14)
+
+* **Rollup written:** `20-VERIFICATION.md` (gates, decisions D-20-18-1…5, defects fixed, carryover
+  ledger) and `20-18-SUMMARY.md`. Phase 20 is **rolled up but NOT closed**: the ≥ 80 % upstream-suite
+  target is NOT MET (11 / 815 on the final tree), so the ROADMAP box stays `[ ]`.
+* **D-20-A held to the end:** no `git add/commit/stash/restore/checkout` in any plan. The D-20-C
+  capture stood in for 20-18-PLAN's "check out the tree as of 20-08".
+* **Facts that moved during execution (for whoever resumes):**
+  - the `.venv` site-packages pyscf is **2.14.0**; oracle runs must pin `PYTHONPATH` and assert
+    2.12.1; examples run as `PYTHONPATH=$REPO/python .venv/bin/python` from a cwd other than the repo root;
+  - `pytest.ini`'s `--import-mode=importlib` cannot measure the overlay on upstream tests — use
+    `--import-mode=prepend` (the `target/p20-19-suite/` harness);
+  - the periodic oracle floors fell ~100× after 20-19 D (SCF overlap precision); the old 4e-12 /
+    6e-12 floors quoted in docs and test comments are stale (carryover `20-tree-hygiene.md`);
+  - native FFTDF `get_jk` is 5.95× upstream on a quiet box (carryover `20-fftdf-jk-performance.md`);
+  - the `oracle-determinism` CI job cannot build periodic crates (no cube-math/rmath clone); the
+    periodic determinism step is in `pbc-oracle`.
+* **Carryovers:** `.planning/carryovers/20-*.md` (13 files) plus the updated
+  `D-PBC-24-cintx-range-omega-PLAN.md` (rsjk).

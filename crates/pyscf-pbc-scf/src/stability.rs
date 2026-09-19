@@ -54,7 +54,11 @@ pub fn rhf_internal(
 ) -> Result<InternalStability, PbscfStabilityError> {
     let (lowest, direction) = lowest_hessian_pair(hop, h_diag, dim, 2.0)?;
     let stable = !(lowest < STABILITY_THRESHOLD);
-    Ok(InternalStability { stable, lowest_eigenvalue: lowest, direction: if stable { Vec::new() } else { direction } })
+    Ok(InternalStability {
+        stable,
+        lowest_eigenvalue: lowest,
+        direction: if stable { Vec::new() } else { direction },
+    })
 }
 
 /// External RHF→UHF stability (`stability.py::rhf_external`).
@@ -71,7 +75,10 @@ pub fn rhf_external(
 ) -> Result<ExternalStability, PbscfStabilityError> {
     let (lowest, _direction) = lowest_hessian_pair(hop, h_diag, dim, 1.0)?;
     let stable = !(lowest < STABILITY_THRESHOLD);
-    Ok(ExternalStability { stable, lowest_eigenvalue: lowest })
+    Ok(ExternalStability {
+        stable,
+        lowest_eigenvalue: lowest,
+    })
 }
 
 /// Shared dense lowest-eigenpair core: materialize `scale·hop` symmetrically,
@@ -83,7 +90,10 @@ fn lowest_hessian_pair(
     scale: f64,
 ) -> Result<(f64, Vec<f64>), PbscfStabilityError> {
     if h_diag.len() != dim || dim == 0 {
-        return Err(PbscfStabilityError::Shape { expected: dim, got: h_diag.len() });
+        return Err(PbscfStabilityError::Shape {
+            expected: dim,
+            got: h_diag.len(),
+        });
     }
     // Materialize the symmetric Hessian densely (test-size exact-Davidson).
     let mut h = vec![0.0f64; dim * dim];
@@ -131,7 +141,10 @@ pub fn rotate_mo_real(
 ) -> Result<Vec<f64>, PbscfStabilityError> {
     let nvir = nmo - nocc;
     if mo_coeff.len() != nmo * nmo || dx.len() != nvir * nocc {
-        return Err(PbscfStabilityError::Shape { expected: nvir * nocc, got: dx.len() });
+        return Err(PbscfStabilityError::Shape {
+            expected: nvir * nocc,
+            got: dx.len(),
+        });
     }
     // dr (row-major nmo × nmo): dr[no+i, j] = dx[i·nocc+j], dr[j, no+i] = −dx.
     let mut dr = vec![0.0f64; nmo * nmo];
@@ -159,7 +172,10 @@ pub fn rotate_mo_real(
 /// Real matrix exponential by scaling-and-squaring Taylor (test-size path).
 fn expm_real(a: &[f64], n: usize) -> Result<Vec<f64>, PbscfStabilityError> {
     if a.len() != n * n {
-        return Err(PbscfStabilityError::Shape { expected: n * n, got: a.len() });
+        return Err(PbscfStabilityError::Shape {
+            expected: n * n,
+            got: a.len(),
+        });
     }
     let max: f64 = a.iter().map(|x| x.abs()).fold(0.0, f64::max);
     let mut s = 0;
@@ -226,7 +242,10 @@ impl std::fmt::Display for PbscfStabilityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PbscfStabilityError::Shape { expected, got } => {
-                write!(f, "stability: shape mismatch (expected {expected}, got {got})")
+                write!(
+                    f,
+                    "stability: shape mismatch (expected {expected}, got {got})"
+                )
             }
             PbscfStabilityError::Hop(e) => write!(f, "stability: hop failed: {e}"),
             PbscfStabilityError::AsymmetricHessian { asym } => {

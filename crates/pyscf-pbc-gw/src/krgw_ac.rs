@@ -42,7 +42,10 @@ pub enum AcMode {
 /// development) — this table form divides by values and does not.
 pub fn thiele_coeffs(vals: &[Complex64], zn: &[Complex64]) -> Result<Vec<Complex64>, PbcGwError> {
     if vals.len() != zn.len() || vals.is_empty() {
-        return Err(PbcGwError::ShapeMismatch { expected: zn.len(), got: vals.len() });
+        return Err(PbcGwError::ShapeMismatch {
+            expected: zn.len(),
+            got: vals.len(),
+        });
     }
     let n = vals.len();
     let mut g = vec![vec![Complex64::new(0.0, 0.0); n]; n];
@@ -65,10 +68,17 @@ pub fn thiele_coeffs(vals: &[Complex64], zn: &[Complex64]) -> Result<Vec<Complex
 
 /// Padé–Thiele evaluation (`pade_thiele(freqs, zn, coeff)`) at real `omega`.
 /// Literal port of the continued-fraction ordering (needs `nfit ≥ 2`).
-pub fn pade_eval(omega: f64, zn: &[Complex64], coeff: &[Complex64]) -> Result<Complex64, PbcGwError> {
+pub fn pade_eval(
+    omega: f64,
+    zn: &[Complex64],
+    coeff: &[Complex64],
+) -> Result<Complex64, PbcGwError> {
     let nfit = coeff.len();
     if nfit < 2 || zn.len() != nfit {
-        return Err(PbcGwError::ShapeMismatch { expected: nfit.max(2), got: zn.len().min(coeff.len()) });
+        return Err(PbcGwError::ShapeMismatch {
+            expected: nfit.max(2),
+            got: zn.len().min(coeff.len()),
+        });
     }
     let one = Complex64::new(1.0, 0.0);
     let w = Complex64::new(omega, 0.0);
@@ -77,7 +87,9 @@ pub fn pade_eval(omega: f64, zn: &[Complex64], coeff: &[Complex64]) -> Result<Co
         let idx = nfit - i - 1;
         let denom = one + x;
         if denom.norm() == 0.0 {
-            return Err(PbcGwError::PadeFailure { reason: "vanishing Padé denominator".into() });
+            return Err(PbcGwError::PadeFailure {
+                reason: "vanishing Padé denominator".into(),
+            });
         }
         x = coeff[idx] * (w - zn[idx - 1]) / denom;
     }
@@ -86,7 +98,9 @@ pub fn pade_eval(omega: f64, zn: &[Complex64], coeff: &[Complex64]) -> Result<Co
 
 /// Two-pole model evaluation (`two_pole(freqs, coeff)`).
 pub fn two_pole_eval(omega: f64, coeff: &[f64; 10]) -> Complex64 {
-    let cf: Vec<Complex64> = (0..5).map(|i| Complex64::new(coeff[i], coeff[i + 5])).collect();
+    let cf: Vec<Complex64> = (0..5)
+        .map(|i| Complex64::new(coeff[i], coeff[i + 5]))
+        .collect();
     cf[0] + cf[1] / (omega + cf[3]) + cf[2] / (omega + cf[4])
 }
 
@@ -96,9 +110,15 @@ pub fn two_pole_eval(omega: f64, coeff: &[f64; 10]) -> Complex64 {
 /// the first `npade*2` points. Grids are COMPLEX (imaginary axis).
 /// Returns `(coeff, zn_fit)`. Requires at least 42 grid points (the hardcoded
 /// subsample reaches index 41+).
-pub fn ac_pade_fit_row(sigma: &[Complex64], omega: &[Complex64]) -> Result<(Vec<Complex64>, Vec<Complex64>), PbcGwError> {
+pub fn ac_pade_fit_row(
+    sigma: &[Complex64],
+    omega: &[Complex64],
+) -> Result<(Vec<Complex64>, Vec<Complex64>), PbcGwError> {
     if sigma.len() != omega.len() || sigma.len() < 42 {
-        return Err(PbcGwError::ShapeMismatch { expected: 42, got: sigma.len().min(omega.len()) });
+        return Err(PbcGwError::ShapeMismatch {
+            expected: 42,
+            got: sigma.len().min(omega.len()),
+        });
     }
     let mut idx: Vec<usize> = (1..40).step_by(6).collect();
     let mut k = idx[idx.len() - 1] + 4;
@@ -115,12 +135,7 @@ pub fn ac_pade_fit_row(sigma: &[Complex64], omega: &[Complex64]) -> Result<(Vec<
 
 /// Linearized G0W0 QP energy: `e = ep + Z·(σR + vk − vmf)` with
 /// `Z = 1/(1 − dσ/de)` by finite difference (`de = 1e-6`).
-pub fn qp_linearized(
-    ep: f64,
-    sigma_r: impl Fn(f64) -> f64,
-    vk: f64,
-    vmf: f64,
-) -> f64 {
+pub fn qp_linearized(ep: f64, sigma_r: impl Fn(f64) -> f64, vk: f64, vmf: f64) -> f64 {
     let de = 1e-6;
     let s0 = sigma_r(ep);
     let dsigma = sigma_r(ep + de) - s0;
@@ -181,14 +196,22 @@ pub fn kernel_krgw_ac(
     linearized: bool,
 ) -> Result<QpResult, PbcGwError> {
     if mode != AcMode::Pade {
-        return Err(PbcGwError::NotYetImplemented { module: "gw two-pole FIT (needs least-squares optimizer)" });
+        return Err(PbcGwError::NotYetImplemented {
+            module: "gw two-pole FIT (needs least-squares optimizer)",
+        });
     }
     let nk = sigma_imag.len();
     if mf_energy.len() != nk || vk_diag.len() != nk || vmf_diag.len() != nk {
-        return Err(PbcGwError::ShapeMismatch { expected: nk, got: mf_energy.len() });
+        return Err(PbcGwError::ShapeMismatch {
+            expected: nk,
+            got: mf_energy.len(),
+        });
     }
     if omegas.len() != orbs.len() {
-        return Err(PbcGwError::ShapeMismatch { expected: orbs.len(), got: omegas.len() });
+        return Err(PbcGwError::ShapeMismatch {
+            expected: orbs.len(),
+            got: omegas.len(),
+        });
     }
     let mut qp = Vec::with_capacity(nk * orbs.len());
     // NOTE: single-k driver shape (19-10): the fixture gates k = 0..nklist
@@ -197,7 +220,10 @@ pub fn kernel_krgw_ac(
         for (oi, p) in orbs.clone().enumerate() {
             // sigma/omega rows are relative to the window.
             if oi >= sigma_imag[k].len() || oi >= omegas.len() || p >= mf_energy[k].len() {
-                return Err(PbcGwError::ShapeMismatch { expected: p + 1, got: mf_energy[k].len() });
+                return Err(PbcGwError::ShapeMismatch {
+                    expected: p + 1,
+                    got: mf_energy[k].len(),
+                });
             }
             if sigma_imag[k][oi].len() != omegas[oi].len() {
                 return Err(PbcGwError::ShapeMismatch {
@@ -207,19 +233,34 @@ pub fn kernel_krgw_ac(
             }
             let (coeff, zn) = ac_pade_fit_row(&sigma_imag[k][oi], &omegas[oi])?;
             let sigma_r = |w: f64| {
-                pade_eval(w - ef, &zn, &coeff).map(|z| z.re).unwrap_or(f64::NAN)
+                pade_eval(w - ef, &zn, &coeff)
+                    .map(|z| z.re)
+                    .unwrap_or(f64::NAN)
             };
             let ep = mf_energy[k][p];
             let e = if linearized {
                 qp_linearized(ep, &sigma_r, vk_diag[k][p], vmf_diag[k][p])
             } else {
-                qp_newton(ep, &sigma_r, vk_diag[k][p], vmf_diag[k][p], cfg.conv_tol, cfg.max_cycle)?
+                qp_newton(
+                    ep,
+                    &sigma_r,
+                    vk_diag[k][p],
+                    vmf_diag[k][p],
+                    cfg.conv_tol,
+                    cfg.max_cycle,
+                )?
             };
             if !e.is_finite() {
-                return Err(PbcGwError::QpNotConverged { cycles: cfg.max_cycle });
+                return Err(PbcGwError::QpNotConverged {
+                    cycles: cfg.max_cycle,
+                });
             }
             qp.push(e);
         }
     }
-    Ok(QpResult { qp_energy: qp, route: GwRoute::AnalyticContinuation, converged: true })
+    Ok(QpResult {
+        qp_energy: qp,
+        route: GwRoute::AnalyticContinuation,
+        converged: true,
+    })
 }

@@ -22,8 +22,8 @@ use common::{GATE, cell_args, diamond, max_dev, oracle_python, run_python};
 use pyscf_algebra::CTensor;
 use pyscf_pbc_df::df_jk::KMats;
 use pyscf_pbc_df::{
-    Fftdf, GradMats, TaggedMo, deriv1_blksize, deriv1_blksize_from_avail,
-    get_j_e1_kpts, get_k_e1_kpts, k_e1_footprint, kdiff_index, resident_k_count, resident_mb,
+    Fftdf, GradMats, TaggedMo, deriv1_blksize, deriv1_blksize_from_avail, get_j_e1_kpts,
+    get_k_e1_kpts, k_e1_footprint, kdiff_index, resident_k_count, resident_mb,
 };
 use pyscf_pbc_gto::make_kpts_default;
 
@@ -75,7 +75,10 @@ fn budgeted_residency_endpoints() {
         nao
     );
     // Starved: the transient floors at one AO row, never zero.
-    assert_eq!(deriv1_blksize(1.0, resident_mb(1, ngrids, nao), ngrids, nao), 1);
+    assert_eq!(
+        deriv1_blksize(1.0, resident_mb(1, ngrids, nao), ngrids, nao),
+        1
+    );
 }
 
 /// The k-difference index firewall: on a 2×2×2 mesh the 64 raw `(k2, k1)`
@@ -249,12 +252,7 @@ fn mo_tagged_agrees_and_allocates_less() {
         }
     }
     let dms = vec![vec![dm; nkpts]];
-    let tag = TaggedMo::from_coeff_occ(
-        &vec![coeff; nkpts],
-        &vec![occ; nkpts],
-        nao,
-    )
-    .expect("tag");
+    let tag = TaggedMo::from_coeff_occ(&vec![coeff; nkpts], &vec![occ; nkpts], nao).expect("tag");
     assert!(tag.blocks.iter().all(|b| b.nocc == nocc));
 
     let df = Fftdf::with_mesh(cell, &kpts, MESH_FAST).expect("FFTDF");
@@ -315,8 +313,7 @@ fn gradient_jk_is_bit_identical_1_vs_8_threads() {
 
     let run = || {
         let vj = get_j_e1_kpts(&df, &dms, &kpts, None, None).expect("J");
-        let vk =
-            get_k_e1_kpts(&df, &dms, &kpts, None, None, None, None, None).expect("K");
+        let vk = get_k_e1_kpts(&df, &dms, &kpts, None, None, None, None, None).expect("K");
         (vj, vk)
     };
     let a = pool(1).install(run);
@@ -415,7 +412,7 @@ fn flatten_grad(g: &GradMats) -> Vec<CTensor> {
 /// `pyscf.pbc.df.fft_jk` at gamma, 1×1×2 (the shape `test_krhf.py:37` uses)
 /// and 2×2×2.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn e1_matches_upstream_gamma_112_222() {
     for nk in [[1usize, 1, 1], [1, 1, 2], [2, 2, 2]] {
         let cell = diamond();

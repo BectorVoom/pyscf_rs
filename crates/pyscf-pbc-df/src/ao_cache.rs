@@ -79,8 +79,9 @@ pub fn resident_k_count(max_memory_mb: f64, ngrids: usize, nao: usize, nkpts: us
 /// transient is smaller (`naoj = nocc`), so sizing by the full `nao` is
 /// conservative there — it can only undershoot, never overshoot.
 pub fn deriv1_blksize_from_avail(avail_mb: f64, ngrids: usize, nao: usize) -> usize {
-    let blk = (avail_mb.max(0.0) * 1e6 / 16.0 / BUFFER_MULTIPLICITY / 3.0 / ngrids as f64
-        / nao as f64) as usize;
+    let blk =
+        (avail_mb.max(0.0) * 1e6 / 16.0 / BUFFER_MULTIPLICITY / 3.0 / ngrids as f64 / nao as f64)
+            as usize;
     nao.min(blk.max(1))
 }
 
@@ -218,8 +219,7 @@ pub fn k_e1_footprint(
     ket_extra_bytes: u64,
 ) -> KGradFootprint {
     let resident = m as u64 * deriv1_table_bytes(ngrids, nao) + ket_extra_bytes;
-    let rho1 =
-        BUFFER_MULTIPLICITY as u64 * 3 * blksize as u64 * naoj as u64 * ngrids as u64 * 16;
+    let rho1 = BUFFER_MULTIPLICITY as u64 * 3 * blksize as u64 * naoj as u64 * ngrids as u64 * 16;
     let vrdm = 3 * nset as u64 * nao as u64 * ngrids as u64 * 16;
     let transient = rho1 + vrdm;
     KGradFootprint {

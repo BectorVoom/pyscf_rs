@@ -80,8 +80,11 @@ fn einsum_two_operand_matches_the_explicit_loop() {
 /// `x` is NEGATIVE real), not `Σ |x|²`.
 #[test]
 fn einsum_does_not_conjugate() {
-    let x = ZArr::from_ctensor(&[3], CTensor::from_planes(vec![0.0; 3], vec![1.0, 2.0, 3.0]))
-        .unwrap();
+    let x = ZArr::from_ctensor(
+        &[3],
+        CTensor::from_planes(vec![0.0; 3], vec![1.0, 2.0, 3.0]),
+    )
+    .unwrap();
     let unconj = einsum("i,i->", &[&x, &x]).unwrap();
     assert_eq!(unconj.at(&[]).unwrap(), (-14.0, 0.0), "Σ x·x = -(1+4+9)");
     // The conjugated product is written by conjugating an operand explicitly.
@@ -114,7 +117,10 @@ fn einsum_three_operands() {
                 }
             }
             let (gr, gi) = got.at(&[k, i]).unwrap();
-            assert!((gr - re).abs() < 1e-13 && (gi - im).abs() < 1e-13, "k{k} i{i}");
+            assert!(
+                (gr - re).abs() < 1e-13 && (gi - im).abs() < 1e-13,
+                "k{k} i{i}"
+            );
         }
     }
 }
@@ -140,7 +146,10 @@ fn malformed_specs_are_refused() {
     assert!(einsum("ij,jk->ik", &[&a]).is_err(), "operand count");
     assert!(einsum("ijk,jk->i", &[&a, &b]).is_err(), "rank mismatch");
     assert!(einsum("ii,jk->jk", &[&a, &b]).is_err(), "diagonal");
-    assert!(einsum("ij,jk->ix", &[&a, &b]).is_err(), "free output letter");
+    assert!(
+        einsum("ij,jk->ix", &[&a, &b]).is_err(),
+        "free output letter"
+    );
     let c = ramp(&[5, 3], 0.0);
     assert!(einsum("ij,jk->ik", &[&a, &c]).is_err(), "extent mismatch");
 }

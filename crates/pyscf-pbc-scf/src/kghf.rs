@@ -141,7 +141,7 @@ impl KOverrideHooks for Kghf {
 
     fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.nao_scalar();
-        let s = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?, nao);
+        let s = to_row_major(pyscf_pbc_gto::get_ovlp_scf(self.cell(), self.kpts())?, nao);
         Ok(s.iter().map(|m| block_diag(m, nao)).collect())
     }
 
@@ -156,7 +156,7 @@ impl KOverrideHooks for Kghf {
         // evenly between the two diagonal spin blocks.
         let nao = self.nao_scalar();
         let nkpts = self.kpts().len();
-        let scalar_s = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?, nao);
+        let scalar_s = to_row_major(pyscf_pbc_gto::get_ovlp_scf(self.cell(), self.kpts())?, nao);
         let scalar = crate::init_guess::get_init_guess(
             self.cell(),
             nkpts,

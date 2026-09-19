@@ -907,23 +907,49 @@ impl AoKAccumulator {
         if nkpts * n == 0 {
             return Vec::new();
         }
-        let bytes = dispatch_backend!(
-            client,
-            c,
-            Rt,
-            c.read(vec![self.re.clone(), self.im.clone()])
-        );
+        // The read is where the lazily launched accumulate kernels actually
+        // execute, so this span holds them too.
+        let bytes = {
+            let _span = tracing::info_span!("pbc_eval_ao_readback").entered();
+            dispatch_backend!(
+                client,
+                c,
+                Rt,
+                c.read(vec![self.re.clone(), self.im.clone()])
+            )
+        };
+        let _span = tracing::info_span!("pbc_eval_ao_transpose").entered();
         let re: &[f64] = bytemuck::cast_slice(&bytes[0]);
         let im: &[f64] = bytemuck::cast_slice(&bytes[1]);
         if self.point_major {
-            (0..nkpts)
-                .into_par_iter()
-                .map(|k| {
-                    let rk: Vec<f64> = (0..n).map(|p| re[p * nkpts + k]).collect();
-                    let ik: Vec<f64> = (0..n).map(|p| im[p * nkpts + k]).collect();
-                    (rk, ik)
-                })
-                .collect()
+            // BAND-07: transpose in point CHUNKS — each worker streams its
+            // contiguous `[p0, p1) x nkpts` slab once and writes every k's
+            // `[p0, p1)` run. The per-k gather this replaced had every one of
+            // `nkpts` workers stride through the WHOLE buffer, pulling each
+            // cache line `nkpts` times (at 40 band k-points, most of the AO
+            // pass). Pure data movement: bit-identical.
+            let mut planes: Vec<(Vec<f64>, Vec<f64>)> =
+                (0..nkpts).map(|_| (vec![0.0; n], vec![0.0; n])).collect();
+            let ptrs: Vec<(SyncPtr, SyncPtr)> = planes
+                .iter_mut()
+                .map(|(r, i)| (SyncPtr(r.as_mut_ptr()), SyncPtr(i.as_mut_ptr())))
+                .collect();
+            const CHUNK: usize = 2048;
+            (0..n.div_ceil(CHUNK)).into_par_iter().for_each(|c| {
+                let (p0, p1) = (c * CHUNK, ((c + 1) * CHUNK).min(n));
+                for (k, (pr, pi)) in ptrs.iter().enumerate() {
+                    for p in p0..p1 {
+                        // SAFETY: `p < n` indexes plane `k` of length `n`,
+                        // and the chunks `[p0, p1)` are disjoint across
+                        // workers, so no two writes alias.
+                        unsafe {
+                            *pr.0.add(p) = re[p * nkpts + k];
+                            *pi.0.add(p) = im[p * nkpts + k];
+                        }
+                    }
+                }
+            });
+            planes
         } else {
             (0..nkpts)
                 .into_par_iter()
@@ -994,3 +1020,12 @@ pub fn eval_ao_k_accumulate(
     acc.accumulate(client, ao, pr, pi)?;
     Ok(acc.into_planes(client))
 }
+
+/// A raw plane pointer handed to the chunked transpose in
+/// [`AoKAccumulator::into_k_planes`]; the workers write disjoint ranges.
+#[derive(Clone, Copy)]
+struct SyncPtr(*mut f64);
+// SAFETY: only used for the disjoint-range writes documented at the use site.
+unsafe impl Send for SyncPtr {}
+// SAFETY: as above.
+unsafe impl Sync for SyncPtr {}

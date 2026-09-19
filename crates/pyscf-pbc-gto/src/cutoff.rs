@@ -100,16 +100,37 @@ pub enum PgtoOp {
     Min,
     /// `op = 'max'` — the most COMPACT primitive (largest exponent). Drives `ke_cutoff`.
     Max,
+    /// `mole.py:4336-4366` `op = 'diffuse'` — per shell, the primitive with the
+    /// largest estimated decay radius
+    /// `r2 = ln((2l+1)/(4π)/precision²·c²·100^l + 1e-200)/(2e)`.
+    /// This is what `eval_gto._estimate_rcut` (`eval_gto.py:171-189`) selects on;
+    /// it usually (but not always — the coefficient weight matters) coincides
+    /// with [`PgtoOp::Min`].
+    Diffuse,
 }
 
 /// One `(exponent, coefficient)` pair per shell.
 ///
 /// Ports `cell.py:481-500` — the LOCAL `_extract_pgto_params`, which loops over
-/// shells and picks `e.argmin()` / `e.argmax()`. (The similarly named
-/// `gto/mole.py:4336` helper is a different, un-called algorithm.)
+/// shells and picks `e.argmin()` / `e.argmax()` — for [`PgtoOp::Min`] /
+/// [`PgtoOp::Max`]. [`PgtoOp::Diffuse`] instead ports the `mole.py:4336-4366`
+/// helper of the same name, which `eval_gto._estimate_rcut`
+/// (`eval_gto.py:171-189`) selects on: per shell, the primitive maximising the
+/// estimated decay radius. (An earlier revision of this docstring claimed the
+/// `mole.py` helper was un-called; it is — by the eval path. `cell.py`'s local
+/// one serves `cell.estimate_rcut`.)
 ///
 /// `argmin`/`argmax` in numpy return the FIRST extremal index; the strict
 /// comparisons below reproduce that tie-break.
+///
+/// # `libm` note
+///
+/// The `Diffuse` radius uses `ln`, `100^l` and `precision²`, where numpy uses
+/// the C library `log`/`pow`: the two agree to ~1 ULP per call, so a shell
+/// whose two primitives tie for slowest decay to the last bit could select
+/// differently. No such near-tie has been observed; the radii of distinct
+/// primitives differ by orders of magnitude in practice. (`powi` is used for
+/// the integer powers — exact where C `pow` is not, which can only help.)
 pub fn extract_pgto_params(cell: &Cell, op: PgtoOp) -> (Vec<f64>, Vec<f64>) {
     let mut es = Vec::with_capacity(cell.mol.nbas);
     let mut cs = Vec::with_capacity(cell.mol.nbas);
@@ -120,13 +141,37 @@ pub fn extract_pgto_params(cell: &Cell, op: PgtoOp) -> (Vec<f64>, Vec<f64>) {
             continue;
         }
         let mut idx = 0_usize;
-        for (k, ek) in e.iter().enumerate().skip(1) {
-            let better = match op {
-                PgtoOp::Min => *ek < e[idx],
-                PgtoOp::Max => *ek > e[idx],
-            };
-            if better {
-                idx = k;
+        if op == PgtoOp::Diffuse {
+            // mole.py:4355-4360. `precision` is `1e-8` for a bare Mole,
+            // `mol.precision` for a Cell — and this always runs on a Cell.
+            let lang = bas_angular(cell, i);
+            let l = lang as f64;
+            let prec = cell.precision;
+            let prec2 = prec * prec;
+            let pow100 = 100f64.powi(lang);
+            let mut best_r2 = f64::NEG_INFINITY;
+            for (k, (ek, ck)) in e.iter().zip(c.iter()).enumerate() {
+                // ((2l+1)/(4π))/precision²·c²·100^l + 1e-200, left to right.
+                let r2 = ((((2.0 * l + 1.0) / (4.0 * PI)) / prec2) * ck * ck * pow100
+                    + 1e-200)
+                    .ln()
+                    / (2.0 * ek);
+                if r2 > best_r2 {
+                    best_r2 = r2;
+                    idx = k;
+                }
+            }
+        } else {
+            for (k, ek) in e.iter().enumerate().skip(1) {
+                let better = match op {
+                    PgtoOp::Min => *ek < e[idx],
+                    PgtoOp::Max => *ek > e[idx],
+                    // The `Diffuse` arm above returns before this loop runs.
+                    PgtoOp::Diffuse => false,
+                };
+                if better {
+                    idx = k;
+                }
             }
         }
         es.push(e[idx]);

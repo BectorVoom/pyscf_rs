@@ -21,6 +21,10 @@ on:
     branches: [master, main]
   pull_request:
   workflow_dispatch:
+  # Plan 20-03: drives `pbc-oracle-nightly` (T1 + T2 PBC upstream gates).
+  # Every job without an `if:` also runs on this trigger.
+  schedule:
+    - cron: "0 3 * * *"
 
 env:
   # FOUND-05 + Pitfall 1: explicitly empty so no GitHub-Actions-default
@@ -883,3 +887,503 @@ jobs:
         run: |
           cargo test -p pyscf-oracle --features python --locked \
             -- --test-threads=1 --include-ignored grad geomopt
+
+  # ── Phase 20 plan 20-03: the PBC upstream-oracle gates ─────────────
+  # The first CI jobs that exercise periodic code. Tiers are 20-02's measured
+  # runtimes (measurements/pbc-oracle-tiers.md, written into each
+  # `#[ignore = "Tn: ..."]`): T1 < 30 s on push/PR, T2 30 s - 5 min nightly,
+  # T3 > 5 min on workflow_dispatch only. No gate tolerance is changed here.
+  #
+  # Every gate set runs as
+  #   cargo test -p <crate> --release --locked --no-fail-fast --test <target>... \
+  #       -- --ignored --exact --nocapture <gate>...
+  # through .github/actions/pbc-oracle-run/run.sh, which also fails when fewer
+  # gates pass than were named, or when an oracle gate printed a skip line.
+  # Targets are always named: a bare `--tests` has been OOM-killed here.
+  #
+  # Gate sets are YAML anchors (`&pbc-...`), defined once where first used and
+  # aliased (`*pbc-...`) by the nightly and full matrices.
+  #
+  # NOT RUN anywhere below, by design -- child entry points, not gates (each is
+  # spawned by a non-ignored parent test that `cargo test --workspace` runs;
+  # standalone they read an env var only the parent sets):
+  #   pyscf-pbc-gto   eval_ao_point_screen::emit_ao_bits   (T1, fails standalone)
+  #   pyscf-pbc-gto   eval_ao_stages::emit_ao_bits         (T1, fails standalone)
+  #   pyscf-pbc-gto   eval_ao_screen::print_reference_unscreened (T1)
+  #   pyscf-pbc-gto   eval_ao_image_batch::compare_unscreened_child (T2)
+  #   pyscf-pbc-tools fft_thread_determinism::fft_thread_child_emits_bits (T1)
+  pbc-oracle:
+    name: pbc-oracle (T1 PBC upstream gates vs pyscf==2.12.1)
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env: &pbc-oracle-env
+      # `oracle_python()` resolves "1" to $GITHUB_WORKSPACE/.venv/bin/python.
+      PYSCF_ORACLE_VENV: "1"
+      # The local gate protocol's spelling (20-EXECUTION-NOTES §2): same
+      # target dir shape and LTO value the tier runtimes were measured with.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/gate
+      CARGO_PROFILE_RELEASE_LTO: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - &pbc-oracle-setup-step
+        id: setup
+        uses: ./.github/actions/pbc-oracle-setup
+        with:
+          pyscf-requirement: "pyscf==2.12.1"
+          expected-version: "2.12.1"
+      - &pbc-oracle-version-step
+        name: Assert the oracle version (belt and braces over the setup action)
+        run: |
+          V=$(cd "$GITHUB_WORKSPACE" && PYTHONPATH="$GITHUB_WORKSPACE" .venv/bin/python -c "import pyscf; print(pyscf.__version__)")
+          [ "$V" = "2.12.1" ] || { echo "oracle is $V, expected 2.12.1"; exit 1; }
+          W=$(cd / && env -u PYTHONPATH "$GITHUB_WORKSPACE/.venv/bin/python" -c "import pyscf; print(pyscf.__version__)")
+          [ "$W" = "2.12.1" ] || { echo "site-packages oracle is $W, expected 2.12.1"; exit 1; }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pbc-oracle-t1
+          workspaces: ". -> target/gate"
+
+      - name: T1 pyscf-pbc-gto
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        uses: ./.github/actions/pbc-oracle-run
+        with: &pbc-t1-gto
+          tier: T1
+          crate: pyscf-pbc-gto
+          targets: gth_pp_loc gth_pp_nl oracle_phase9 pbc_intor
+          gates: >-
+            g_space_factors_match_upstream_on_diamond
+            g_space_factors_match_upstream_on_lif
+            vnl_matches_upstream_on_diamond_222
+            vnl_matches_upstream_on_silicon_222
+            cell_scalars_match_upstream
+            gv_and_si_match_upstream
+            lattice_ls_match_upstream
+            kpts_and_kconserv_match_upstream
+            ewald_matches_upstream
+            make_kpts_variants_match_upstream
+            angstrom_lattices_match_upstream_within_the_codata_gap
+            ovlp_matches_upstream_on_diamond_222
+            kin_matches_upstream_on_diamond_222
+            ovlp_matches_upstream_on_diamond_321
+
+      - name: T1 pyscf-pbc-df
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        uses: ./.github/actions/pbc-oracle-run
+        with: &pbc-t1-df
+          tier: T1
+          crate: pyscf-pbc-df
+          targets: band_kpoints df_ao2mo fft_jk_grad fftdf gdf_builder gdf_omega incore
+          gates: >-
+            gdf_get_jk_at_band_kpoints_matches_upstream
+            mdf_get_jk_at_band_kpoints_matches_upstream
+            get_eri_matches_upstream_on_he_fcc
+            ao2mo_7d_matches_upstream_on_he_fcc
+            get_eri_is_bit_exact_with_upstream_over_the_same_cderi
+            e1_matches_upstream_gamma_112_222
+            get_pp_matches_upstream_on_diamond_222
+            get_hcore_matches_upstream_on_diamond_222
+            get_nuc_matches_upstream_on_he
+            jk_matches_upstream_on_diamond_222
+            helium_fused_j3c_and_j2c_match_upstream
+            gdf_sr_matches_upstream
+            isolated_cell_aux_e2_matches_upstream
+            isolated_cell_fill_2c2e_is_symmetric_and_positive_definite
+
+      - name: T1 pyscf-pbc-scf
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        uses: ./.github/actions/pbc-oracle-run
+        # T1 EXCLUDED here, kept in nightly/full as KNOWN-RED:
+        #   newton_ah::live_newton_matches_upstream_energy -- unconditional
+        #   panic!, arm not wired to the KRHF Fock build (19-04 Task 3).
+        with: &pbc-t1-scf
+          tier: T1
+          crate: pyscf-pbc-scf
+          targets: krhf_bands_oracle kscf
+          gates: >-
+            krhf_get_bands_matches_upstream
+            krhf_he_all_electron_matches_upstream
+            kuhf_he_all_electron_matches_upstream
+
+      # 20-18 Task 4 — the `oracle-determinism` pattern (RAYON_NUM_THREADS=1|8)
+      # extended to one PERIODIC driver. The test itself asserts e_tot/mo_energy
+      # to_bits() equality between explicit 1- and 8-worker pools inside one
+      # process; this step additionally runs it under RAYON_NUM_THREADS=1 and =8
+      # and compares the printed global-pool bits across the two processes.
+      # It lives here, not in the `oracle-determinism` matrix, because that job's
+      # `setup-sibling-crates` does not clone cube-math/rmath, which the periodic
+      # crates need (carryover 20-oracle-harness-and-ci.md).
+      - name: PBC determinism (KRHF He-fcc 2x2x2, RAYON_NUM_THREADS=1|8)
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          for n in 1 8; do
+            RAYON_NUM_THREADS=$n cargo test --release --locked -p pyscf-pbc-scf --test krhf_threads \
+              -- --exact krhf_e_tot_is_bit_identical_at_1_and_8_rayon_threads --nocapture --test-threads=1 \
+              2>&1 | tee "krhf_threads_$n.log"
+            grep -q 'test result: ok. 1 passed' "krhf_threads_$n.log"
+          done
+          b1=$(grep -o 'e_tot_bits=0x[0-9a-f]*' krhf_threads_1.log)
+          b8=$(grep -o 'e_tot_bits=0x[0-9a-f]*' krhf_threads_8.log)
+          echo "RAYON_NUM_THREADS=1: $b1"; echo "RAYON_NUM_THREADS=8: $b8"
+          [ -n "$b1" ] && [ "$b1" = "$b8" ]
+
+      - name: T1 pyscf-pbc-dft
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        uses: ./.github/actions/pbc-oracle-run
+        with: &pbc-t1-dft
+          tier: T1
+          crate: pyscf-pbc-dft
+          targets: gate gate_openshell gdf_ksymm_bisect
+          gates: >-
+            krks_si_222_pbe_matches_upstream
+            krks_si_222_lda_matches_upstream
+            krks_he_all_electron_222_pbe_matches_upstream
+            kuks_si_222_pbe_matches_upstream
+            krks_si_222_pbe_against_xcfun
+            kuks_li_atom_gamma_pbe_matches_upstream
+            kuks_li_atom_gamma_lda_matches_upstream
+            kuks_li_atom_113_pbe_matches_upstream
+            kuhf_li_atom_gamma_is_the_open_shell_floor
+            kuks_h2_stretched_gamma_pbe_matches_upstream
+            kuks_h2_stretched_gamma_lda_matches_upstream
+            kuhf_h2_stretched_gamma_matches_upstream
+            kuks_li_atom_gamma_pbe0_matches_upstream
+            kuks_h2_stretched_gamma_pbe0_matches_upstream
+            bisect_fixture_and_arm_grids
+
+      - name: T1 pyscf-pbc-mp
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        uses: ./.github/actions/pbc-oracle-run
+        with: &pbc-t1-mp
+          tier: T1
+          crate: pyscf-pbc-mp
+          targets: oracle_phase15 perf_dpbc28
+          gates: >-
+            symm_map_and_operation
+            padding_surface
+            ao2mo_and_ao2mo_7d
+            t2_rdm1_and_gamma1
+            upstream_kump2_kernel_remains_an_explicit_refusal
+            build_symm_map_growth_curve
+
+      - name: T1 pyscf-pbc-cc
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        uses: ./.github/actions/pbc-oracle-run
+        with: &pbc-t1-cc
+          tier: T1
+          crate: pyscf-pbc-cc
+          targets: >-
+            kccsd_rhf kgccsd krccsd_smoke kuccsd oracle_eom_star oracle_eom_ta
+            oracle_gamma_rccsd oracle_gamma_ug oracle_kuccsd oracle_phase16
+          gates: >-
+            eris_incore_and_spilled_are_bit_identical
+            symm_map_loop_matches_the_all_triples_loop
+            amplitudes_and_energy_are_bit_reproducible
+            init_amps_emp2_equals_kmp2
+            eris_charges_exactly_what_it_allocates
+            ccsd_t_peak_memory_is_bounded_by_one_block
+            amplitudes_are_bit_identical_across_thread_counts
+            krccsd_runs_on_diamond_112
+            update_amps_at_zero_amplitudes_reproduces_init_amps
+            rhf_ccsd_star_matches_upstream
+            rhf_t3p2_and_ta_roots_match_upstream
+            rccsd_equations_match_upstream
+            rccsd_e_corr_matches_upstream
+            gamma_shim_and_krccsd_at_one_kpoint_agree
+            gamma_shim_runs_on_this_ports_own_mean_field
+            uccsd_equations_match_upstream
+            uccsd_e_corr_matches_upstream
+            gamma_shims_and_the_kpoint_routes_agree
+            kueris_blocks_match_upstream
+            eris_blocks_match_upstream
+            intermediates_and_update_amps_match_upstream
+
+      - name: T1 pyscf-pbc-ci
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        uses: ./.github/actions/pbc-oracle-run
+        with: &pbc-t1-ci
+          tier: T1
+          crate: pyscf-pbc-ci
+          targets: oracle_kcis
+          gates: kcis_roots_match_upstream
+
+      # T1 EXCLUDED from push/PR, kept in nightly/full as KNOWN-RED (plus
+      # scf newton_ah above). Unwired arms whose owner is named in the reason:
+      #   pyscf-pbc-adc   ea::gate_d_ip_spec_factors -- IP spec factors 9.358e-1
+      #                   vs Gate D 5e-4; needs get_trans_moments + ADC-norm
+      #                   renormalisation (19-15/19-16 follow-up)
+      #   pyscf-pbc-tdscf uhf::live_bigbox_matches_molecular -- unconditional
+      #                   panic!; needs matrix-free vind for non-uniform per-k
+      #                   fillings (19-08 follow-up)
+
+  # T1 + T2, nightly. One matrix row per gate set.
+  pbc-oracle-nightly:
+    name: pbc-oracle-nightly (${{ matrix.tier }} ${{ matrix.crate }})
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env: *pbc-oracle-env
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - *pbc-t1-gto
+          - *pbc-t1-df
+          - *pbc-t1-scf
+          - *pbc-t1-dft
+          - *pbc-t1-mp
+          - *pbc-t1-cc
+          - *pbc-t1-ci
+          - &pbc-t2-gto
+            tier: T2
+            crate: pyscf-pbc-gto
+            targets: gth_pp_loc pbc_intor
+            gates: >-
+              part2_matches_upstream_on_diamond
+              derivative_families_match_upstream_all_reference_cells
+          # T2-tagged `df_ao2mo::get_eri_matches_upstream_on_diamond_gamma` is
+          # NOT here: its route-pinned run took 2793 s (46.5 min, ~12 cores),
+          # so it is T3 by D-20-D, and it FAILS at 3.8427e-8 vs 1e-11
+          # (measurements/gdf-ao2mo-regression.md). It is a KNOWN-RED row of
+          # pbc-oracle-full. Its ignore tag still says T2 -- owed to its owner.
+          - &pbc-t2-df
+            tier: T2
+            crate: pyscf-pbc-df
+            targets: gdf_omega perf_dpbc28_mofirst
+            gates: >-
+              gdf_lr_matches_upstream
+              mdf_lr_matches_upstream
+              mdf_sr_matches_upstream
+              mo_first_vs_ao_first_cost
+          - &pbc-t2-scf
+            tier: T2
+            crate: pyscf-pbc-scf
+            targets: df_swap gate3_rsdf kscf
+            gates: >-
+              krhf_on_mdf_matches_upstream_he_fcc
+              wall_clock_per_builder
+              gate3_both_routes_match_upstream_he_fcc
+              krhf_diamond_222_matches_upstream
+          - &pbc-t2-dft
+            tier: T2
+            crate: pyscf-pbc-dft
+            targets: gate mg_kpts_bench mg_pair_bench
+            gates: >-
+              krhf_si_222_is_the_pseudopotential_floor
+              krks_si_222_pbe0_matches_upstream
+              mg_kpts_bench
+              mg_pair_bench
+          - &pbc-t2-mp
+            tier: T2
+            crate: pyscf-pbc-mp
+            targets: oracle_phase15 perf_dpbc28
+            gates: >-
+              committed_diamond_anchor_is_still_reproducible
+              kmp2_four_index_thread_scaling
+          - &pbc-t2-cc
+            tier: T2
+            crate: pyscf-pbc-cc
+            targets: >-
+              kccsd_rhf kgccsd oracle_eom_ee_singlet oracle_eom_partition
+              oracle_eom_star oracle_eom_ta oracle_gamma_ug oracle_kuccsd
+              oracle_phase16 zgemm_vs_host
+            gates: >-
+              krccsd_matches_the_supercell_at_gamma
+              kgccsd_equals_krccsd_on_a_closed_shell
+              ee_singlet_equations_match_upstream
+              ee_singlet_roots_match_upstream
+              upstream_refuses_every_partition_the_drivers_are_given
+              rhf_partition_mp_matches_upstream
+              ghf_partition_mp_diagonals_match_upstream
+              ghf_ccsd_star_matches_upstream
+              ghf_t3p2_and_ta_roots_match_upstream
+              gccsd_equations_match_upstream
+              gccsd_e_corr_matches_upstream
+              the_eri_residual_is_the_mesh_and_not_the_port
+              kuccsd_init_amps_matches_upstream
+              kuccsd_update_amps_matches_upstream
+              kuccsd_e_corr_matches_upstream
+              kuccsd_intermediates_match_upstream
+              kuccsd_wovvo_block_matches_upstream
+              kuccsd_woooo_block_matches_upstream
+              kuccsd_fock_block_matches_upstream
+              kuccsd_rdm1_matches_upstream
+              kuccsd_eom_intermediates_match_upstream
+              kuccsd_eom_ip_matches_upstream
+              kuccsd_eom_ea_matches_upstream
+              kuccsd_eom_roots_match_upstream
+              ccsd_t_fast_equals_slow_and_matches_upstream
+              kgccsd_matches_upstream
+              krccsd_e_corr_matches_upstream_gdf
+              kgccsd_eom_intermediates_match_upstream
+              kgccsd_eom_ip_and_ea_match_upstream
+              kgccsd_eom_roots_match_upstream
+              kgccsd_eom_ee_matches_upstream
+              krccsd_e_corr_matches_upstream_fftdf
+              krccsd_eom_intermediates_match_upstream
+              krccsd_eom_ip_and_ea_match_upstream
+              krccsd_eom_roots_match_upstream
+              zgemm_dense_versus_the_host_loop_on_this_phases_shapes
+          # KNOWN-RED: these rows are EXPECTED to fail until their carryovers
+          # close. They are listed, not skipped and not continue-on-error, so
+          # the nightly is red for a named reason. See pbc-oracle-tiers.md §5.
+          - &pbc-red-adc
+            tier: KNOWN-RED (T1 unwired arm, 19-15/19-16)
+            crate: pyscf-pbc-adc
+            targets: ea
+            gates: gate_d_ip_spec_factors
+          - &pbc-red-tdscf
+            tier: KNOWN-RED (T1 unwired arm, 19-08)
+            crate: pyscf-pbc-tdscf
+            targets: uhf
+            gates: live_bigbox_matches_molecular
+          - &pbc-red-scf
+            tier: KNOWN-RED (T1 unwired arm, 19-04 Task 3)
+            crate: pyscf-pbc-scf
+            targets: newton_ah
+            gates: live_newton_matches_upstream_energy
+          - &pbc-red-dft
+            # PRECONDITION FAILED: the full-BZ beta solution is symmetry-broken
+            # (max|dm_a-dm_b| 1.194); needs a star-symmetric open-shell fixture.
+            tier: KNOWN-RED (T2 fixture precondition)
+            crate: pyscf-pbc-dft
+            targets: krks_ksymm
+            gates: kuks_ibz_energy_matches_full_bz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - *pbc-oracle-setup-step
+      - *pbc-oracle-version-step
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pbc-oracle-${{ matrix.crate }}
+          workspaces: ". -> target/gate"
+      - name: ${{ matrix.tier }} ${{ matrix.crate }}
+        uses: ./.github/actions/pbc-oracle-run
+        with:
+          tier: ${{ matrix.tier }}
+          crate: ${{ matrix.crate }}
+          targets: ${{ matrix.targets }}
+          gates: ${{ matrix.gates }}
+
+  # All tiers, manual only. T3 rows are > 5 min per gate; 16 of the 21 were
+  # killed at 600 s by 20-02 with NO observed outcome, so a T3 row may hit the
+  # 360-minute hosted-runner ceiling -- that is "not observed", not a pass.
+  # The heaviest T3 sets are split so each row has its own ceiling.
+  pbc-oracle-full:
+    name: pbc-oracle-full (${{ matrix.tier }} ${{ matrix.crate }})
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env: *pbc-oracle-env
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - *pbc-t1-gto
+          - *pbc-t1-df
+          - *pbc-t1-scf
+          - *pbc-t1-dft
+          - *pbc-t1-mp
+          - *pbc-t1-cc
+          - *pbc-t1-ci
+          - *pbc-t2-gto
+          - *pbc-t2-df
+          - *pbc-t2-scf
+          - *pbc-t2-dft
+          - *pbc-t2-mp
+          - *pbc-t2-cc
+          - tier: T3
+            crate: pyscf-pbc-gto
+            targets: gth_pp_loc
+            gates: part2_matches_upstream_on_lif
+          - tier: T3 (diamond CC j3c builds)
+            crate: pyscf-pbc-df
+            targets: exclude_dd_block gdf_builder
+            gates: >-
+              diamond_gdf_both_routes_produce_a_cderi
+              cderi_fingerprint_matches_upstream_diamond
+          - tier: T3
+            crate: pyscf-pbc-df
+            targets: gdf gdf_mo_k perf_dpbc28_mofirst
+            gates: >-
+              get_pp_works_at_k_points
+              mo_route_wall_clock_vs_dm_route_diamond
+              mo_first_vs_ao_first_cost_222
+          - tier: T3 (exclude_dd_block energies)
+            crate: pyscf-pbc-scf
+            targets: exclude_dd_block_energy
+            gates: >-
+              diamond_gamma_matches_upstream
+              diamond_2x2x2_matches_upstream
+          - tier: T3
+            crate: pyscf-pbc-scf
+            targets: gate3_rsdf kscf
+            gates: >-
+              gate3_both_routes_match_upstream_diamond_gamma
+              rs_mdf_matches_upstream_he_fcc
+              krhf_diamond_222_matches_upstream_at_the_default_mesh
+          - tier: T3 (GDF k-symmetry bisect, ~2544 s class each)
+            crate: pyscf-pbc-dft
+            targets: gdf_ksymm_bisect
+            gates: >-
+              bisect_gdf_and_fftdf_routes_at_one_density
+              gdf_gate_c_with_and_without_matched_xc_grid
+          - tier: T3
+            crate: pyscf-pbc-dft
+            targets: krks_ksymm
+            gates: >-
+              krks_ibz_energy_matches_full_bz_on_gdf
+              gdf_band_route_matches_the_direct_route
+          - tier: T3
+            crate: pyscf-pbc-mp
+            targets: oracle_phase15 perf_dpbc28
+            gates: >-
+              lov_blocks
+              kmp2_energies
+              stagger_energies
+              mo_first_ao2mo_block
+              lov_build_and_kmp2_kernel_thread_scaling
+          - tier: T3
+            crate: pyscf-pbc-symm
+            targets: basis_precision_probe
+            gates: fock_block_diagonality_floor
+          - *pbc-red-adc
+          - *pbc-red-tdscf
+          - *pbc-red-scf
+          - *pbc-red-dft
+          # KNOWN-RED: route-pinned port CCGDF vs upstream CCGDF on diamond
+          # gamma = 3.8427e-8 vs gate 1e-11, 2793 s; residual not attributed
+          # (measurements/gdf-ao2mo-regression.md "Diamond gamma"). Tagged T2,
+          # T3 by runtime. This job is expected red until that carryover closes.
+          - tier: KNOWN-RED (T3 by runtime, df_ao2mo diamond gamma 3.8427e-8)
+            crate: pyscf-pbc-df
+            targets: df_ao2mo
+            gates: get_eri_matches_upstream_on_diamond_gamma
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-sibling-crates
+      - *pbc-oracle-setup-step
+      - *pbc-oracle-version-step
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: pbc-oracle-${{ matrix.crate }}
+          workspaces: ". -> target/gate"
+      - name: ${{ matrix.tier }} ${{ matrix.crate }}
+        uses: ./.github/actions/pbc-oracle-run
+        with:
+          tier: ${{ matrix.tier }}
+          crate: ${{ matrix.crate }}
+          targets: ${{ matrix.targets }}
+          gates: ${{ matrix.gates }}

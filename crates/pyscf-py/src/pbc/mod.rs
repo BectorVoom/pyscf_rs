@@ -24,16 +24,26 @@
 
 use pyo3::prelude::*;
 
+pub mod ao2mo;
+pub mod cc;
+pub mod ci;
 pub mod convert;
 pub mod df;
+pub mod dft;
 pub mod gto;
+pub mod kbridge;
+pub mod lib;
+pub mod mp;
+pub mod scf;
+pub mod symm;
+pub mod tools;
 
 /// Dotted name of the periodic parent module.
 pub const PBC_MODULE: &str = "pyscf._native.pbc";
 
-/// The ten children, in upstream `pyscf.pbc` package order, with the plan that
-/// fills each one.
-pub const PBC_CHILDREN: [(&str, &str); 10] = [
+/// The children, in upstream `pyscf.pbc` package order, with the plan that
+/// fills each one (`ao2mo` added by 20-15).
+pub const PBC_CHILDREN: [(&str, &str); 11] = [
     ("gto", "20-09"),
     ("scf", "20-12"),
     ("dft", "20-13"),
@@ -44,6 +54,7 @@ pub const PBC_CHILDREN: [(&str, &str); 10] = [
     ("mp", "20-15"),
     ("cc", "20-15"),
     ("ci", "20-15"),
+    ("ao2mo", "20-15"),
 ];
 
 /// Create `pyscf._native.pbc` and its ten empty children, attach `pbc` to the
@@ -63,7 +74,9 @@ pub fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {
         m.setattr(
             "__doc__",
             match child {
-                "gto" | "df" => format!("{full} — periodic bindings (plan {plan})."),
+                "gto" | "df" | "symm" | "lib" | "tools" | "mp" | "cc" | "ci" | "ao2mo" => {
+                    format!("{full} — periodic bindings (plan {plan}).")
+                }
                 _ => {
                     format!("{full} — registered empty (plan 20-08); bindings land in plan {plan}.")
                 }
@@ -72,6 +85,19 @@ pub fn register(py: Python<'_>, root: &Bound<'_, PyModule>) -> PyResult<()> {
         match child {
             "gto" => gto::register(&m)?,
             "df" => df::register(&m)?,
+            "scf" => scf::register(&m)?,
+            // 20-13: periodic KS DFT (sets its own `__doc__`).
+            "dft" => dft::register(&m)?,
+            // 20-14: `lib` and `tools` re-export objects of `symm` / `gto`, which
+            // precede them in `PBC_CHILDREN` and are already in `sys.modules`.
+            "symm" => symm::register(&m)?,
+            "lib" => lib::register(py, &m)?,
+            "tools" => tools::register(py, &m)?,
+            // 20-15: the correlated drivers read a converged `pbc.scf` driver.
+            "mp" => mp::register(&m)?,
+            "cc" => cc::register(&m)?,
+            "ci" => ci::register(&m)?,
+            "ao2mo" => ao2mo::register(&m)?,
             _ => {}
         }
         pbc.add_submodule(&m)?;

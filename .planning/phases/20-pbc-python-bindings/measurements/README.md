@@ -32,10 +32,10 @@ unless they start `crates/`.
 
 | # | quantity | fixture | floor | status | source |
 |---|---|---|---|---|---|
-| 1 | `KRHF` vs upstream, all-electron | He-fcc `sto-3g`, 2×2×2, mesh 15³ | **2.18e-13** (prose rounds it to 2.2e-13, `:120`) | PASS at 1e-12 | `11-fft-fftdf-periodic-hf/11-VERIFICATION.md:90` |
-| 2 | `KRHF` vs upstream, `gth-pade` | diamond `gth-szv`, 2×2×2, mesh 47³ (default) | **4.00e-12** (4.02e-12 at mesh 31³, `:92`) | PASS at 1e-11 | `11-fft-fftdf-periodic-hf/11-VERIFICATION.md:93` |
-| 3 | `KRKS` vs upstream | Si `gth-szv`, 2×2×2, PBE | **6.45e-12** | PASS at 1e-11 | `12-periodic-dft/12-VERIFICATION.md:77` |
-| 3a | `KRKS` vs upstream, all-electron control | He-fcc `sto-3g`, 2×2×2, PBE | **9.81e-14** (221 ulp) | PASS at 1e-12 | `12-periodic-dft/12-VERIFICATION.md:81`, `:144` |
+| 1 | `KRHF` vs upstream, all-electron | He-fcc `sto-3g`, 2×2×2, mesh 15³ | ~~**2.18e-13**~~ (prose rounds it to 2.2e-13, `:120`); **Superseded 2026-09-14 by 20-19 D** (SCF `get_ovlp` at upstream's `precision*1e-5`, `20-19-D-SUMMARY.md` §T1 gate re-run): KRHF / KUHF He AE (`kscf`) **7.1e-15 / 6.7e-15** (was 2.167e-13) | PASS at 1e-12 | `11-fft-fftdf-periodic-hf/11-VERIFICATION.md:90` |
+| 2 | `KRHF` vs upstream, `gth-pade` | diamond `gth-szv`, 2×2×2, mesh 47³ (default) | **4.00e-12** (4.02e-12 at mesh 31³, `:92`). *Not re-measured after 20-19 D; its Si `gth-pade` analogue `dft gate::krhf_si_222_is_the_pseudopotential_floor` fell 4.158e-12 → **2.931e-14** (`20-19-D-SUMMARY.md`), so this floor is expected to fall too — the "inherited from `get_pp`" reading is refuted.* | PASS at 1e-11 | `11-fft-fftdf-periodic-hf/11-VERIFICATION.md:93` |
+| 3 | `KRKS` vs upstream | Si `gth-szv`, 2×2×2, PBE | ~~**6.45e-12**~~ (6.453e-12 on P4, `pbc-oracle-tiers.md`); **Superseded 2026-09-14 by 20-19 D** (SCF `get_ovlp` at upstream's `precision*1e-5`, `20-19-D-SUMMARY.md` §T1 gate re-run): **4.086e-14** (LDA 6.507e-12 → 3.730e-14; KUKS PBE 6.448e-12 → 4.086e-14) | PASS at 1e-11 | `12-periodic-dft/12-VERIFICATION.md:77` |
+| 3a | `KRKS` vs upstream, all-electron control | He-fcc `sto-3g`, 2×2×2, PBE | ~~**9.81e-14**~~ (221 ulp; 8.482e-14 on P4); **Superseded 2026-09-14 by 20-19 D** (SCF `get_ovlp` at upstream's `precision*1e-5`, `20-19-D-SUMMARY.md` §T1 gate re-run): **6.217e-14** | PASS at 1e-12 | `12-periodic-dft/12-VERIFICATION.md:81`, `:144` |
 | 4 | FFTDF − AFTDF `KRHF` energy (upstream vs upstream) | diamond 2×2×2, mesh 31 and 41 bit-identical | **2.607e-11** | the Phase-13 Gate-2 plateau | `13-ft-ao-aftdf/measurements/README.md:53` |
 | 5 | GDF − RSDF `KRHF` energy (upstream vs upstream) | diamond `gth-szv` 2×2×2 | **1.353e-08** | Phase-14 Gate 3 floor | `14-gdf-mdf-rsdf-rsjk/measurements/README.md:119` |
 | 6 | FFTDF − MDF `KRHF` energy (upstream vs upstream) | diamond `gth-szv` 2×2×2, MDF default mesh | **1.124e-06** | Phase-14 Gate 2 floor | `14-gdf-mdf-rsdf-rsjk/measurements/README.md:120` |
@@ -47,9 +47,9 @@ unless they start `crates/`.
 | 10a | ksymm **Gate C**, FFTDF — `KRKS` ksymm vs full BZ | `si [2,2,2]`, both `use_ao_symmetry` branches | **3.109e-14 / 2.842e-14** | MET | `17-ksymm-multigrid/17-VERIFICATION.md:125` |
 | 10b | ksymm **Gate C**, GDF — `KRHF` ksymm vs full BZ | `si [2,2,2]` | **2.486e-10** | MET | `17-ksymm-multigrid/17-VERIFICATION.md:124` |
 | 11 | ksymm **Gate C**, **GDF** — `KRKS` ksymm vs full BZ | `si [2,2,2]` | upstream vs itself 1.8e-11 … 1.6e-10; measured **1.432e-06** | **NOT MET** — recorded, not absorbed (`§12`, `:801`, states it "against a 1e-8 tolerance") | `17-ksymm-multigrid/17-VERIFICATION.md:126` |
-| 12 | `get_bands` vs upstream (off mesh, 2 band k-points) | He-fcc `sto-3g`, 1 AO, 2×2×2, mesh `[15,15,15]` | **1.68e-11** (`mo_energy` on mesh: 6.10e-11) | measured 2026-09-12 | `20-pbc-python-bindings/20-CONTEXT.md:149-150`; produced by `crates/pyscf-pbc-scf/tests/krhf_bands_oracle.rs` (printed, not a literal in the file) |
+| 12 | `get_bands` vs upstream (off mesh, 2 band k-points) | He-fcc `sto-3g`, 1 AO, 2×2×2, mesh `[15,15,15]` | ~~**1.68e-11**~~ (`mo_energy` on mesh: ~~6.10e-11~~); **Superseded 2026-09-14 by 20-19 D** (SCF `get_ovlp` at upstream's `precision*1e-5`, `20-19-D-SUMMARY.md` §T1 gate re-run): `get_bands` **4.23e-13**, `mo_energy` **3.72e-13** (gate `< 1e-9` unchanged) | measured 2026-09-12; re-measured 2026-09-14 | `20-pbc-python-bindings/20-CONTEXT.md:149-150`; produced by `crates/pyscf-pbc-scf/tests/krhf_bands_oracle.rs` (printed, not a literal in the file) |
 | 13 | band J/K via `kpts_band`, GDF, model density | 8 sampling + 2 band k-points | **~1.394e-9** (asserted `< 2e-9`) | reproducible to the 4th digit | `crates/pyscf-pbc-df/tests/band_kpoints.rs:211` (comment), `:220-221` (assertion) |
-| 14 | row 11 bisected (20-04, added 2026-09-14): GDF `KRKS` ksymm vs full BZ at ONE density, full-BZ arm's XC grid matched to `cell.mesh` | `si [2,2,2]`, default precision, `lda,vwn` | `E_elec[D]` **2.719e-10**; converged SCF Gate C **2.720e-10** (as the gate builds the arms: **1.432e-06**, reproduced to 12 digits) | row 11 is a **DEFECT (a), not a floor**: `Krks::from_df` (`crates/pyscf-pbc-dft/src/krks.rs:93`) grids XC on `Gdf::mesh()` = `[13,13,13]`, not `cell.mesh` = `[35,35,35]`; `_cderi`/J/K/band/hcore steps all 0e0. Gate (1e-8) NOT restated; fix owed | `20-pbc-python-bindings/measurements/gdf-ksymm-bisect.md` |
+| 14 | row 11 bisected (20-04, added 2026-09-14): GDF `KRKS` ksymm vs full BZ at ONE density, full-BZ arm's XC grid matched to `cell.mesh` | `si [2,2,2]`, default precision, `lda,vwn` | `E_elec[D]` **2.719e-10**; converged SCF Gate C **2.720e-10** (as the gate builds the arms: **1.432e-06**, reproduced to 12 digits) | row 11 is a **DEFECT (a), not a floor**: `Krks::from_df` (`crates/pyscf-pbc-dft/src/krks.rs:93`) grids XC on `Gdf::mesh()` = `[13,13,13]`, not `cell.mesh` = `[35,35,35]`; `_cderi`/J/K/band/hcore steps all 0e0. Gate (1e-8) NOT restated. **FIXED 2026-09-14** (`20-04-FIX-SUMMARY.md`): converged Gate C now **2.1997e-10**, MET | `20-pbc-python-bindings/measurements/gdf-ksymm-bisect.md` |
 
 **Correction to the plan's row "ksymm Gate C, FFTDF — 1.703e-11".** That number
 IS in `17-VERIFICATION.md` (`:138`), but the same paragraph says it is *"easy to
@@ -73,7 +73,7 @@ chasing upstream's own numbers and will never close.
 | upstream's own two GDF builders (`_RSGDFBuilder` vs `_CCGDFBuilder`) | **4.502e-06** | `14-gdf-mdf-rsdf-rsjk/measurements/README.md:139` (diamond gamma) | Two upstream constructions of the same fitted quantity disagree with each other. A port can match one route (and gates each against its own upstream number); no single answer matches both. |
 | CC route split, FFTDF vs GDF `e_corr` | **9.223479e-04 Ha** (quoted as 9.22e-4) | `16-periodic-cc-ci/measurements/README.md:165` (§4) | The plane-wave pair (FFTDF, MDF) and the Gaussian pair (GDF, RSDF) are two routes in upstream; they sit 9.2e-4 apart on diamond `[1,1,2]`. That is upstream disagreeing with itself, which is why every CC gate names its DF route. |
 | `pp_int.get_pp_loc_part2` vs `_IntPPBuilder.get_pp_loc_part2` | **1.7933e-9** (quoted as 1.79e-9) | `13-ft-ao-aftdf/13-VERIFICATION.md:110`, `:114` | Two upstream routes for the same pseudopotential term disagree by this much on diamond. Substituting the `pp_int` route into upstream's own `AFTDF.get_pp` collapses the port's deviation to 3.98e-11 (`:123`). Worth reporting upstream; not reachable by matching both. |
-| band energies vs upstream | **~1.7e-11** (1.68e-11 off mesh, 6.10e-11 on mesh) | `20-pbc-python-bindings/20-CONTEXT.md:146-150` | Cross-implementation summation order: the band chain (hcore, plane-wave lattice sum, J2C fit, `kpts_band` J/K, per-k eigendecomposition) runs in C/BLAS upstream and in Rust/CubeCL here. It is ~1e-11 even on the 1-AO all-electron cell with no pseudopotential residual. |
+| band energies vs upstream | ~~**~1.7e-11**~~ (1.68e-11 off mesh, 6.10e-11 on mesh); **superseded 2026-09-14 by 20-19 D: 4.23e-13 off mesh, 3.72e-13 on mesh** — most of the old gap was the SCF overlap precision, not summation order; still never bitwise | `20-pbc-python-bindings/20-CONTEXT.md:146-150` | Cross-implementation summation order: the band chain (hcore, plane-wave lattice sum, J2C fit, `kpts_band` J/K, per-k eigendecomposition) runs in C/BLAS upstream and in Rust/CubeCL here. It is ~1e-11 even on the 1-AO all-electron cell with no pseudopotential residual. |
 
 ---
 
@@ -158,3 +158,21 @@ A1 HF-family roots **1e-5**; A2 KS-family roots **1e-8 Ha**; B single-CPHF seam
 **1e-8 Ha** — A1/A2/B/D/E MET; C MET for AC live and for CD/UAC/slow on
 analytic arms, the three live-vs-upstream GW arms **NOT RUN**
 (`19-VERIFICATION.md` gate matrix; `.planning/carryovers/19-gw-live-oracle.md`).
+
+---
+
+## §6 — Phase-20 closing numbers (added 2026-09-14 by 20-18)
+
+Measured on the final tree (`.so` 2026-09-14 19:52:34), vendored 2.12.1 as the oracle. Details and
+commands: `../20-VERIFICATION.md` §3.
+
+| # | quantity | fixture | measured | bound / status | source |
+|---|---|---|---|---|---|
+| 15 | identity gate | 18 names | **18 / 18 pass** (18 / 18 failed pre-binding, §4) | MET | `20-VERIFICATION.md` §3.1 |
+| 16 | `examples/pbc/22-k_points_mp2.py` KMP2 `e_tot`, native vs upstream | diamond `gth-szv` 2×2×2 / one k, 47³ | **4.558e-7** / **6.543e-9**; terminal `NotImplementedError` at line 62 on both sides | 2e-6 (row 7), MET | `target/p20-18-final/ex22.{log,json}` |
+| 17 | `22-k_points_mp2_ksymm.py` KMP2 `e_tot` | Si 2×2×2 IBZ, 24³ | **1.695e-6** | 2e-6, MET (1.18× margin) | `target/p20-18-final/ksymm.{log,json}` |
+| 18 | `23-smearing.py` σ=0.1 free energy / entropy | Al `gth-dzvp` 4×4×4 PBE | **2.2e-9** / 2.3e-8 (5.04e-3 / 1.50e-2 before 20-19 D) | MET | `target/p20-18-final/smearing.{log,json}`; `20-19-D-SUMMARY.md` |
+| 19 | KRHF bit-identity across rayon pools 1 / 8 / global and `RAYON_NUM_THREADS=1|8` | He-fcc `sto-3g` 2×2×2, mesh 15³ | `e_tot_bits=0xc0067587e69e6ce6` everywhere | bitwise (same-implementation A/B), MET | `crates/pyscf-pbc-scf/tests/krhf_threads.rs` |
+| 20 | upstream `pyscf/pbc` suite under the overlay | 815 selected tests | **11 / 815** (control 808 / 815) | ≥ 80 %, **NOT MET** | `upstream-pbc-suite-after-20-19.md`; final re-run `target/p20-19-suite/logs/run-overlay-final/` |
+| 20a | `examples/pbc/40-custom_gdf.py` (bounded replacement for example 20) | diamond `sto3g` AE 2×2×2, GDF | native killed at 4927 s inside KRHF-from-`_cderi`; upstream 53.5 s; one native GDF `get_jk` > 580 s | **NOT MET** (none qualifies) | `target/p20-18-final/ex40-*.log`, `ex40_probe.py` |
+| 21 | FFTDF `get_jk` wall, native / upstream, warm, 16 threads | example-22 diamond 2×2×2, 47³ | **114.26 s / 19.19 s = 5.95×** | ≤ 2× sanity, **NOT MET** | `target/p20-18-final/jk_perf.log` |

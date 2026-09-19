@@ -12,12 +12,13 @@
 //!
 //! Run scoped: `cargo test -p pyscf-pbc-scf --test stability`
 
-use pyscf_pbc_scf::stability::{
-    STABILITY_THRESHOLD, rhf_external, rhf_internal, rotate_mo_real,
-};
+use pyscf_pbc_scf::stability::{STABILITY_THRESHOLD, rhf_external, rhf_internal, rotate_mo_real};
 use serde_json::Value;
 
-fn dense_hop(mat: &[f64], dim: usize) -> impl Fn(&[f64]) -> Result<Vec<f64>, pyscf_core::PyscfRsError> + '_ {
+fn dense_hop(
+    mat: &[f64],
+    dim: usize,
+) -> impl Fn(&[f64]) -> Result<Vec<f64>, pyscf_core::PyscfRsError> + '_ {
     move |x: &[f64]| {
         let mut out = vec![0.0f64; dim];
         for i in 0..dim {
@@ -32,12 +33,19 @@ fn dense_hop(mat: &[f64], dim: usize) -> impl Fn(&[f64]) -> Result<Vec<f64>, pys
 }
 
 fn fixture(name: &str) -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name);
     serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture must exist")).unwrap()
 }
 
 fn get_mat(v: &Value, key: &str) -> Vec<f64> {
-    v[key].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
+    v[key]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_f64().unwrap())
+        .collect()
 }
 
 /// Stable synthetic Hessian: lowest = +1.0 → stable, no direction.
@@ -77,7 +85,9 @@ fn threshold_edge_matches_upstream_rule() {
     let mk = |hop_e0: f64| {
         let h = vec![hop_e0, 0.0, 0.0, 1.0];
         let hop = dense_hop(&h, 2);
-        rhf_internal(&hop, &[hop_e0, 1.0], 2).expect("must run").stable
+        rhf_internal(&hop, &[hop_e0, 1.0], 2)
+            .expect("must run")
+            .stable
     };
     // Hessian eigenvalue = 2·hop eigenvalue: hop −0.4e-5 → −0.8e-5
     // (stable); hop −0.6e-5 → −1.2e-5 (unstable).
@@ -107,7 +117,11 @@ fn live_hop_fixtures_reproduce_upstream() {
                 (r.stable, r.lowest_eigenvalue)
             };
             assert_eq!(stable, expect, "{name} {key}: verdict");
-            assert_eq!(stable, b["upstream_stable"].as_bool().unwrap(), "{name} {key}: upstream verdict");
+            assert_eq!(
+                stable,
+                b["upstream_stable"].as_bool().unwrap(),
+                "{name} {key}: upstream verdict"
+            );
             let ref_e = b["upstream_lowest"].as_f64().unwrap();
             assert!(
                 (lowest - ref_e).abs() < 1e-8,
@@ -164,8 +178,14 @@ fn stability_deterministic_across_thread_counts() {
         let he = dense_hop(&he_mat, dim);
         rhf_external(&he, &he_hdiag, dim).unwrap().lowest_eigenvalue
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.to_bits(), b.to_bits());
 }

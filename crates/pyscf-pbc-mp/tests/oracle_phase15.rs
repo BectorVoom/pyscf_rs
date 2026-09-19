@@ -176,7 +176,7 @@ fn mo_from(out: &str, name: &str, nao: usize) -> MoCoeff {
 // ---------------------------------------------------------------- 1. symm_map
 
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn symm_map_and_operation() {
     let Some(out) = rollup("symm_map") else {
         return;
@@ -226,7 +226,7 @@ fn symm_map_and_operation() {
 // ---------------------------------------------------------------- 2. padding
 
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn padding_surface() {
     let Some(out) = rollup("padding") else {
         return;
@@ -286,7 +286,7 @@ fn padding_surface() {
 /// upstream's OWN randomly drawn MO coefficients — so the diff is the AO2MO
 /// transform, not two independent SCFs.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn ao2mo_and_ao2mo_7d() {
     let Some(out) = rollup("ao2mo7d") else {
         return;
@@ -372,7 +372,11 @@ fn ao2mo_and_ao2mo_7d() {
             // either hiding that finding behind a loosened number or failing
             // for a reason Phase 15 does not own. With the `j3c` correct the
             // residual is the ordinary DF fitting difference, so it gates.
-            let tol = if *name == "gdf" { GDF_AO2MO_TOL } else { MDF_AO2MO_TOL };
+            let tol = if *name == "gdf" {
+                GDF_AO2MO_TOL
+            } else {
+                MDF_AO2MO_TOL
+            };
             assert!(dev < tol, "[ao2mo {name}] {dev:.3e}");
             assert!(dev7 < tol, "[ao2mo_7d {name}] {dev7:.3e}");
         }
@@ -403,7 +407,7 @@ const MDF_AO2MO_TOL: f64 = 3e-7;
 // ---------------------------------------------------------------- 4. Lov
 
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV and a diamond GDF build"]
+#[ignore = "T3: requires PYSCF_ORACLE_VENV and a diamond GDF build"]
 fn lov_blocks() {
     let Some(out) = rollup("lov") else {
         return;
@@ -471,7 +475,7 @@ fn lov_blocks() {
 // ---------------------------------------------------------------- 5. KMP2
 
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV and four periodic SCFs"]
+#[ignore = "T3: requires PYSCF_ORACLE_VENV and four periodic SCFs"]
 fn kmp2_energies() {
     let Some(out) = rollup("kmp2") else {
         return;
@@ -555,7 +559,7 @@ fn kmp2_energies() {
 // ---------------------------------------------------------------- 6. t2/RDM
 
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV and a periodic SCF"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV and a periodic SCF"]
 fn t2_rdm1_and_gamma1() {
     let Some(out) = rollup("t2rdm") else {
         return;
@@ -634,7 +638,7 @@ fn t2_rdm1_and_gamma1() {
 // ---------------------------------------------------------------- 7. stagger
 
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV and three periodic SCFs"]
+#[ignore = "T3: requires PYSCF_ORACLE_VENV and three periodic SCFs"]
 fn stagger_energies() {
     let script = ".planning/phases/15-periodic-ao2mo-kmp2/measurements/stagger.py";
     let Some(out) = run(&["-u", script]) else {
@@ -661,7 +665,7 @@ fn stagger_energies() {
 // ---------------------------------------------------------------- 8. KUMP2
 
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn upstream_kump2_kernel_remains_an_explicit_refusal() {
     let code = "import inspect,pyscf; from pyscf.pbc.mp import kump2; assert pyscf.__version__=='2.12.1'; print('pyscf.__version__=2.12.1'); s=inspect.getsource(kump2.KUMP2.kernel); assert 'raise NotImplementedError' in s; print('KUMP2 refusal confirmed')";
     let Some(out) = run(&["-c", code]) else {
@@ -681,7 +685,7 @@ fn upstream_kump2_kernel_remains_an_explicit_refusal() {
 /// CPU-minutes without finishing, on BOTH sides of the comparison, and buys
 /// nothing the cheaper fixture does not already prove.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV and a diamond SCF"]
+#[ignore = "T3: requires PYSCF_ORACLE_VENV and a diamond SCF"]
 fn mo_first_ao2mo_block() {
     use pyscf_pbc_df::pbc_ao2mo::fft_general_mo_first;
 
@@ -758,7 +762,7 @@ fn slice_mo(m: &MoCoeff, lo: usize, hi: usize) -> MoCoeff {
 /// so a drift in upstream's own constant is separable from a drift in this
 /// port.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV and a full periodic SCF"]
+#[ignore = "T2: requires PYSCF_ORACLE_VENV and a full periodic SCF"]
 fn committed_diamond_anchor_is_still_reproducible() {
     let script = ".planning/phases/15-periodic-ao2mo-kmp2/measurements/anchor.py";
     let Some(out) = run(&["-u", script]) else {

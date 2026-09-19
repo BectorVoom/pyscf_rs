@@ -132,7 +132,7 @@ struct Row {
 /// accumulators, NOT `zgemm_dense`. It was adopted on a measurement taken
 /// elsewhere; this takes one here, on the shapes this phase actually contracts.
 #[test]
-#[ignore = "a timing measurement; run with --release and --nocapture"]
+#[ignore = "T2: a timing measurement; run with --release and --nocapture"]
 fn zgemm_dense_versus_the_host_loop_on_this_phases_shapes() {
     // `gth-szv` diamond 2×2×2 spin-orbital: nocc = nvir = 16 after doubling.
     // `Wvvvv`'s ladder is (nvir² × nvir²) · (nvir² × nocc²).

@@ -74,10 +74,16 @@ pub fn build_kab(
         || eri7_im.len() != nkpts * nkpts * nkpts
         || kconserv.len() != nkpts
     {
-        return Err(PbcTdscfError::ShapeMismatch { expected: nkpts, got: kconserv.len() });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: nkpts,
+            got: kconserv.len(),
+        });
     }
     if e_occ_k.len() != nkpts || e_vir_k.len() != nkpts {
-        return Err(PbcTdscfError::ShapeMismatch { expected: nkpts, got: e_occ_k.len() });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: nkpts,
+            got: e_occ_k.len(),
+        });
     }
     // eri7 block index (length-checked once up front so the hot loop stays
     // infallible on indexing).
@@ -90,9 +96,15 @@ pub fn build_kab(
         }
         let _ = bi;
     }
-    let at = |v: &[Vec<f64>], p: usize, q: usize, r: usize, a: usize, b: usize, c: usize, d: usize| -> f64 {
-        v[(p * nkpts + q) * nkpts + r][((a * nocc + b) * nmo + c) * nmo + d]
-    };
+    let at = |v: &[Vec<f64>],
+              p: usize,
+              q: usize,
+              r: usize,
+              a: usize,
+              b: usize,
+              c: usize,
+              d: usize|
+     -> f64 { v[(p * nkpts + q) * nkpts + r][((a * nocc + b) * nmo + c) * nmo + d] };
     let mut are = vec![0.0f64; nkd * nkd];
     let mut aim = vec![0.0f64; nkd * nkd];
     let mut bre = vec![0.0f64; nkd * nkd];
@@ -100,12 +112,18 @@ pub fn build_kab(
     for ki in 0..nkpts {
         let ka = kconserv[ki];
         if ka >= nkpts {
-            return Err(PbcTdscfError::ShapeMismatch { expected: nkpts, got: ka });
+            return Err(PbcTdscfError::ShapeMismatch {
+                expected: nkpts,
+                got: ka,
+            });
         }
         for kj in 0..nkpts {
             let kb = kconserv[kj];
             if kb >= nkpts {
-                return Err(PbcTdscfError::ShapeMismatch { expected: nkpts, got: kb });
+                return Err(PbcTdscfError::ShapeMismatch {
+                    expected: nkpts,
+                    got: kb,
+                });
             }
             for i in 0..nocc {
                 for aj in 0..nvir {
@@ -162,9 +180,16 @@ fn assert_hermitian(a: &CTensor, nkd: usize) -> Result<(), PbcTdscfError> {
             asym = asym.max((a.im[i * nkd + j] + a.im[j * nkd + i]).abs());
         }
     }
-    let scale: f64 = a.re.iter().chain(a.im.iter()).map(|x| x.abs()).fold(0.0, f64::max);
+    let scale: f64 =
+        a.re.iter()
+            .chain(a.im.iter())
+            .map(|x| x.abs())
+            .fold(0.0, f64::max);
     if asym > 1e-8 * scale.max(1.0) {
-        return Err(PbcTdscfError::ShapeMismatch { expected: 0, got: (asym * 1e12) as usize });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: 0,
+            got: (asym * 1e12) as usize,
+        });
     }
     Ok(())
 }
@@ -186,12 +211,24 @@ pub fn kernel_krhf_tda(
     cfg: &TdaConfig,
 ) -> Result<TdaResult, PbcTdscfError> {
     let (a, _b) = build_kab(
-        eri7_re, eri7_im, e_occ_k, e_vir_k, kconserv, nkpts, nocc, nmo, cfg.singlet, hyb,
+        eri7_re,
+        eri7_im,
+        e_occ_k,
+        e_vir_k,
+        kconserv,
+        nkpts,
+        nocc,
+        nmo,
+        cfg.singlet,
+        hyb,
         1.0 / nkpts as f64,
     )?;
     let nkd = nkpts * nocc * (nmo - nocc);
     if cfg.nroots > nkd {
-        return Err(PbcTdscfError::TooManyRoots { nroots: cfg.nroots, dim: nkd });
+        return Err(PbcTdscfError::TooManyRoots {
+            nroots: cfg.nroots,
+            dim: nkd,
+        });
     }
     assert_hermitian(&a, nkd)?;
     let ident = CTensor {
@@ -238,16 +275,24 @@ pub fn kernel_krhf_tdhf(
     cfg: &TdaConfig,
 ) -> Result<TdaResult, PbcTdscfError> {
     let (a, b) = build_kab(
-        eri7_re, eri7_im, e_occ_k, e_vir_k, kconserv, nkpts, nocc, nmo, cfg.singlet, hyb,
+        eri7_re,
+        eri7_im,
+        e_occ_k,
+        e_vir_k,
+        kconserv,
+        nkpts,
+        nocc,
+        nmo,
+        cfg.singlet,
+        hyb,
         1.0 / nkpts as f64,
     )?;
     let nkd = nkpts * nocc * (nmo - nocc);
-    let max_im: f64 = a
-        .im
-        .iter()
-        .chain(b.im.iter())
-        .map(|x| x.abs())
-        .fold(0.0, f64::max);
+    let max_im: f64 =
+        a.im.iter()
+            .chain(b.im.iter())
+            .map(|x| x.abs())
+            .fold(0.0, f64::max);
     if max_im > COMPLEX_TDHF_BOUND {
         return Err(PbcTdscfError::NotYetImplemented {
             module: "tdscf/krhf complex-valued TDHF (non-Hermitian complex dense solve)",

@@ -77,6 +77,11 @@ cubek-reduce    = { version = "=0.2.0" }
 wgpu            = "29.0.3"
 # Host eigh/Cholesky/QR/SVD per ALG-05.
 faer            = "0.24.0"
+# Reference-LAPACK host kernels (DSYEVD/ZHEEVD). The symmetric/Hermitian
+# eigendecomposition paths in pyscf-algebra route here instead of faer;
+# Cholesky/QR/SVD/LU/non-symmetric eig stay on faer until lapack_rs
+# implements them (see lapack_rs docs/pyscf-lapack-coverage-plan.md).
+lapack_rs       = { path = "../lapack_rs" }
 # Logging — FOUND-09 + ALG-08.
 tracing         = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["fmt"] }

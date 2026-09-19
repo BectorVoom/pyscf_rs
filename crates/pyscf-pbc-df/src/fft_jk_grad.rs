@@ -201,8 +201,7 @@ fn build_rho_j(ao: &AoKpts, dm: &KMats, nao: usize, ngrids: usize) -> CTensor {
     for k in 0..nkpts {
         let a = &ao.aot[k];
         let dmk = &dm[k];
-        c0re
-            .par_chunks_mut(ngrids)
+        c0re.par_chunks_mut(ngrids)
             .zip(c0im.par_chunks_mut(ngrids))
             .enumerate()
             .for_each(|(mu, (crow, cirow))| {
@@ -339,7 +338,8 @@ pub fn get_j_e1_kpts(
         })
         .collect();
     for chunk in (0..nband).collect::<Vec<_>>().chunks(m) {
-        let tabs = ao_cache::eval_deriv1_chunk(&df.cell, &df.grids.coords, band, chunk, Some(&counter))?;
+        let tabs =
+            ao_cache::eval_deriv1_chunk(&df.cell, &df.grids.coords, band, chunk, Some(&counter))?;
         for tab in tabs.iter() {
             let k = tab.kidx;
             let avt = ao_val.at(k);
@@ -386,8 +386,11 @@ pub fn get_j_e1_kpts(
                                 let ii = oracle_dot(&di, qi);
                                 let ri = oracle_dot(&dr, qi);
                                 let ir = oracle_dot(&di, qr);
-                                rrow[q] -= rr + ii;
-                                irow[q] -= ri - ir;
+                                // `conj(dao) . aow`: (dr+i·di)(qr+i·qi)
+                                // = (rr-ii) + i(ri+ir) (`fft_jk.py:177`
+                                // `einsum('axi,xj->aij', ao[1:].conj(), aow)`).
+                                rrow[q] -= rr - ii;
+                                irow[q] -= ri + ir;
                             }
                         });
                 }
@@ -699,7 +702,10 @@ pub fn get_k_e1_kpts(
     // fft_jk.py:369 — for k2, ao2T in enumerate(ao2_kpts).
     for k2 in 0..nkpts {
         let (ao2t, naoj) = if tagged {
-            (&ket_kpts[k2], mo.expect("tagged mo checked above").blocks[k2].nocc)
+            (
+                &ket_kpts[k2],
+                mo.expect("tagged mo checked above").blocks[k2].nocc,
+            )
         } else {
             (ao2_kpts.at(k2), nao)
         };
@@ -711,7 +717,9 @@ pub fn get_k_e1_kpts(
         let ao_dms: Vec<CTensor> = if tagged {
             vec![ao2t.conj()]
         } else {
-            dms.iter().map(|d| dm_times_conj_ao(&d[k2], ao2t, nao, ngrids)).collect()
+            dms.iter()
+                .map(|d| dm_times_conj_ao(&d[k2], ao2t, nao, ngrids))
+                .collect()
         };
 
         // fft_jk.py:381 — the inner k1 loop, tiled in chunks of m. Each
@@ -719,8 +727,13 @@ pub fn get_k_e1_kpts(
         // of the chunk: one code path from resident (`m = nband`) to
         // streaming (`m = 1`), counted on `counter`.
         for chunk in (0..nband).collect::<Vec<_>>().chunks(m) {
-            let tabs =
-                ao_cache::eval_deriv1_chunk(&df.cell, &df.grids.coords, band, chunk, Some(&counter))?;
+            let tabs = ao_cache::eval_deriv1_chunk(
+                &df.cell,
+                &df.grids.coords,
+                band,
+                chunk,
+                Some(&counter),
+            )?;
             for tab in tabs.iter() {
                 let k1 = tab.kidx;
                 let kpt1 = band[k1];
@@ -735,8 +748,7 @@ pub fn get_k_e1_kpts(
                 while p0 < nao {
                     let p1 = (p0 + blksize).min(nao);
 
-                    let rho1 =
-                        build_rho1_e1(&tab.kao, ao2t, expmikr, p0, p1, nao, naoj, ngrids);
+                    let rho1 = build_rho1_e1(&tab.kao, ao2t, expmikr, p0, p1, nao, naoj, ngrids);
                     let mut vg = fft(&rho1, mesh)?;
                     vg.re
                         .par_chunks_mut(ngrids)

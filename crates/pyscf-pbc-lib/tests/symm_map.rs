@@ -218,7 +218,10 @@ fn transform_symm_matches_the_reference_operation_bitwise() {
 #[test]
 fn the_map_is_not_built_until_asked_for() {
     let mut lazy = KptsHelper::without_symm_map(&lattice(), &kpts(4));
-    assert!(lazy.symm_map.is_none(), "kccsd_rhf.py:512 passes init_symm_map=False");
+    assert!(
+        lazy.symm_map.is_none(),
+        "kccsd_rhf.py:512 passes init_symm_map=False"
+    );
     assert!(lazy.operation(0, 0, 0).is_none());
     assert_eq!(
         lazy.transform_symm(&CTensor::zeros(1), [1; 4], 0, 0, 0),

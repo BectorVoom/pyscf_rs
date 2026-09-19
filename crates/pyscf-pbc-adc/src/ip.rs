@@ -43,7 +43,10 @@ pub fn build_m_ij(
 ) -> Result<IpIntermediates, PbcAdcError> {
     let (nk, no, nv) = (eris.nkpts, eris.nocc, eris.nvir);
     if e_occ_k.len() != nk || kconserv.len() != nk * nk * nk {
-        return Err(PbcAdcError::ShapeMismatch { expected: nk, got: e_occ_k.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: nk,
+            got: e_occ_k.len(),
+        });
     }
     if amps.t2_1.re.len() != nk * nk * nk * no * no * nv * nv {
         return Err(PbcAdcError::ShapeMismatch {
@@ -52,16 +55,18 @@ pub fn build_m_ij(
         });
     }
     // t2 accessor: t2[ki,kj,ka][i,j,a,b] -> (re, im).
-    let t2_at = |ki: usize, kj: usize, ka: usize, i: usize, j: usize, a: usize, b: usize| -> (f64, f64) {
-        let o = (((ki * nk + kj) * nk + ka) * no + i) * no * nv * nv + (j * nv + a) * nv + b;
-        (amps.t2_1.re[o], amps.t2_1.im[o])
-    };
+    let t2_at =
+        |ki: usize, kj: usize, ka: usize, i: usize, j: usize, a: usize, b: usize| -> (f64, f64) {
+            let o = (((ki * nk + kj) * nk + ka) * no + i) * no * nv * nv + (j * nv + a) * nv + b;
+            (amps.t2_1.re[o], amps.t2_1.im[o])
+        };
     // ovov[ki,kj,ka][i,a,j,b] accessor.
-    let ovov_at = |ki: usize, kj: usize, ka: usize, i: usize, a: usize, j: usize, b: usize| -> (f64, f64) {
-        let t = no * nv * no * nv;
-        let o = ((ki * nk + kj) * nk + ka) * t + ((i * nv + a) * no + j) * nv + b;
-        (eris.ovov.re[o], eris.ovov.im[o])
-    };
+    let ovov_at =
+        |ki: usize, kj: usize, ka: usize, i: usize, a: usize, j: usize, b: usize| -> (f64, f64) {
+            let t = no * nv * no * nv;
+            let o = ((ki * nk + kj) * nk + ka) * t + ((i * nv + a) * no + j) * nv + b;
+            (eris.ovov.re[o], eris.ovov.im[o])
+        };
     let mut m_ij = Vec::with_capacity(nk);
     for ki in 0..nk {
         let kj = ki;
@@ -73,7 +78,10 @@ pub fn build_m_ij(
             for kd in 0..nk {
                 let ke = kconserv[(kj * nk + kd) * nk + kl];
                 if ke >= nk {
-                    return Err(PbcAdcError::ShapeMismatch { expected: nk, got: ke });
+                    return Err(PbcAdcError::ShapeMismatch {
+                        expected: nk,
+                        got: ke,
+                    });
                 }
                 for i in 0..no {
                     for j in 0..no {
@@ -136,8 +144,8 @@ pub fn build_m_ij(
                                     let (v2r, v2i) = ovov_at(ki, ke, kl, i, e, l, d);
                                     acc.0 += -0.25 * (tr * v1r - ti * v1i)
                                         + 0.25 * (tr * v2r - ti * v2i);
-                                    acc.1 += 0.25 * (tr * v1i + ti * v1r)
-                                        - 0.25 * (tr * v2i + ti * v2r);
+                                    acc.1 +=
+                                        0.25 * (tr * v1i + ti * v1r) - 0.25 * (tr * v2i + ti * v2r);
                                 }
                             }
                         }
@@ -153,13 +161,13 @@ pub fn build_m_ij(
 }
 
 /// ADC(2) IP sigma-vector product at fixed `kshift` (`matvec.sigma_`, ADC(2)).
- ///
+///
 /// `r = [r1 (nocc), r2 ([ka][kj][a][j][k])]` → `s` in the same layout, as
 /// `(re, im)` pairs. Couplings mirror the loop nest exactly:
 /// `s1 += 2·conj(ovoo[kj,ka,kk])·r2 − conj(ovoo[kk,ka,kj])·r2`,
 /// `s2[ka,kj] += ovoo[kj,ka,kk]·r1 + diag·r2` with
 /// `ka = kconserv[kk,kshift,kj]`, `diag = −e_vir[ka] + e_occ[kj] + e_occ[kk]`.
- ///
+///
 /// The final `s *= -1.0` (`kadc_rhf_ip.py:747`) is part of the product: the
 /// 1h block is `e_occ`-diagonal (negative), and upstream solves the NEGATED
 /// problem so the reported roots are positive ionisation energies. Dropping
@@ -179,13 +187,17 @@ pub fn sigma_ip(
     let (nk, no, nv) = (eris.nkpts, eris.nocc, eris.nvir);
     let nd = nk * nk * nv * no * no;
     if r1.len() != no || r2.len() != nd || kshift >= nk {
-        return Err(PbcAdcError::ShapeMismatch { expected: no, got: r1.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: no,
+            got: r1.len(),
+        });
     }
-    let ovoo_at = |ki: usize, kj: usize, ka: usize, i: usize, a: usize, j: usize, k: usize| -> (f64, f64) {
-        let t = no * nv * no * no;
-        let o = ((ki * nk + kj) * nk + ka) * t + ((i * nv + a) * no + j) * no + k;
-        (eris.ovoo.re[o], eris.ovoo.im[o])
-    };
+    let ovoo_at =
+        |ki: usize, kj: usize, ka: usize, i: usize, a: usize, j: usize, k: usize| -> (f64, f64) {
+            let t = no * nv * no * no;
+            let o = ((ki * nk + kj) * nk + ka) * t + ((i * nv + a) * no + j) * no + k;
+            (eris.ovoo.re[o], eris.ovoo.im[o])
+        };
     let r2_at = |ka: usize, kj: usize, a: usize, j: usize, k: usize| -> (f64, f64) {
         r2[((ka * nk + kj) * nv + a) * no * no + j * no + k]
     };
@@ -207,7 +219,10 @@ pub fn sigma_ip(
         for kk in 0..nk {
             let ka = kconserv[(kk * nk + kshift) * nk + kj];
             if ka >= nk {
-                return Err(PbcAdcError::ShapeMismatch { expected: nk, got: ka });
+                return Err(PbcAdcError::ShapeMismatch {
+                    expected: nk,
+                    got: ka,
+                });
             }
             for i in 0..no {
                 // s1[i] += 2·Σ_{a,j,k} conj(ovoo[kj,ka,kk][j,a,k,i])·r2[ka,kj][a,j,k]
@@ -266,7 +281,7 @@ pub fn sigma_ip(
 }
 
 /// ADC(2) IP roots at `kshift` (dense Davidson — exact on fixture sizes).
- ///
+///
 /// Materializes the secular matrix column by column through [`sigma_ip`]
 /// (HERMITICITY IS NOT ASSUMED — upstream's own matrix is non-symmetric at
 /// 0.048, hence `davidson_nosym1` there and [`crate::roots::nosym_roots`]
@@ -286,7 +301,10 @@ pub fn kernel_ip(
     let nd = nk * nk * nv * no * no;
     let dim = no + nd;
     if cfg.nroots > dim || dim == 0 {
-        return Err(PbcAdcError::ShapeMismatch { expected: dim, got: cfg.nroots });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: dim,
+            got: cfg.nroots,
+        });
     }
     // Materialize H (complex, row-major): column c = sigma(e_c).
     let mut hre = vec![0.0f64; dim * dim];
@@ -313,7 +331,11 @@ pub fn kernel_ip(
     // Hermiticity assert belongs here — the nosym solver takes it as is.
     let (energies_all, columns) = crate::roots::nosym_roots(&hre, &him, dim, cfg.nroots)?;
     // Spectroscopic factors = singles weight |U_singles|² per root.
-    let mut roots = AdcRoots { energies: Vec::with_capacity(cfg.nroots), spec_factors: Vec::with_capacity(cfg.nroots), converged: true };
+    let mut roots = AdcRoots {
+        energies: Vec::with_capacity(cfg.nroots),
+        spec_factors: Vec::with_capacity(cfg.nroots),
+        converged: true,
+    };
     for r in 0..cfg.nroots {
         roots.energies.push(energies_all[r]);
         let mut w_terms = Vec::with_capacity(2 * no);

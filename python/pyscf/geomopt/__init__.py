@@ -35,3 +35,24 @@ from pyscf._native.geomopt import (  # type: ignore[attr-defined]
 )
 
 __all__ = ["optimize", "geometric_solver", "berny_solver"]
+
+# 20-19 A: fall through to upstream PySCF for submodules (`extend_path`) and for
+# top-level names this overlay does not bind (`__getattr__`, pyscf/_passthrough.py).
+# Silent (not a PBC family); the native names above stay module globals, so
+# `pyscf.geomopt.<native name> is pyscf._native.geomopt.<native name>` is unchanged.
+import pkgutil as _pkgutil  # noqa: E402
+
+__path__ = _pkgutil.extend_path(__path__, __name__)
+del _pkgutil
+
+from pyscf._passthrough import package_getattr as _package_getattr  # noqa: E402
+
+__getattr__ = _package_getattr(globals(), ("pyscf._native.geomopt",))
+
+# `import pyscf.geomopt.geometric_solver` must keep returning the native shim, not
+# the upstream file `extend_path` now exposes (which would also rebind the attribute).
+import sys as _sys  # noqa: E402
+
+_sys.modules.setdefault(__name__ + ".geometric_solver", geometric_solver)
+_sys.modules.setdefault(__name__ + ".berny_solver", berny_solver)
+del _sys

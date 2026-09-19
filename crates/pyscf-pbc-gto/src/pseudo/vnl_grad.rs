@@ -51,7 +51,7 @@
 use crate::cell::Cell;
 use crate::pbc_intor::{PbcIntorOpts, PbcIntorOutput, intor_cross};
 use crate::pseudo::vnl::{FakeCellVnl, MAX_NPROJ, fake_cell_vnl};
-use pyscf_algebra::oracle_sum;
+use pyscf_algebra::{CTensor, oracle_sum};
 use pyscf_core::{CoreError, PyscfRsError};
 
 /// The three derivative half-overlap operators of `_int_vnl`'s `ppnl_half_ip2`
@@ -162,7 +162,90 @@ pub fn vppnl_nuc_grad(
         return Ok(grad);
     }
 
-    vppnl_nuc_grad_kpts(cell, &fake, dm, kpts)
+    // dmH[q, p] = dm[q,p] + dm[p,q], real (F-order storage), shared at
+    // every k — the 18-03 contract. [`vppnl_nuc_grad_kdm`] builds the per-k
+    // complex planes instead.
+    let mut dmh = vec![0.0_f64; nao * nao];
+    for q in 0..nao {
+        for p in 0..nao {
+            dmh[q + p * nao] = dm[q + p * nao] + dm[p + q * nao];
+        }
+    }
+    let zeros = vec![0.0_f64; nao * nao];
+    let dmh_re = vec![dmh; kpts.len()];
+    let dmh_im = vec![zeros; kpts.len()];
+    vppnl_nuc_grad_kpts(cell, &fake, &dmh_re, &dmh_im, kpts)
+}
+
+/// `vppnl_nuc_grad(cell, dm, kpts)` for a k-point density — plan 18-05.
+///
+/// Same quantity as [`vppnl_nuc_grad`] (`pp_int.py:443-509`), but the density
+/// is the SCF's per-k complex `dm[k]`, `nao × nao` row-major
+/// (`pyscf-pbc-scf` convention), instead of one real matrix shared at every
+/// k. Upstream's k-path (`pp_int.py:468-509`) forms
+/// `dm_dmH = dm + dm.transpose(0,2,1).conj()` per k and takes `.real` at the
+/// end (warning when `max|Im| >= 1e-8`); this port does exactly that, with
+/// the Hermitian sum pre-built per k and every reduction through
+/// [`oracle_sum`].
+///
+/// At all-gamma k-points this delegates to [`vppnl_nuc_grad`] on the real
+/// parts (upstream's gamma branch takes `dm.real`, `pp_int.py:351`).
+///
+/// # Errors
+/// As [`vppnl_nuc_grad`], plus [`CoreError::InvalidMolecule`] when `dm` has
+/// the wrong k-point count or plane shape, or holds non-finite entries.
+pub fn vppnl_nuc_grad_kdm(
+    cell: &Cell,
+    dm: &[CTensor],
+    kpts: &[[f64; 3]],
+) -> Result<Vec<[f64; 3]>, PyscfRsError> {
+    let nao = cell.mol.nao_nr;
+    let owned_gamma = [[0.0_f64; 3]];
+    let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
+    if dm.len() != kpts.len()
+        || dm.iter().any(|m| {
+            m.re.len() != nao * nao
+                || m.im.len() != nao * nao
+                || m.re.iter().chain(&m.im).any(|v| !v.is_finite())
+        })
+    {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "vppnl_nuc_grad_kdm: need {} finite nao x nao = {} planes, got {}",
+            kpts.len(),
+            nao * nao,
+            dm.len(),
+        ))));
+    }
+    if kpts.iter().all(|k| crate::pbc_intor::is_gamma(k)) {
+        // F-order real parts into the 18-03 entry point (upstream's `.real`).
+        let mut flat = vec![0.0_f64; nao * nao];
+        for q in 0..nao {
+            for p in 0..nao {
+                flat[q + p * nao] = dm[0].re[q * nao + p];
+            }
+        }
+        return vppnl_nuc_grad(cell, &flat, kpts);
+    }
+    let fake = fake_cell_vnl(cell)?;
+    if fake.blocks.is_empty() {
+        return Ok(vec![[0.0; 3]; cell.mol.natm]);
+    }
+    // dmH[k, q, p] = dm[k, q, p] + conj(dm[k, p, q]), F-order planes.
+    let mut dmh_re = Vec::with_capacity(kpts.len());
+    let mut dmh_im = Vec::with_capacity(kpts.len());
+    for m in dm {
+        let mut wr = vec![0.0_f64; nao * nao];
+        let mut wi = vec![0.0_f64; nao * nao];
+        for q in 0..nao {
+            for p in 0..nao {
+                wr[q + p * nao] = m.re[q * nao + p] + m.re[p * nao + q];
+                wi[q + p * nao] = m.im[q * nao + p] - m.im[p * nao + q];
+            }
+        }
+        dmh_re.push(wr);
+        dmh_im.push(wi);
+    }
+    vppnl_nuc_grad_kpts(cell, &fake, &dmh_re, &dmh_im, kpts)
 }
 
 /// `_contract_ppnl_nuc_grad` — `pp_int.py:300-405` at the gamma point
@@ -326,12 +409,14 @@ pub fn contract_ppnl_nuc_grad(
 /// Per k, per block: `dppnl[d,p,q] = Σ_{i,j,m} conj(dP[i,d,m,p])·hl[i,j]·P[j,m,q]`
 /// feeds `grad[proj] += Σ dppnl·dmH` immediately and accumulates into the full
 /// `dppnl[k]` whose AO-slice rows feed `grad[ia] −= Σ dppnl[k][:,p∈A,:]·dmH`.
-/// `dmH = dm + dmᵀ` (real symmetric input, so `2·dm`); the real part is taken
-/// at the end.
+/// `dmH[k]` is the caller-built Hermitian sum `dm[k] + dm[k]ᴴ`, F-order
+/// `(q + p·nao)` planes with independent real/imaginary parts; the real part
+/// of the total is taken at the end.
 fn vppnl_nuc_grad_kpts(
     cell: &Cell,
     fake: &FakeCellVnl,
-    dm: &[f64],
+    dmh_re: &[Vec<f64>],
+    dmh_im: &[Vec<f64>],
     kpts: &[[f64; 3]],
 ) -> Result<Vec<[f64; 3]>, PyscfRsError> {
     use pyscf_gto::aoslice_by_atom;
@@ -340,6 +425,18 @@ fn vppnl_nuc_grad_kpts(
     let natm = cell.mol.natm;
     let nkpts = kpts.len();
     let slices = aoslice_by_atom(&cell.mol)?;
+    if dmh_re.len() != nkpts
+        || dmh_im.len() != nkpts
+        || dmh_re.iter().any(|m| m.len() != nao * nao)
+        || dmh_im.iter().any(|m| m.len() != nao * nao)
+    {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "vppnl_nuc_grad: need {nkpts} dmH planes of nao x nao = {}, got {}/{}",
+            nao * nao,
+            dmh_re.len(),
+            dmh_im.len(),
+        ))));
+    }
 
     let halves = crate::pseudo::vnl::int_vnl(cell, fake, kpts)?;
     let mut halves_ip2 = int_vnl_ip2(cell, fake, kpts)?;
@@ -354,13 +451,11 @@ fn vppnl_nuc_grad_kpts(
         }
     }
 
-    // dmH[q, p] = dm[q,p] + dm[p,q], real (F-order storage).
-    let mut dmh = vec![0.0_f64; nao * nao];
-    for q in 0..nao {
-        for p in 0..nao {
-            dmh[q + p * nao] = dm[q + p * nao] + dm[p + q * nao];
-        }
-    }
+    // dmH[q, p] planes arrive pre-built from the caller (F-order storage):
+    // the shared real `dm + dmᵀ` for [`vppnl_nuc_grad`], the per-k complex
+    // `dm[k] + dm[k]ᴴ` for [`vppnl_nuc_grad_kdm`]. With zero imaginary weights
+    // the products below are bit-identical to the pre-18-05 real-only loop
+    // (`x·0 = ±0`, `x ± 0 = x`), so the 18-03 gate still pins this path.
 
     let mut grad_re = vec![[0.0_f64; 3]; natm];
     let mut grad_im = vec![[0.0_f64; 3]; natm];
@@ -431,10 +526,10 @@ fn vppnl_nuc_grad_kpts(
                 let mut ti = Vec::with_capacity(nao * nao);
                 for q in 0..nao {
                     for p in 0..nao {
-                        let w = dmh[q + p * nao];
+                        let (wr, wi) = (dmh_re[k][q + p * nao], dmh_im[k][q + p * nao]);
                         let o = d * nao * nao + p + q * nao;
-                        tr.push(dk_re[o] * w);
-                        ti.push(dk_im[o] * w);
+                        tr.push(dk_re[o] * wr - dk_im[o] * wi);
+                        ti.push(dk_re[o] * wi + dk_im[o] * wr);
                     }
                 }
                 grad_re[ka][d] += oracle_sum(&tr);
@@ -461,10 +556,10 @@ fn vppnl_nuc_grad_kpts(
                 let mut ti = Vec::new();
                 for q in 0..nao {
                     for p in p0.min(nao)..p1.min(nao) {
-                        let w = dmh[q + p * nao];
+                        let (wr, wi) = (dmh_re[k][q + p * nao], dmh_im[k][q + p * nao]);
                         let o = d * nao * nao + p + q * nao;
-                        tr.push(dall_re[k][o] * w);
-                        ti.push(dall_im[k][o] * w);
+                        tr.push(dall_re[k][o] * wr - dall_im[k][o] * wi);
+                        ti.push(dall_re[k][o] * wi + dall_im[k][o] * wr);
                     }
                 }
                 grad_re[ia][d] -= oracle_sum(&tr);

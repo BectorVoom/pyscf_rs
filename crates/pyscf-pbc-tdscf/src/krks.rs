@@ -31,19 +31,34 @@ pub fn kernel_krks_tda(
     check_hybrid_kernel(xc, hyb)?;
     let _ = crate::require_rks_response();
     let (mut a, _b) = crate::krhf::build_kab(
-        eri7_re, eri7_im, e_occ_k, e_vir_k, kconserv, nkpts, nocc, nmo, cfg.singlet, hyb,
+        eri7_re,
+        eri7_im,
+        e_occ_k,
+        e_vir_k,
+        kconserv,
+        nkpts,
+        nocc,
+        nmo,
+        cfg.singlet,
+        hyb,
         1.0 / nkpts as f64,
     )?;
     let nkd = nkpts * nocc * (nmo - nocc);
     if fxc_re.len() != nkd * nkd || fxc_im.len() != nkd * nkd {
-        return Err(PbcTdscfError::ShapeMismatch { expected: nkd * nkd, got: fxc_re.len().min(fxc_im.len()) });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: nkd * nkd,
+            got: fxc_re.len().min(fxc_im.len()),
+        });
     }
     for i in 0..nkd * nkd {
         a.re[i] += fxc_re[i];
         a.im[i] += fxc_im[i];
     }
     if cfg.nroots > nkd {
-        return Err(PbcTdscfError::TooManyRoots { nroots: cfg.nroots, dim: nkd });
+        return Err(PbcTdscfError::TooManyRoots {
+            nroots: cfg.nroots,
+            dim: nkd,
+        });
     }
     // Hermitian assert (the fxc addition must preserve it — a non-Hermitian
     // XC kernel is a caller bug, caught here rather than in the spectrum).
@@ -54,9 +69,16 @@ pub fn kernel_krks_tda(
             asym = asym.max((a.im[i * nkd + j] + a.im[j * nkd + i]).abs());
         }
     }
-    let scale: f64 = a.re.iter().chain(a.im.iter()).map(|x| x.abs()).fold(0.0, f64::max);
+    let scale: f64 =
+        a.re.iter()
+            .chain(a.im.iter())
+            .map(|x| x.abs())
+            .fold(0.0, f64::max);
     if asym > 1e-8 * scale.max(1.0) {
-        return Err(PbcTdscfError::ShapeMismatch { expected: 0, got: (asym * 1e12) as usize });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: 0,
+            got: (asym * 1e12) as usize,
+        });
     }
     let ident = CTensor {
         re: {

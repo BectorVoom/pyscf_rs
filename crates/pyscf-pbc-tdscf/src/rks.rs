@@ -30,7 +30,9 @@ pub fn hyb_fraction(xc: &str) -> Result<f64, PbcTdscfError> {
     // through the global-hybrid table (the table contains cam-b3lyp's
     // short-range fraction, which is not the whole kernel).
     if key.contains("hse") || key.contains("cam") || key.contains("rsh") || key.contains("wb97") {
-        return Err(PbcTdscfError::NotYetImplemented { module: "tdscf KS range-separated hybrid kernel" });
+        return Err(PbcTdscfError::NotYetImplemented {
+            module: "tdscf KS range-separated hybrid kernel",
+        });
     }
     if key.contains("hf") && !key.contains("b3lyp") && !key.contains("pbe0") {
         return Ok(1.0);
@@ -54,11 +56,16 @@ pub fn hyb_fraction(xc: &str) -> Result<f64, PbcTdscfError> {
 /// exact-exchange-bearing name is a silent wrong-kernel error, not a default.
 pub fn check_hybrid_kernel(xc: &str, hyb: f64) -> Result<(), PbcTdscfError> {
     let key = xc.to_lowercase();
-    let looks_hybrid = ["b3lyp", "pbe0", "b3p86", "b3pw91", "hse", "cam", "pbeh", "hf"]
-        .iter()
-        .any(|t| key.contains(t));
+    let looks_hybrid = [
+        "b3lyp", "pbe0", "b3p86", "b3pw91", "hse", "cam", "pbeh", "hf",
+    ]
+    .iter()
+    .any(|t| key.contains(t));
     if looks_hybrid && hyb == 0.0 {
-        return Err(PbcTdscfError::ShapeMismatch { expected: 1, got: 0 });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: 1,
+            got: 0,
+        });
     }
     Ok(())
 }
@@ -86,7 +93,10 @@ pub fn kernel_rks_tda(
     let (mut a, mut b) = crate::rhf::build_ab(eri, e_ia, nocc, nmo, cfg.singlet, hyb)?;
     let dim = nocc * (nmo - nocc);
     if fxc_a.len() != dim * dim || fxc_b.len() != dim * dim {
-        return Err(PbcTdscfError::ShapeMismatch { expected: dim * dim, got: fxc_a.len().min(fxc_b.len()) });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: dim * dim,
+            got: fxc_a.len().min(fxc_b.len()),
+        });
     }
     for i in 0..dim * dim {
         a[i] += fxc_a[i];

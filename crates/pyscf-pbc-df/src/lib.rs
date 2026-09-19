@@ -47,7 +47,7 @@ pub use density_fit::{DfKind, DfOpts, density_fit};
 pub use df_ao2mo::{Eri, Eri7d, MoCoeff, MoKpts, PairDims};
 pub use df_jk::{KMats, all_gamma, ewald_exxdiv_for_g0, format_kpts_band};
 pub use fft_jk::{get_j_kpts, get_k_kpts, get_k_kpts_opts};
-pub use fftdf::{AoKpts, CoulgEntry, Fftdf, get_hcore, get_nuc, get_pp};
+pub use fftdf::{AoKpts, CoulgEntry, Fftdf, aor_loop_blocks, get_hcore, get_nuc, get_pp};
 pub use gdf::{CderiFile, Gdf, SrBlock};
 pub use gdf_builder::{ETA_MIN, EtaChoice, FusedCell, auxbar, fuse_auxcell, guess_eta};
 pub use incore::{Aosym, AuxCell, aux_e2, fill_2c2e, make_auxcell, make_modrho_basis};

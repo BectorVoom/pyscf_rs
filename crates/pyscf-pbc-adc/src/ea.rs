@@ -42,17 +42,22 @@ pub fn build_m_ab(
 ) -> Result<EaIntermediates, PbcAdcError> {
     let (nk, no, nv) = (eris.nkpts, eris.nocc, eris.nvir);
     if e_vir_k.len() != nk || kconserv.len() != nk * nk * nk {
-        return Err(PbcAdcError::ShapeMismatch { expected: nk, got: e_vir_k.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: nk,
+            got: e_vir_k.len(),
+        });
     }
-    let t2_at = |ki: usize, kj: usize, ka: usize, i: usize, j: usize, a: usize, b: usize| -> (f64, f64) {
-        let o = (((ki * nk + kj) * nk + ka) * no + i) * no * nv * nv + (j * nv + a) * nv + b;
-        (amps.t2_1.re[o], amps.t2_1.im[o])
-    };
-    let ovov_at = |ki: usize, kj: usize, ka: usize, i: usize, a: usize, j: usize, b: usize| -> (f64, f64) {
-        let t = no * nv * no * nv;
-        let o = ((ki * nk + kj) * nk + ka) * t + ((i * nv + a) * no + j) * nv + b;
-        (eris.ovov.re[o], eris.ovov.im[o])
-    };
+    let t2_at =
+        |ki: usize, kj: usize, ka: usize, i: usize, j: usize, a: usize, b: usize| -> (f64, f64) {
+            let o = (((ki * nk + kj) * nk + ka) * no + i) * no * nv * nv + (j * nv + a) * nv + b;
+            (amps.t2_1.re[o], amps.t2_1.im[o])
+        };
+    let ovov_at =
+        |ki: usize, kj: usize, ka: usize, i: usize, a: usize, j: usize, b: usize| -> (f64, f64) {
+            let t = no * nv * no * nv;
+            let o = ((ki * nk + kj) * nk + ka) * t + ((i * nv + a) * no + j) * nv + b;
+            (eris.ovov.re[o], eris.ovov.im[o])
+        };
     let mut m_ab = Vec::with_capacity(nk);
     for ka in 0..nk {
         let kb = ka;
@@ -64,7 +69,10 @@ pub fn build_m_ab(
             for km in 0..nk {
                 let kd = kconserv[(kl * nk + ka) * nk + km];
                 if kd >= nk {
-                    return Err(PbcAdcError::ShapeMismatch { expected: nk, got: kd });
+                    return Err(PbcAdcError::ShapeMismatch {
+                        expected: nk,
+                        got: kd,
+                    });
                 }
                 for a in 0..nv {
                     for b in 0..nv {
@@ -154,13 +162,17 @@ pub fn sigma_ea(
     let (nk, no, nv) = (eris.nkpts, eris.nocc, eris.nvir);
     let nd = nk * nk * no * nv * nv;
     if r1.len() != nv || r2.len() != nd || kshift >= nk {
-        return Err(PbcAdcError::ShapeMismatch { expected: nv, got: r1.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: nv,
+            got: r1.len(),
+        });
     }
-    let ovvv_at = |ki: usize, kj: usize, ka: usize, i: usize, a: usize, b: usize, c: usize| -> (f64, f64) {
-        let t = no * nv * nv * nv;
-        let o = ((ki * nk + kj) * nk + ka) * t + ((i * nv + a) * nv + b) * nv + c;
-        (eris.ovvv.re[o], eris.ovvv.im[o])
-    };
+    let ovvv_at =
+        |ki: usize, kj: usize, ka: usize, i: usize, a: usize, b: usize, c: usize| -> (f64, f64) {
+            let t = no * nv * nv * nv;
+            let o = ((ki * nk + kj) * nk + ka) * t + ((i * nv + a) * nv + b) * nv + c;
+            (eris.ovvv.re[o], eris.ovvv.im[o])
+        };
     let r2_at = |ki: usize, kb: usize, i: usize, b: usize, c: usize| -> (f64, f64) {
         r2[((ki * nk + kb) * no + i) * nv * nv + b * nv + c]
     };
@@ -180,7 +192,10 @@ pub fn sigma_ea(
         for kc in 0..nk {
             let ki = kconserv[(kb * nk + kshift) * nk + kc];
             if ki >= nk {
-                return Err(PbcAdcError::ShapeMismatch { expected: nk, got: ki });
+                return Err(PbcAdcError::ShapeMismatch {
+                    expected: nk,
+                    got: ki,
+                });
             }
             for a in 0..nv {
                 // s1[a] += 2·Σ_{i,b,c} conj(ovvv[ki,kc,kshift][i,c,a,b])·r2[ki,kb][i,b,c].
@@ -239,7 +254,10 @@ pub fn kernel_ea(
     let nd = nk * nk * no * nv * nv;
     let dim = nv + nd;
     if cfg.nroots > dim || dim == 0 {
-        return Err(PbcAdcError::ShapeMismatch { expected: dim, got: cfg.nroots });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: dim,
+            got: cfg.nroots,
+        });
     }
     let mut hre = vec![0.0f64; dim * dim];
     let mut him = vec![0.0f64; dim * dim];
@@ -262,7 +280,11 @@ pub fn kernel_ea(
         }
     }
     let (energies_all, columns) = crate::roots::nosym_roots(&hre, &him, dim, cfg.nroots)?;
-    let mut roots = AdcRoots { energies: Vec::with_capacity(cfg.nroots), spec_factors: Vec::with_capacity(cfg.nroots), converged: true };
+    let mut roots = AdcRoots {
+        energies: Vec::with_capacity(cfg.nroots),
+        spec_factors: Vec::with_capacity(cfg.nroots),
+        converged: true,
+    };
     for r in 0..cfg.nroots {
         roots.energies.push(energies_all[r]);
         let mut w_terms = Vec::with_capacity(2 * nv);

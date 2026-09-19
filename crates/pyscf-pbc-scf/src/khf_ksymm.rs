@@ -496,7 +496,7 @@ impl KOverrideHooks for KsymAdaptedKrhf {
     fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.nao();
         Ok(pyscf_pbc_scf_to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
+            pyscf_pbc_gto::get_ovlp_scf(self.cell(), self.kpts())?,
             nao,
         ))
     }

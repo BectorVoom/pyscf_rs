@@ -158,6 +158,20 @@ pub trait PeriodicDf: std::fmt::Debug + Send + Sync {
     /// by [`crate::df_ao2mo`].
     fn ao2mo_7d(&self, mos: MoKpts<'_>, factor: f64) -> Result<Eri7d, PbcDfError>;
 
+    /// BAND-03 — the local nuclear potential in real space on the builder's
+    /// uniform grid, `v[g]`, such that `get_pp`/`get_nuc` at any k is
+    /// `Σ_g conj(ao_p(g)) ao_q(g) v[g]` plus (pseudopotential cells) `V_nl`.
+    ///
+    /// `None` for builders whose local term is not a grid potential. A band
+    /// structure folds `v` into the XC/J potential so one band AO evaluation
+    /// serves every local term.
+    ///
+    /// # Errors
+    /// Builder-specific.
+    fn local_potential_r(&self) -> Result<Option<Vec<f64>>, PbcDfError> {
+        Ok(None)
+    }
+
     /// Upstream's `isinstance(with_df, df.GDF)` route discriminator.
     fn has_cderi(&self) -> bool {
         false

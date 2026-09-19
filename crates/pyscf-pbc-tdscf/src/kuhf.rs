@@ -53,32 +53,88 @@ pub fn build_kuab(
     let (da, db) = (dims.da(), dims.db());
     let nkd = nkpts * (da + db);
     if kconserv.len() != nkpts {
-        return Err(PbcTdscfError::ShapeMismatch { expected: nkpts, got: kconserv.len() });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: nkpts,
+            got: kconserv.len(),
+        });
     }
-    for v in [eri7_aa_re, eri7_aa_im, eri7_ab_re, eri7_ab_im, eri7_bb_re, eri7_bb_im] {
+    for v in [
+        eri7_aa_re, eri7_aa_im, eri7_ab_re, eri7_ab_im, eri7_bb_re, eri7_bb_im,
+    ] {
         if v.len() != nkpts * nkpts * nkpts {
-            return Err(PbcTdscfError::ShapeMismatch { expected: nkpts * nkpts * nkpts, got: v.len() });
+            return Err(PbcTdscfError::ShapeMismatch {
+                expected: nkpts * nkpts * nkpts,
+                got: v.len(),
+            });
         }
     }
     // Block readers with explicit axis sizes.
-    let at_aa = |v: &[Vec<f64>], p: usize, q: usize, r: usize, a: usize, b: usize, c: usize, d: usize| -> Result<f64, PbcTdscfError> {
-        let blk = v.get((p * nkpts + q) * nkpts + r).ok_or(PbcTdscfError::ShapeMismatch { expected: 1, got: 0 })?;
+    let at_aa = |v: &[Vec<f64>],
+                 p: usize,
+                 q: usize,
+                 r: usize,
+                 a: usize,
+                 b: usize,
+                 c: usize,
+                 d: usize|
+     -> Result<f64, PbcTdscfError> {
+        let blk = v
+            .get((p * nkpts + q) * nkpts + r)
+            .ok_or(PbcTdscfError::ShapeMismatch {
+                expected: 1,
+                got: 0,
+            })?;
         if blk.len() != nmo_a * noa * nmo_a * nmo_a {
-            return Err(PbcTdscfError::ShapeMismatch { expected: nmo_a * noa * nmo_a * nmo_a, got: blk.len() });
+            return Err(PbcTdscfError::ShapeMismatch {
+                expected: nmo_a * noa * nmo_a * nmo_a,
+                got: blk.len(),
+            });
         }
         Ok(blk[((a * noa + b) * nmo_a + c) * nmo_a + d])
     };
-    let at_ab = |v: &[Vec<f64>], p: usize, q: usize, r: usize, a: usize, b: usize, c: usize, d: usize| -> Result<f64, PbcTdscfError> {
-        let blk = v.get((p * nkpts + q) * nkpts + r).ok_or(PbcTdscfError::ShapeMismatch { expected: 1, got: 0 })?;
+    let at_ab = |v: &[Vec<f64>],
+                 p: usize,
+                 q: usize,
+                 r: usize,
+                 a: usize,
+                 b: usize,
+                 c: usize,
+                 d: usize|
+     -> Result<f64, PbcTdscfError> {
+        let blk = v
+            .get((p * nkpts + q) * nkpts + r)
+            .ok_or(PbcTdscfError::ShapeMismatch {
+                expected: 1,
+                got: 0,
+            })?;
         if blk.len() != nmo_a * noa * nmo_b * nmo_b {
-            return Err(PbcTdscfError::ShapeMismatch { expected: nmo_a * noa * nmo_b * nmo_b, got: blk.len() });
+            return Err(PbcTdscfError::ShapeMismatch {
+                expected: nmo_a * noa * nmo_b * nmo_b,
+                got: blk.len(),
+            });
         }
         Ok(blk[((a * noa + b) * nmo_b + c) * nmo_b + d])
     };
-    let at_bb = |v: &[Vec<f64>], p: usize, q: usize, r: usize, a: usize, b: usize, c: usize, d: usize| -> Result<f64, PbcTdscfError> {
-        let blk = v.get((p * nkpts + q) * nkpts + r).ok_or(PbcTdscfError::ShapeMismatch { expected: 1, got: 0 })?;
+    let at_bb = |v: &[Vec<f64>],
+                 p: usize,
+                 q: usize,
+                 r: usize,
+                 a: usize,
+                 b: usize,
+                 c: usize,
+                 d: usize|
+     -> Result<f64, PbcTdscfError> {
+        let blk = v
+            .get((p * nkpts + q) * nkpts + r)
+            .ok_or(PbcTdscfError::ShapeMismatch {
+                expected: 1,
+                got: 0,
+            })?;
         if blk.len() != nmo_b * nob * nmo_b * nmo_b {
-            return Err(PbcTdscfError::ShapeMismatch { expected: nmo_b * nob * nmo_b * nmo_b, got: blk.len() });
+            return Err(PbcTdscfError::ShapeMismatch {
+                expected: nmo_b * nob * nmo_b * nmo_b,
+                got: blk.len(),
+            });
         }
         Ok(blk[((a * nob + b) * nmo_b + c) * nmo_b + d])
     };
@@ -93,12 +149,18 @@ pub fn build_kuab(
     for ki in 0..nkpts {
         let ka = kconserv[ki];
         if ka >= nkpts {
-            return Err(PbcTdscfError::ShapeMismatch { expected: nkpts, got: ka });
+            return Err(PbcTdscfError::ShapeMismatch {
+                expected: nkpts,
+                got: ka,
+            });
         }
         for kj in 0..nkpts {
             let kb = kconserv[kj];
             if kb >= nkpts {
-                return Err(PbcTdscfError::ShapeMismatch { expected: nkpts, got: kb });
+                return Err(PbcTdscfError::ShapeMismatch {
+                    expected: nkpts,
+                    got: kb,
+                });
             }
             // Alpha-alpha + beta-beta + coupling rows.
             for i in 0..noa {
@@ -115,7 +177,14 @@ pub fn build_kuab(
                                 at_aa(eri7_aa_re, kj, ki, ka, j, i, noa + aj, noa + bj)?,
                                 at_aa(eri7_aa_im, kj, ki, ka, j, i, noa + aj, noa + bj)?,
                             );
-                            put(&mut are, &mut aim, ia, jb, weight * (jr - hyb * kr), weight * (ji - hyb * ki_));
+                            put(
+                                &mut are,
+                                &mut aim,
+                                ia,
+                                jb,
+                                weight * (jr - hyb * kr),
+                                weight * (ji - hyb * ki_),
+                            );
                             let (jr, ji) = (
                                 at_aa(eri7_aa_re, ka, ki, kb, noa + aj, i, noa + bj, j)?,
                                 at_aa(eri7_aa_im, ka, ki, kb, noa + aj, i, noa + bj, j)?,
@@ -124,7 +193,14 @@ pub fn build_kuab(
                                 at_aa(eri7_aa_re, ka, kj, kb, noa + aj, j, noa + bj, i)?,
                                 at_aa(eri7_aa_im, ka, kj, kb, noa + aj, j, noa + bj, i)?,
                             );
-                            put(&mut bre, &mut bim, ia, jb, weight * (jr - hyb * kr), weight * (ji - hyb * ki_));
+                            put(
+                                &mut bre,
+                                &mut bim,
+                                ia,
+                                jb,
+                                weight * (jr - hyb * kr),
+                                weight * (ji - hyb * ki_),
+                            );
                         }
                     }
                     for j in 0..nob {
@@ -166,7 +242,14 @@ pub fn build_kuab(
                                 at_bb(eri7_bb_re, kj, ki, ka, j, i, nob + aj, nob + bj)?,
                                 at_bb(eri7_bb_im, kj, ki, ka, j, i, nob + aj, nob + bj)?,
                             );
-                            put(&mut are, &mut aim, ia, jb, weight * (jr - hyb * kr), weight * (ji - hyb * ki_));
+                            put(
+                                &mut are,
+                                &mut aim,
+                                ia,
+                                jb,
+                                weight * (jr - hyb * kr),
+                                weight * (ji - hyb * ki_),
+                            );
                             let (jr, ji) = (
                                 at_bb(eri7_bb_re, ka, ki, kb, nob + aj, i, nob + bj, j)?,
                                 at_bb(eri7_bb_im, ka, ki, kb, nob + aj, i, nob + bj, j)?,
@@ -175,7 +258,14 @@ pub fn build_kuab(
                                 at_bb(eri7_bb_re, ka, kj, kb, nob + aj, j, nob + bj, i)?,
                                 at_bb(eri7_bb_im, ka, kj, kb, nob + aj, j, nob + bj, i)?,
                             );
-                            put(&mut bre, &mut bim, ia, jb, weight * (jr - hyb * kr), weight * (ji - hyb * ki_));
+                            put(
+                                &mut bre,
+                                &mut bim,
+                                ia,
+                                jb,
+                                weight * (jr - hyb * kr),
+                                weight * (ji - hyb * ki_),
+                            );
                         }
                     }
                 }
@@ -225,13 +315,30 @@ pub fn kernel_kuhf_tda(
     cfg: &TdaConfig,
 ) -> Result<TdaResult, PbcTdscfError> {
     let (a, _b) = build_kuab(
-        eri7_aa_re, eri7_aa_im, eri7_ab_re, eri7_ab_im, eri7_bb_re, eri7_bb_im,
-        e_occ_a, e_vir_a, e_occ_b, e_vir_b, kconserv, nkpts, dims, nmo_a, nmo_b,
-        hyb, 1.0 / nkpts as f64,
+        eri7_aa_re,
+        eri7_aa_im,
+        eri7_ab_re,
+        eri7_ab_im,
+        eri7_bb_re,
+        eri7_bb_im,
+        e_occ_a,
+        e_vir_a,
+        e_occ_b,
+        e_vir_b,
+        kconserv,
+        nkpts,
+        dims,
+        nmo_a,
+        nmo_b,
+        hyb,
+        1.0 / nkpts as f64,
     )?;
     let nkd = nkpts * (dims.da() + dims.db());
     if cfg.nroots > nkd {
-        return Err(PbcTdscfError::TooManyRoots { nroots: cfg.nroots, dim: nkd });
+        return Err(PbcTdscfError::TooManyRoots {
+            nroots: cfg.nroots,
+            dim: nkd,
+        });
     }
     // Hermitian assert (19-07 tripwire, coupled form).
     let mut asym = 0.0f64;
@@ -241,9 +348,16 @@ pub fn kernel_kuhf_tda(
             asym = asym.max((a.im[i * nkd + j] + a.im[j * nkd + i]).abs());
         }
     }
-    let scale: f64 = a.re.iter().chain(a.im.iter()).map(|x| x.abs()).fold(0.0, f64::max);
+    let scale: f64 =
+        a.re.iter()
+            .chain(a.im.iter())
+            .map(|x| x.abs())
+            .fold(0.0, f64::max);
     if asym > 1e-8 * scale.max(1.0) {
-        return Err(PbcTdscfError::ShapeMismatch { expected: 0, got: (asym * 1e12) as usize });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: 0,
+            got: (asym * 1e12) as usize,
+        });
     }
     let ident = CTensor {
         re: {

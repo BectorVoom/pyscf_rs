@@ -22,3 +22,16 @@ reference SCF at a new geometry, re-snapshots, and re-runs the MP2 kernel.
 from pyscf._native.mp import MP2, RMP2, UMP2, DFMP2  # type: ignore[attr-defined]
 
 __all__ = ["MP2", "RMP2", "UMP2", "DFMP2"]
+
+# 20-19 A: fall through to upstream PySCF for submodules (`extend_path`) and for
+# top-level names this overlay does not bind (`__getattr__`, pyscf/_passthrough.py).
+# Silent (not a PBC family); the native names above stay module globals, so
+# `pyscf.mp.<native name> is pyscf._native.mp.<native name>` is unchanged.
+import pkgutil as _pkgutil  # noqa: E402
+
+__path__ = _pkgutil.extend_path(__path__, __name__)
+del _pkgutil
+
+from pyscf._passthrough import package_getattr as _package_getattr  # noqa: E402
+
+__getattr__ = _package_getattr(globals(), ("pyscf._native.mp",))

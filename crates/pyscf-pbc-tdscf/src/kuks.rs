@@ -43,21 +43,41 @@ pub fn kernel_kuks_tda(
     check_hybrid_kernel(xc, hyb)?;
     let _ = crate::require_rks_response();
     let (mut a, _b) = crate::kuhf::build_kuab(
-        eri7_aa_re, eri7_aa_im, eri7_ab_re, eri7_ab_im, eri7_bb_re, eri7_bb_im,
-        e_occ_a, e_vir_a, e_occ_b, e_vir_b, kconserv, nkpts, dims, nmo_a, nmo_b,
-        hyb, 1.0 / nkpts as f64,
+        eri7_aa_re,
+        eri7_aa_im,
+        eri7_ab_re,
+        eri7_ab_im,
+        eri7_bb_re,
+        eri7_bb_im,
+        e_occ_a,
+        e_vir_a,
+        e_occ_b,
+        e_vir_b,
+        kconserv,
+        nkpts,
+        dims,
+        nmo_a,
+        nmo_b,
+        hyb,
+        1.0 / nkpts as f64,
     )?;
     let (da, db) = (dims.da(), dims.db());
     let nkd = nkpts * (da + db);
     if fxc_re.len() != nkd * nkd || fxc_im.len() != nkd * nkd {
-        return Err(PbcTdscfError::ShapeMismatch { expected: nkd * nkd, got: fxc_re.len().min(fxc_im.len()) });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: nkd * nkd,
+            got: fxc_re.len().min(fxc_im.len()),
+        });
     }
     for i in 0..nkd * nkd {
         a.re[i] += fxc_re[i];
         a.im[i] += fxc_im[i];
     }
     if cfg.nroots > nkd {
-        return Err(PbcTdscfError::TooManyRoots { nroots: cfg.nroots, dim: nkd });
+        return Err(PbcTdscfError::TooManyRoots {
+            nroots: cfg.nroots,
+            dim: nkd,
+        });
     }
     let mut asym = 0.0f64;
     for i in 0..nkd {
@@ -66,9 +86,16 @@ pub fn kernel_kuks_tda(
             asym = asym.max((a.im[i * nkd + j] + a.im[j * nkd + i]).abs());
         }
     }
-    let scale: f64 = a.re.iter().chain(a.im.iter()).map(|x| x.abs()).fold(0.0, f64::max);
+    let scale: f64 =
+        a.re.iter()
+            .chain(a.im.iter())
+            .map(|x| x.abs())
+            .fold(0.0, f64::max);
     if asym > 1e-8 * scale.max(1.0) {
-        return Err(PbcTdscfError::ShapeMismatch { expected: 0, got: (asym * 1e12) as usize });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: 0,
+            got: (asym * 1e12) as usize,
+        });
     }
     let ident = CTensor {
         re: {

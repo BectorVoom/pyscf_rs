@@ -171,7 +171,12 @@ fn nonsymmetric_roots_match_the_dense_solve() {
                     r.re[i] -= res.e[k] * x.re[i];
                     r.im[i] -= res.e[k] * x.im[i];
                 }
-                let nrm = r.re.iter().chain(r.im.iter()).map(|v| v * v).sum::<f64>().sqrt();
+                let nrm =
+                    r.re.iter()
+                        .chain(r.im.iter())
+                        .map(|v| v * v)
+                        .sum::<f64>()
+                        .sqrt();
                 assert!(
                     nrm < 1e-3,
                     "n {n} root {k}: residual {nrm:e} above tol_residual"
@@ -340,7 +345,10 @@ fn max_space_trimming_triggers_and_still_converges() {
             res.e[0],
             want[0]
         );
-        assert!(res.conv[0], "max_space {max_space}: root reported unconverged");
+        assert!(
+            res.conv[0],
+            "max_space {max_space}: root reported unconverged"
+        );
         results.push(res);
     }
     // `max_space = 3` (widened by `(nroots-1)*6 = 0`) cannot hold more than
@@ -466,7 +474,10 @@ fn near_degenerate_roots_stay_distinct() {
         .map(|i| res.x[0].re[i] * res.x[1].re[i] + res.x[0].im[i] * res.x[1].im[i])
         .sum::<f64>()
         .abs();
-    assert!(ov < 0.99, "the two roots collapsed onto one vector (|⟨0|1⟩| = {ov})");
+    assert!(
+        ov < 0.99,
+        "the two roots collapsed onto one vector (|⟨0|1⟩| = {ov})"
+    );
 
     // The lindep collapse itself: a guess set containing a duplicate is reduced
     // by `_qr` rather than producing a singular subspace.

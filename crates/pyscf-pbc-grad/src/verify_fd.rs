@@ -45,7 +45,13 @@ fn invalid(message: &str) -> PyscfRsError {
     pyscf_core::CoreError::InvalidMolecule(message.into()).into()
 }
 
-fn with_coords(cell: &Cell, coords: &[[f64; 3]]) -> Result<Cell, PyscfRsError> {
+/// Swap atom coordinates into a clone of `cell`, preserving lattice, mesh,
+/// pseudopotential and every periodic build setting.
+///
+/// `pub(crate)` so the 18-19 scanner's geometry overload (`set_geom_`) shares
+/// the single pin-the-mesh implementation (18-CONTEXT trap 5) instead of
+/// forking it.
+pub(crate) fn with_coords(cell: &Cell, coords: &[[f64; 3]]) -> Result<Cell, PyscfRsError> {
     if coords.len() != cell.natm {
         return Err(PbcGradError::ShapeMismatch {
             expected: cell.natm,

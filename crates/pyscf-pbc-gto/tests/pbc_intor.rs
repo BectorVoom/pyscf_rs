@@ -485,7 +485,7 @@ print(json.dumps(out))
 /// **THE PHASE-10 GATE.** `pbc_intor('int1e_ovlp', kpts)` on diamond with a
 /// 2x2x2 Monkhorst-Pack mesh, element-by-element against upstream, at 1e-12.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn ovlp_matches_upstream_on_diamond_222() {
     compare_with_upstream("int1e_ovlp", [2, 2, 2], 1e-12);
 }
@@ -493,7 +493,7 @@ fn ovlp_matches_upstream_on_diamond_222() {
 /// The same gate for the kinetic-energy matrix — a different cintx operator
 /// through the identical lattice-sum path.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn kin_matches_upstream_on_diamond_222() {
     compare_with_upstream("int1e_kin", [2, 2, 2], 1e-12);
 }
@@ -501,7 +501,7 @@ fn kin_matches_upstream_on_diamond_222() {
 /// A 3x2x1 mesh — an unequal, non-power-of-two grid, so the k-point ordering
 /// and the `cartesian_prod` axis order are exercised too.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn ovlp_matches_upstream_on_diamond_321() {
     compare_with_upstream("int1e_ovlp", [3, 2, 1], 1e-12);
 }
@@ -758,7 +758,7 @@ fn gamma_ipovlp_is_real_and_antisymmetric() {
 /// `int1e_ipkin`, on all five §9.2 reference cells at gamma and 2×2×2.
 /// (`int1e_ipnuc` is excluded — see the finding above.)
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T2: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn derivative_families_match_upstream_all_reference_cells() {
     for (name, cell) in systems::all() {
         for fam in ["int1e_ipovlp", "int1e_ipkin"] {

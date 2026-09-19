@@ -33,7 +33,7 @@ fn same(a: &CTensor, b: &CTensor) -> bool {
 }
 
 #[test]
-#[ignore = "D-PBC-28 measurement; run with --release --ignored --nocapture"]
+#[ignore = "T3: D-PBC-28 measurement; run with --release --ignored --nocapture"]
 fn lov_build_and_kmp2_kernel_thread_scaling() {
     // `[1,1,2]`, not `[2,2,2]`: the Rust GDF's `make_j3c` over the fused cell
     // is already tens of minutes at `[1,1,2]` (`tests/gdf_builder.rs:477`), and
@@ -120,7 +120,7 @@ fn lov_build_and_kmp2_kernel_thread_scaling() {
 /// transform. The four-index FFTDF route is that workload: eight conserving
 /// quadruples, roughly a second each.
 #[test]
-#[ignore = "D-PBC-28 measurement; run with --release --ignored --nocapture"]
+#[ignore = "T2: D-PBC-28 measurement; run with --release --ignored --nocapture"]
 fn kmp2_four_index_thread_scaling() {
     let cell = common::diamond_anchor();
     let kpts = cell.make_kpts([1, 1, 2]).expect("kpts");
@@ -158,7 +158,7 @@ fn kmp2_four_index_thread_scaling() {
 }
 
 #[test]
-#[ignore = "D-PBC-28 measurement; run with --release --ignored --nocapture"]
+#[ignore = "T1: D-PBC-28 measurement; run with --release --ignored --nocapture"]
 fn build_symm_map_growth_curve() {
     let cell = common::diamond_anchor();
     let mut prev: Option<(usize, f64)> = None;

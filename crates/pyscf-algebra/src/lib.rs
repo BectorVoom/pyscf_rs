@@ -2,7 +2,10 @@
 //!
 //! Phase 1 surface (D-06): gemm, gemv, axpy, scal, dot, reduce_sum,
 //! transpose, oracle_sum, oracle_dot, oracle_einsum, eigh, cholesky,
-//! qr, svd. Eigh family routes to faer 0.24 on host (ALG-05).
+//! qr, svd. Standard symmetric/Hermitian eigh routes to `lapack_rs`
+//! (Reference-LAPACK DSYEVD/ZHEEVD via `lapack_backend`); Cholesky/QR/SVD/LU
+//! and the non-symmetric eig stay on faer 0.24 (ALG-05) until `lapack_rs`
+//! implements them.
 //!
 //! ALG-06 dep-wall: this crate (alongside pyscf-runtime) is the ONLY
 //! workspace crate permitted to declare cubecl-* dependencies. Method
@@ -53,10 +56,13 @@ pub mod device_buffer;
 pub mod launch;
 
 pub mod axpy;
+pub mod arch;
 pub mod dot;
 pub mod gemm;
 pub mod gemv;
 pub mod host_fallback;
+pub mod lapack_backend;
+pub mod openblas_emu;
 pub mod oracle;
 pub mod reduce;
 pub mod scal;
@@ -108,6 +114,7 @@ pub use eigh_gen::eigh_gen;
 pub use gemm::{gemm, gemm_dense};
 pub use gemv::{gemv, gemv_dense};
 pub use host_fallback::{cholesky, eigh, qr, svd};
+pub use lapack_backend::{hermitian_eigh, sym_eigh};
 pub use oracle::{oracle_dot, oracle_einsum, oracle_sum};
 pub use reduce::{reduce_sum, reduce_sum_axis_dense, reduce_sum_dense, reduced_shape};
 pub use scal::{scal, scal_dense};

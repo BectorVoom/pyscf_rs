@@ -18,8 +18,6 @@ pub enum PbcEphError {
 
 impl From<PbcEphError> for pyscf_core::PyscfRsError {
     fn from(e: PbcEphError) -> Self {
-        pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
-            "{e}"
-        )))
+        pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!("{e}")))
     }
 }

@@ -587,6 +587,78 @@ fn lattice_sum(
         .collect();
     drop(probe);
 
+    // BAND-01: the per-(image, shell pair) real blocks are k-independent, so
+    // they are computed once per (cells, intor, images, screen) and cached;
+    // every later k-list — the band k-points after an SCF, a second
+    // `get_bands` — pays only the Bloch-phase fold below. The fold replays the
+    // SAME (image, ish, jsh) order, so each output element receives the
+    // identical sequence of additions: bit-identical to the uncached path.
+    let npair = nbas_a * nbas_b;
+    let key = image_block_key(ctx, cell1, cell2, ls, nl);
+    let blocks = match key.and_then(image_block_cache_get) {
+        Some(b) => b,
+        None => {
+            let b = std::sync::Arc::new(eval_image_blocks(
+                ctx, cell1, cell2, ls, nl, nbas_a, nbas_b, &bra_cnt, &ket_cnt, &opts,
+            )?);
+            if let Some(key) = key {
+                image_block_cache_put(key, &b);
+            }
+            b
+        }
+    };
+
+    for m in 0..ls.len() {
+        for ish in 0..nbas_a {
+            let di = bra_cnt[ish];
+            for jsh in 0..nbas_b {
+                let block = &blocks[m * npair + ish * nbas_b + jsh];
+                if block.is_empty() {
+                    continue;
+                }
+                let dj = ket_cnt[jsh];
+                let oi = bra_off[ish];
+                let oj = ket_off[jsh];
+                for (k, mat) in kmats.iter_mut().enumerate() {
+                    let pr = expkl_re[k * ctx.nimgs + m];
+                    let pi = expkl_im[k * ctx.nimgs + m];
+                    for c in 0..comp {
+                        let cb = c * di * dj;
+                        let co = c * ni * nj;
+                        for jj in 0..dj {
+                            for ii in 0..di {
+                                let v = block[cb + ii + jj * di];
+                                let o = co + (oi + ii) + (oj + jj) * ni;
+                                mat.re[o] += pr * v;
+                                mat.im[o] += pi * v;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every surviving `(image, ish, jsh)` block of the lattice sum, flat at
+/// `[m * nbas_a * nbas_b + ish * nbas_b + jsh]`; screened, skipped or empty
+/// pairs stay empty vectors. Evaluated in the pre-BAND-01 order.
+#[allow(clippy::too_many_arguments)]
+fn eval_image_blocks(
+    ctx: &LatticeSumCtx<'_>,
+    cell1: &Cell,
+    cell2: &Cell,
+    ls: &[[f64; 3]],
+    nl: Option<&NeighborList>,
+    nbas_a: usize,
+    nbas_b: usize,
+    bra_cnt: &[usize],
+    ket_cnt: &[usize],
+    opts: &ExecutionOptions,
+) -> Result<Vec<Vec<f64>>, PyscfRsError> {
+    let comp = ctx.comp;
+    let mut blocks: Vec<Vec<f64>> = vec![Vec::new(); ls.len() * nbas_a * nbas_b];
     for (m, l) in ls.iter().enumerate() {
         // Nothing survives screening for this image -> skip the basis build too.
         if let Some(nl) = nl
@@ -653,7 +725,7 @@ fn lattice_sum(
                     )))
                 })?;
 
-                let block = &outcome.tensor.owned_values;
+                let block = outcome.tensor.owned_values;
                 let dmjc = di * dj * comp;
                 if block.len() != dmjc {
                     return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
@@ -664,29 +736,86 @@ fn lattice_sum(
                         outcome.tensor.extents,
                     ))));
                 }
-
-                let oi = bra_off[ish];
-                let oj = ket_off[jsh];
-                for (k, mat) in kmats.iter_mut().enumerate() {
-                    let pr = expkl_re[k * ctx.nimgs + m];
-                    let pi = expkl_im[k * ctx.nimgs + m];
-                    for c in 0..comp {
-                        let cb = c * di * dj;
-                        let co = c * ni * nj;
-                        for jj in 0..dj {
-                            for ii in 0..di {
-                                let v = block[cb + ii + jj * di];
-                                let o = co + (oi + ii) + (oj + jj) * ni;
-                                mat.re[o] += pr * v;
-                                mat.im[o] += pi * v;
-                            }
-                        }
-                    }
-                }
+                blocks[m * nbas_a * nbas_b + ish * nbas_b + jsh] = block;
             }
         }
     }
-    Ok(())
+    Ok(blocks)
+}
+
+/// 128-bit fingerprint of everything the image blocks depend on, or `None`
+/// when the cache is off (`PYSCF_PBC_INTOR_IMAGE_CACHE=0`).
+fn image_block_key(
+    ctx: &LatticeSumCtx<'_>,
+    cell1: &Cell,
+    cell2: &Cell,
+    ls: &[[f64; 3]],
+    nl: Option<&NeighborList>,
+) -> Option<(u64, u64)> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    if std::env::var("PYSCF_PBC_INTOR_IMAGE_CACHE").is_ok_and(|v| v == "0") {
+        return None;
+    }
+    let feed = |h: &mut DefaultHasher| {
+        for cell in [cell1, cell2] {
+            format!("{:?}", cell.mol._atom).hash(h);
+            // `_basis` is a HashMap: key-sorted, so equal bases hash equal.
+            let mut basis: Vec<_> = cell.mol._basis.iter().collect();
+            basis.sort_by(|a, b| a.0.cmp(b.0));
+            format!("{basis:?}").hash(h);
+            cell.mol.cart.hash(h);
+        }
+        ctx.full_name.hash(h);
+        ctx.comp.hash(h);
+        ctx.hermi.hash(h);
+        ctx.omega.map(f64::to_bits).hash(h);
+        for l in ls {
+            for x in l {
+                x.to_bits().hash(h);
+            }
+        }
+        nl.map(|nl| &nl.per_image).hash(h);
+    };
+    let mut a = DefaultHasher::new();
+    feed(&mut a);
+    let mut b = DefaultHasher::new();
+    0x9e37_79b9_7f4a_7c15_u64.hash(&mut b);
+    feed(&mut b);
+    Some((a.finish(), b.finish()))
+}
+
+type ImageBlocks = std::sync::Arc<Vec<Vec<f64>>>;
+
+/// The most `f64`s the image-block cache holds (256 MiB). A larger entry is
+/// never cached; inserting past the cap empties the cache first.
+const IMAGE_BLOCK_CACHE_MAX_F64: usize = 32 * 1024 * 1024;
+
+type ImageBlockCache = std::sync::Mutex<Vec<((u64, u64), ImageBlocks)>>;
+
+fn image_block_cache() -> &'static ImageBlockCache {
+    static CACHE: std::sync::OnceLock<ImageBlockCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn image_block_cache_get(key: (u64, u64)) -> Option<ImageBlocks> {
+    let cache = image_block_cache().lock().ok()?;
+    cache.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone())
+}
+
+fn image_block_cache_put(key: (u64, u64), blocks: &ImageBlocks) {
+    let size = |b: &ImageBlocks| b.iter().map(Vec::len).sum::<usize>();
+    let new = size(blocks);
+    if new > IMAGE_BLOCK_CACHE_MAX_F64 {
+        return;
+    }
+    if let Ok(mut cache) = image_block_cache().lock() {
+        let held: usize = cache.iter().map(|(_, v)| size(v)).sum();
+        if held + new > IMAGE_BLOCK_CACHE_MAX_F64 {
+            cache.clear();
+        }
+        cache.push((key, blocks.clone()));
+    }
 }
 
 /// The `(bra shells | ket shells translated by `l`)` cross basis for ONE image.

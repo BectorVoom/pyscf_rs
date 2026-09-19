@@ -93,7 +93,7 @@ fn cell_at(mesh: usize) -> Cell {
 /// Forward (`eval_rho_g_kpts`) and reverse-inclusive (`nr_rks_kpts`) wall as
 /// a function of `nkpts`, warm minimum over `reps`.
 #[test]
-#[ignore = "an instrument, not a gate — run with --ignored --nocapture"]
+#[ignore = "T2: an instrument, not a gate — run with --ignored --nocapture"]
 fn mg_kpts_bench() {
     let mesh = env_usize("PYSCF_MG_BENCH_MESH", 25);
     let reps = env_usize("PYSCF_MG_BENCH_REPS", 3);

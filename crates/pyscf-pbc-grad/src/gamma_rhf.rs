@@ -127,12 +127,10 @@ impl<'a> GammaCoulombEngine<'a> {
     pub(crate) fn resolve(self) -> Result<&'a MultiGridNumInt2, PyscfRsError> {
         match self {
             GammaCoulombEngine::MultiGridV2(ni) => Ok(ni),
-            GammaCoulombEngine::Other(detail) => {
-                Err(PbcGradError::NonMultigridCoulomb {
-                    detail: detail.into(),
-                }
-                .into())
+            GammaCoulombEngine::Other(detail) => Err(PbcGradError::NonMultigridCoulomb {
+                detail: detail.into(),
             }
+            .into()),
         }
     }
 }
@@ -343,13 +341,9 @@ impl<'a> GammaRhfGradients<'a> {
                     None,
                 )
                 .map_err(|e| wrap_dft("vpploc_part1_nuc_grad", e))?;
-            let part2 = pyscf_pbc_gto::pseudo::vpploc_part2_nuc_grad(
-                self.cell,
-                &self.dm0,
-                &self.kpts,
-            )?;
-            let nonloc =
-                pyscf_pbc_gto::pseudo::vppnl_nuc_grad(self.cell, &self.dm0, &self.kpts)?;
+            let part2 =
+                pyscf_pbc_gto::pseudo::vpploc_part2_nuc_grad(self.cell, &self.dm0, &self.kpts)?;
+            let nonloc = pyscf_pbc_gto::pseudo::vppnl_nuc_grad(self.cell, &self.dm0, &self.kpts)?;
             for ia in 0..natm {
                 for c in 0..3 {
                     de[ia][c] = oracle_sum(&[de[ia][c], part2[ia][c], nonloc[ia][c]]);
@@ -481,9 +475,10 @@ pub fn gamma_make_rdm1e(
 ) -> Result<Vec<f64>, PyscfRsError> {
     let nmo = mo_occ.len();
     if mo_energy.len() != nmo
-        || mo_coeff_col_major.len() != nao.checked_mul(nmo).ok_or_else(|| {
-            invalid("gamma_make_rdm1e: orbital count overflow")
-        })?
+        || mo_coeff_col_major.len()
+            != nao
+                .checked_mul(nmo)
+                .ok_or_else(|| invalid("gamma_make_rdm1e: orbital count overflow"))?
     {
         return Err(invalid(
             "gamma_make_rdm1e: mo_coeff/mo_energy/mo_occ shapes disagree",

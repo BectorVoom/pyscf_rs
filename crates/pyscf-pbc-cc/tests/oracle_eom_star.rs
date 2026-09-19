@@ -110,7 +110,7 @@ fn diff_estar(got: &[pyscf_pbc_cc::eom_kccsd_ghf::StarRoot], want: &[f64], name:
 
 /// **The spin-adapted IP/EA-CCSD\* corrections, root by root.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn rhf_ccsd_star_matches_upstream() {
     let Some(out) = emit("star_rhf") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -189,7 +189,7 @@ fn rhf_ccsd_star_matches_upstream() {
 /// where the spin-adapted one permutes only the left, and its prefactor is
 /// `1/12` against `1/2`.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn ghf_ccsd_star_matches_upstream() {
     let Some(out) = emit("star_ghf") else { return };
     let f = diamond_scf([1, 1, 2]);

@@ -88,5 +88,8 @@ fn it_is_not_the_chemist_block() {
     let c = chem(n);
     let a = PhysicistsEris::antisymmetrise(&c, n);
     let differs = c.iter().zip(a.iter()).any(|(x, y)| (x - y).abs() > 1e-9);
-    assert!(differs, "the physicist block is identical to the chemist one");
+    assert!(
+        differs,
+        "the physicist block is identical to the chemist one"
+    );
 }

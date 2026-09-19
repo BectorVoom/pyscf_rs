@@ -101,9 +101,16 @@ fn bloch_periodicity_holds() {
             }
         }
     }
+    // Tolerance 1e-9: the identity holds to the lattice-sum tail, and the
+    // eval-variant image list (`eval_gto.py:192-257`) is sized for grid-box
+    // points, not arbitrary probes — the shifted points here leave the box.
+    // Upstream itself measures 4.26e-10 on this exact geometry (vendored
+    // 2.12.1, `KNumInt.eval_ao`); native with the eval list gives 2.66e-10.
+    // (The old 1e-10 was calibrated on the tools-variant superset list, which
+    // over-converges arbitrary points but diverges from the eval oracle.)
     assert!(
-        worst < 1e-10,
-        "Bloch periodicity violated by {worst:e} (tolerance 1e-10)"
+        worst < 1e-9,
+        "Bloch periodicity violated by {worst:e} (tolerance 1e-9)"
     );
 }
 

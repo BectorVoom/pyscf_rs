@@ -1,0 +1,135 @@
+name: PBC oracle setup
+description: >-
+  Shared setup for the pbc-oracle jobs (plan 20-03): the two sibling crates
+  setup-sibling-crates does not clone, the oracle venv at $GITHUB_WORKSPACE/.venv,
+  and the assertion that the oracle the Rust harness will import is the pinned
+  PySCF. Run after actions/checkout and ./.github/actions/setup-sibling-crates.
+
+# How the Rust harness imports PySCF (read before changing anything below)
+# -----------------------------------------------------------------------
+# PYSCF_ORACLE_VENV=1 makes `oracle_python()` resolve to
+# <workspace root>/.venv/bin/python, so the venv MUST live at
+# $GITHUB_WORKSPACE/.venv. The oracle subprocess then imports PySCF in one of
+# two ways:
+#
+#   A. pinned: cwd = root, PYTHONPATH = root (tests/common/mod.rs run_python in
+#      pbc-df/-dft/-scf, pbc-cc emit, oracle_kcis, oracle_kuccsd,
+#      oracle_phase15, oracle_phase9). `import pyscf` resolves to the VENDORED
+#      Python tree at <root>/pyscf (2.12.1, checked out with the repo). The
+#      vendored tree has no compiled libraries, so `pyscf.lib.load_library`
+#      falls back through `pyscf.__path__` to the site-packages wheel's
+#      pyscf/lib/*.so.
+#   B. unpinned: script in a temp dir, no PYTHONPATH (pbc-gto gth_pp_loc,
+#      gth_pp_nl, pbc_intor). `import pyscf` resolves to the site-packages wheel.
+#
+# Pinning the wheel to the same version makes A and B the same PySCF; the
+# assertion step checks both, from exactly those cwd/PYTHONPATH settings.
+#
+# NumPy is built from source WITHOUT BLAS (measured, not a preference)
+# ---------------------------------------------------------------------
+# The oracle that every Phase 9-20 floor was measured against is a numpy
+# 1.26.4 built from source on Python 3.13 that links no BLAS. A stock numpy
+# wheel links OpenBLAS, and that moves upstream's own answer:
+# `pyscf.pbc.df.fft_jk` k_e1 on diamond 2x2x2 by 1.712e-7 and FFTDF vk on
+# diamond 2x2x2 past its gate, so `fft_jk_grad::e1_matches_upstream_gamma_112_222`
+# and `fftdf::jk_matches_upstream_on_diamond_222` go red against a stock
+# `pip install numpy` while the port is unchanged. BLAS-less numpy 1.26.4 +
+# pyscf 2.12.1 wheel reproduces the local oracle to the last printed digits.
+# Evidence: .planning/phases/20-pbc-python-bindings/20-03-SUMMARY.md.
+
+inputs:
+  pyscf-requirement:
+    description: pip requirement for the PySCF wheel that supplies the compiled libraries and route B
+    required: true
+  expected-version:
+    description: the version every import route must report
+    required: true
+  python-version:
+    description: interpreter for the oracle venv (the measured oracle is 3.13)
+    required: false
+    default: "3.13"
+
+runs:
+  using: composite
+  steps:
+    - name: Free runner disk space (release build of the PBC crates + libxc kernels)
+      shell: bash
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h /
+
+    # `cube-math` (Cargo.toml workspace dependency, used by pyscf-kernels) and
+    # `rmath` (pyscf-pbc-gto) are path siblings that setup-sibling-crates does
+    # not clone. Without them no PBC crate resolves.
+    - name: Clone the sibling crates the PBC stack also needs (cube-math, rmath)
+      shell: bash
+      run: |
+        set -euo pipefail
+        parent="$(dirname "$GITHUB_WORKSPACE")"
+        for repo in cube-math rmath; do
+          rm -rf "${parent:?}/$repo"
+          git clone --depth 1 "https://github.com/BectorVoom/${repo}.git" "$parent/$repo"
+        done
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Build the oracle venv at $GITHUB_WORKSPACE/.venv
+      shell: bash
+      env:
+        PYSCF_REQUIREMENT: ${{ inputs.pyscf-requirement }}
+      run: |
+        set -euo pipefail
+        python -m venv "$GITHUB_WORKSPACE/.venv"
+        py="$GITHUB_WORKSPACE/.venv/bin/python"
+        "$py" -m pip install --upgrade pip
+        # BLAS-less numpy first (see the header), then everything else against it.
+        "$py" -m pip install --no-binary numpy "numpy==1.26.4" \
+          -Csetup-args=-Dblas=none -Csetup-args=-Dlapack=none
+        "$py" -m pip install "$PYSCF_REQUIREMENT" "numpy==1.26.4" "scipy==1.17.1" "h5py==3.16.0"
+        "$py" -m pip freeze
+
+    - name: Assert the oracle every import route will use
+      shell: bash
+      env:
+        EXPECTED: ${{ inputs.expected-version }}
+      run: |
+        set -euo pipefail
+        root="$GITHUB_WORKSPACE"
+        py="$root/.venv/bin/python"
+        test -f "$root/pyscf/__init__.py" || { echo "::error::vendored PySCF tree missing at $root/pyscf"; exit 1; }
+
+        echo "== route A: cwd=root, PYTHONPATH=root (tests/common/mod.rs run_python)"
+        (cd "$root" && PYTHONPATH="$root" "$py" - <<'PY'
+        import importlib.metadata as md, os, sys
+        import numpy, pyscf
+        from pyscf.lib import numpy_helper
+        from pyscf.gto import moleintor
+        import pyscf.pbc.df, pyscf.pbc.scf
+        root, want = os.environ["GITHUB_WORKSPACE"], os.environ["EXPECTED"]
+        site = os.path.join(root, ".venv")
+        checks = {
+            "pyscf.__version__": (pyscf.__version__, want),
+            "pyscf.__file__": (pyscf.__file__, os.path.join(root, "pyscf", "__init__.py")),
+            "wheel version": (md.version("pyscf"), want),
+            "np_helper from the wheel": (numpy_helper._np_helper._name.startswith(site), True),
+            "libcgto from the wheel": (moleintor.libcgto._name.startswith(site), True),
+            "numpy version": (numpy.__version__, "1.26.4"),
+            "numpy links a BLAS": (numpy.__config__.CONFIG["Build Dependencies"]["blas"].get("found") is True, False),
+        }
+        bad = {k: v for k, v in checks.items() if v[0] != v[1]}
+        for k, (got, exp) in checks.items():
+            print(f"  {k}: {got}" + ("" if got == exp else f"   <-- expected {exp}"))
+        sys.exit(1 if bad else 0)
+        PY
+        )
+
+        echo "== route B: neutral cwd, no PYTHONPATH (pbc-gto gth_pp_*/pbc_intor)"
+        (cd / && env -u PYTHONPATH "$py" - <<'PY'
+        import os, sys, pyscf
+        want, site = os.environ["EXPECTED"], os.path.join(os.environ["GITHUB_WORKSPACE"], ".venv")
+        print(f"  pyscf {pyscf.__version__} from {pyscf.__file__}")
+        sys.exit(0 if pyscf.__version__ == want and pyscf.__file__.startswith(site) else 1)
+        PY
+        )

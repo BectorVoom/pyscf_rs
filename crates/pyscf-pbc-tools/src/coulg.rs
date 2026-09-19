@@ -177,10 +177,15 @@ fn lu_solve3(lu: &[[f64; 3]; 3], piv: &[usize; 3], b: [f64; 3]) -> [f64; 3] {
     x
 }
 
-/// `|k+G|^2` for every grid point.
+/// `|k+G|^2` for every grid point — `np.einsum('gi,gi->g', kG, kG)`
+/// (`pbc.py:365`).
+///
+/// numpy's einsum reduces the length-3 axis as `(x^2 + z^2) + y^2`, not left
+/// to right; the plain order differs from upstream in the last bit of ~12% of
+/// the grid (measured on meshes 11..47, zero and shifted `k`).
 pub fn abs_g2(kg: &[[f64; 3]]) -> Vec<f64> {
     kg.iter()
-        .map(|g| g[0] * g[0] + g[1] * g[1] + g[2] * g[2])
+        .map(|g| (g[0] * g[0] + g[2] * g[2]) + g[1] * g[1])
         .collect()
 }
 

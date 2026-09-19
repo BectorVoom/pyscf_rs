@@ -221,7 +221,7 @@ fn batched_accumulate_is_bit_identical_without_the_block_screen() {
 }
 
 #[test]
-#[ignore = "child process for batched_accumulate_is_bit_identical_without_the_block_screen"]
+#[ignore = "T2: child process for batched_accumulate_is_bit_identical_without_the_block_screen"]
 fn compare_unscreened_child() {
     // A smaller mesh: every one of the 1331 images is evaluated on the whole grid here.
     compare(7);

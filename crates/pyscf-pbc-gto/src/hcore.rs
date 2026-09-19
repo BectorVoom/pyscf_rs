@@ -41,6 +41,11 @@ use pyscf_core::PyscfRsError;
 /// rest mirrored; this port does the same, which is both faster and exactly
 /// Hermitian by construction.
 ///
+/// **Not the SCF overlap.** Every periodic SCF driver consumes
+/// [`get_ovlp_scf`] (`pbc/scf/hf.py:get_ovlp`, tightened precision). This one
+/// is the plain `cell.pbc_intor('int1e_ovlp', hermi=1)` that `krkspu.py`,
+/// `scf/addons.py` and `df_jk.py` call directly.
+///
 /// # Errors
 /// As [`crate::pbc_intor::intor_cross`].
 pub fn get_ovlp(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PyscfRsError> {
@@ -56,6 +61,109 @@ pub fn get_ovlp(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PyscfRsE
         },
     )?
     .kmats)
+}
+
+/// The factor upstream's SCF overlap tightens `cell.precision` by —
+/// `precision = cell.precision * 1e-5` (`pbc/scf/hf.py:50`).
+pub const SCF_OVLP_PRECISION_FACTOR: f64 = 1e-5;
+
+/// `get_ovlp(cell, kpt)` — `pbc/scf/hf.py:47-76`. **The overlap every periodic
+/// SCF consumes** (`SCF.get_ovlp` `:645-648`, `khf.get_ovlp` / `KSCF.get_ovlp`
+/// `khf.py:52-63,457`, and through them `KsymAdaptedKSCF`, `KGHF`, the KS
+/// classes and `get_bands`' `s1e`).
+///
+/// It is NOT [`get_ovlp`] (`scfint.get_ovlp`, plain `cell.precision`). Upstream
+/// evaluates the lattice sum as
+///
+/// ```text
+/// precision = cell.precision * 1e-5
+/// rcut      = max(cell.rcut, estimate_rcut(cell, precision))
+/// with temporary_env(cell, rcut=rcut, precision=precision):
+///     s = cell.pbc_intor('int1e_ovlp', hermi=0, kpts=kpt, pbcopt=NULL)
+/// ```
+///
+/// which this ports line by line:
+///
+/// * `rcut` widens the image list `Ls` (`cell.py:222-223`).
+/// * `precision` reaches the lattice sum only through the neighbor list of the
+///   `use_loose_rcut` route (`_intor_cross_screened` -> `rcut_by_shells(precision)`,
+///   `neighborlist.py:87-88`); the plain `intor_cross` route never reads it.
+/// * `hermi=0` — the full `s1` fill, NOT mirrored, so `S` is Hermitian only to
+///   rounding, exactly as upstream's is.
+/// * `pbcopt=lib.c_null_ptr()` is swallowed by `**kwargs` in 2.12.1's
+///   `intor_cross`, so it changes nothing and has no counterpart here.
+///
+/// The upstream Hermiticity check (`:57-61`) is a `tracing::warn!`; the
+/// `verbose >= DEBUG` condition-number warning (`:63-73`) is diagnostics only
+/// and is not ported.
+///
+/// On a near-singular overlap this matters: `examples/pbc/23-smearing.py`'s Al
+/// cell has a Γ overlap with λ_min ≈ 3e-9, and the plain-precision sum differs
+/// by 2e-9 — enough to move a fractionally occupied band by 0.2 Ha and the
+/// σ = 0.1 free energy by 5e-3 Ha (20-18-PRE-SUMMARY, 20-19 item D).
+///
+/// # Errors
+/// As [`crate::pbc_intor::intor_cross`] and [`crate::lattice::get_lattice_ls`].
+pub fn get_ovlp_scf(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PyscfRsError> {
+    let precision = cell.precision * SCF_OVLP_PRECISION_FACTOR;
+    // `max(cell.rcut, gto.estimate_rcut(cell, precision))` — Python's `max`
+    // keeps the FIRST argument on a tie.
+    let cell_rcut = cell.try_rcut()?;
+    let est = crate::cutoff::estimate_rcut(cell, precision);
+    let rcut = if est > cell_rcut { est } else { cell_rcut };
+    let ls = crate::lattice::get_lattice_ls(cell, Some(rcut), None, true)?;
+    // `Cell.pbc_intor` picks the screened route on `use_loose_rcut`
+    // (`cell.py:2033-2038`); there the neighbor list is built under the
+    // temporary precision.
+    let nl = if cell.use_loose_rcut {
+        Some(crate::neighborlist::build_neighbor_list(
+            cell,
+            None,
+            &ls,
+            None,
+            None,
+            0,
+            Some(precision),
+        )?)
+    } else {
+        None
+    };
+    let out = crate::pbc_intor::intor_cross_with_images(
+        "int1e_ovlp",
+        cell,
+        cell,
+        kpts,
+        PbcIntorOpts {
+            comp: None,
+            hermi: 0,
+            screen: false,
+            omega: None,
+        },
+        &ls,
+        nl.as_ref(),
+    )?;
+
+    // hf.py:56-61 — `abs(s - s^H).max()`, warned above cell.precision and 1e-12.
+    let n = out.ni;
+    let mut hermi_error = 0.0_f64;
+    for s in &out.kmats {
+        for j in 0..n {
+            for i in 0..n {
+                let p = i + j * n;
+                let q = j + i * n;
+                let dre = s.re[p] - s.re[q];
+                let dim = s.im[p] + s.im[q];
+                hermi_error = hermi_error.max((dre * dre + dim * dim).sqrt());
+            }
+        }
+    }
+    if hermi_error > cell.precision && hermi_error > 1e-12 {
+        tracing::warn!(
+            "{hermi_error:.4e} error found in overlap integrals. cell.precision or \
+             cell.rcut can be adjusted to improve accuracy."
+        );
+    }
+    Ok(out.kmats)
 }
 
 /// `get_t(cell, kpts)` — `scfint.py:57-62`. The kinetic-energy matrix.

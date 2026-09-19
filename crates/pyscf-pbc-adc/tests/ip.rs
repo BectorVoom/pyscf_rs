@@ -20,8 +20,8 @@ use pyscf_pbc_adc::types::AdcConfig;
 use serde_json::Value;
 
 fn fixture() -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/kadc_he2.json");
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/kadc_he2.json");
     serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture must exist")).unwrap()
 }
 
@@ -53,14 +53,24 @@ fn eris_of(v: &Value) -> KadcEris {
         im: flat(&v["blocks"][name]["im"]),
     };
     KadcEris::from_blocks(
-        nk, no, nv,
-        ct("oooo"), ct("oovv"), ct("ovoo"), ct("ovov"), ct("ovvv"), ct("ovvo"),
+        nk,
+        no,
+        nv,
+        ct("oooo"),
+        ct("oovv"),
+        ct("ovoo"),
+        ct("ovov"),
+        ct("ovvv"),
+        ct("ovvo"),
     )
     .expect("fixture blocks must fit")
 }
 
 fn max_diff(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f64::max)
 }
 
 /// Amplitudes on live blocks vs upstream t2[0].
@@ -74,8 +84,16 @@ fn t2_matches_upstream_on_live_blocks() {
     let amps = t2_first_order(&eris, &e_occ, &e_vir, &kc).expect("t2 must build");
     let (tr, ti) = (flat(&v["t2"]["re"]), flat(&v["t2"]["im"]));
     assert_eq!(amps.t2_1.re.len(), tr.len());
-    assert!(max_diff(&amps.t2_1.re, &tr) < 1e-10, "t2.re deviates {:e}", max_diff(&amps.t2_1.re, &tr));
-    assert!(max_diff(&amps.t2_1.im, &ti) < 1e-10, "t2.im deviates {:e}", max_diff(&amps.t2_1.im, &ti));
+    assert!(
+        max_diff(&amps.t2_1.re, &tr) < 1e-10,
+        "t2.re deviates {:e}",
+        max_diff(&amps.t2_1.re, &tr)
+    );
+    assert!(
+        max_diff(&amps.t2_1.im, &ti) < 1e-10,
+        "t2.im deviates {:e}",
+        max_diff(&amps.t2_1.im, &ti)
+    );
 }
 
 /// M_ij vs upstream get_imds.
@@ -95,8 +113,16 @@ fn m_ij_matches_upstream() {
         let base = k * no * no;
         let rr = flat(&v["M_ij"]["re"])[base..base + no * no].to_vec();
         let ri = flat(&v["M_ij"]["im"])[base..base + no * no].to_vec();
-        assert!(max_diff(&m.m_ij[k].re, &rr) < 1e-9, "M_ij[{k}].re deviates {:e}", max_diff(&m.m_ij[k].re, &rr));
-        assert!(max_diff(&m.m_ij[k].im, &ri) < 1e-9, "M_ij[{k}].im deviates {:e}", max_diff(&m.m_ij[k].im, &ri));
+        assert!(
+            max_diff(&m.m_ij[k].re, &rr) < 1e-9,
+            "M_ij[{k}].re deviates {:e}",
+            max_diff(&m.m_ij[k].re, &rr)
+        );
+        assert!(
+            max_diff(&m.m_ij[k].im, &ri) < 1e-9,
+            "M_ij[{k}].im deviates {:e}",
+            max_diff(&m.m_ij[k].im, &ri)
+        );
     }
 }
 
@@ -113,7 +139,10 @@ fn gate_d_ip_roots() {
     let cfg = AdcConfig::default();
     let roots = kernel_ip(&m, &eris, &e_occ, &e_vir, &kc, 0, &cfg).expect("IP must solve");
     assert_eq!(roots.energies.len(), 3);
-    assert!(roots.energies.windows(2).all(|w| w[0] <= w[1]), "roots must be sorted");
+    assert!(
+        roots.energies.windows(2).all(|w| w[0] <= w[1]),
+        "roots must be sorted"
+    );
     assert!(roots.converged);
     let eref = flat(&v["ip_roots"]);
     let d = max_diff(&roots.energies, &eref[..3]);
@@ -135,8 +164,14 @@ fn ip_deterministic_across_thread_counts() {
             .expect("IP must solve")
             .energies
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b.iter()) {

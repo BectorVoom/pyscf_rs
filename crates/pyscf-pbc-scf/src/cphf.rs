@@ -96,7 +96,9 @@ pub fn run_kcphf(
 /// Build a dense-kernel `KFvind` for testing and for drivers whose response is
 /// explicitly materialized: `fvind(k, z) = Kmat[k]·z` (row-major dense, host
 /// loop; the oracle ordering lives in the solver).
-pub fn dense_kvind<'a>(kmat_k: &'a [Vec<f64>]) -> impl Fn(usize, &[f64]) -> Result<Vec<f64>, PyscfRsError> + 'a {
+pub fn dense_kvind<'a>(
+    kmat_k: &'a [Vec<f64>],
+) -> impl Fn(usize, &[f64]) -> Result<Vec<f64>, PyscfRsError> + 'a {
     move |k: usize, z: &[f64]| -> Result<Vec<f64>, PyscfRsError> {
         let m = kmat_k.get(k).ok_or_else(|| {
             PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!(

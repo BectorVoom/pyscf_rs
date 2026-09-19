@@ -311,7 +311,10 @@ fn sr_loop_takes_the_upper_triangle_from_the_conjugate_pair() {
             for nu in 0..nao {
                 let a = l * nao * nao + mu * nao + nu;
                 let b = l * nao * nao + nu * nao + mu;
-                assert_eq!(sq[0].re[a], sq10[0].re[b], "hermiticity re L={l} ({mu},{nu})");
+                assert_eq!(
+                    sq[0].re[a], sq10[0].re[b],
+                    "hermiticity re L={l} ({mu},{nu})"
+                );
                 assert_eq!(
                     sq[0].im[a], -sq10[0].im[b],
                     "hermiticity im L={l} ({mu},{nu})"
@@ -427,7 +430,7 @@ fn get_pp_is_hermitian_at_gamma() {
 /// **Slow**: diamond's part-2 lattice sum runs to `cell.rcut = 21.3` Bohr, so
 /// this is an opt-in acceptance run rather than a per-commit gate.
 #[test]
-#[ignore = "slow — diamond's part-2 lattice sum runs to cell.rcut"]
+#[ignore = "T3: slow — diamond's part-2 lattice sum runs to cell.rcut"]
 fn get_pp_works_at_k_points() {
     let cell = common::diamond();
     let nao = cell.mol.nao_nr;

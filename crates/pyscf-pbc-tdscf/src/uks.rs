@@ -35,12 +35,17 @@ pub fn kernel_uks_tda(
     let hyb = hyb_fraction(xc)?;
     check_hybrid_kernel(xc, hyb)?;
     let _ = crate::require_rks_response();
-    let (mut a, _b) = build_uab(eri_aa, eri_ab, eri_bb, e_ia_a, e_ia_b, dims, nmo_a, nmo_b, hyb)?;
+    let (mut a, _b) = build_uab(
+        eri_aa, eri_ab, eri_bb, e_ia_a, e_ia_b, dims, nmo_a, nmo_b, hyb,
+    )?;
     let (da, db) = (dims.da(), dims.db());
     let dim = da + db;
     for (blk, base, n) in [(fxc_aa, 0, da), (fxc_bb, da * dim + da, db)] {
         if blk.len() != n * n {
-            return Err(PbcTdscfError::ShapeMismatch { expected: n * n, got: blk.len() });
+            return Err(PbcTdscfError::ShapeMismatch {
+                expected: n * n,
+                got: blk.len(),
+            });
         }
         let stride = dim;
         for i in 0..n {
@@ -52,7 +57,10 @@ pub fn kernel_uks_tda(
         }
     }
     if fxc_ab.len() != da * db {
-        return Err(PbcTdscfError::ShapeMismatch { expected: da * db, got: fxc_ab.len() });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: da * db,
+            got: fxc_ab.len(),
+        });
     }
     for i in 0..da {
         for j in 0..db {

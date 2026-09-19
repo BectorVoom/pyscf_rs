@@ -60,17 +60,12 @@ fn closed_shell_densities() -> ([Vec<f64>; 2], [Vec<f64>; 2], Vec<f64>, Vec<f64>
 }
 
 fn trace_dot(a: &[f64], b: &[f64]) -> f64 {
-    oracle_sum(
-        &a.iter()
-            .zip(b)
-            .map(|(x, y)| x * y)
-            .collect::<Vec<f64>>(),
-    )
+    oracle_sum(&a.iter().zip(b).map(|(x, y)| x * y).collect::<Vec<f64>>())
 }
 
 fn intor_plane(cell: &Cell, intor: &str) -> Vec<f64> {
-    let out = pyscf_pbc_gto::pbc_intor(cell, intor, &GAMMA, Default::default())
-        .expect("intor evaluates");
+    let out =
+        pyscf_pbc_gto::pbc_intor(cell, intor, &GAMMA, Default::default()).expect("intor evaluates");
     assert_eq!(out.kmats.len(), 1);
     out.kmats[0].re.clone()
 }
@@ -92,7 +87,9 @@ fn fixed_energy(
     let vnuc =
         pyscf_pbc_dft::multigrid::pp::get_nuc(cell).expect("AFTDF nuclear attraction builds");
     let nr = ni.nr_rks(cell, xc, dm_sf).expect("nr_rks evaluates");
-    let enuc = cell.energy_nuc().expect("Ewald nuclear repulsion evaluates");
+    let enuc = cell
+        .energy_nuc()
+        .expect("Ewald nuclear repulsion evaluates");
     oracle_sum(&[
         2.0 * trace_dot(dm_sf, &kin),
         2.0 * trace_dot(dm_sf, &vnuc),
@@ -128,7 +125,12 @@ fn refusals_are_named() {
 
     // uhf.py:38-43 — a numint that is not MultiGridNumInt2.
     let err = expect_err_msg(
-        GammaUhfGradients::new(&cell, GammaCoulombEngine::Other("GDF"), dm.clone(), dme.clone()),
+        GammaUhfGradients::new(
+            &cell,
+            GammaCoulombEngine::Other("GDF"),
+            dm.clone(),
+            dme.clone(),
+        ),
         "non-multigrid numint must be refused",
     );
     assert!(
@@ -345,8 +347,7 @@ fn energy_weighted_densities_match_hand_rolls() {
     let e = vec![-0.5, -0.25];
     let n = vec![1.0, 1.0];
     let [dme_a, dme_b] =
-        gamma_make_rdm1e_uhf([&c_alpha, &c_beta], [&e, &e], [&n, &n], nao)
-            .expect("rdm1e builds");
+        gamma_make_rdm1e_uhf([&c_alpha, &c_beta], [&e, &e], [&n, &n], nao).expect("rdm1e builds");
     assert_eq!(dme_a, vec![-0.5, 0.0, 0.0, -0.25]);
     assert_eq!(dme_b, vec![-0.25, 0.0, 0.0, -0.5]);
     let err = gamma_make_rdm1e_uhf([&c_alpha, &[][..]], [&e, &e], [&n, &n], nao)

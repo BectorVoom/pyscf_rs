@@ -194,14 +194,14 @@ print(json.dumps(out))
 "#;
 
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn vnl_matches_upstream_on_diamond_222() {
     compare_with_upstream(&diamond(), [2, 2, 2], 1e-11);
 }
 
 /// Silicon exercises the `nproj = 2` path (the `r²` half-overlap + `PLI_FAC`).
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn vnl_matches_upstream_on_silicon_222() {
     compare_with_upstream(&si(), [2, 2, 2], 1e-11);
 }

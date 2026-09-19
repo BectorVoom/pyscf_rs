@@ -55,15 +55,29 @@ fn dims_of(v: &Value) -> (UhfDims, usize, usize) {
         nocc_b: v["nob"].as_u64().unwrap() as usize,
         nvir_b: v["nvb"].as_u64().unwrap() as usize,
     };
-    (d, v["nmo_a"].as_u64().unwrap() as usize, v["nmo_b"].as_u64().unwrap() as usize)
+    (
+        d,
+        v["nmo_a"].as_u64().unwrap() as usize,
+        v["nmo_b"].as_u64().unwrap() as usize,
+    )
 }
 
 fn max_diff(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f64::max)
 }
 
 fn cfg(nroots: usize) -> TdaConfig {
-    TdaConfig { nroots, conv_tol: 1e-9, max_cycle: 50, singlet: true, tda: true, kshift: 0 }
+    TdaConfig {
+        nroots,
+        conv_tol: 1e-9,
+        max_cycle: 50,
+        singlet: true,
+        tda: true,
+        kshift: 0,
+    }
 }
 
 /// Coupled build vs upstream element-wise (all three spin sectors).
@@ -72,8 +86,15 @@ fn build_uab_matches_upstream() {
     let v = fixture();
     let (d, nmo_a, nmo_b) = dims_of(&v);
     let (a, b) = build_uab(
-        &flat(&v["eri_aa"]), &flat(&v["eri_ab"]), &flat(&v["eri_bb"]),
-        &flat(&v["e_ia_a"]), &flat(&v["e_ia_b"]), d, nmo_a, nmo_b, 1.0,
+        &flat(&v["eri_aa"]),
+        &flat(&v["eri_ab"]),
+        &flat(&v["eri_bb"]),
+        &flat(&v["e_ia_a"]),
+        &flat(&v["e_ia_b"]),
+        d,
+        nmo_a,
+        nmo_b,
+        1.0,
     )
     .expect("build must run");
     let (da, db) = (d.da(), d.db());
@@ -96,7 +117,11 @@ fn build_uab_matches_upstream() {
             ar[(da + i) * (da + db) + da + j] = bb[i * db + j];
         }
     }
-    assert!(max_diff(&a, &ar) < 1e-10, "A deviates {:e}", max_diff(&a, &ar));
+    assert!(
+        max_diff(&a, &ar) < 1e-10,
+        "A deviates {:e}",
+        max_diff(&a, &ar)
+    );
     let ba = flat(&v["B"][0]);
     let bab = flat(&v["B"][1]);
     let bbb = flat(&v["B"][2]);
@@ -115,7 +140,11 @@ fn build_uab_matches_upstream() {
             br[(da + i) * (da + db) + da + j] = bbb[i * db + j];
         }
     }
-    assert!(max_diff(&b, &br) < 1e-10, "B deviates {:e}", max_diff(&b, &br));
+    assert!(
+        max_diff(&b, &br) < 1e-10,
+        "B deviates {:e}",
+        max_diff(&b, &br)
+    );
 }
 
 /// Gate A: UHF-TDA + TDHF roots at upstream's decimals, sorted/counted.
@@ -124,27 +153,56 @@ fn gate_a_uhf_roots() {
     let v = fixture();
     let (d, nmo_a, nmo_b) = dims_of(&v);
     let args = (
-        &flat(&v["eri_aa"]), &flat(&v["eri_ab"]), &flat(&v["eri_bb"]),
-        &flat(&v["e_ia_a"]), &flat(&v["e_ia_b"]), d, nmo_a, nmo_b, 1.0,
+        &flat(&v["eri_aa"]),
+        &flat(&v["eri_ab"]),
+        &flat(&v["eri_bb"]),
+        &flat(&v["e_ia_a"]),
+        &flat(&v["e_ia_b"]),
+        d,
+        nmo_a,
+        nmo_b,
+        1.0,
     );
-    let r = kernel_uhf_tda(args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, &cfg(3))
-        .expect("TDA must run");
+    let r = kernel_uhf_tda(
+        args.0,
+        args.1,
+        args.2,
+        args.3,
+        args.4,
+        args.5,
+        args.6,
+        args.7,
+        args.8,
+        &cfg(3),
+    )
+    .expect("TDA must run");
     assert_eq!(r.energies.len(), 3);
     assert!(r.energies.windows(2).all(|w| w[0] <= w[1]));
     let eref = flat(&v["e_tda"]);
     let dev = max_diff(
-        &r.energies.iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
+        &r.energies
+            .iter()
+            .map(|x| x * HARTREE2EV)
+            .collect::<Vec<_>>(),
         &eref[..3].iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
     );
     assert!(dev < 5e-5, "TDA deviates {dev:e} eV");
     let mut c = cfg(3);
     c.tda = false;
-    let rt = kernel_uhf_tdhf(args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, &c)
-        .expect("TDHF must run");
+    let rt = kernel_uhf_tdhf(
+        args.0, args.1, args.2, args.3, args.4, args.5, args.6, args.7, args.8, &c,
+    )
+    .expect("TDHF must run");
     let ereft = flat(&v["e_tdhf"]);
     let devt = max_diff(
-        &rt.energies.iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
-        &ereft[..3].iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
+        &rt.energies
+            .iter()
+            .map(|x| x * HARTREE2EV)
+            .collect::<Vec<_>>(),
+        &ereft[..3]
+            .iter()
+            .map(|x| x * HARTREE2EV)
+            .collect::<Vec<_>>(),
     );
     assert!(devt < 5e-5, "TDHF deviates {devt:e} eV");
 }
@@ -157,8 +215,15 @@ fn decoupling_is_exact_when_ab_vanishes() {
     let (da, db) = (d.da(), d.db());
     let eri_ab0 = vec![0.0f64; flat(&v["eri_ab"]).len()];
     let (a, _) = build_uab(
-        &flat(&v["eri_aa"]), &eri_ab0, &flat(&v["eri_bb"]),
-        &flat(&v["e_ia_a"]), &flat(&v["e_ia_b"]), d, nmo_a, nmo_b, 1.0,
+        &flat(&v["eri_aa"]),
+        &eri_ab0,
+        &flat(&v["eri_bb"]),
+        &flat(&v["e_ia_a"]),
+        &flat(&v["e_ia_b"]),
+        d,
+        nmo_a,
+        nmo_b,
+        1.0,
     )
     .unwrap();
     // Independent dense solves on the diagonal blocks.
@@ -184,8 +249,16 @@ fn decoupling_is_exact_when_ab_vanishes() {
     // not bit-identity: an 18×18 eigh blocks differently than 6×6 + 12×12
     // eighs, so last-ulp ordering differences are correct behavior).
     let r = kernel_uhf_tda(
-        &flat(&v["eri_aa"]), &eri_ab0, &flat(&v["eri_bb"]),
-        &flat(&v["e_ia_a"]), &flat(&v["e_ia_b"]), d, nmo_a, nmo_b, 1.0, &cfg(da + db),
+        &flat(&v["eri_aa"]),
+        &eri_ab0,
+        &flat(&v["eri_bb"]),
+        &flat(&v["e_ia_a"]),
+        &flat(&v["e_ia_b"]),
+        d,
+        nmo_a,
+        nmo_b,
+        1.0,
+        &cfg(da + db),
     )
     .unwrap();
     assert_eq!(r.energies.len(), union.len());
@@ -201,8 +274,15 @@ fn live_coupling_shifts_roots() {
     let (d, nmo_a, nmo_b) = dims_of(&v);
     let (da, db) = (d.da(), d.db());
     let (a, _) = build_uab(
-        &flat(&v["eri_aa"]), &flat(&v["eri_ab"]), &flat(&v["eri_bb"]),
-        &flat(&v["e_ia_a"]), &flat(&v["e_ia_b"]), d, nmo_a, nmo_b, 1.0,
+        &flat(&v["eri_aa"]),
+        &flat(&v["eri_ab"]),
+        &flat(&v["eri_bb"]),
+        &flat(&v["e_ia_a"]),
+        &flat(&v["e_ia_b"]),
+        d,
+        nmo_a,
+        nmo_b,
+        1.0,
     )
     .unwrap();
     let mut aaa = vec![0.0f64; da * da];
@@ -254,7 +334,10 @@ fn kuhf_single_k_matches_gamma_driver() {
         out
     }
     let wrap = |x: Vec<f64>| vec![x];
-    let (aa_r, aa_i) = (wrap(to_7d(flat(&v["eri_aa"]), d.nocc_a, nmo_a)), wrap(vec![0.0; nmo_a * d.nocc_a * nmo_a * nmo_a]));
+    let (aa_r, aa_i) = (
+        wrap(to_7d(flat(&v["eri_aa"]), d.nocc_a, nmo_a)),
+        wrap(vec![0.0; nmo_a * d.nocc_a * nmo_a * nmo_a]),
+    );
     let ab_src = flat(&v["eri_ab"]);
     let mut ab_7d = vec![0.0f64; nmo_a * d.nocc_a * nmo_b * nmo_b];
     for i in 0..d.nocc_a {
@@ -278,8 +361,24 @@ fn kuhf_single_k_matches_gamma_driver() {
     let e_ob = vec![flat(&v["e_occ_b"])];
     let e_vb = vec![flat(&v["e_vir_b"])];
     let r = kernel_kuhf_tda(
-        &aa_r, &aa_i, &ab_r, &ab_i, &bb_r, &bb_i,
-        &e_oa, &e_va, &e_ob, &e_vb, &kc, 1, d, nmo_a, nmo_b, 1.0, 0, &cfg(3),
+        &aa_r,
+        &aa_i,
+        &ab_r,
+        &ab_i,
+        &bb_r,
+        &bb_i,
+        &e_oa,
+        &e_va,
+        &e_ob,
+        &e_vb,
+        &kc,
+        1,
+        d,
+        nmo_a,
+        nmo_b,
+        1.0,
+        0,
+        &cfg(3),
     );
     // Single-k complex path on real data: roots must match gamma closely.
     // (real eigh vs complex zeigh — same math, last-ulp latitude.)
@@ -301,14 +400,33 @@ fn kuhf_single_k_matches_gamma_driver() {
 fn kuhf_complex_build_oracle() {
     // nk=1, noa=1, nva=1, nob=1, nvb=1, nmo=2: tiny complex blocks.
     let nk = 1;
-    let d = UhfDims { nocc_a: 1, nvir_a: 1, nocc_b: 1, nvir_b: 1 };
+    let d = UhfDims {
+        nocc_a: 1,
+        nvir_a: 1,
+        nocc_b: 1,
+        nvir_b: 1,
+    };
     // eri_aa full (1,2,2,2)=8 complex values: re = flat index, im = -re.
     let mk = |base: f64| -> Vec<f64> { (0..8).map(|i| base + i as f64).collect() };
     let mki = |base: f64| -> Vec<f64> { (0..8).map(|i| -(base + i as f64)).collect() };
     let (a, b) = build_kuab(
-        &[mk(0.0)], &[mki(0.0)], &[mk(100.0)], &[mki(100.0)], &[mk(200.0)], &[mki(200.0)],
-        &[vec![-1.0]], &[vec![0.5]], &[vec![-0.8]], &[vec![0.7]],
-        &[0], nk, d, 2, 2, 1.0, 1.0,
+        &[mk(0.0)],
+        &[mki(0.0)],
+        &[mk(100.0)],
+        &[mki(100.0)],
+        &[mk(200.0)],
+        &[mki(200.0)],
+        &[vec![-1.0]],
+        &[vec![0.5]],
+        &[vec![-0.8]],
+        &[vec![0.7]],
+        &[0],
+        nk,
+        d,
+        2,
+        2,
+        1.0,
+        1.0,
     )
     .expect("build must run");
     // dim = (1+1)*1 = 2. A[0][0] (alpha-alpha diag):
@@ -338,14 +456,28 @@ fn uhf_deterministic_across_thread_counts() {
         let v = fixture();
         let (d, nmo_a, nmo_b) = dims_of(&v);
         kernel_uhf_tda(
-            &flat(&v["eri_aa"]), &flat(&v["eri_ab"]), &flat(&v["eri_bb"]),
-            &flat(&v["e_ia_a"]), &flat(&v["e_ia_b"]), d, nmo_a, nmo_b, 1.0, &cfg(3),
+            &flat(&v["eri_aa"]),
+            &flat(&v["eri_ab"]),
+            &flat(&v["eri_bb"]),
+            &flat(&v["e_ia_a"]),
+            &flat(&v["e_ia_b"]),
+            d,
+            nmo_a,
+            nmo_b,
+            1.0,
+            &cfg(3),
         )
         .expect("TDA must run")
         .energies
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b.iter()) {
@@ -360,7 +492,7 @@ fn uhf_deterministic_across_thread_counts() {
 /// `get_ab`); the 2-k Davidson runs matrix-free. Committed upstream numbers:
 /// shift roots [0.10073, 0.10912] Ha vs molecular [same] at 2dp.
 #[test]
-#[ignore = "live 2-k Davidson arm: non-uniform per-k fillings need the matrix-free vind path (19-08 follow-up)"]
+#[ignore = "T1: live 2-k Davidson arm: non-uniform per-k fillings need the matrix-free vind path (19-08 follow-up)"]
 fn live_bigbox_matches_molecular() {
     panic!("live arm: KUHF (2,1,1) Davidson vs molecular UHF-TDA at 2dp");
 }

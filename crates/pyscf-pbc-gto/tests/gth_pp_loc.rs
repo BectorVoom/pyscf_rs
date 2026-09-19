@@ -255,19 +255,19 @@ print(json.dumps(out))
 "#;
 
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn g_space_factors_match_upstream_on_diamond() {
     compare_g_space(&diamond(), 1e-12);
 }
 
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn g_space_factors_match_upstream_on_lif() {
     compare_g_space(&lif(), 1e-12);
 }
 
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T2: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn part2_matches_upstream_on_diamond() {
     compare_part2(&diamond(), 1e-9);
 }
@@ -281,7 +281,7 @@ fn part2_matches_upstream_on_diamond() {
 /// cintx has since fixed it; `tests/cintx_moment_weighted_available.rs` pins the
 /// corrected kernels against libcint, and this is the end-to-end gate.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + an upstream PySCF"]
+#[ignore = "T3: needs PYSCF_ORACLE_VENV + an upstream PySCF"]
 fn part2_matches_upstream_on_lif() {
     compare_part2(&lif(), 1e-9);
 }

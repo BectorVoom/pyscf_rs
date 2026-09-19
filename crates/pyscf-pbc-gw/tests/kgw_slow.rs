@@ -13,11 +13,11 @@
 
 use num_complex::Complex64;
 use pyscf_pbc_gw::gw_slow::kernel_gw_slow;
-use pyscf_pbc_gw::kgw_slow::{kernel_kgw_slow, slow_sigma_real, LehmannPole, SLOW_ETA};
+use pyscf_pbc_gw::kgw_slow::{LehmannPole, SLOW_ETA, kernel_kgw_slow, slow_sigma_real};
 use pyscf_pbc_gw::kgw_slow_supercell::{
     kernel_kgw_slow_supercell, mean_primitive_sigma, replicate_supercell,
 };
-use pyscf_pbc_gw::krgw_ac::{kernel_krgw_ac, AcMode};
+use pyscf_pbc_gw::krgw_ac::{AcMode, kernel_krgw_ac};
 use pyscf_pbc_gw::types::GwConfig;
 
 fn cfg(n: usize) -> GwConfig {

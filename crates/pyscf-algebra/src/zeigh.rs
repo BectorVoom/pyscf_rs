@@ -51,7 +51,7 @@
 
 use crate::complex::CTensor;
 use crate::{AlgebraError, eigh_gen, solve_linear};
-use faer::linalg::solvers::{Llt, PartialPivLu, SelfAdjointEigen, Solve};
+use faer::linalg::solvers::{Llt, PartialPivLu, Solve};
 use faer::{Mat, Side, c64};
 
 /// D-PBC-04 outcome: faer 0.24 ships a working native `c64` eigensolver,
@@ -360,8 +360,12 @@ fn to_faer(x: &CTensor, n: usize) -> Mat<c64> {
 }
 
 /// Native complex Löwdin route: the exact algorithm [`crate::eigh_gen`] runs,
-/// lifted to `c64` (`S = U·diag(s)·Uᴴ`, `X = U·diag(s^{-1/2})` with
-/// linear-dependency removal, `F' = Xᴴ·F·X`, `C = X·V`).
+/// lifted to complex arithmetic (`S = U·diag(s)·Uᴴ`, `X = U·diag(s^{-1/2})`
+/// with linear-dependency removal, `F' = Xᴴ·F·X`, `C = X·V`).
+///
+/// The two inner standard Hermitian decompositions (`S`, then `F'`) run
+/// through `lapack_rs` ZHEEVD (see [`crate::lapack_backend`]); the Löwdin
+/// glue stays here (faer `c64` `Mat` products only — no faer eigensolver).
 ///
 /// Only compiled/reachable while [`FAER_C64`] is `true`.
 pub fn zeigh_gen_faer(
@@ -375,17 +379,15 @@ pub fn zeigh_gen_faer(
         return Ok((Vec::new(), CTensor::zeros(0)));
     }
 
-    // === Step 1: eigh(S) ===
-    let s_mat = to_faer(s, n);
-    let s_evd = SelfAdjointEigen::new(s_mat.as_ref(), Side::Lower)
-        .map_err(|e| AlgebraError::CubeclRuntime(format!("zeigh: eigh(S) failed: {e:?}")))?;
-    let s_evals = s_evd.S();
-    let s_evecs = s_evd.U();
+    // === Step 1: eigh(S) via lapack_rs ZHEEVD ===
+    // Column-major parts: element (i, j) at `s_evecs_re[i + j*n]`.
+    let (s_evals, s_evecs_re, s_evecs_im) =
+        crate::lapack_backend::hermitian_eigh(&s.re, &s.im, n)?;
 
     // === Step 2: X = U · diag(s^{-1/2}) with linear-dependency removal ===
     let mut valid_cols: Vec<(usize, f64)> = Vec::with_capacity(n);
     for j in 0..n {
-        let lam = s_evals[j].re;
+        let lam = s_evals[j];
         if lam > crate::eigh_gen::S_LINEAR_DEP_TOL {
             valid_cols.push((j, 1.0 / lam.sqrt()));
         }
@@ -396,7 +398,7 @@ pub fn zeigh_gen_faer(
     let n_lin = valid_cols.len();
     let x = Mat::<c64>::from_fn(n, n_lin, |i, k| {
         let (j, inv_sqrt) = valid_cols[k];
-        s_evecs[(i, j)] * c64::new(inv_sqrt, 0.0)
+        c64::new(s_evecs_re[i + j * n], s_evecs_im[i + j * n]) * c64::new(inv_sqrt, 0.0)
     });
 
     // === Step 3: F' = Xᴴ · F · X (n_lin × n_lin, Hermitian) ===
@@ -404,21 +406,31 @@ pub fn zeigh_gen_faer(
     let xh_f = x.adjoint() * &f_mat;
     let fp = &xh_f * &x;
 
-    // === Step 4: eigh(F') ===
-    let fp_evd = SelfAdjointEigen::new(fp.as_ref(), Side::Lower)
-        .map_err(|e| AlgebraError::CubeclRuntime(format!("zeigh: eigh(F') failed: {e:?}")))?;
-    let fp_evals = fp_evd.S();
-    let v = fp_evd.U();
+    // === Step 4: eigh(F') via lapack_rs ZHEEVD ===
+    // Pack the faer product into row-major planar buffers for the backend.
+    let mut fp_re_row = vec![0.0_f64; n_lin * n_lin];
+    let mut fp_im_row = vec![0.0_f64; n_lin * n_lin];
+    for i in 0..n_lin {
+        for j in 0..n_lin {
+            fp_re_row[i * n_lin + j] = fp[(i, j)].re;
+            fp_im_row[i * n_lin + j] = fp[(i, j)].im;
+        }
+    }
+    let (fp_evals, v_re_col, v_im_col) =
+        crate::lapack_backend::hermitian_eigh(&fp_re_row, &fp_im_row, n_lin)?;
+    let v = Mat::<c64>::from_fn(n_lin, n_lin, |i, j| {
+        c64::new(v_re_col[i + j * n_lin], v_im_col[i + j * n_lin])
+    });
 
     // === Step 5: C = X · V (n × n_lin) ===
-    let c_lin = &x * v;
+    let c_lin = &x * &v;
 
     // Pack: eigenvalues padded with +inf for the dropped linearly-dependent
     // directions; C is F-order with the dropped columns left at zero — exactly
     // the convention `eigh_gen` documents.
     let mut eigenvalues = vec![f64::INFINITY; n];
     for (i, e) in eigenvalues.iter_mut().enumerate().take(n_lin) {
-        *e = fp_evals[i].re;
+        *e = fp_evals[i];
     }
     let mut c = CTensor::zeros(n * n);
     for j in 0..n_lin {

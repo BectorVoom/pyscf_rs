@@ -122,7 +122,9 @@ fn fft_matches_upstream_and_gdf_integral_routes_agree() {
             // route-agreement assertion below is upstream's identity, not a
             // tolerance.
             let dev = (direct - expected).abs();
-            eprintln!("KMP2/GDF He/6-31g: AO2MO={direct:.17}, upstream={expected:.17}, |d|={dev:e}");
+            eprintln!(
+                "KMP2/GDF He/6-31g: AO2MO={direct:.17}, upstream={expected:.17}, |d|={dev:e}"
+            );
             assert!(
                 dev < 2e-6,
                 "KMP2 on GDF: AO2MO={direct}, upstream={expected}, |d|={dev:e}"

@@ -239,11 +239,9 @@ impl<'a> GammaUhfGradients<'a> {
                 .ni
                 .vpploc_part1_nuc_grad(self.cell, &dm_sf, &self.kpts, None, None)
                 .map_err(|e| wrap_dft("vpploc_part1_nuc_grad", e))?;
-            let part2 = pyscf_pbc_gto::pseudo::vpploc_part2_nuc_grad(
-                self.cell, &dm_sf, &self.kpts,
-            )?;
-            let nonloc =
-                pyscf_pbc_gto::pseudo::vppnl_nuc_grad(self.cell, &dm_sf, &self.kpts)?;
+            let part2 =
+                pyscf_pbc_gto::pseudo::vpploc_part2_nuc_grad(self.cell, &dm_sf, &self.kpts)?;
+            let nonloc = pyscf_pbc_gto::pseudo::vppnl_nuc_grad(self.cell, &dm_sf, &self.kpts)?;
             for ia in 0..natm {
                 for c in 0..3 {
                     de[ia][c] = oracle_sum(&[de[ia][c], part2[ia][c], nonloc[ia][c]]);

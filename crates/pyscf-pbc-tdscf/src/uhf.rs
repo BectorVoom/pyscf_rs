@@ -67,7 +67,10 @@ pub fn build_uab(
         || e_ia_a.len() != da
         || e_ia_b.len() != db
     {
-        return Err(PbcTdscfError::ShapeMismatch { expected: da + db, got: e_ia_a.len() + e_ia_b.len() });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: da + db,
+            got: e_ia_a.len() + e_ia_b.len(),
+        });
     }
     let eaa = |i: usize, p: usize, q: usize, r: usize| -> f64 {
         eri_aa[((i * nmo_a + p) * nmo_a + q) * nmo_a + r]
@@ -88,10 +91,10 @@ pub fn build_uab(
             for j in 0..noa {
                 for bj in 0..nva {
                     let jb = j * nva + bj;
-                    a[ia * dim + jb] = eaa(i, noa + aj, noa + bj, j)
-                        - hyb * eaa(i, j, noa + bj, noa + aj);
-                    b[ia * dim + jb] = eaa(i, noa + aj, j, noa + bj)
-                        - hyb * eaa(j, noa + aj, i, noa + bj);
+                    a[ia * dim + jb] =
+                        eaa(i, noa + aj, noa + bj, j) - hyb * eaa(i, j, noa + bj, noa + aj);
+                    b[ia * dim + jb] =
+                        eaa(i, noa + aj, j, noa + bj) - hyb * eaa(j, noa + aj, i, noa + bj);
                 }
             }
             a[ia * dim + ia] += e_ia_a[ia];
@@ -121,10 +124,10 @@ pub fn build_uab(
             for j in 0..nob {
                 for bj in 0..nvb {
                     let jb = da + j * nvb + bj;
-                    a[ia * dim + jb] = ebb(i, nob + aj, nob + bj, j)
-                        - hyb * ebb(i, j, nob + bj, nob + aj);
-                    b[ia * dim + jb] = ebb(i, nob + aj, j, nob + bj)
-                        - hyb * ebb(j, nob + aj, i, nob + bj);
+                    a[ia * dim + jb] =
+                        ebb(i, nob + aj, nob + bj, j) - hyb * ebb(i, j, nob + bj, nob + aj);
+                    b[ia * dim + jb] =
+                        ebb(i, nob + aj, j, nob + bj) - hyb * ebb(j, nob + aj, i, nob + bj);
                 }
             }
             a[ia * dim + ia] += e_ia_b[ia - da];
@@ -147,8 +150,9 @@ pub fn kernel_uhf_tda(
     hyb: f64,
     cfg: &TdaConfig,
 ) -> Result<TdaResult, PbcTdscfError> {
-    let (a, _b) =
-        build_uab(eri_aa, eri_ab, eri_bb, e_ia_a, e_ia_b, dims, nmo_a, nmo_b, hyb)?;
+    let (a, _b) = build_uab(
+        eri_aa, eri_ab, eri_bb, e_ia_a, e_ia_b, dims, nmo_a, nmo_b, hyb,
+    )?;
     let mut out = tda_dense(&a, dims.da() + dims.db(), cfg)?;
     out.kshift = 0;
     Ok(out)
@@ -168,7 +172,8 @@ pub fn kernel_uhf_tdhf(
     hyb: f64,
     cfg: &TdaConfig,
 ) -> Result<TdaResult, PbcTdscfError> {
-    let (a, b) =
-        build_uab(eri_aa, eri_ab, eri_bb, e_ia_a, e_ia_b, dims, nmo_a, nmo_b, hyb)?;
+    let (a, b) = build_uab(
+        eri_aa, eri_ab, eri_bb, e_ia_a, e_ia_b, dims, nmo_a, nmo_b, hyb,
+    )?;
     crate::rhf::symm_tdhf(&a, &b, dims.da() + dims.db(), cfg.nroots)
 }

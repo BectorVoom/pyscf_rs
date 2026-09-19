@@ -19,7 +19,7 @@
 //! **Do not optimise it.**
 
 use crate::error::PbcGwError;
-use crate::kgw_slow::{kernel_slow_orbital, slow_sigma_real, LehmannPole, SLOW_ETA};
+use crate::kgw_slow::{LehmannPole, SLOW_ETA, kernel_slow_orbital, slow_sigma_real};
 use crate::types::{GwConfig, GwRoute, QpResult};
 
 /// Replicate primitive k-mesh poles into the supercell pole set: union over

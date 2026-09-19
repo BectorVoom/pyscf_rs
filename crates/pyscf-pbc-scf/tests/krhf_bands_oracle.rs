@@ -141,7 +141,7 @@ fn compare(got: &[Vec<f64>], want: &serde_json::Value, label: &str) -> f64 {
 /// **THE BAND GATE.** A converged KRHF, then `get_bands` at two genuine
 /// off-mesh band k-points, against upstream's `get_bands` on the same density.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krhf_get_bands_matches_upstream() {
     let Some(py) = oracle_python() else {
         eprintln!("SKIP: {GATE} is not set");

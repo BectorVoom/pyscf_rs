@@ -1,0 +1,34 @@
+name: PBC oracle run
+description: >-
+  Run one crate's named #[ignore]d PBC gates with `cargo test --release --locked
+  --test <target>... -- --ignored --exact <gate>...` and fail on a vacuous green
+  (gate count mismatch, or a skip line while PYSCF_ORACLE_VENV is set). Plan 20-03.
+  The logic is run.sh next to this file, so the exact CI command can be run locally.
+
+inputs:
+  tier:
+    description: label only (T1, T2, T3, or a KNOWN-RED set) -- the gate list is what selects
+    required: true
+  crate:
+    description: cargo package, e.g. pyscf-pbc-df
+    required: true
+  targets:
+    description: whitespace-separated integration-test target names (never empty; never a bare --tests)
+    required: true
+  gates:
+    description: whitespace-separated exact test names
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: cargo test --ignored --exact (named targets and gates)
+      shell: bash
+      env:
+        PBC_TIER: ${{ inputs.tier }}
+        PBC_CRATE: ${{ inputs.crate }}
+        PBC_TARGETS: ${{ inputs.targets }}
+        PBC_GATES: ${{ inputs.gates }}
+      run: |
+        echo "tier: $PBC_TIER"
+        bash "$GITHUB_ACTION_PATH/run.sh" "$PBC_CRATE" "$PBC_TARGETS" "$PBC_GATES"

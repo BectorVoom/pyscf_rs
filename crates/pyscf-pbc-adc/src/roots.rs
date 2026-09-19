@@ -39,10 +39,16 @@ pub fn nosym_roots(
     nroots: usize,
 ) -> Result<(Vec<f64>, Vec<Vec<(f64, f64)>>), PbcAdcError> {
     if hre.len() != dim * dim || him.len() != dim * dim || dim == 0 {
-        return Err(PbcAdcError::ShapeMismatch { expected: dim * dim, got: hre.len().min(him.len()) });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: dim * dim,
+            got: hre.len().min(him.len()),
+        });
     }
     if nroots > dim {
-        return Err(PbcAdcError::ShapeMismatch { expected: dim, got: nroots });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: dim,
+            got: nroots,
+        });
     }
     let max_im: f64 = him.iter().map(|x| x.abs()).fold(0.0, f64::max);
     if max_im > IMAG_BOUND {
@@ -53,7 +59,9 @@ pub fn nosym_roots(
     let mat = Mat::<f64>::from_fn(dim, dim, |i, j| hre[i * dim + j]);
     let evd = Eigen::new_from_real(mat.as_ref()).map_err(|e| {
         PbcAdcError::Core(pyscf_core::PyscfRsError::Core(
-            pyscf_core::CoreError::InvalidMolecule(format!("adc nosym eigendecomposition failed: {e:?}")),
+            pyscf_core::CoreError::InvalidMolecule(format!(
+                "adc nosym eigendecomposition failed: {e:?}"
+            )),
         ))
     })?;
     let s = evd.S();
@@ -63,14 +71,22 @@ pub fn nosym_roots(
         s[a].re
             .partial_cmp(&s[b].re)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then(s[a].im.abs().partial_cmp(&s[b].im.abs()).unwrap_or(std::cmp::Ordering::Equal))
+            .then(
+                s[a].im
+                    .abs()
+                    .partial_cmp(&s[b].im.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
     });
     let mut energies = Vec::with_capacity(nroots);
     let mut columns = Vec::with_capacity(nroots);
     for r in 0..nroots {
         let j = order[r];
         if s[j].im.abs() > ROOT_IMAG_BOUND {
-            return Err(PbcAdcError::ShapeMismatch { expected: 0, got: (s[j].im.abs() * 1e12) as usize });
+            return Err(PbcAdcError::ShapeMismatch {
+                expected: 0,
+                got: (s[j].im.abs() * 1e12) as usize,
+            });
         }
         energies.push(s[j].re);
         let mut col = Vec::with_capacity(dim);

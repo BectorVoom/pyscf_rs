@@ -58,6 +58,19 @@ __all__ = [
     "Scanner",
 ]
 
+# 20-19 A: fall through to upstream PySCF for submodules (`extend_path`) and for
+# top-level names this overlay does not bind (`__getattr__`, pyscf/_passthrough.py).
+# Silent (not a PBC family); the native names above stay module globals, so
+# `pyscf.grad.<native name> is pyscf._native.grad.<native name>` is unchanged.
+import pkgutil as _pkgutil  # noqa: E402
+
+__path__ = _pkgutil.extend_path(__path__, __name__)
+del _pkgutil
+
+from pyscf._passthrough import package_getattr as _package_getattr  # noqa: E402
+
+__getattr__ = _package_getattr(globals(), ("pyscf._native.grad",))
+
 
 def _graft_nuc_grad_onto_scf() -> None:
     """Graft `mf.nuc_grad_method()` onto the Rust SCF base classes (the upstream

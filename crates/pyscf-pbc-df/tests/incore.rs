@@ -411,7 +411,7 @@ print(json.dumps({
 /// Measured at ~1e-15 on every one of the 23 auxiliary components; the gate is
 /// set two decades looser so it survives a libm difference, not a wrong index.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn isolated_cell_aux_e2_matches_upstream() {
     use pyscf_core::Unit;
     use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
@@ -495,7 +495,7 @@ fn isolated_cell_aux_e2_matches_upstream() {
 /// lattice sum cannot be made Hermitian), so this too is gated where it is well
 /// defined.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T1: requires PYSCF_ORACLE_VENV"]
 fn isolated_cell_fill_2c2e_is_symmetric_and_positive_definite() {
     use pyscf_core::Unit;
     use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};

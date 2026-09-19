@@ -49,6 +49,43 @@ pub fn silicon() -> Cell {
     )
 }
 
+/// Diamond, ALL-ELECTRON (`sto-3g`, no pseudopotential) — the `get_nuc`
+/// multi-atom path: 2 C atoms, one off the origin.
+pub fn diamond_all_electron() -> Cell {
+    let h = 3.37032;
+    let q = 1.68516;
+    Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![("C".into(), [0.0, 0.0, 0.0]), ("C".into(), [q, q, q])]),
+            basis: BasisInput::Name("sto-3g".into()),
+            unit: Unit::Bohr,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]),
+        ..Default::default()
+    })
+    .expect("diamond all-electron cell must build")
+}
+
+/// Two He atoms on the He fcc lattice, one off the origin.
+pub fn he2_off_origin() -> Cell {
+    let h = 2.834589;
+    Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![
+                ("He".into(), [0.0, 0.0, 0.0]),
+                ("He".into(), [1.0, 0.5, 0.25]),
+            ]),
+            basis: BasisInput::Name("sto-3g".into()),
+            unit: Unit::Bohr,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[0.0, h, h], [h, 0.0, h], [h, h, 0.0]]),
+        ..Default::default()
+    })
+    .expect("He2 cell must build")
+}
+
 /// He on an fcc lattice, ALL-ELECTRON (`sto-3g`, no pseudopotential) — the
 /// `get_nuc` path, which a `gth-pade` cell never reaches.
 pub fn he_all_electron() -> Cell {

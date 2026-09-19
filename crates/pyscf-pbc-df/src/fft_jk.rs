@@ -140,6 +140,48 @@ pub fn get_j_kpts(
     Ok(out)
 }
 
+/// The weighted real-space Coulomb potential of a REAL, BZ-averaged density —
+/// the `vR` [`get_j_kpts`] contracts with the band AO pairs (`fft_jk.py:84-94`,
+/// Hermitian branch), for callers that already hold `rho` on the uniform grid.
+///
+/// `weight` is the uniform grid weight (`vol / ngrids`).
+///
+/// # Errors
+/// Propagates `get_coulG` and the FFT; `rho` must cover the whole mesh.
+pub fn coulomb_potential_from_rho(
+    cell: &pyscf_pbc_gto::Cell,
+    mesh: [usize; 3],
+    rho: &[f64],
+    weight: f64,
+) -> Result<Vec<f64>, PbcDfError> {
+    let gv = get_gv(cell, Some(mesh))?;
+    let coulg = get_coulg(
+        cell,
+        CoulGArgs {
+            mesh: Some(mesh),
+            gv: Some(&gv),
+            ..CoulGArgs::new()
+        },
+    )?;
+    let ngrids = coulg.len();
+    if rho.len() != ngrids {
+        return Err(PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+            pyscf_core::CoreError::InvalidMolecule(format!(
+                "coulomb_potential_from_rho: {} density values for a {ngrids}-point mesh",
+                rho.len()
+            )),
+        )));
+    }
+    let rho = CTensor::from_planes(rho.to_vec(), vec![0.0; ngrids]);
+    let mut rhog = fft(&rho, mesh)?;
+    for g in 0..ngrids {
+        rhog.re[g] *= coulg[g];
+        rhog.im[g] *= coulg[g];
+    }
+    let v = ifft(&rhog, mesh)?;
+    Ok(v.re.iter().map(|x| x * weight).collect())
+}
+
 /// `rho[g] += sum_{mu,nu} conj(ao[mu,g]) dm[nu,mu] ao[nu,g]` — upstream's
 /// `ao_dm = ao . dm; rho += einsum('xi,xi->x', ao_dm, ao.conj())`
 /// (`fft_jk.py:81-83`), transposed into the `(nao, ngrids)` layout.
@@ -791,15 +833,7 @@ fn kk_symmetric_pair_loop(
             let (coulg, expmikr) = (entry.coulg.as_slice(), entry.expmikr.as_deref());
 
             // The ONE transform this pair pays for.
-            let rho1 = build_rho1(
-                ao_kpts.at(k1),
-                ao_kpts.at(k2),
-                expmikr,
-                0,
-                nao,
-                nao,
-                ngrids,
-            );
+            let rho1 = build_rho1(ao_kpts.at(k1), ao_kpts.at(k2), expmikr, 0, nao, nao, ngrids);
             let mut vg = fft(&rho1, mesh)?;
             vg.re
                 .par_chunks_mut(ngrids)

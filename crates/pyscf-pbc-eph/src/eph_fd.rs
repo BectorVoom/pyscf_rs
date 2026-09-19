@@ -35,7 +35,11 @@ pub const EPH_FD_IMPLIED_FLOOR: f64 = 1e-8;
 /// `+disp/2`/`−disp/2` along one Cartesian mode. Lengths must agree; `disp`
 /// must be positive and finite — a zero step divides by zero, a negative step
 /// flips the sign, both silently. Refused here.
-pub fn central_difference(q_plus: &[f64], q_minus: &[f64], disp: f64) -> Result<Vec<f64>, PbcEphError> {
+pub fn central_difference(
+    q_plus: &[f64],
+    q_minus: &[f64],
+    disp: f64,
+) -> Result<Vec<f64>, PbcEphError> {
     if q_plus.len() != q_minus.len() {
         return Err(PbcEphError::ShapeMismatch {
             expected: q_plus.len(),
@@ -43,7 +47,10 @@ pub fn central_difference(q_plus: &[f64], q_minus: &[f64], disp: f64) -> Result<
         });
     }
     if !(disp > 0.0) || !disp.is_finite() {
-        return Err(PbcEphError::ShapeMismatch { expected: 1, got: 0 });
+        return Err(PbcEphError::ShapeMismatch {
+            expected: 1,
+            got: 0,
+        });
     }
     Ok(q_plus
         .iter()
@@ -57,6 +64,10 @@ pub fn central_difference(q_plus: &[f64], q_minus: &[f64], disp: f64) -> Result<
 /// Ports the `get_vmat` contraction shape: `e_plus`/`e_minus` hold the MO
 /// energies at `+disp`/`-disp` along one mode; returns the central-difference
 /// derivative `dE/dR` at the default step.
-pub fn eph_fd_coupling(e_plus: &[f64], e_minus: &[f64], disp: f64) -> Result<Vec<f64>, PbcEphError> {
+pub fn eph_fd_coupling(
+    e_plus: &[f64],
+    e_minus: &[f64],
+    disp: f64,
+) -> Result<Vec<f64>, PbcEphError> {
     central_difference(e_plus, e_minus, disp)
 }

@@ -20,6 +20,10 @@ pyscf-pbc-gto   = { path = "../pyscf-pbc-gto" }
 pyscf-pbc-df    = { path = "../pyscf-pbc-df" }
 pyscf-pbc-scf   = { path = "../pyscf-pbc-scf" }
 pyscf-pbc-dft   = { path = "../pyscf-pbc-dft" }
+# Plan 18-05 (D-PBC-31 clause 10) — the shared (natm,3) atom/grid contraction
+# primitive. ALG-06-clean: this names pyscf-kernels, never cubecl-*
+# (xtask check-dependency-wall).
+pyscf-kernels   = { path = "../pyscf-kernels" }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
 

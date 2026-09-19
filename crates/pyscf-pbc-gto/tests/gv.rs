@@ -147,15 +147,17 @@ fn fftfreq_scaled_folds_correctly_for_n_up_to_32() {
     }
 }
 
-/// `np.fft.fftfreq(n)` is `np.fft.fftfreq(n, 1./n) / n`.
+/// `np.fft.fftfreq(n)` is `np.fft.fftfreq(n, 1./n) * (1.0 / n)` — numpy
+/// multiplies by the rounded reciprocal, it does not divide by `n`.
 #[test]
-fn fftfreq_is_the_scaled_table_over_n() {
+fn fftfreq_is_the_scaled_table_times_reciprocal() {
     for n in 1..=32_usize {
         let s = fftfreq_scaled(n);
         let f = fftfreq(n);
+        let val = 1.0 / n as f64;
         assert_eq!(f.len(), n);
         for i in 0..n {
-            assert_eq!(f[i], s[i] / n as f64, "n = {n} i = {i}");
+            assert_eq!(f[i].to_bits(), (s[i] * val).to_bits(), "n = {n} i = {i}");
             assert!(
                 (-0.5..0.5).contains(&f[i]),
                 "n = {n} i = {i}: {} outside [-0.5, 0.5)",
@@ -605,7 +607,7 @@ fn fftfreq_tables_match_numpy_for_n_1_to_8() {
         );
     }
     for (k, want) in FFTFREQ_REF.iter().enumerate() {
-        // Exact: numpy computes the same `i/n` divisions in the same order.
+        // Exact: numpy computes the same `i * (1/n)` products in the same order.
         assert_eq!(&fftfreq(k + 1)[..], *want, "fftfreq({})", k + 1);
     }
 }

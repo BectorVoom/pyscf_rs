@@ -114,6 +114,39 @@ pub fn ifft(g: &CTensor, mesh: [usize; 3]) -> Result<CTensor, PbcToolsError> {
     }
 }
 
+/// `pbc.py:129-134` — the meshes upstream's default `NUMPY+BLAS` engine sends
+/// to `_fftn_blas`/`_ifftn_blas`: every axis in this set.
+fn in_blas_exclude(n: usize) -> bool {
+    const PRIMES: [usize; 56] = [
+        17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107,
+        109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199,
+        211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281, 283, 293,
+    ];
+    PRIMES.contains(&n)
+        || PRIMES[..30].iter().any(|p| 2 * p == n)
+        || PRIMES[..20].iter().any(|p| 3 * p == n)
+}
+
+/// `tools.ifft(g, mesh)` with upstream's own rounding.
+///
+/// Upstream (`pbc.py:128-140`, default `FFT_ENGINE = 'NUMPY+BLAS'`) calls
+/// `scipy.fft.ifftn` (bit-faithful pocketfft: [`crate::pocketfft`], `cfftp` or
+/// Bluestein per axis) unless all three axes are in `_EXCLUDE`, in which case
+/// it calls `_ifftn_blas` (three GEMM contractions:
+/// [`crate::fft_blas_upstream::ifftn_blas`]).
+///
+/// # Errors
+/// As [`ifft`] for a malformed buffer.
+pub fn ifft_upstream(g: &CTensor, mesh: [usize; 3]) -> Result<CTensor, PbcToolsError> {
+    check_shape(g, mesh)?;
+    if mesh.iter().all(|&n| in_blas_exclude(n)) {
+        return crate::fft_blas_upstream::ifftn_blas(g, mesh);
+    }
+    let fct = crate::pocketfft::norm_fct_inv(ngrids_of(mesh) as u64);
+    let (re, im) = crate::pocketfft::c2c_3d(&g.re, &g.im, mesh, false, fct);
+    Ok(CTensor::from_planes(re, im))
+}
+
 /// `tools.fftk(f, mesh, expmikr)` — the transform of a Bloch-periodic function
 /// `f(r) e^{-i k r}` (`pbc.py:222-227`).
 ///

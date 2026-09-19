@@ -210,7 +210,7 @@ fn gdf_lr_matches_upstream() {
 /// **Oracle.** `GDF.get_jk(omega < 0)` — `range_coulomb` + `_RSGDFBuilder`
 /// on an attenuated cell (`df.py:476-479`, `rsdf_builder.py:83-90`).
 #[test]
-#[ignore = "T2: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn gdf_sr_matches_upstream() {
     let (cell, k) = he_222();
     let df = Gdf::new(cell, &k);

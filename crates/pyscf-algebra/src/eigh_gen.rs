@@ -6,17 +6,23 @@
 //! `NotYetImplemented{phase:3}` — `eigh_gen` ships a slice-based
 //! wrapper mirroring `solve_linear` (plan 03-01) so SCF (which lives
 //! one crate up at pyscf-scf and is not allowed to depend on cubecl-rs
-//! types — D-04 algebra-wall) can call into faer 0.24 without naming
+//! types — D-04 algebra-wall) can call the host eigendecomposition without naming
 //! `Tensor`/`AlgebraClient`.
 //!
 //! Algorithm — Löwdin transform:
-//!   1. Diagonalize `S = U·diag(s)·U^T` (self-adjoint eigh).
+//!   1. Diagonalize `S = U·diag(s)·U^T` (standard symmetric eigh via
+//!      `lapack_rs` DSYEVD, see [`crate::lapack_backend`]).
 //!   2. Build `X = U·diag(s^{-1/2})·U^T` (the symmetric S^{-1/2}).
 //!      Drop tiny eigenvalues below `s_tol` (linear-dependency removal —
 //!      pyscf/scf/addons.py:remove_linear_dep).
 //!   3. Transform `F' = X·F·X` (symmetric).
-//!   4. Diagonalize `F' = V·diag(ε)·V^T`.
+//!   4. Diagonalize `F' = V·diag(ε)·V^T` (again via `lapack_rs` DSYEVD).
 //!   5. Recover `C = X·V`. Then `F·C = S·C·diag(ε)` holds.
+//!
+//! The two inner standard decompositions are the LAPACK DSYEVD calls; the
+//! Löwdin glue (steps 2/3/5) is the DSYGV-equivalent orchestration, which
+//! `lapack_rs` does not implement yet, so it stays here (faer `Mat` products
+//! only — no faer eigensolver).
 //!
 //! Layout: input `f` is row-major n×n; `s` is row-major n×n. Output `c`
 //! is **column-major** (F-order) n×n — the convention pyscf-core's
@@ -28,8 +34,7 @@
 //! on the F-order output buffer.
 
 use crate::AlgebraError;
-use faer::linalg::solvers::SelfAdjointEigen;
-use faer::{Mat, Side};
+use faer::Mat;
 
 /// Linear-dependency cutoff. Eigenvalues of S below this magnitude are
 /// dropped (matches upstream pyscf's `LINEAR_DEP_THRESHOLD = 1e-12`
@@ -46,7 +51,7 @@ pub const S_LINEAR_DEP_TOL: f64 = 1e-12;
 /// - [`AlgebraError::Singular`] if the LU decomposition reports failure
 ///   or if `S` has more than `n` eigenvalues below `S_LINEAR_DEP_TOL`
 ///   (full linear dependency — caller must investigate).
-/// - [`AlgebraError::Backend(_)`] on faer evd failure (rare; usually
+/// - [`AlgebraError::Backend(_)`] on LAPACK driver failure (rare; usually
 ///   indicates non-self-adjoint input — symmetrize the input before
 ///   calling).
 pub fn eigh_gen(f: &[f64], s: &[f64], n: usize) -> Result<(Vec<f64>, Vec<f64>), AlgebraError> {
@@ -63,19 +68,16 @@ pub fn eigh_gen(f: &[f64], s: &[f64], n: usize) -> Result<(Vec<f64>, Vec<f64>), 
         });
     }
 
-    // === Step 1: eigh(S) ===
-    // Input is row-major flat slice; element (i, j) at s[i*n + j].
-    let s_mat = Mat::<f64>::from_fn(n, n, |i, j| s[i * n + j]);
-    let s_evd = SelfAdjointEigen::new(s_mat.as_ref(), Side::Lower)
-        .map_err(|e| AlgebraError::CubeclRuntime(format!("eigh(S) failed: {e:?}")))?;
-    let s_evals_diag = s_evd.S();
-    let s_evecs = s_evd.U();
+    // === Step 1: eigh(S) via lapack_rs DSYEVD ===
+    // `s_evecs_col` is column-major: element (i, j) at `s_evecs_col[i + j*n]`;
+    // `s_evals` ascending.
+    let (s_evals, s_evecs_col) = crate::lapack_backend::sym_eigh(s, n)?;
 
     // === Step 2: X = U · diag(s^{-1/2}) · U^T with linear-dep removal ===
     // Drop columns where eigenvalue < S_LINEAR_DEP_TOL.
     let mut valid_cols: Vec<(usize, f64)> = Vec::with_capacity(n);
     for j in 0..n {
-        let lam = s_evals_diag[j];
+        let lam = s_evals[j];
         if lam > S_LINEAR_DEP_TOL {
             valid_cols.push((j, 1.0 / lam.sqrt()));
         }
@@ -89,7 +91,7 @@ pub fn eigh_gen(f: &[f64], s: &[f64], n: usize) -> Result<(Vec<f64>, Vec<f64>), 
     // X[i, k] = U[i, j(k)] * s^{-1/2}(k)
     let x = Mat::<f64>::from_fn(n, n_lin, |i, k| {
         let (j, inv_sqrt) = valid_cols[k];
-        s_evecs[(i, j)] * inv_sqrt
+        s_evecs_col[i + j * n] * inv_sqrt
     });
 
     // === Step 3: F' = X^T · F · X (n_lin × n_lin, symmetric) ===
@@ -98,23 +100,26 @@ pub fn eigh_gen(f: &[f64], s: &[f64], n: usize) -> Result<(Vec<f64>, Vec<f64>), 
     let xt_f = x.transpose() * &f_mat;
     let fp = &xt_f * &x; // (n_lin × n_lin)
 
-    // === Step 4: eigh(F') ===
-    let fp_evd = SelfAdjointEigen::new(fp.as_ref(), Side::Lower)
-        .map_err(|e| AlgebraError::CubeclRuntime(format!("eigh(F') failed: {e:?}")))?;
-    let eigvals_diag = fp_evd.S();
-    let v = fp_evd.U();
+    // === Step 4: eigh(F') via lapack_rs DSYEVD ===
+    // Pack the faer product into a row-major flat slice for the backend.
+    let fp_row: Vec<f64> = (0..n_lin * n_lin)
+        .map(|k| {
+            let (i, j) = (k / n_lin, k % n_lin);
+            fp[(i, j)]
+        })
+        .collect();
+    let (eigvals, v_col) = crate::lapack_backend::sym_eigh(&fp_row, n_lin)?;
+    let v = Mat::<f64>::from_fn(n_lin, n_lin, |i, j| v_col[i + j * n_lin]);
 
     // === Step 5: C = X · V (n × n_lin) ===
-    let c_lin = &x * v;
+    let c_lin = &x * &v;
 
-    // Pack outputs. eigenvalues: n entries — first n_lin from fp_evd
-    // (sorted nondecreasing by faer), remaining padded with +∞ as
+    // Pack outputs. eigenvalues: n entries — first n_lin from the F' solve
+    // (sorted nondecreasing by LAPACK), remaining padded with +∞ as
     // "linearly-dependent / dropped" markers so the caller sees an
     // n-length vector aligned with the n-column C buffer.
     let mut eigenvalues = vec![f64::INFINITY; n];
-    for i in 0..n_lin {
-        eigenvalues[i] = eigvals_diag[i];
-    }
+    eigenvalues[..n_lin].copy_from_slice(&eigvals);
 
     // C output: F-order (column-major) n × n. First n_lin columns are
     // the valid MO coefficients; remaining columns are zeroed (these

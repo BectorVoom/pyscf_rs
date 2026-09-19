@@ -21,7 +21,10 @@ use pyscf_algebra::oracle_sum;
 pub fn pade_continue(grid: &[f64], values: &[f64], omega: f64) -> Result<f64, PbcGwError> {
     let n = grid.len();
     if n < 2 || values.len() != n {
-        return Err(PbcGwError::ShapeMismatch { expected: n, got: values.len() });
+        return Err(PbcGwError::ShapeMismatch {
+            expected: n,
+            got: values.len(),
+        });
     }
     // Reciprocal-difference table (Thiele): g[i] updated in place.
     let mut g = values.to_vec();

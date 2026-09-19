@@ -170,7 +170,10 @@ fn kpoint_multigrid_e_tot_matches_upstream() {
         let d_grid = (e_grid - e_up_ref).abs();
         worst = worst.max(d_mg);
 
-        println!("--- {nk:?} ({} k-points), mesh {MESH:?} ---", nk.iter().product::<usize>());
+        println!(
+            "--- {nk:?} ({} k-points), mesh {MESH:?} ---",
+            nk.iter().product::<usize>()
+        );
         println!("  upstream FFTDF KRKS      : {e_up_ref:.12}");
         println!("  this port, grid numint   : {e_grid:.12}   |d| = {d_grid:.3e}");
         println!("  this port, MULTIGRID k   : {e_mg:.12}   |d| = {d_mg:.3e}");

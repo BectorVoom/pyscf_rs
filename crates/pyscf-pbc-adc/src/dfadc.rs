@@ -42,7 +42,10 @@ pub fn df_ovvv_chunk(
     chnk_size: usize,
 ) -> Result<CTensor, PbcAdcError> {
     if lov.re.len() != naux * nocc * nvir || lvv.re.len() != naux * nvir * nvir {
-        return Err(PbcAdcError::ShapeMismatch { expected: naux * nocc * nvir, got: lov.re.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: naux * nocc * nvir,
+            got: lov.re.len(),
+        });
     }
     let rows = chnk_size.min(nocc.saturating_sub(p));
     // Lov_temp: rows [p:p+rows] of transpose(1,2,0) = (occ,vir,aux) → (rows·nvir, naux).
@@ -155,11 +158,17 @@ pub fn build_df_blocks(
 ) -> Result<KadcEris, PbcAdcError> {
     let nvir = nmo - nocc;
     if lpq.len() != nkpts * nkpts || kconserv.len() != nkpts * nkpts * nkpts {
-        return Err(PbcAdcError::ShapeMismatch { expected: nkpts * nkpts, got: lpq.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: nkpts * nkpts,
+            got: lpq.len(),
+        });
     }
     for b in lpq {
         if b.re.len() != naux * nmo * nmo {
-            return Err(PbcAdcError::ShapeMismatch { expected: naux * nmo * nmo, got: b.re.len() });
+            return Err(PbcAdcError::ShapeMismatch {
+                expected: naux * nmo * nmo,
+                got: b.re.len(),
+            });
         }
     }
     // Slices: Loo[ki,kj][x][i][j], Lov[ki,kj][x][i][a], Lvo, Lvv.
@@ -179,7 +188,10 @@ pub fn build_df_blocks(
             for kr in 0..nkpts {
                 let ks = kconserv[(kp * nkpts + kq) * nkpts + kr];
                 if ks >= nkpts {
-                    return Err(PbcAdcError::ShapeMismatch { expected: nkpts, got: ks });
+                    return Err(PbcAdcError::ShapeMismatch {
+                        expected: nkpts,
+                        got: ks,
+                    });
                 }
                 let left = &lpq[(kp * nkpts + kq)];
                 let right = &lpq[(kr * nkpts + ks)];
@@ -195,7 +207,10 @@ pub fn build_df_blocks(
                                     acc.0 += lr * rr - li * ri;
                                     acc.1 += lr * ri + li * rr;
                                 }
-                                let o = (base * nocc * nocc * nocc + i * nocc * nocc + j * nocc + k) * nocc + l;
+                                let o =
+                                    (base * nocc * nocc * nocc + i * nocc * nocc + j * nocc + k)
+                                        * nocc
+                                        + l;
                                 oooo.re[o] = acc.0 * inv;
                                 oooo.im[o] = acc.1 * inv;
                             }
@@ -209,7 +224,10 @@ pub fn build_df_blocks(
                                     acc.0 += lr * rr - li * ri;
                                     acc.1 += lr * ri + li * rr;
                                 }
-                                let o = (base * nocc * nocc * nvir + i * nocc * nvir + j * nvir + a) * nvir + b;
+                                let o =
+                                    (base * nocc * nocc * nvir + i * nocc * nvir + j * nvir + a)
+                                        * nvir
+                                        + b;
                                 oovv.re[o] = acc.0 * inv;
                                 oovv.im[o] = acc.1 * inv;
                             }
@@ -223,7 +241,12 @@ pub fn build_df_blocks(
                                         acc.0 += lr * rr - li * ri;
                                         acc.1 += lr * ri + li * rr;
                                     }
-                                    let o = (base * nocc * nvir * nocc + i * nvir * nocc + a * nocc + jj) * nocc + kk;
+                                    let o = (base * nocc * nvir * nocc
+                                        + i * nvir * nocc
+                                        + a * nocc
+                                        + jj)
+                                        * nocc
+                                        + kk;
                                     ovoo.re[o] = acc.0 * inv;
                                     ovoo.im[o] = acc.1 * inv;
                                 }
@@ -236,7 +259,12 @@ pub fn build_df_blocks(
                                         acc.0 += lr * rr - li * ri;
                                         acc.1 += lr * ri + li * rr;
                                     }
-                                    let o = (base * nocc * nvir * nocc + i * nvir * nocc + a * nocc + jj) * nvir + b;
+                                    let o = (base * nocc * nvir * nocc
+                                        + i * nvir * nocc
+                                        + a * nocc
+                                        + jj)
+                                        * nvir
+                                        + b;
                                     ovov.re[o] = acc.0 * inv;
                                     ovov.im[o] = acc.1 * inv;
                                 }
@@ -251,7 +279,12 @@ pub fn build_df_blocks(
                                         acc.0 += lr * rr - li * ri;
                                         acc.1 += lr * ri + li * rr;
                                     }
-                                    let o = (base * nocc * nvir * nvir + i * nvir * nvir + a * nvir + b) * nocc + jj;
+                                    let o = (base * nocc * nvir * nvir
+                                        + i * nvir * nvir
+                                        + a * nvir
+                                        + b)
+                                        * nocc
+                                        + jj;
                                     ovvo.re[o] = acc.0 * inv;
                                     ovvo.im[o] = acc.1 * inv;
                                 }
@@ -297,10 +330,16 @@ pub fn sigma_ea_df(
     let (nk, no, nv) = (eris.nkpts, eris.nocc, eris.nvir);
     let nd = nk * nk * no * nv * nv;
     if r1.len() != nv || r2.len() != nd || kshift >= nk {
-        return Err(PbcAdcError::ShapeMismatch { expected: nv, got: r1.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: nv,
+            got: r1.len(),
+        });
     }
     if lov.len() != nk * nk || lvv.len() != nk * nk {
-        return Err(PbcAdcError::ShapeMismatch { expected: nk * nk, got: lov.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: nk * nk,
+            got: lov.len(),
+        });
     }
     let r2_at = |ki: usize, kb: usize, i: usize, b: usize, c: usize| -> (f64, f64) {
         r2[((ki * nk + kb) * no + i) * nv * nv + b * nv + c]
@@ -321,17 +360,34 @@ pub fn sigma_ea_df(
         for kc in 0..nk {
             let ki = kconserv[(kb * nk + kshift) * nk + kc];
             if ki >= nk {
-                return Err(PbcAdcError::ShapeMismatch { expected: nk, got: ki });
+                return Err(PbcAdcError::ShapeMismatch {
+                    expected: nk,
+                    got: ki,
+                });
             }
             // Full-occ chunks (fixture scale; chunking over occ rows is the
             // scaling path for production cells, same equation). The /nkpts
             // is applied HERE (upstream divides the reshaped chunk at every
             // call site — forgetting it doubles EA roots on a 2-k mesh).
             let inv_nk = 1.0 / nk as f64;
-            let ch_direct_raw =
-                df_ovvv_chunk(&lov[(ki * nk + kc)], &lvv[(kshift * nk + kb)], naux, no, nv, 0, no)?;
-            let ch_exch_raw =
-                df_ovvv_chunk(&lov[(ki * nk + kb)], &lvv[(kshift * nk + kc)], naux, no, nv, 0, no)?;
+            let ch_direct_raw = df_ovvv_chunk(
+                &lov[(ki * nk + kc)],
+                &lvv[(kshift * nk + kb)],
+                naux,
+                no,
+                nv,
+                0,
+                no,
+            )?;
+            let ch_exch_raw = df_ovvv_chunk(
+                &lov[(ki * nk + kb)],
+                &lvv[(kshift * nk + kc)],
+                naux,
+                no,
+                nv,
+                0,
+                no,
+            )?;
             let mut ch_direct = CTensor::zeros(ch_direct_raw.re.len());
             let mut ch_exch = CTensor::zeros(ch_exch_raw.re.len());
             for (d, s) in ch_direct.re.iter_mut().zip(ch_direct_raw.re.iter()) {
@@ -419,7 +475,10 @@ pub fn kernel_ea_df(
     let nd = nk * nk * no * nv * nv;
     let dim = nv + nd;
     if cfg.nroots > dim || dim == 0 {
-        return Err(PbcAdcError::ShapeMismatch { expected: dim, got: cfg.nroots });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: dim,
+            got: cfg.nroots,
+        });
     }
     let mut hre = vec![0.0f64; dim * dim];
     let mut him = vec![0.0f64; dim * dim];
@@ -431,7 +490,9 @@ pub fn kernel_ea_df(
         } else {
             r2[c - nv] = (1.0, 0.0);
         }
-        let (s1, s2) = sigma_ea_df(&r1, &r2, m, eris, lov, lvv, naux, e_occ_k, e_vir_k, kconserv, kshift)?;
+        let (s1, s2) = sigma_ea_df(
+            &r1, &r2, m, eris, lov, lvv, naux, e_occ_k, e_vir_k, kconserv, kshift,
+        )?;
         for i in 0..nv {
             hre[i * dim + c] = s1[i].0;
             him[i * dim + c] = s1[i].1;
@@ -442,7 +503,11 @@ pub fn kernel_ea_df(
         }
     }
     let (energies_all, columns) = crate::roots::nosym_roots(&hre, &him, dim, cfg.nroots)?;
-    let mut roots = AdcRoots { energies: Vec::with_capacity(cfg.nroots), spec_factors: Vec::with_capacity(cfg.nroots), converged: true };
+    let mut roots = AdcRoots {
+        energies: Vec::with_capacity(cfg.nroots),
+        spec_factors: Vec::with_capacity(cfg.nroots),
+        converged: true,
+    };
     for r in 0..cfg.nroots {
         roots.energies.push(energies_all[r]);
         let mut w_terms = Vec::with_capacity(2 * nv);

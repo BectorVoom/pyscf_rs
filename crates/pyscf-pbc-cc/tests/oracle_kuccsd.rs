@@ -377,7 +377,7 @@ fn build(section: &str) -> Option<Ctx> {
 /// `voov`/`vovv` and their five spin siblings are stored under. A block put at
 /// the wrong address here is `O(1)` wrong; the FFT transform floor is `~1e-8`.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T1: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kueris_blocks_match_upstream() {
     let Some(ctx) = build("kuccsd") else { return };
     let (worst, failures) = compare_blocks(&ctx, ERI_BLOCK);
@@ -406,7 +406,7 @@ fn kueris_blocks_match_upstream() {
 /// residual was the grid, and the port reproduces upstream's transform to the
 /// floor wherever the grid allows it.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn the_eri_residual_is_the_mesh_and_not_the_port() {
     let Some(coarse) = build("kuccsd_coarse") else {
         return;
@@ -478,7 +478,7 @@ fn compare_blocks(ctx: &Ctx, gate: f64) -> ((f64, &'static str), Vec<String>) {
 
 /// **16-06 test 2 — `init_amps`'s MP2 energy.**
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_init_amps_matches_upstream() {
     let Some(ctx) = build("kuccsd") else { return };
     let (emp2, _, _) =
@@ -496,7 +496,7 @@ fn kuccsd_init_amps_matches_upstream() {
 /// from the iteration: a sign error in one `Ht2ab` term that the converged
 /// energy happens to be insensitive to still shows up here, at `O(1)`.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_update_amps_matches_upstream() {
     let Some(ctx) = build("kuccsd") else { return };
     let nk = ctx.eris.nkpts;
@@ -567,7 +567,7 @@ fn kuccsd_update_amps_matches_upstream() {
 
 /// **16-06 test 4 — the converged `e_corr`.**
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_e_corr_matches_upstream() {
     let Some(ctx) = build("kuccsd") else { return };
     assert_eq!(
@@ -649,7 +649,7 @@ fn the_block_table_is_upstreams() {
 /// cancels in the assembled `t2new` is exactly the kind of thing that survives
 /// an end-to-end gate and then breaks EOM-KUCCSD, which reuses these.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_intermediates_match_upstream() {
     let Some(ctx) = build("kuccsd_imds") else {
         return;
@@ -762,7 +762,7 @@ fn gather(blocks: &pyscf_pbc_cc::KBlocks, nk: usize) -> ZArr {
 /// zeroed `Ht2` (see `section_kuccsd_wovvo`), so this compares one block
 /// against one block instead of one 400-line function against another.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_wovvo_block_matches_upstream() {
     let Some(ctx) = build("kuccsd_wovvo") else {
         return;
@@ -812,7 +812,7 @@ fn kuccsd_wovvo_block_matches_upstream() {
 /// equation except the `Fvv`/`Foo` driving loop, which the singles already
 /// exercise.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_woooo_block_matches_upstream() {
     let Some(ctx) = build("kuccsd_woooo") else {
         return;
@@ -862,7 +862,7 @@ fn kuccsd_woooo_block_matches_upstream() {
 /// against upstream's own lines, so a mismatch in the assembled `t2new` is
 /// attributable to a named stage or to the denominators, and to nothing else.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_fock_block_matches_upstream() {
     let Some(ctx) = build("kuccsd_fock") else {
         return;
@@ -921,7 +921,7 @@ fn kuccsd_fock_block_matches_upstream() {
 /// is small, so a wrong `t1`-linear term barely moves `dm1` and an end-to-end
 /// comparison would not see it.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_rdm1_matches_upstream() {
     let Some(ctx) = build("kuccsd") else { return };
     let nk = ctx.eris.nkpts;
@@ -1028,7 +1028,7 @@ fn rdm1_frozen_core_refuses_and_says_where() {
 /// `W1oovv` and `W2oovv` are gated separately from their sum for the reason
 /// 16-10 gives about `W1ovvo`/`W2ovvo`: upstream builds the halves.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_eom_intermediates_match_upstream() {
     let Some(ctx) = build("kuccsd_eom") else {
         return;
@@ -1172,7 +1172,7 @@ fn kuccsd_eom_intermediates_match_upstream() {
 /// composite `(k, occ)` index, two mixed ones stored whole — so the round trip
 /// is asserted exactly before anything is contracted.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_eom_ip_matches_upstream() {
     let Some(ctx) = build("kuccsd_eom") else {
         return;
@@ -1239,7 +1239,7 @@ fn kuccsd_eom_ip_matches_upstream() {
 /// per `(kj, ka)` from whether `ka < kb`, exactly as the spin-orbital module's
 /// does — so the trial vector and the round trip are per shift.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_eom_ea_matches_upstream() {
     let Some(ctx) = build("kuccsd_eom") else {
         return;
@@ -1311,7 +1311,7 @@ fn kuccsd_eom_ea_matches_upstream() {
 /// On UPSTREAM's own converged `t1`/`t2`, so the comparison is the eigensolve
 /// and not two CCSD convergences. Gate `1e-5`, as for the other two EOM ports.
 #[test]
-#[ignore = "opt-in: needs PYSCF_ORACLE_VENV"]
+#[ignore = "T2: opt-in: needs PYSCF_ORACLE_VENV"]
 fn kuccsd_eom_roots_match_upstream() {
     let Some(ctx) = build("kuccsd_eom") else {
         return;

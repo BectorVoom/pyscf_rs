@@ -201,7 +201,7 @@ fn max_off_block_grad(precision: f64, conv_tol: f64, conv_tol_grad: f64) -> (f64
 }
 
 #[test]
-#[ignore = "diagnostic probe; runs several converged KRHFs"]
+#[ignore = "T3: diagnostic probe; runs several converged KRHFs"]
 fn fock_block_diagonality_floor() {
     use std::io::Write;
     // The two decisive points of `17-04-MEASUREMENT.md` §3's table:

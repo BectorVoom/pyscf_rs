@@ -14,7 +14,7 @@ use pyscf_pbc_scf::{KScfConfig, Krhf};
 use pyscf_runtime::ZWorkspacePool;
 
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn krccsd_runs_on_diamond_112() {
     let cell = common::diamond([15, 15, 15]);
     let kpts = cell.make_kpts([1, 1, 2]).expect("kpts");

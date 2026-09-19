@@ -130,7 +130,7 @@ fn gccsd_eris(out: &str, tag: &str) -> (PhysicistsErisZ, usize, usize) {
 /// **The spin-orbital blocks, the six `cc_*`, `update_amps`, `energy` and
 /// `init_amps`, at Γ and at a shifted k-point.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn gccsd_equations_match_upstream() {
     let Some(out) = emit("gamma_ug") else { return };
     let mut failures: Vec<String> = Vec::new();
@@ -247,7 +247,7 @@ fn gccsd_equations_match_upstream() {
 
 /// **The GCCSD `e_corr`, and its `mbpt2` — the one that is NOT Γ-only.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn gccsd_e_corr_matches_upstream() {
     let Some(out) = emit("gamma_ug") else { return };
     let mut failures: Vec<String> = Vec::new();
@@ -391,7 +391,7 @@ fn synthetic_u(
 /// **The 25 blocks, `update_amps`, `energy` and `init_amps`, at Γ and at a
 /// shifted k-point.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn uccsd_equations_match_upstream() {
     let Some(out) = emit("gamma_ug") else { return };
     let mut failures: Vec<String> = Vec::new();
@@ -479,7 +479,7 @@ fn uccsd_equations_match_upstream() {
 
 /// **The UCCSD `e_corr`, and the `mbpt2` upstream refuses away from Γ.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn uccsd_e_corr_matches_upstream() {
     let Some(out) = emit("gamma_ug") else { return };
     let mut failures: Vec<String> = Vec::new();
@@ -530,7 +530,7 @@ fn uccsd_e_corr_matches_upstream() {
 /// **The three Γ shims and their k-point counterparts at `[1,1,1]`** — the
 /// same cross-check `oracle_gamma_rccsd.rs` runs for RCCSD, reported.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn gamma_shims_and_the_kpoint_routes_agree() {
     let Some(out) = emit("gamma_ug") else { return };
     for (shim, kroute) in [("ug", "kuccsd111"), ("gg", "kgccsd111")] {

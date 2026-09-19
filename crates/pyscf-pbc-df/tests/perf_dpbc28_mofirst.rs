@@ -177,7 +177,7 @@ fn sweep(label: &str, cell: Cell, kmesh: [usize; 3], nocc: usize) {
 }
 
 #[test]
-#[ignore = "D-PBC-28 measurement; run with --release --ignored --nocapture"]
+#[ignore = "T2: D-PBC-28 measurement; run with --release --ignored --nocapture"]
 fn mo_first_vs_ao_first_cost() {
     sweep("diamond/gth-szv [1,1,2]", diamond_szv(), [1, 1, 2], 4);
 }
@@ -185,7 +185,7 @@ fn mo_first_vs_ao_first_cost() {
 /// The `[2,2,2]` sweep is 512 quadruples on the same 47^3 mesh — 64x the
 /// `[1,1,2]` row. Split out so the cheap row is always available.
 #[test]
-#[ignore = "D-PBC-28 measurement, LONG; run with --release --ignored --nocapture"]
+#[ignore = "T3: D-PBC-28 measurement, LONG; run with --release --ignored --nocapture"]
 fn mo_first_vs_ao_first_cost_222() {
     sweep("diamond/gth-szv [2,2,2]", diamond_szv(), [2, 2, 2], 4);
 }

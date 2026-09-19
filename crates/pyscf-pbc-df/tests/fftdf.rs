@@ -372,7 +372,7 @@ fn oracle_matrices(
 /// `FFTDF.get_pp` element-wise against upstream at a mesh where upstream's
 /// `ft_ao` non-local expansion has converged.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn get_pp_matches_upstream_on_diamond_222() {
     let cell = diamond();
     let kpts = kpts222(&cell);
@@ -389,7 +389,7 @@ fn get_pp_matches_upstream_on_diamond_222() {
 
 /// `FFTDF.get_hcore` — the assembly this phase owes Phase 10.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn get_hcore_matches_upstream_on_diamond_222() {
     let cell = diamond();
     let kpts = kpts222(&cell);
@@ -408,7 +408,7 @@ fn get_hcore_matches_upstream_on_diamond_222() {
 /// The all-electron `get_nuc`, which has no `ft_ao` component and so matches at
 /// any mesh.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn get_nuc_matches_upstream_on_he() {
     let cell = he_all_electron();
     let kpts = kpts222(&cell);
@@ -426,7 +426,7 @@ fn get_nuc_matches_upstream_on_he() {
 /// `vj`, `vk` and `vk` with the Ewald `exxdiv`, element-wise against upstream.
 /// These have no `ft_ao` component, so the FAST mesh is enough.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn jk_matches_upstream_on_diamond_222() {
     let cell = diamond();
     let kpts = kpts222(&cell);

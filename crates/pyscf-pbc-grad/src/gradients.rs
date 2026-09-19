@@ -52,6 +52,10 @@ pub trait Gradients {
         }
         .into())
     }
+    /// `get_ovlp` — `krhf.py:114-115`: `-pbc_intor('int1e_ipovlp')`.
+    ///
+    /// The minus lives HERE, not in `pbc_intor` (18-03 Task 2): the integral
+    /// carries the ket derivative and the gradient needs the bra one.
     fn get_ovlp(&self) -> Result<GradMatrices, PyscfRsError> {
         let integral =
             pyscf_pbc_gto::pbc_intor(self.cell(), "int1e_ipovlp", self.kpts(), Default::default())?;
@@ -107,6 +111,15 @@ pub trait Gradients {
         }
         .into())
     }
+    /// `optimizer(solver='ase')` — `krhf.py:290-298`.
+    ///
+    /// Upstream accepts ONLY `'ase'` here; `'geometric'` (and anything else)
+    /// raises `RuntimeError('Optimization solver … not supported')`. That
+    /// refusal is mirrored exactly — it is upstream's behaviour (18-CONTEXT
+    /// §1.7), not a port gap: the geomeTRIC path is reachable only through
+    /// `pbc.geomopt.optimize`, which 18-14 ports. The `'ase'` branch itself
+    /// belongs to Phase 20's `tools/pyscf_ase` and is a named refusal until
+    /// then.
     fn optimizer(&self, solver: &str) -> Result<(), PyscfRsError> {
         if solver != "ase" {
             return Err(PbcGradError::UnsupportedOptimizer {

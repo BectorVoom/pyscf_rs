@@ -55,7 +55,10 @@ pub fn build_ab(
     let nvir = nmo - nocc;
     let dim = nocc * nvir;
     if eri.len() != nocc * nmo * nmo * nmo || e_ia.len() != dim {
-        return Err(PbcTdscfError::ShapeMismatch { expected: nocc * nmo * nmo * nmo, got: eri.len() });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: nocc * nmo * nmo * nmo,
+            got: eri.len(),
+        });
     }
     let e = |i: usize, p: usize, q: usize, r: usize| -> f64 {
         eri[((i * nmo + p) * nmo + q) * nmo + r]
@@ -125,7 +128,10 @@ pub fn kernel_rhf_tdhf(
     let (a, b) = build_ab(eri, e_ia, nocc, nmo, cfg.singlet, hyb)?;
     let dim = nocc * (nmo - nocc);
     if cfg.nroots > dim {
-        return Err(PbcTdscfError::TooManyRoots { nroots: cfg.nroots, dim });
+        return Err(PbcTdscfError::TooManyRoots {
+            nroots: cfg.nroots,
+            dim,
+        });
     }
     symm_tdhf(&a, &b, dim, cfg.nroots)
 }
@@ -137,9 +143,17 @@ pub fn kernel_rhf_tdhf(
 /// applies. Requires both `(A−B)` and `(A+B)` positive definite; otherwise
 /// the reference is an instability input ([`PbcTdscfError::UnstableReference`]).
 /// Returned roots carry `kshift = 0`; k-point callers re-stamp (19-07).
-pub fn symm_tdhf(a: &[f64], b: &[f64], dim: usize, nroots: usize) -> Result<TdaResult, PbcTdscfError> {
+pub fn symm_tdhf(
+    a: &[f64],
+    b: &[f64],
+    dim: usize,
+    nroots: usize,
+) -> Result<TdaResult, PbcTdscfError> {
     if a.len() != dim * dim || b.len() != dim * dim || nroots > dim || dim == 0 {
-        return Err(PbcTdscfError::ShapeMismatch { expected: dim * dim, got: a.len().min(b.len()) });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: dim * dim,
+            got: a.len().min(b.len()),
+        });
     }
     // AmBp = A+B, AmBm = A−B.
     let mut sum = vec![0.0f64; dim * dim];

@@ -11,8 +11,8 @@
 //! Run scoped: `cargo test -p pyscf-pbc-gw --test kugw_ac`
 
 use num_complex::Complex64;
-use pyscf_pbc_gw::krgw_ac::{kernel_krgw_ac, AcMode};
-use pyscf_pbc_gw::kugw_ac::{kernel_kugw_ac, sigma_row_on_grid, GW_ETA};
+use pyscf_pbc_gw::krgw_ac::{AcMode, kernel_krgw_ac};
+use pyscf_pbc_gw::kugw_ac::{GW_ETA, kernel_kugw_ac, sigma_row_on_grid};
 use pyscf_pbc_gw::types::GwConfig;
 
 /// Smooth screening model `W(z) = w0·c²/(c² − z²)`: on the imag axis

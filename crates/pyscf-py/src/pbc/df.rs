@@ -123,6 +123,9 @@ impl PeriodicDf for SharedDf {
     fn name(&self) -> &'static str {
         self.0.name()
     }
+    fn local_potential_r(&self) -> Result<Option<Vec<f64>>, PbcDfError> {
+        self.0.local_potential_r()
+    }
     fn get_jk(
         &self,
         dms: &[KMats],
@@ -975,7 +978,8 @@ impl PyPeriodicDf {
 
     /// `get_eri(kpts=None, compact=True)` — the AO ERI block at one k-quadruple
     /// (`get_ao_eri`, `df_ao2mo.rs:496` for GDF). `kpts` is `(4, 3)` k-vectors
-    /// from `self.kpts`; `None` is the gamma quadruple. Real when every k is
+    /// from `self.kpts`, or one `(3,)` k-point broadcast to all four
+    /// (upstream `_format_kpts`, fft_ao2mo.py:430); `None` is the gamma quadruple. Real when every k is
     /// gamma and the block has no imaginary part, else complex.
     #[pyo3(signature = (kpts = None, compact = true))]
     fn get_eri(
@@ -1089,6 +1093,14 @@ impl PyPeriodicDf {
                 let g = self.kidx(&[0.0; 3])?;
                 Ok(([g; 4], true))
             }
+            // 20-18: upstream `_format_kpts` (pyscf/pbc/df/fft_ao2mo.py:430-439,
+            // shared by aft_ao2mo.py:41/130 and df_ao2mo.py:39/114) broadcasts a
+            // single k-point (`kpts.size == 3`, i.e. `(3,)` or `(1, 3)`) to all
+            // four indices: `numpy.vstack([kpts]*4)`.
+            Some((k, _)) if k.len() == 1 => {
+                let gamma = k[0].iter().all(|x| x.abs() < 1e-9);
+                Ok(([self.kidx(&k[0])?; 4], gamma))
+            }
             Some((k, _)) if k.len() == 4 => {
                 let gamma = k.iter().all(|q| q.iter().all(|x| x.abs() < 1e-9));
                 Ok((
@@ -1102,7 +1114,7 @@ impl PyPeriodicDf {
                 ))
             }
             Some(_) => Err(PyValueError::new_err(
-                "kpts must be four k-points, shape (4, 3)",
+                "kpts must be one k-point, shape (3,), or four k-points, shape (4, 3)",
             )),
         }
     }

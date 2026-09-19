@@ -134,7 +134,7 @@ fn diamond(mesh: [usize; 3]) -> Cell {
 ///    Davidson converges to a different state. A gate tighter than THAT on a
 ///    Davidson root would be measuring the solver's luck.
 #[test]
-#[ignore = "opt-in PySCF oracle; converges an SCF"]
+#[ignore = "T1: opt-in PySCF oracle; converges an SCF"]
 fn kcis_roots_match_upstream() {
     let Some(out) = emit("kcis") else { return };
     let cell = diamond([15, 15, 15]);

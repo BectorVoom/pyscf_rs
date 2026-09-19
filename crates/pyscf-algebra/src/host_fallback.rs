@@ -1,9 +1,11 @@
-//! Host-fallback dense linear algebra (ALG-05). All four decompositions —
-//! `eigh`/`cholesky`/`qr`/`svd` — route to faer 0.24 on host. On a GPU
+//! Host-fallback dense linear algebra (ALG-05). `eigh` routes to `lapack_rs`
+//! (Reference-LAPACK DSYEVD via [`crate::lapack_backend`); `cholesky`/`qr`/`svd`
+//! route to faer 0.24 on host. On a GPU
 //! `AlgebraClient`, the bodies copy the operand down with
-//! `device_buffer::download::<f64>`, run faer on host, and `device_buffer::upload`
+//! `device_buffer::download::<f64>`, run the host kernel, and `device_buffer::upload`
 //! the factor(s) back (Vec<f64> round-trip per RESEARCH §9 + faer-ext Pitfall 3).
-//! This module names ONLY `device_buffer::{download,upload}`, `faer::*`, and
+//! This module names ONLY `device_buffer::{download,upload}`, `faer::*`,
+//! `lapack_rs` (through `lapack_backend`), and
 //! `AlgebraError` — never a device-runtime type, keeping the ALG-06 wall intact
 //! (the device-runtime generics stay inside `device_buffer`).
 //!
@@ -12,8 +14,13 @@
 //! discipline: download → `Mat::from_fn` row-major → decompose → flat-Vec →
 //! upload). The four public signatures are LOCKED (re-exported at `lib.rs:63`).
 //!
+//! lapack_rs migration: `eigh` now delegates to
+//! [`crate::lapack_backend::sym_eigh`] (Reference-LAPACK DSYEVD) instead of
+//! faer `SelfAdjointEigen`. `cholesky`/`qr`/`svd` stay on faer until
+//! `lapack_rs` implements DPOTRF/DGEQRF/DGESVD.
+//!
 //! Output layout conventions (DOCUMENTED and asserted by the oracle tests):
-//!   * `eigh`: eigenvalues ASCENDING (as faer `SelfAdjointEigen` returns);
+//!   * `eigh`: eigenvalues ASCENDING (as LAPACK DSYEVD returns);
 //!     eigenvectors in **column-major / F-order** (`evecs[i + j*n] = U[(i,j)]`),
 //!     matching `eigh_gen.rs`'s `MOCoefficients` F-order convention.
 //!   * `cholesky`: lower-triangular factor `L` in **row-major** order
@@ -30,7 +37,6 @@
 
 use crate::device_buffer;
 use crate::{AlgebraClient, AlgebraError, Tensor};
-use faer::linalg::solvers::SelfAdjointEigen;
 use faer::{Mat, Side};
 
 /// Validate that `matrix` is a rank-2 square `n×n` Tensor and return `n`.
@@ -64,36 +70,23 @@ fn download_square(
 
 /// Self-adjoint eigendecomposition. Returns `(eigenvalues, eigenvectors)`.
 ///
-/// Eigenvalues are ASCENDING (faer `SelfAdjointEigen`); the eigenvector Tensor
+/// Eigenvalues are ASCENDING (LAPACK DSYEVD); the eigenvector Tensor
 /// is **column-major / F-order** (`evecs[i + j*n] = U[(i,j)]`), matching the
-/// `eigh_gen.rs` MO-coefficient convention. Routes to faer on host via a
-/// `device_buffer` Vec<f64> round-trip (ALG-05); requires a square `n×n` input.
+/// `eigh_gen.rs` MO-coefficient convention. Routes to `lapack_rs` on host via
+/// a `device_buffer` Vec<f64> round-trip (ALG-05); requires a square `n×n` input.
 ///
 /// # Errors
 /// - [`AlgebraError::ShapeMismatch`] if `matrix` is not rank-2 square or the
 ///   downloaded length disagrees with `n*n`.
-/// - [`AlgebraError::CubeclRuntime`] on faer evd failure (rare; usually a
-///   non-self-adjoint input — only the lower triangle is read, `Side::Lower`).
+/// - [`AlgebraError::CubeclRuntime`] on LAPACK driver failure (rare; usually a
+///   non-self-adjoint input — only the lower triangle is read, `Uplo::Lower`).
 pub fn eigh(client: &AlgebraClient, matrix: &Tensor) -> Result<(Vec<f64>, Tensor), AlgebraError> {
     let n = square_n(matrix)?;
     let data = download_square(client, matrix, n)?;
 
-    // Row-major flat slice: element (i, j) at data[i*n + j].
-    let m = Mat::<f64>::from_fn(n, n, |i, j| data[i * n + j]);
-    let evd = SelfAdjointEigen::new(m.as_ref(), Side::Lower)
-        .map_err(|e| AlgebraError::CubeclRuntime(format!("eigh failed: {e:?}")))?;
-
-    // Eigenvalues ASCENDING (as faer returns).
-    let eigenvalues: Vec<f64> = (0..n).map(|k| evd.S()[k]).collect();
-
-    // Eigenvectors back to a flat Vec in column-major / F-order.
-    let evecs_mat = evd.U();
-    let mut evecs = vec![0.0_f64; n * n];
-    for j in 0..n {
-        for i in 0..n {
-            evecs[i + j * n] = evecs_mat[(i, j)];
-        }
-    }
+    // Row-major flat slice → LAPACK DSYEVD via lapack_backend, which returns
+    // eigenvalues ascending and eigenvectors column-major / F-order.
+    let (eigenvalues, evecs) = crate::lapack_backend::sym_eigh(&data, n)?;
     let evec_tensor = device_buffer::upload::<f64>(client, &evecs, vec![n, n])?;
 
     Ok((eigenvalues, evec_tensor))

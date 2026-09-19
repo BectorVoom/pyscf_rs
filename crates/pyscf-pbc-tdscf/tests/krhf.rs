@@ -70,15 +70,36 @@ fn load() -> (Fix, Value) {
     }
     let e_occ = vec![flat(&v["e_occ"][0]), flat(&v["e_occ"][1])];
     let e_vir = vec![flat(&v["e_vir"][0]), flat(&v["e_vir"][1])];
-    (Fix { nk, nocc, nmo, eri7re, eri7im, e_occ, e_vir }, v)
+    (
+        Fix {
+            nk,
+            nocc,
+            nmo,
+            eri7re,
+            eri7im,
+            e_occ,
+            e_vir,
+        },
+        v,
+    )
 }
 
 fn max_diff(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f64::max)
 }
 
 fn cfg(singlet: bool, nroots: usize) -> TdaConfig {
-    TdaConfig { nroots, conv_tol: 1e-9, max_cycle: 50, singlet, tda: true, kshift: 0 }
+    TdaConfig {
+        nroots,
+        conv_tol: 1e-9,
+        max_cycle: 50,
+        singlet,
+        tda: true,
+        kshift: 0,
+    }
 }
 
 /// k-shift A/B build vs upstream's get_ab, element-wise, both shifts.
@@ -91,17 +112,42 @@ fn build_kab_matches_upstream_per_shift() {
             .map(|x| *x as usize)
             .collect();
         let (a, b) = build_kab(
-            &f.eri7re, &f.eri7im, &f.e_occ, &f.e_vir, &kc, f.nk, f.nocc, f.nmo, true, 1.0,
+            &f.eri7re,
+            &f.eri7im,
+            &f.e_occ,
+            &f.e_vir,
+            &kc,
+            f.nk,
+            f.nocc,
+            f.nmo,
+            true,
+            1.0,
             1.0 / f.nk as f64,
         )
         .expect("build must run");
         let sh = &v["shifts"][&ks.to_string()];
         let (ar, ai) = (flat(&sh["a"]["re"]), flat(&sh["a"]["im"]));
         let (br, bi) = (flat(&sh["b"]["re"]), flat(&sh["b"]["im"]));
-        assert!(max_diff(&a.re, &ar) < 1e-10, "shift {ks} A.re {:e}", max_diff(&a.re, &ar));
-        assert!(max_diff(&a.im, &ai) < 1e-10, "shift {ks} A.im {:e}", max_diff(&a.im, &ai));
-        assert!(max_diff(&b.re, &br) < 1e-10, "shift {ks} B.re {:e}", max_diff(&b.re, &br));
-        assert!(max_diff(&b.im, &bi) < 1e-10, "shift {ks} B.im {:e}", max_diff(&b.im, &bi));
+        assert!(
+            max_diff(&a.re, &ar) < 1e-10,
+            "shift {ks} A.re {:e}",
+            max_diff(&a.re, &ar)
+        );
+        assert!(
+            max_diff(&a.im, &ai) < 1e-10,
+            "shift {ks} A.im {:e}",
+            max_diff(&a.im, &ai)
+        );
+        assert!(
+            max_diff(&b.re, &br) < 1e-10,
+            "shift {ks} B.re {:e}",
+            max_diff(&b.re, &br)
+        );
+        assert!(
+            max_diff(&b.im, &bi) < 1e-10,
+            "shift {ks} B.im {:e}",
+            max_diff(&b.im, &bi)
+        );
     }
 }
 
@@ -115,7 +161,16 @@ fn gate_a_krhf_tda_per_shift() {
             .map(|x| *x as usize)
             .collect();
         let r = kernel_krhf_tda(
-            &f.eri7re, &f.eri7im, &f.e_occ, &f.e_vir, &kc, f.nk, f.nocc, f.nmo, 1.0, ks,
+            &f.eri7re,
+            &f.eri7im,
+            &f.e_occ,
+            &f.e_vir,
+            &kc,
+            f.nk,
+            f.nocc,
+            f.nmo,
+            1.0,
+            ks,
             &cfg(true, 1),
         )
         .expect("TDA must run");
@@ -131,9 +186,21 @@ fn gate_a_krhf_tda_per_shift() {
 #[test]
 fn gate_a_krhf_tda_triplet() {
     let (f, v) = load();
-    let kc: Vec<usize> = flat(&v["shifts"]["0"]["kconserv"]).iter().map(|x| *x as usize).collect();
+    let kc: Vec<usize> = flat(&v["shifts"]["0"]["kconserv"])
+        .iter()
+        .map(|x| *x as usize)
+        .collect();
     let r = kernel_krhf_tda(
-        &f.eri7re, &f.eri7im, &f.e_occ, &f.e_vir, &kc, f.nk, f.nocc, f.nmo, 1.0, 0,
+        &f.eri7re,
+        &f.eri7im,
+        &f.e_occ,
+        &f.e_vir,
+        &kc,
+        f.nk,
+        f.nocc,
+        f.nmo,
+        1.0,
+        0,
         &cfg(false, 2),
     )
     .expect("TDA must run");
@@ -141,7 +208,10 @@ fn gate_a_krhf_tda_triplet() {
     assert!(r.energies[0] <= r.energies[1]);
     let eref = flat(&v["shifts"]["0"]["e_tda_trip"]);
     let d = max_diff(
-        &r.energies.iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
+        &r.energies
+            .iter()
+            .map(|x| x * HARTREE2EV)
+            .collect::<Vec<_>>(),
         &eref[..2].iter().map(|x| x * HARTREE2EV).collect::<Vec<_>>(),
     );
     assert!(d < 5e-5, "triplet deviates {d:e} eV");
@@ -160,14 +230,26 @@ fn cross_shift_sorting_is_caught() {
             .map(|x| *x as usize)
             .collect();
         let r = kernel_krhf_tda(
-            &f.eri7re, &f.eri7im, &f.e_occ, &f.e_vir, &kc, f.nk, f.nocc, f.nmo, 1.0, ks,
+            &f.eri7re,
+            &f.eri7im,
+            &f.e_occ,
+            &f.e_vir,
+            &kc,
+            f.nk,
+            f.nocc,
+            f.nmo,
+            1.0,
+            ks,
             &cfg(true, 1),
         )
         .unwrap();
         lows.push(r.energies[0]);
     }
     let gap_ev = (lows[0] - lows[1]).abs() * HARTREE2EV;
-    assert!(gap_ev > 1e-4, "shifts unexpectedly equivalent ({gap_ev:e} eV)");
+    assert!(
+        gap_ev > 1e-4,
+        "shifts unexpectedly equivalent ({gap_ev:e} eV)"
+    );
     // A pooled-and-sorted report would attribute shift 1's root to shift 0's
     // gate (or vice versa) and miss by the full gap:
     assert!(gap_ev > 5e-5, "pooling would pass — fixture too symmetric");
@@ -177,7 +259,10 @@ fn cross_shift_sorting_is_caught() {
 #[test]
 fn complex_tdhf_refuses() {
     let (f, v) = load();
-    let kc: Vec<usize> = flat(&v["shifts"]["0"]["kconserv"]).iter().map(|x| *x as usize).collect();
+    let kc: Vec<usize> = flat(&v["shifts"]["0"]["kconserv"])
+        .iter()
+        .map(|x| *x as usize)
+        .collect();
     let mut c = cfg(true, 1);
     c.tda = false;
     let r = kernel_krhf_tdhf(
@@ -202,13 +287,27 @@ fn real_tdhf_path_on_diagonal_problem() {
     let kc = vec![0usize];
     let mut c = cfg(true, 2);
     c.tda = false;
-    let r = kernel_krhf_tdhf(&eri7re, &eri7im, &e_occ, &e_vir, &kc, nk, nocc, nmo, 1.0, 0, &c)
-        .expect("real TDHF must run");
+    let r = kernel_krhf_tdhf(
+        &eri7re, &eri7im, &e_occ, &e_vir, &kc, nk, nocc, nmo, 1.0, 0, &c,
+    )
+    .expect("real TDHF must run");
     assert!((r.energies[0] - 4.0).abs() < 1e-9);
     assert!((r.energies[1] - 9.0).abs() < 1e-9);
     // And TDA agrees on the diagonal problem.
-    let rt = kernel_krhf_tda(&eri7re, &eri7im, &e_occ, &e_vir, &kc, nk, nocc, nmo, 1.0, 0, &cfg(true, 2))
-        .expect("TDA must run");
+    let rt = kernel_krhf_tda(
+        &eri7re,
+        &eri7im,
+        &e_occ,
+        &e_vir,
+        &kc,
+        nk,
+        nocc,
+        nmo,
+        1.0,
+        0,
+        &cfg(true, 2),
+    )
+    .expect("TDA must run");
     assert!((rt.energies[0] - 4.0).abs() < 1e-9);
 }
 
@@ -217,13 +316,34 @@ fn real_tdhf_path_on_diagonal_problem() {
 fn ktda_deterministic_across_thread_counts() {
     let run = || {
         let (f, v) = load();
-        let kc: Vec<usize> = flat(&v["shifts"]["0"]["kconserv"]).iter().map(|x| *x as usize).collect();
-        kernel_krhf_tda(&f.eri7re, &f.eri7im, &f.e_occ, &f.e_vir, &kc, f.nk, f.nocc, f.nmo, 1.0, 0, &cfg(true, 2))
-            .expect("TDA must run")
-            .energies
+        let kc: Vec<usize> = flat(&v["shifts"]["0"]["kconserv"])
+            .iter()
+            .map(|x| *x as usize)
+            .collect();
+        kernel_krhf_tda(
+            &f.eri7re,
+            &f.eri7im,
+            &f.e_occ,
+            &f.e_vir,
+            &kc,
+            f.nk,
+            f.nocc,
+            f.nmo,
+            1.0,
+            0,
+            &cfg(true, 2),
+        )
+        .expect("TDA must run")
+        .energies
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b.iter()) {

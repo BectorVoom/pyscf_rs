@@ -79,13 +79,33 @@ impl KadcEris {
             nk3 * nocc * nvir * nvir * nvir,
             nk3 * nocc * nvir * nvir * nocc,
         ];
-        let got = [oooo.re.len(), oovv.re.len(), ovoo.re.len(), ovov.re.len(), ovvv.re.len(), ovvo.re.len()];
+        let got = [
+            oooo.re.len(),
+            oovv.re.len(),
+            ovoo.re.len(),
+            ovov.re.len(),
+            ovvv.re.len(),
+            ovvo.re.len(),
+        ];
         for (w, g) in want.iter().zip(got.iter()) {
             if w != g {
-                return Err(PbcAdcError::ShapeMismatch { expected: *w, got: *g });
+                return Err(PbcAdcError::ShapeMismatch {
+                    expected: *w,
+                    got: *g,
+                });
             }
         }
-        Ok(Self { nkpts, nocc, nvir, oooo, oovv, ovoo, ovov, ovvv, ovvo })
+        Ok(Self {
+            nkpts,
+            nocc,
+            nvir,
+            oooo,
+            oovv,
+            ovoo,
+            ovov,
+            ovvv,
+            ovvo,
+        })
     }
     /// Flat offset of triple `(ki, kj, ka)` in a block with trailing size `t`.
     fn triple_offset(&self, ki: usize, kj: usize, ka: usize, t: usize) -> usize {
@@ -112,8 +132,7 @@ impl KadcEris {
 ///
 /// The production implementation is [`ao2mo_block`]; tests substitute a
 /// synthetic provider with distinguishable values per index.
-pub type MoBlockFetch<'a> =
-    dyn Fn(usize, usize, usize, usize) -> Result<CTensor, PbcAdcError> + 'a;
+pub type MoBlockFetch<'a> = dyn Fn(usize, usize, usize, usize) -> Result<CTensor, PbcAdcError> + 'a;
 
 /// Build the six incore blocks (`transform_integrals_incore`).
 ///
@@ -166,7 +185,10 @@ pub fn build_incore(
             for ikr in 0..nkpts {
                 let iks = kconserv[(ikp * nkpts + ikq) * nkpts + ikr];
                 if iks >= nkpts {
-                    return Err(PbcAdcError::ShapeMismatch { expected: nkpts, got: iks });
+                    return Err(PbcAdcError::ShapeMismatch {
+                        expected: nkpts,
+                        got: iks,
+                    });
                 }
                 let blk = fetch(ikp, ikq, ikr, iks)?;
                 if blk.re.len() != nmo * nmo * nmo * nmo || blk.im.len() != nmo * nmo * nmo * nmo {
@@ -184,7 +206,10 @@ pub fn build_incore(
                     for j in 0..nocc {
                         for k in 0..nocc {
                             for l in 0..nocc {
-                                let o = (base * nocc * nocc * nocc + i * nocc * nocc + j * nocc + k) * nocc + l;
+                                let o =
+                                    (base * nocc * nocc * nocc + i * nocc * nocc + j * nocc + k)
+                                        * nocc
+                                        + l;
                                 let (re, im) = at(i, j, k, l);
                                 eris.oooo.re[o] = re * inv_nk;
                                 eris.oooo.im[o] = im * inv_nk;
@@ -192,13 +217,18 @@ pub fn build_incore(
                         }
                         for a in 0..nvir {
                             for b in 0..nvir {
-                                let o = (base * nocc * nocc * nvir + i * nocc * nvir + j * nvir + a) * nvir + b;
+                                let o =
+                                    (base * nocc * nocc * nvir + i * nocc * nvir + j * nvir + a)
+                                        * nvir
+                                        + b;
                                 let (re, im) = at(i, j, nocc + a, nocc + b);
                                 eris.oovv.re[o] = re * inv_nk;
                                 eris.oovv.im[o] = im * inv_nk;
                             }
                             for jj in 0..nocc {
-                                let o = (base * nocc * nvir * nocc + i * nvir * nocc + a * nocc + jj) * nocc;
+                                let o =
+                                    (base * nocc * nvir * nocc + i * nvir * nocc + a * nocc + jj)
+                                        * nocc;
                                 for kk in 0..nocc {
                                     let (re, im) = at(i, nocc + a, jj, kk);
                                     eris.ovoo.re[o + kk] = re * inv_nk;
@@ -207,7 +237,12 @@ pub fn build_incore(
                             }
                             for jj in 0..nocc {
                                 for b in 0..nvir {
-                                    let o = (base * nocc * nvir * nocc + i * nvir * nocc + a * nocc + jj) * nvir + b;
+                                    let o = (base * nocc * nvir * nocc
+                                        + i * nvir * nocc
+                                        + a * nocc
+                                        + jj)
+                                        * nvir
+                                        + b;
                                     let (re, im) = at(i, nocc + a, jj, nocc + b);
                                     eris.ovov.re[o] = re * inv_nk;
                                     eris.ovov.im[o] = im * inv_nk;
@@ -215,13 +250,23 @@ pub fn build_incore(
                             }
                             for b in 0..nvir {
                                 for c in 0..nvir {
-                                    let o = (base * nocc * nvir * nvir + i * nvir * nvir + a * nvir + b) * nvir + c;
+                                    let o = (base * nocc * nvir * nvir
+                                        + i * nvir * nvir
+                                        + a * nvir
+                                        + b)
+                                        * nvir
+                                        + c;
                                     let (re, im) = at(i, nocc + a, nocc + b, nocc + c);
                                     eris.ovvv.re[o] = re * inv_nk;
                                     eris.ovvv.im[o] = im * inv_nk;
                                 }
                                 for jj in 0..nocc {
-                                    let o = (base * nocc * nvir * nvir + i * nvir * nvir + a * nvir + b) * nocc + jj;
+                                    let o = (base * nocc * nvir * nvir
+                                        + i * nvir * nvir
+                                        + a * nvir
+                                        + b)
+                                        * nocc
+                                        + jj;
                                     let (re, im) = at(i, nocc + a, nocc + b, jj);
                                     eris.ovvo.re[o] = re * inv_nk;
                                     eris.ovvo.im[o] = im * inv_nk;

@@ -250,8 +250,10 @@ fn krhf_on_gdf_matches_upstream_he_631g_off_gamma() {
         let out = mf.kernel(&c).expect("KRHF");
         assert!(out.converged, "KRHF on {route} did not converge");
         let d = (out.e_tot - want).abs();
-        eprintln!("KRHF/{route} He/6-31g [1,1,2]: E = {:.14}, upstream {want:.14}, |dE| = {d:e}",
-                  out.e_tot);
+        eprintln!(
+            "KRHF/{route} He/6-31g [1,1,2]: E = {:.14}, upstream {want:.14}, |dE| = {d:e}",
+            out.e_tot
+        );
         assert!(
             d < 1e-8,
             "KRHF on {route}: E = {:.14}, upstream {want:.14}, |dE| = {d:e}",
@@ -461,7 +463,7 @@ fn every_builder_drives_krhf_unchanged() {
 /// integral errors can lead to a difference in the total energy […] around 4th
 /// decimal place" — which is why it abandons Cholesky for MDF.
 #[test]
-#[ignore = "oracle: needs PYSCF_ORACLE_VENV and a real MDF build"]
+#[ignore = "T2: oracle: needs PYSCF_ORACLE_VENV and a real MDF build"]
 fn krhf_on_mdf_matches_upstream_he_fcc() {
     use pyscf_pbc_df::Mdf;
 
@@ -583,7 +585,7 @@ print(json.dumps({'e_tot': float(e), 'mesh': [int(x) for x in d.mesh],
 /// diamond `make_j3c` is a single screening group of ~77 M cintx shell triples
 /// and its wall time is still unmeasured (§3 of the verification).
 #[test]
-#[ignore = "measurement: prints wall clock, asserts nothing"]
+#[ignore = "T2: measurement: prints wall clock, asserts nothing"]
 fn wall_clock_per_builder() {
     use pyscf_pbc_df::{Gdf, Mdf};
     use std::time::Instant;

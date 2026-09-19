@@ -1,0 +1,4033 @@
+{
+ "modules": [
+  "pyscf.pbc",
+  "pyscf.pbc.__all__",
+  "pyscf.pbc.adc",
+  "pyscf.pbc.adc.dfadc",
+  "pyscf.pbc.adc.kadc_ao2mo",
+  "pyscf.pbc.adc.kadc_rhf",
+  "pyscf.pbc.adc.kadc_rhf_amplitudes",
+  "pyscf.pbc.adc.kadc_rhf_ea",
+  "pyscf.pbc.adc.kadc_rhf_ip",
+  "pyscf.pbc.ao2mo",
+  "pyscf.pbc.ao2mo.eris",
+  "pyscf.pbc.cc",
+  "pyscf.pbc.cc.ccsd",
+  "pyscf.pbc.cc.eom_kccsd_ghf",
+  "pyscf.pbc.cc.eom_kccsd_rhf",
+  "pyscf.pbc.cc.eom_kccsd_rhf_ea",
+  "pyscf.pbc.cc.eom_kccsd_rhf_ip",
+  "pyscf.pbc.cc.eom_kccsd_uhf",
+  "pyscf.pbc.cc.kccsd",
+  "pyscf.pbc.cc.kccsd_rhf",
+  "pyscf.pbc.cc.kccsd_rhf_ksymm",
+  "pyscf.pbc.cc.kccsd_t",
+  "pyscf.pbc.cc.kccsd_t_rhf",
+  "pyscf.pbc.cc.kccsd_t_rhf_slow",
+  "pyscf.pbc.cc.kccsd_uhf",
+  "pyscf.pbc.cc.kintermediates",
+  "pyscf.pbc.cc.kintermediates_rhf",
+  "pyscf.pbc.cc.kintermediates_rhf_ksymm",
+  "pyscf.pbc.cc.kintermediates_uhf",
+  "pyscf.pbc.cc.kuccsd_rdm",
+  "pyscf.pbc.ci",
+  "pyscf.pbc.ci.cisd",
+  "pyscf.pbc.ci.kcis_rhf",
+  "pyscf.pbc.df",
+  "pyscf.pbc.df.aft",
+  "pyscf.pbc.df.aft_ao2mo",
+  "pyscf.pbc.df.aft_jk",
+  "pyscf.pbc.df.df",
+  "pyscf.pbc.df.df_ao2mo",
+  "pyscf.pbc.df.df_jk",
+  "pyscf.pbc.df.fft",
+  "pyscf.pbc.df.fft_ao2mo",
+  "pyscf.pbc.df.fft_jk",
+  "pyscf.pbc.df.ft_ao",
+  "pyscf.pbc.df.gdf_builder",
+  "pyscf.pbc.df.incore",
+  "pyscf.pbc.df.mdf",
+  "pyscf.pbc.df.mdf_ao2mo",
+  "pyscf.pbc.df.mdf_jk",
+  "pyscf.pbc.df.outcore",
+  "pyscf.pbc.df.rsdf",
+  "pyscf.pbc.df.rsdf_builder",
+  "pyscf.pbc.df.rsdf_helper",
+  "pyscf.pbc.df.rsdf_jk",
+  "pyscf.pbc.dft",
+  "pyscf.pbc.dft.cdft",
+  "pyscf.pbc.dft.gen_grid",
+  "pyscf.pbc.dft.gks",
+  "pyscf.pbc.dft.kgks",
+  "pyscf.pbc.dft.krks",
+  "pyscf.pbc.dft.krks_ksymm",
+  "pyscf.pbc.dft.krkspu",
+  "pyscf.pbc.dft.krkspu_ksymm",
+  "pyscf.pbc.dft.kroks",
+  "pyscf.pbc.dft.kuks",
+  "pyscf.pbc.dft.kuks_ksymm",
+  "pyscf.pbc.dft.kukspu",
+  "pyscf.pbc.dft.kukspu_ksymm",
+  "pyscf.pbc.dft.multigrid",
+  "pyscf.pbc.dft.multigrid._backend_c",
+  "pyscf.pbc.dft.multigrid.multigrid",
+  "pyscf.pbc.dft.multigrid.multigrid_pair",
+  "pyscf.pbc.dft.multigrid.pp",
+  "pyscf.pbc.dft.multigrid.utils",
+  "pyscf.pbc.dft.numint",
+  "pyscf.pbc.dft.numint2c",
+  "pyscf.pbc.dft.rks",
+  "pyscf.pbc.dft.roks",
+  "pyscf.pbc.dft.uks",
+  "pyscf.pbc.eph",
+  "pyscf.pbc.eph.eph_fd",
+  "pyscf.pbc.geomopt",
+  "pyscf.pbc.geomopt.geometric_solver",
+  "pyscf.pbc.grad",
+  "pyscf.pbc.grad.krhf",
+  "pyscf.pbc.grad.krks",
+  "pyscf.pbc.grad.krks_stress",
+  "pyscf.pbc.grad.krkspu",
+  "pyscf.pbc.grad.kuhf",
+  "pyscf.pbc.grad.kuks",
+  "pyscf.pbc.grad.kuks_stress",
+  "pyscf.pbc.grad.kukspu",
+  "pyscf.pbc.grad.rhf",
+  "pyscf.pbc.grad.rks",
+  "pyscf.pbc.grad.rks_stress",
+  "pyscf.pbc.grad.uhf",
+  "pyscf.pbc.grad.uks",
+  "pyscf.pbc.grad.uks_stress",
+  "pyscf.pbc.gto",
+  "pyscf.pbc.gto._pbcintor",
+  "pyscf.pbc.gto.basis",
+  "pyscf.pbc.gto.basis.split_BASIS_MOLOPT",
+  "pyscf.pbc.gto.basis.split_GTH_BASIS_SETS",
+  "pyscf.pbc.gto.basis.split_HFX_BASIS",
+  "pyscf.pbc.gto.cell",
+  "pyscf.pbc.gto.ecp",
+  "pyscf.pbc.gto.eval_gto",
+  "pyscf.pbc.gto.ewald_methods",
+  "pyscf.pbc.gto.neighborlist",
+  "pyscf.pbc.gto.pseudo",
+  "pyscf.pbc.gto.pseudo.pp",
+  "pyscf.pbc.gto.pseudo.pp_int",
+  "pyscf.pbc.gto.pseudo.ppnl_velgauge",
+  "pyscf.pbc.gto.pseudo.split_GTH_POTENTIALS",
+  "pyscf.pbc.gw",
+  "pyscf.pbc.gw.gw_slow",
+  "pyscf.pbc.gw.kgw_slow",
+  "pyscf.pbc.gw.kgw_slow_supercell",
+  "pyscf.pbc.gw.krgw_ac",
+  "pyscf.pbc.gw.krgw_cd",
+  "pyscf.pbc.gw.kugw_ac",
+  "pyscf.pbc.lib",
+  "pyscf.pbc.lib.arnoldi",
+  "pyscf.pbc.lib.chkfile",
+  "pyscf.pbc.lib.kpts",
+  "pyscf.pbc.lib.kpts_helper",
+  "pyscf.pbc.lib.ktensor",
+  "pyscf.pbc.lib.linalg_helper",
+  "pyscf.pbc.mp",
+  "pyscf.pbc.mp.kmp2",
+  "pyscf.pbc.mp.kmp2_ksymm",
+  "pyscf.pbc.mp.kmp2_stagger",
+  "pyscf.pbc.mp.kump2",
+  "pyscf.pbc.mp.mp2",
+  "pyscf.pbc.mpicc",
+  "pyscf.pbc.mpicc.kccsd_rhf",
+  "pyscf.pbc.mpicc.kintermediates_rhf",
+  "pyscf.pbc.mpicc.mpi_kpoint_helper",
+  "pyscf.pbc.mpitools",
+  "pyscf.pbc.mpitools.mpi",
+  "pyscf.pbc.mpitools.mpi_blksize",
+  "pyscf.pbc.mpitools.mpi_helper",
+  "pyscf.pbc.mpitools.mpi_load_balancer",
+  "pyscf.pbc.mpitools.mpi_pool",
+  "pyscf.pbc.scf",
+  "pyscf.pbc.scf._response_functions",
+  "pyscf.pbc.scf.addons",
+  "pyscf.pbc.scf.chkfile",
+  "pyscf.pbc.scf.cphf",
+  "pyscf.pbc.scf.ghf",
+  "pyscf.pbc.scf.hf",
+  "pyscf.pbc.scf.kghf",
+  "pyscf.pbc.scf.kghf_ksymm",
+  "pyscf.pbc.scf.khf",
+  "pyscf.pbc.scf.khf_ksymm",
+  "pyscf.pbc.scf.krohf",
+  "pyscf.pbc.scf.kuhf",
+  "pyscf.pbc.scf.kuhf_ksymm",
+  "pyscf.pbc.scf.newton_ah",
+  "pyscf.pbc.scf.rohf",
+  "pyscf.pbc.scf.rsjk",
+  "pyscf.pbc.scf.scfint",
+  "pyscf.pbc.scf.smearing",
+  "pyscf.pbc.scf.stability",
+  "pyscf.pbc.scf.uhf",
+  "pyscf.pbc.symm",
+  "pyscf.pbc.symm.basis",
+  "pyscf.pbc.symm.geom",
+  "pyscf.pbc.symm.group",
+  "pyscf.pbc.symm.pyscf_spglib",
+  "pyscf.pbc.symm.space_group",
+  "pyscf.pbc.symm.symmetry",
+  "pyscf.pbc.symm.tables",
+  "pyscf.pbc.tddft",
+  "pyscf.pbc.tdscf",
+  "pyscf.pbc.tdscf.krhf",
+  "pyscf.pbc.tdscf.krks",
+  "pyscf.pbc.tdscf.kuhf",
+  "pyscf.pbc.tdscf.kuks",
+  "pyscf.pbc.tdscf.rhf",
+  "pyscf.pbc.tdscf.rks",
+  "pyscf.pbc.tdscf.uhf",
+  "pyscf.pbc.tdscf.uks",
+  "pyscf.pbc.tools",
+  "pyscf.pbc.tools.k2gamma",
+  "pyscf.pbc.tools.lattice",
+  "pyscf.pbc.tools.make_test_cell",
+  "pyscf.pbc.tools.pbc",
+  "pyscf.pbc.tools.print_funcs",
+  "pyscf.pbc.tools.pyscf_ase",
+  "pyscf.pbc.tools.pywannier90",
+  "pyscf.pbc.tools.tril",
+  "pyscf.pbc.x2c",
+  "pyscf.pbc.x2c.sfx2c1e",
+  "pyscf.pbc.x2c.x2c1e"
+ ],
+ "configs": {
+  "site": [
+   {
+    "name": "pyscf.pbc",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.__all__",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.dfadc",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_rhf_amplitudes",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_rhf_ea",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_rhf_ip",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.ao2mo",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/ao2mo/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.ao2mo.eris",
+    "status": "error",
+    "error": "ImportError: cannot import name 'gen_uniform_grids' from 'pyscf.pbc.dft.gen_grid' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/dft/gen_grid.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/cc/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.cc.ccsd",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_ghf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'eom_rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_rhf_ea",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_rhf_ip",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_uhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'eom_rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd",
+    "status": "error",
+    "error": "ImportError: cannot import name 'gccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_rhf_ksymm",
+    "status": "error",
+    "error": "ImportError: cannot import name 'MORotationMatrix' from 'pyscf.pbc.lib.kpts' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/lib/kpts.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_t",
+    "status": "error",
+    "error": "ImportError: cannot import name 'gccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_t_rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_t_rhf_slow",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_uhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'uccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kintermediates",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kintermediates_rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kintermediates_rhf_ksymm",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/cc/kintermediates_rhf_ksymm.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.cc.kintermediates_uhf",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/cc/kintermediates_uhf.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.cc.kuccsd_rdm",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/cc/kuccsd_rdm.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.ci",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/ci/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.ci.cisd",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.ci.kcis_rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/df/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.df.aft",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.aft_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.aft_jk",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.ft_ao'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.df",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.df_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.df_jk",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/df/df_jk.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.df.fft",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.fft_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.fft_jk",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/df/fft_jk.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.df.ft_ao",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.ft_ao'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.gdf_builder",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.incore",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.mdf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.mdf_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.mdf_jk",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.ft_ao'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.outcore",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.rsdf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.rsdf_builder",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.rsdf_helper",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.rsdf_jk",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/df/rsdf_jk.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.dft",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/dft/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.dft.cdft",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.gen_grid",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/dft/gen_grid.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.dft.gks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kgks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.krks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.krks_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.krkspu",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.krkspu_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kroks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kuks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kuks_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kukspu",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kukspu_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid._backend_c",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid.multigrid",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid.multigrid_pair",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid.pp",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid.utils",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.numint",
+    "status": "error",
+    "error": "ImportError: cannot import name 'numint' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.numint2c",
+    "status": "error",
+    "error": "ImportError: cannot import name 'numint' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.rks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.roks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rohf' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.uks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.eph",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/eph/__init__.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.eph.eph_fd",
+    "status": "error",
+    "error": "ImportError: cannot import name '_vhf' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.geomopt",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.geomopt.addons'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.geomopt.geometric_solver",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.geomopt.addons'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.krhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.krks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.krks_stress",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.krkspu",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.kuhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.kuks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.kuks_stress",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.kukspu",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.rks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.rks_stress",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.uhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.uks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.uks_stress",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/gto/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.gto._pbcintor",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/gto/_pbcintor.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.gto.basis",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.basis.split_BASIS_MOLOPT",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.basis.split_GTH_BASIS_SETS",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.basis.split_HFX_BASIS",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.cell",
+    "status": "error",
+    "error": "ImportError: cannot import name 'radi' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.ecp",
+    "status": "error",
+    "error": "ImportError: cannot import name 'radi' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.eval_gto",
+    "status": "error",
+    "error": "ImportError: cannot import name 'moleintor' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.ewald_methods",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.neighborlist",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/gto/neighborlist.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo.pp",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo.pp_int",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo.ppnl_velgauge",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo.split_GTH_POTENTIALS",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.gw_slow",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.kgw_slow",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.kgw_slow_supercell",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.krgw_ac",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.krgw_cd",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.kugw_ac",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.lib",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/lib/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.lib.arnoldi",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/lib/arnoldi.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.lib.chkfile",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/lib/chkfile.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.lib.kpts",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/lib/kpts.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.lib.kpts_helper",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/lib/kpts_helper.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.lib.ktensor",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/lib/ktensor.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.lib.linalg_helper",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/lib/linalg_helper.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.mp",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/mp/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.mp.kmp2",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mp.kmp2_ksymm",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mp.kmp2_stagger",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mp.kump2",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mp.mp2",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpicc",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpicc.kccsd_rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpicc.kintermediates_rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpicc.mpi_kpoint_helper",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/mpitools/__init__.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi_blksize",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi_helper",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi_load_balancer",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi_pool",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/scf/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.scf._response_functions",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/scf/_response_functions.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.scf.addons",
+    "status": "error",
+    "error": "ImportError: cannot import name 'addons' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.chkfile",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.scf.chkfile'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.cphf",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/scf/cphf.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.scf.ghf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.hf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.kghf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.kghf_ksymm",
+    "status": "ok",
+    "file": null,
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "no-file (stub or native)"
+   },
+   {
+    "name": "pyscf.pbc.scf.khf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.khf_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.krohf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.kuhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.kuhf_ksymm",
+    "status": "ok",
+    "file": null,
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "no-file (stub or native)"
+   },
+   {
+    "name": "pyscf.pbc.scf.newton_ah",
+    "status": "error",
+    "error": "ImportError: cannot import name 'chkfile' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.rohf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rohf' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.rsjk",
+    "status": "error",
+    "error": "ImportError: cannot import name '_vhf' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.scfint",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/scf/scfint.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.scf.smearing",
+    "status": "error",
+    "error": "ImportError: cannot import name 'addons' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.stability",
+    "status": "error",
+    "error": "ImportError: cannot import name 'chkfile' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.uhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/symm/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.symm.basis",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.geom",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.group",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.pyscf_spglib",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'spglib'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.space_group",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.symmetry",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.tables",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/symm/tables.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.tddft",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.krhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.krks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.kuhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.kuks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.rks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.uhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.uks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tools",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/tools/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.tools.k2gamma",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/tools/k2gamma.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.tools.lattice",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/tools/lattice.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.tools.make_test_cell",
+    "status": "error",
+    "error": "ImportError: cannot import name 'gen_uniform_grids' from 'pyscf.pbc.dft.gen_grid' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/dft/gen_grid.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tools.pbc",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/tools/pbc.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.tools.print_funcs",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/tools/print_funcs.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.tools.pyscf_ase",
+    "status": "error",
+    "error": "RuntimeError: ASE is not found",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tools.pywannier90",
+    "status": "error",
+    "error": "ImportError: cannot import name 'numint' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tools.tril",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/tools/tril.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.x2c",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/.venv/lib/python3.13/site-packages/pyscf/pbc/x2c/__init__.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "site-packages 2.14.0"
+   },
+   {
+    "name": "pyscf.pbc.x2c.sfx2c1e",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.x2c.x2c1e",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   }
+  ],
+  "vendored": [
+   {
+    "name": "pyscf.pbc",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.__all__",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.dfadc",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_rhf_amplitudes",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_rhf_ea",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.adc.kadc_rhf_ip",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.ao2mo",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/ao2mo/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.ao2mo.eris",
+    "status": "error",
+    "error": "ImportError: cannot import name 'gen_uniform_grids' from 'pyscf.pbc.dft.gen_grid' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/dft/gen_grid.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/cc/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.cc.ccsd",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_ghf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'eom_rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_rhf_ea",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_rhf_ip",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.eom_kccsd_uhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'eom_rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd",
+    "status": "error",
+    "error": "ImportError: cannot import name 'gccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_rhf_ksymm",
+    "status": "error",
+    "error": "ImportError: cannot import name 'MORotationMatrix' from 'pyscf.pbc.lib.kpts' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/lib/kpts.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_t",
+    "status": "error",
+    "error": "ImportError: cannot import name 'gccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_t_rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_t_rhf_slow",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kccsd_uhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'uccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kintermediates",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kintermediates_rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.cc.kintermediates_rhf_ksymm",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/cc/kintermediates_rhf_ksymm.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.cc.kintermediates_uhf",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/cc/kintermediates_uhf.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.cc.kuccsd_rdm",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/cc/kuccsd_rdm.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.ci",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/ci/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.ci.cisd",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.ci.kcis_rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/df/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.df.aft",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.aft_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.aft_jk",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.ft_ao'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.df",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.df_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.df_jk",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/df/df_jk.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.df.fft",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.fft_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.fft_jk",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/df/fft_jk.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.df.ft_ao",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.ft_ao'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.gdf_builder",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.incore",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.mdf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.mdf_ao2mo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.mdf_jk",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.ft_ao'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.outcore",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.rsdf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.rsdf_builder",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.rsdf_helper",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.df.rsdf_jk",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/df/rsdf_jk.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.dft",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/dft/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.dft.cdft",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.gen_grid",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/dft/gen_grid.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.dft.gks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kgks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.krks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.krks_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.krkspu",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.krkspu_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kroks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kuks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kuks_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kukspu",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.kukspu_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid._backend_c",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid.multigrid",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid.multigrid_pair",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid.pp",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.multigrid.utils",
+    "status": "error",
+    "error": "ImportError: cannot import name 'ATOM_OF' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.numint",
+    "status": "error",
+    "error": "ImportError: cannot import name 'numint' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.numint2c",
+    "status": "error",
+    "error": "ImportError: cannot import name 'numint' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.rks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.roks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rohf' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.dft.uks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.eph",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/eph/__init__.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.eph.eph_fd",
+    "status": "error",
+    "error": "ImportError: cannot import name '_vhf' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.geomopt",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.geomopt.addons'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.geomopt.geometric_solver",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.geomopt.addons'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.krhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.krks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.krks_stress",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.krkspu",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.kuhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.kuks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.kuks_stress",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.kukspu",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.rks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.rks_stress",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.uhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.uks",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.grad.uks_stress",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rhf' from 'pyscf.grad' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/grad/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/gto/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.gto._pbcintor",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/gto/_pbcintor.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.gto.basis",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.basis.split_BASIS_MOLOPT",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.basis.split_GTH_BASIS_SETS",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.basis.split_HFX_BASIS",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.cell",
+    "status": "error",
+    "error": "ImportError: cannot import name 'radi' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.ecp",
+    "status": "error",
+    "error": "ImportError: cannot import name 'radi' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.eval_gto",
+    "status": "error",
+    "error": "ImportError: cannot import name 'moleintor' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.ewald_methods",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.neighborlist",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/gto/neighborlist.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo.pp",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo.pp_int",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo.ppnl_velgauge",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gto.pseudo.split_GTH_POTENTIALS",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.gw_slow",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.kgw_slow",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.kgw_slow_supercell",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.krgw_ac",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.krgw_cd",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.gw.kugw_ac",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.lib",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/lib/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.lib.arnoldi",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/lib/arnoldi.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.lib.chkfile",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/lib/chkfile.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.lib.kpts",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/lib/kpts.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.lib.kpts_helper",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/lib/kpts_helper.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.lib.ktensor",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/lib/ktensor.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.lib.linalg_helper",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/lib/linalg_helper.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.mp",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/mp/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.mp.kmp2",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mp.kmp2_ksymm",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mp.kmp2_stagger",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mp.kump2",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mp.mp2",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mp2' from 'pyscf.mp' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/mp/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpicc",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpicc.kccsd_rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpicc.kintermediates_rhf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpicc.mpi_kpoint_helper",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rccsd' from 'pyscf.cc' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/cc/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/mpitools/__init__.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi_blksize",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi_helper",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi_load_balancer",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.mpitools.mpi_pool",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'mpi4py'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/scf/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.scf._response_functions",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/scf/_response_functions.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.scf.addons",
+    "status": "error",
+    "error": "ImportError: cannot import name 'addons' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.chkfile",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.scf.chkfile'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.cphf",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/scf/cphf.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.scf.ghf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.hf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.kghf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.kghf_ksymm",
+    "status": "ok",
+    "file": null,
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "no-file (stub or native)"
+   },
+   {
+    "name": "pyscf.pbc.scf.khf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.khf_ksymm",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.krohf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.kuhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.kuhf_ksymm",
+    "status": "ok",
+    "file": null,
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "no-file (stub or native)"
+   },
+   {
+    "name": "pyscf.pbc.scf.newton_ah",
+    "status": "error",
+    "error": "ImportError: cannot import name 'chkfile' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.rohf",
+    "status": "error",
+    "error": "ImportError: cannot import name 'rohf' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.rsjk",
+    "status": "error",
+    "error": "ImportError: cannot import name '_vhf' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.scfint",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/scf/scfint.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.scf.smearing",
+    "status": "error",
+    "error": "ImportError: cannot import name 'addons' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.stability",
+    "status": "error",
+    "error": "ImportError: cannot import name 'chkfile' from 'pyscf.scf' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/scf/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.scf.uhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.basis'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/symm/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.symm.basis",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.geom",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.group",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.pyscf_spglib",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'spglib'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.space_group",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.symmetry",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.symm.tables",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/symm/tables.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.tddft",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.krhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.krks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.kuhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.kuks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.rhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.rks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.uhf",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tdscf.uks",
+    "status": "error",
+    "error": "ModuleNotFoundError: No module named 'pyscf.gto.moleintor'",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tools",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/tools/__init__.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.tools.k2gamma",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/tools/k2gamma.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.tools.lattice",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/tools/lattice.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.tools.make_test_cell",
+    "status": "error",
+    "error": "ImportError: cannot import name 'gen_uniform_grids' from 'pyscf.pbc.dft.gen_grid' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/dft/gen_grid.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tools.pbc",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/pbc/tools/pbc.py",
+    "pbc_warnings": [],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "overlay"
+   },
+   {
+    "name": "pyscf.pbc.tools.print_funcs",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/tools/print_funcs.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.tools.pyscf_ase",
+    "status": "error",
+    "error": "RuntimeError: ASE is not found",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tools.pywannier90",
+    "status": "error",
+    "error": "ImportError: cannot import name 'numint' from 'pyscf.dft' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/dft/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.tools.tril",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/tools/tril.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.x2c",
+    "status": "ok",
+    "file": "/home/user/Documents/workspace/pyscf_rs/pyscf/pbc/x2c/__init__.py",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": "vendored 2.12.1"
+   },
+   {
+    "name": "pyscf.pbc.x2c.sfx2c1e",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   },
+   {
+    "name": "pyscf.pbc.x2c.x2c1e",
+    "status": "error",
+    "error": "ImportError: cannot import name 'mole' from 'pyscf.gto' (/home/user/Documents/workspace/pyscf_rs/python/pyscf/gto/__init__.py)",
+    "pbc_warnings": [
+     "pyscf-rs"
+    ],
+    "pyscf_file": "/home/user/Documents/workspace/pyscf_rs/python/pyscf/__init__.py",
+    "resolved": null
+   }
+  ]
+ }
+}

@@ -26,7 +26,7 @@
 use num_complex::Complex64;
 
 use crate::error::PbcGwError;
-use crate::krgw_ac::{ac_pade_fit_row, pade_eval, qp_linearized, qp_newton, AcMode};
+use crate::krgw_ac::{AcMode, ac_pade_fit_row, pade_eval, qp_linearized, qp_newton};
 use crate::types::{GwConfig, GwRoute, QpResult};
 
 /// Broadening for the Green's-function denominators (upstream

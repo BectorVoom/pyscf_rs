@@ -767,7 +767,7 @@ fn density_permutation_is_cached_once_per_star_and_mesh() {
 #[test]
 fn vector_density_uses_l1_rotation_and_is_thread_bit_exact() {
     let mesh = [8usize, 8, 8];
-    let (_cell, kpts) = density_fixture(mesh);
+    let (cell, kpts) = density_fixture(mesh);
     let base = synthetic_rho(mesh);
     let vy: Vec<f64> = base.iter().map(|v| 0.7 * v - 0.2).collect();
     let vz: Vec<f64> = base.iter().map(|v| -0.3 * v + 0.4).collect();
@@ -777,11 +777,11 @@ fn vector_density_uses_l1_rotation_and_is_thread_bit_exact() {
     let eight = pool(8);
     for ibz in 0..kpts.nkpts_ibz() {
         let got = one.install(|| {
-            kpts.symmetrize_density_vec(rho, ibz, mesh)
+            kpts.symmetrize_density_vec(&cell, rho, ibz, mesh)
                 .expect("vector density")
         });
         let parallel = eight.install(|| {
-            kpts.symmetrize_density_vec(rho, ibz, mesh)
+            kpts.symmetrize_density_vec(&cell, rho, ibz, mesh)
                 .expect("vector density")
         });
         for component in 0..3 {
@@ -819,6 +819,91 @@ fn vector_density_uses_l1_rotation_and_is_thread_bit_exact() {
             }
         }
         assert!(max < 1e-12, "l=1 vector rotation residual {max:e}");
+    }
+}
+
+/// 20-13 D4: an s-only basis. `Symmetry` builds `Dmats` only up to the basis'
+/// highest `l` (`symmetry.py:83-84`), so on an s-only cell `dmats()[iop]`
+/// holds `l = 0` alone and the vector (GGA gradient) symmetrization indexed
+/// `[1]` out of bounds — a panic, and with `panic = "abort"` a dead
+/// interpreter. The gradient is a Cartesian vector whatever the basis, so the
+/// result must be BITWISE the one an otherwise identical cell whose basis
+/// carries p functions (and therefore `Dmats[l = 1]`) produces.
+#[test]
+fn vector_density_on_an_s_only_basis_matches_a_p_basis_twin() {
+    use pyscf_core::{ParsedBasis, ShellSpec, Unit};
+    use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs};
+    use pyscf_pbc_gto::{ALattice, CellBuildArgs};
+
+    let mesh = [8usize, 8, 8];
+    let template = diamond();
+    let atoms: Vec<(String, [f64; 3])> = template
+        .mol
+        ._atom
+        .iter()
+        .map(|(s, _)| s.clone())
+        .zip(template.mol.atom_coords())
+        .collect();
+    let twin = |with_p: bool| -> (Cell, KPoints) {
+        let mut shells = vec![ShellSpec {
+            l: 0,
+            exponents: vec![1.3],
+            coeffs: vec![vec![1.0]],
+        }];
+        if with_p {
+            shells.push(ShellSpec {
+                l: 1,
+                exponents: vec![0.8],
+                coeffs: vec![vec![1.0]],
+            });
+        }
+        let mut cell = Cell::build(CellBuildArgs {
+            mole: MoleBuildArgs {
+                atom: AtomInput::Tuples(atoms.clone()),
+                basis: BasisInput::Parsed(ParsedBasis { shells }),
+                unit: Unit::Bohr,
+                ..Default::default()
+            },
+            a: ALattice::Matrix(template.a),
+            ..Default::default()
+        })
+        .expect("diamond twin builds");
+        cell.space_group_symmetry = true;
+        cell.symmorphic = false;
+        build_lattice_symmetry(&mut cell, false).expect("build_lattice_symmetry");
+        let kpts_abs = make_kpts_default(&cell, [2, 2, 2]).expect("make_kpts_default");
+        let kpts = make_kpts(&cell, &kpts_abs, true, false).expect("make_kpts");
+        (cell, kpts)
+    };
+    let (s_cell, s_kpts) = twin(false);
+    let (p_cell, p_kpts) = twin(true);
+    // The precondition this gate is about: the s-only set stops at l = 0.
+    assert!(s_kpts.dmats().iter().all(|d| d.len() == 1));
+    assert!(p_kpts.dmats().iter().all(|d| d.len() == 2));
+    assert_eq!(s_kpts.nop(), p_kpts.nop());
+    assert_eq!(s_kpts.stars_ops, p_kpts.stars_ops);
+    assert!(s_kpts.nkpts_ibz() < s_kpts.nkpts(), "the fixture must fold");
+
+    let base = synthetic_rho(mesh);
+    let vy: Vec<f64> = base.iter().map(|v| 0.7 * v - 0.2).collect();
+    let vz: Vec<f64> = base.iter().map(|v| -0.3 * v + 0.4).collect();
+    let rho = [&base[..], &vy[..], &vz[..]];
+    for ibz in 0..s_kpts.nkpts_ibz() {
+        let got = s_kpts
+            .symmetrize_density_vec(&s_cell, rho, ibz, mesh)
+            .expect("s-only vector density");
+        let want = p_kpts
+            .symmetrize_density_vec(&p_cell, rho, ibz, mesh)
+            .expect("p-basis vector density");
+        for component in 0..3 {
+            for g in 0..base.len() {
+                assert_eq!(
+                    got[component][g].to_bits(),
+                    want[component][g].to_bits(),
+                    "component {component}, star {ibz}, grid {g}"
+                );
+            }
+        }
     }
 }
 

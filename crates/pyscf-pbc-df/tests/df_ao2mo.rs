@@ -868,7 +868,7 @@ fn mo_payload(set: &[MoCoeff]) -> String {
 /// at exactly **0**), so this is a 1e-11 gate on the algebra with no deferral
 /// in the way. Three quadruples, one per non-trivial `get_eri` branch.
 #[test]
-#[ignore = "oracle: needs PYSCF_ORACLE_VENV and a real GDF build"]
+#[ignore = "T1: oracle: needs PYSCF_ORACLE_VENV and a real GDF build"]
 fn get_eri_matches_upstream_on_he_fcc() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping", common::GATE);
@@ -878,6 +878,12 @@ fn get_eri_matches_upstream_on_he_fcc() {
     let kmesh = [2, 1, 1];
     let kpts = kpts_of(&cell, kmesh);
     let mut df = Gdf::new(cell.clone(), &kpts);
+    // The oracle runs `_CCGDFBuilder` (`mydf._prefer_ccdf = True`). The port's
+    // default flipped to the range-separated route in a423c0e (plan 14-07
+    // Task 7d). Upstream's own two routes differ (5.222e-10 in the He-fcc 2x2x2
+    // KRHF energy, 14-VERIFICATION), so an unpinned port measured the route
+    // split, not the port: 2.330e-10 here, 8.215e-11 in `ao2mo_7d`.
+    df.prefer_ccdf = true;
     df.build().expect("gdf build");
 
     let kc = pyscf_pbc_lib::kpts_helper::get_kconserv(&cell.a, &kpts);
@@ -939,7 +945,7 @@ fn get_eri_matches_upstream_on_he_fcc() {
 ///
 /// Complex MO coefficients, so a missing conjugate cannot cancel.
 #[test]
-#[ignore = "oracle: needs PYSCF_ORACLE_VENV and a real GDF build"]
+#[ignore = "T1: oracle: needs PYSCF_ORACLE_VENV and a real GDF build"]
 fn ao2mo_7d_matches_upstream_on_he_fcc() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping", common::GATE);
@@ -951,6 +957,9 @@ fn ao2mo_7d_matches_upstream_on_he_fcc() {
     let kpts = kpts_of(&cell, kmesh);
     let nk = kpts.len();
     let mut df = Gdf::new(cell.clone(), &kpts);
+    // Same route pin as `get_eri_matches_upstream_on_he_fcc`: the oracle is
+    // `_CCGDFBuilder`.
+    df.prefer_ccdf = true;
     df.build().expect("gdf build");
 
     let mut rng = Rng::new(2024);
@@ -980,7 +989,7 @@ fn ao2mo_7d_matches_upstream_on_he_fcc() {
 /// the acceptance run, and the numbers it prints belong in
 /// `14-VERIFICATION.md`.
 #[test]
-#[ignore = "acceptance: diamond make_j3c at gamma runs for tens of minutes"]
+#[ignore = "T2: acceptance: diamond make_j3c at gamma runs for tens of minutes"]
 fn get_eri_matches_upstream_on_diamond_gamma() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping", common::GATE);
@@ -989,6 +998,9 @@ fn get_eri_matches_upstream_on_diamond_gamma() {
     let cell = common::diamond();
     let kmesh = [1, 1, 1];
     let mut df = Gdf::new(cell.clone(), &[[0.0; 3]]);
+    // The oracle is `_CCGDFBuilder`; upstream's RS and CC routes differ by
+    // 4.502e-06 in the diamond gamma KRHF energy (Phase 14 `ccdf.py`).
+    df.prefer_ccdf = true;
     df.build().expect("gdf build");
 
     let quads: Vec<Vec<usize>> = vec![vec![0, 0, 0, 0]];
@@ -1025,7 +1037,7 @@ fn get_eri_matches_upstream_on_diamond_gamma() {
 /// `strip_basis`). Without this test a future `cderi` regression would look
 /// like a `df_ao2mo` regression, and the fix would go in the wrong file.
 #[test]
-#[ignore = "oracle: needs PYSCF_ORACLE_VENV and a real GDF build"]
+#[ignore = "T1: oracle: needs PYSCF_ORACLE_VENV and a real GDF build"]
 fn get_eri_is_bit_exact_with_upstream_over_the_same_cderi() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping", common::GATE);
@@ -1037,6 +1049,8 @@ fn get_eri_is_bit_exact_with_upstream_over_the_same_cderi() {
     let kpts = kpts_of(&cell, kmesh);
     let nk = kpts.len();
     let mut df = Gdf::new(cell.clone(), &kpts);
+    // The same `_CCGDFBuilder` cderi the gates above compare against upstream.
+    df.prefer_ccdf = true;
     df.build().expect("gdf build");
 
     let mut blocks: Vec<Vec<f64>> = Vec::new();

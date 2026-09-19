@@ -413,14 +413,28 @@ fn vec_lowdin(c: &CTensor, s: &CTensor, nao: usize, nlo: usize) -> Result<CTenso
     Ok(out)
 }
 
-/// `_add_Vhubbard(vxc, ks, dm, kpts)` — `krkspu.py:67-137`.
+/// `_add_Vhubbard(vxc, ks, dm, kpts)` — `krkspu.py:68-137` (one density
+/// channel, KRKSpU) and `kukspu.py:50-120` (two channels, KUKSpU).
 ///
 /// Adds the Hubbard potential to `vxc` IN PLACE and returns `E_U`.
 ///
-/// `dms` carries one channel for KRKSpU and two for KUKSpU; the `U/2` factor
-/// upstream applies is per CHANNEL, so an unrestricted density (whose channels
-/// each hold one electron per orbital) gets the same expression with its own
-/// `P^k`.
+/// The channel count selects the upstream routine, and the two are NOT the
+/// same expression applied per channel:
+///
+/// | `dms.len()` | upstream | `E_U` term per `(site, k)` | local potential |
+/// |---|---|---|---|
+/// | 1 (spin-summed `D`) | `krkspu.py:111-113` | `w (U/2)(Tr P - Tr P^2 / 2)` | `(1 - P) U/2` |
+/// | 2 (`D_alpha`, `D_beta`) | `kukspu.py:96-97`, per spin | `w (U/2)(Tr P_s - Tr P_s^2)` | `(1 - 2 P_s) U/2` |
+///
+/// For a closed-shell density (`P_s = P / 2`) the two agree exactly. Applying
+/// the restricted row to each spin channel — what this function did before
+/// 20-13-FIX — overcounts `E_U` by `w (U/2) Tr P_s^2` per spin (measured He
+/// sto-3g 2x2x2, U = 5 eV: converged `E_U` 9.187e-2 against upstream 5.6e-14).
+///
+/// Upstream's loop order is kept: KRKSpU runs `site -> k`, KUKSpU runs
+/// `site -> spin -> k` (`kukspu.py:90-92`), so `E_U` accumulates in the same
+/// order. The projectors are spin-independent (`kukspu.py:69-71` applies the
+/// same `C_ao_lo` to both spins).
 ///
 /// # Errors
 /// Propagates the overlap integrals and the local-orbital construction.
@@ -494,6 +508,17 @@ pub fn add_vhubbard_weighted(
         .map(|m| pyscf_pbc_df::zlinalg::forder_to_c(m, nao, nao))
         .collect();
 
+    let unrestricted = match dms.len() {
+        1 => false,
+        2 => true,
+        n => {
+            return Err(err(format!(
+                "DFT+U: {n} density channels; KRKSpU takes 1 (krkspu.py) and KUKSpU 2 \
+                 (kukspu.py)"
+            )));
+        }
+    };
+
     let mut e_u = 0.0_f64;
     for (site, (&val, &alpha)) in resolved
         .indices
@@ -501,29 +526,34 @@ pub fn add_vhubbard_weighted(
         .zip(resolved.u_val.iter().zip(resolved.alpha.iter()))
     {
         let m = site.len();
-        for k in 0..nkpts {
-            // SC[μ, a] = Σ_ν S[μ, ν] C_lo[ν, site[a]]
-            let mut sc = CTensor::zeros(nao * m);
-            for mu in 0..nao {
-                for (a, &idx) in site.iter().enumerate() {
-                    let mut re = 0.0_f64;
-                    let mut im = 0.0_f64;
-                    for nu in 0..nao {
-                        let (ar, ai) = (s[k].re[mu * nao + nu], s[k].im[mu * nao + nu]);
-                        let (br, bi) =
-                            (c_ao_lo[k].re[nu + idx * nao], c_ao_lo[k].im[nu + idx * nao]);
-                        re += ar * br - ai * bi;
-                        im += ar * bi + ai * br;
+        // SC[k][μ, a] = Σ_ν S[μ, ν] C_lo[ν, site[a]] — spin-independent.
+        let sc_k: Vec<CTensor> = (0..nkpts)
+            .map(|k| {
+                let mut sc = CTensor::zeros(nao * m);
+                for mu in 0..nao {
+                    for (a, &idx) in site.iter().enumerate() {
+                        let mut re = 0.0_f64;
+                        let mut im = 0.0_f64;
+                        for nu in 0..nao {
+                            let (ar, ai) = (s[k].re[mu * nao + nu], s[k].im[mu * nao + nu]);
+                            let (br, bi) =
+                                (c_ao_lo[k].re[nu + idx * nao], c_ao_lo[k].im[nu + idx * nao]);
+                            re += ar * br - ai * bi;
+                            im += ar * bi + ai * br;
+                        }
+                        sc.re[mu * m + a] = re;
+                        sc.im[mu * m + a] = im;
                     }
-                    sc.re[mu * m + a] = re;
-                    sc.im[mu * m + a] = im;
                 }
-            }
-            let _ = nlo;
+                sc
+            })
+            .collect();
+        let _ = nlo;
 
-            for (spin, dmset) in dms.iter().enumerate() {
+        for (spin, dmset) in dms.iter().enumerate() {
+            for (k, sc) in sc_k.iter().enumerate() {
                 // P = SC^H D SC
-                let p = triple(&sc, &dmset[k], nao, m);
+                let p = triple(sc, &dmset[k], nao, m);
                 let tr = (0..m).map(|i| p.re[i * m + i]).sum::<f64>();
                 let mut tr_pp = 0.0_f64;
                 for i in 0..m {
@@ -533,17 +563,34 @@ pub fn add_vhubbard_weighted(
                         tr_pp += ar * br - ai * bi;
                     }
                 }
-                e_u += weights[k] * (val * 0.5) * (tr - tr_pp * 0.5);
-
-                // vhub_loc = (I − P)·(U/2) [+ α·I]
                 let mut vloc = CTensor::zeros(m * m);
-                for i in 0..m {
-                    for j in 0..m {
-                        vloc.re[i * m + j] = -p.re[i * m + j] * (val * 0.5);
-                        vloc.im[i * m + j] = -p.im[i * m + j] * (val * 0.5);
+                if unrestricted {
+                    // kukspu.py:96-97
+                    //   E_U += weight[k] * (val * 0.5) * (P_k.trace() - np.dot(P_k, P_k).trace())
+                    //   vhub_loc = (np.eye(P_k.shape[-1]) - P_k * 2.0) * (val * 0.5)
+                    e_u += weights[k] * (val * 0.5) * (tr - tr_pp);
+                    for i in 0..m {
+                        for j in 0..m {
+                            let eye = if i == j { 1.0 } else { 0.0 };
+                            vloc.re[i * m + j] = (eye - p.re[i * m + j] * 2.0) * (val * 0.5);
+                            vloc.im[i * m + j] = (0.0 - p.im[i * m + j] * 2.0) * (val * 0.5);
+                        }
                     }
-                    vloc.re[i * m + i] += val * 0.5;
+                } else {
+                    // krkspu.py:111-113
+                    //   E_U += weight[k] * (val * 0.5) * (P_k.trace() - np.dot(P_k, P_k).trace() * 0.5)
+                    //   vhub_loc = (np.eye(P_k.shape[-1]) - P_k) * (val * 0.5)
+                    e_u += weights[k] * (val * 0.5) * (tr - tr_pp * 0.5);
+                    for i in 0..m {
+                        for j in 0..m {
+                            vloc.re[i * m + j] = -p.re[i * m + j] * (val * 0.5);
+                            vloc.im[i * m + j] = -p.im[i * m + j] * (val * 0.5);
+                        }
+                        vloc.re[i * m + i] += val * 0.5;
+                    }
                 }
+                // krkspu.py:114-118 / kukspu.py:98-102 — the alpha perturbation
+                // on the linear term only.
                 if let Some(a) = alpha {
                     e_u += weights[k] * a * tr;
                     for i in 0..m {
@@ -551,7 +598,7 @@ pub fn add_vhubbard_weighted(
                     }
                 }
                 // vhub = SC · vloc · SC^H
-                let vhub = expand(&sc, &vloc, nao, m);
+                let vhub = expand(sc, &vloc, nao, m);
                 let nchan = vxc.len();
                 let target = vxc
                     .get_mut(spin)

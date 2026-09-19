@@ -39,7 +39,7 @@ const ROOT_GATE: f64 = 1e-5;
 
 /// **The `make_ee` intermediates, the packing, the matvec and the diagonal.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn ee_singlet_equations_match_upstream() {
     let Some(out) = emit("ee_singlet") else {
         return;
@@ -221,7 +221,7 @@ fn ee_singlet_equations_match_upstream() {
 
 /// **The `EOMEESinglet` roots, on upstream's own converged amplitudes.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn ee_singlet_roots_match_upstream() {
     let Some(out) = emit("ee_singlet") else {
         return;

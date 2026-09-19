@@ -3,26 +3,30 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: Periodic Boundary Conditions
 status: in_progress
-last_updated: "2026-09-13T20:30:00.000Z"
-last_activity: 2026-09-13
+last_updated: "2026-09-14T21:30:00.000Z"
+last_activity: 2026-09-14
 # Counters reconciled 2026-09-13 by plan 20-01. Counting rule, scope = the
 # v2.0 milestone named above (phase directories 09-* … 20-* under
 # .planning/phases/):
 #   total_phases     = number of those phase directories (09…20)          = 12
 #   completed_phases = v2.0 ROADMAP rows ticked [x] (9,10,11,12,14,15,17)  = 7
-#   total_plans      = count of *-PLAN.md files in those directories       = 119
-#   completed_plans  = count of *-SUMMARY.md files in those directories   = 68
+#   total_plans      = count of *-PLAN.md files in those directories       = 120
+#   completed_plans  = count of *-SUMMARY.md files in those directories   = 91
 #                      (includes 20-01-SUMMARY.md; phases 10-12 predate
 #                       per-plan files, so they contribute 0 to both)
-#   percent          = round(100 * completed_plans / total_plans)          = 57
+#   percent          = round(100 * completed_plans / total_plans)          = 76
+# Re-counted 2026-09-14 by 20-18 with the same rule: 12 dirs; 120 PLAN
+#   (20-19-PLAN added); 91 SUMMARY (incl. 20-04-FIX, 20-13-FIX, 20-18-PRE,
+#   20-19-AC/B/D and 20-18-SUMMARY); completed_phases unchanged at 7 because
+#   Phase 20 stays [ ] (its >=80% upstream-suite target is NOT MET).
 # Reproduce: ls -d .planning/phases/{09,1[0-9],20}-* | wc -l ;
 #   ls .planning/phases/{09,1[0-9],20}-*/*-PLAN.md | wc -l ; same for -SUMMARY.md
 progress:
   total_phases: 12
   completed_phases: 7
-  total_plans: 119
-  completed_plans: 68
-  percent: 57
+  total_plans: 120
+  completed_plans: 91
+  percent: 76
 ---
 
 # Project State
@@ -33,6 +37,22 @@ See: .planning/PROJECT.md (updated 2026-05-09)
 
 **Core value:** Run mainstream molecular ground-state quantum chemistry (HF, DFT, MP2, CCSD, gradients) 2–5× faster than current PySCF + C extensions, with bit-exact agreement on regression tests, and zero C/CMake/libcint dependency hell at install time.
 **Current focus:** Phase 20 (PBC Python bindings + oracle enforcement) —
+**ROLLED UP 2026-09-14 by 20-18, NOT CLOSED** — `.planning/phases/20-pbc-python-bindings/20-VERIFICATION.md`
+is the authority. 19 PLAN files / 24 SUMMARY files. Identity gate **18/18** (18/18 failed before any
+binding, D-20-C); the example gate, restated because upstream 2.12.1 itself cannot run
+`20-k_points_scf.py` (meta-GGA + Newton-AH, days) or finish `22-k_points_mp2.py`
+(`NotImplementedError` at line 62), is MET on legs 1–3: ex 22 reaches line 62 natively with KMP2 `e_tot` 4.558e-7
+(2×2×2) / 6.543e-9 (1 k) from upstream, `22-k_points_mp2_ksymm.py` 1.695e-6, `23-smearing.py`
+σ=0.1 free energy 2.2e-9 (leg 4, a bounded native replacement for example 20, NOT MET:
+`40-custom_gdf.py` killed after 82 min vs 53.5 s upstream); KRHF He-fcc 2×2×2 bit-identical at 1 and 8 rayon threads
+(`e_tot_bits=0xc0067587e69e6ce6`, new `pbc-oracle` CI step). **NOT MET:** upstream `pyscf/pbc` suite
+**11 / 815** (control 808 / 815; structural — upstream PBC Python subclasses native molecular classes),
+and native FFTDF `get_jk` is **5.95×** upstream's wall time. 13 carryover files
+`.planning/carryovers/20-*.md`. Defects fixed in the phase: FFTDF `coulG` cache key (D-20-E), KS XC
+grid on the DF mesh (GDF Gate C 1.432e-06 → 2.1997e-10), GDF/MDF omega + SR int3c + RSMDF j2c
+precision, rsjk `guess_omega`, `df_ao2mo` route pin, KUKSpU Hubbard + ksymm GGA s-only, KS `get_veff`
+override energy tags, SCF overlap precision (floors fell ~100×: KRHF Si gth 4.158e-12 → 2.931e-14,
+KRKS Si PBE 6.451e-12 → 4.086e-14). Phase 20 was
 **IN PROGRESS 2026-09-13**, `.planning/phases/20-pbc-python-bindings/`
 (`20-CONTEXT.md`, `20-EXECUTION-NOTES.md`; 18 plans). 20-01 reconciled the gates:
 ROADMAP Phase 14/15/17 boxes ticked from their verifications, 13 and 16 left

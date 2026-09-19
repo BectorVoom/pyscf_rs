@@ -62,7 +62,10 @@ pub fn t2_first_order(
 ) -> Result<KadcAmplitudes, PbcAdcError> {
     let (nk, no, nv) = (eris.nkpts, eris.nocc, eris.nvir);
     if e_occ_k.len() != nk || e_vir_k.len() != nk || kconserv.len() != nk * nk * nk {
-        return Err(PbcAdcError::ShapeMismatch { expected: nk, got: e_occ_k.len() });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: nk,
+            got: e_occ_k.len(),
+        });
     }
     let mut t2 = CTensor::zeros(nk * nk * nk * no * no * nv * nv);
     t2.re.fill(0.0);
@@ -72,7 +75,10 @@ pub fn t2_first_order(
             for ka in 0..nk {
                 let kb = kconserv[(ki * nk + ka) * nk + kj];
                 if kb >= nk {
-                    return Err(PbcAdcError::ShapeMismatch { expected: nk, got: kb });
+                    return Err(PbcAdcError::ShapeMismatch {
+                        expected: nk,
+                        got: kb,
+                    });
                 }
                 // ovov[ki,ka,kj] slice, [i,a,j,b].
                 let t = no * nv * no * nv;
@@ -105,7 +111,13 @@ pub fn t2_first_order(
             }
         }
     }
-    Ok(KadcAmplitudes { nkpts: nk, nocc: no, nvir: nv, t2_1: t2, t1_2: None })
+    Ok(KadcAmplitudes {
+        nkpts: nk,
+        nocc: no,
+        nvir: nv,
+        t2_1: t2,
+        t1_2: None,
+    })
 }
 
 /// ADC(2) correlation energy (`compute_amplitudes.py::compute_energy`).
@@ -122,7 +134,10 @@ pub fn adc2_energy(
 ) -> Result<f64, PbcAdcError> {
     let (nk, no, nv) = (t2.nkpts, t2.nocc, t2.nvir);
     if eris.nkpts != nk || eris.nocc != no || eris.nvir != nv {
-        return Err(PbcAdcError::ShapeMismatch { expected: nk, got: eris.nkpts });
+        return Err(PbcAdcError::ShapeMismatch {
+            expected: nk,
+            got: eris.nkpts,
+        });
     }
     let _ = kconserv;
     let mut re_terms: Vec<f64> = Vec::new();
@@ -167,7 +182,9 @@ pub fn build_amplitudes(
     method: &str,
 ) -> Result<(f64, KadcAmplitudes), PbcAdcError> {
     if method != "adc(2)" {
-        return Err(PbcAdcError::NotYetImplemented { module: "adc t1_2/t2_2 (adc(2)-x/adc(3))" });
+        return Err(PbcAdcError::NotYetImplemented {
+            module: "adc t1_2/t2_2 (adc(2)-x/adc(3))",
+        });
     }
     let amps = t2_first_order(eris, e_occ_k, e_vir_k, kconserv)?;
     let e = adc2_energy(&amps, eris, kconserv)?;

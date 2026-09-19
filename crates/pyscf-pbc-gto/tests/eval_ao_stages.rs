@@ -139,7 +139,7 @@ fn k08b_scatter_and_dense_full_images_are_bit_exact() {
 }
 
 #[test]
-#[ignore = "child process for image_loop_is_thread_bit_exact_and_screen_stays_inside_its_gate"]
+#[ignore = "T1: child process for image_loop_is_thread_bit_exact_and_screen_stays_inside_its_gate"]
 fn emit_ao_bits() {
     let path = std::env::var_os("PYSCF_AO_STAGE_OUTPUT").expect("child output path");
     let cell = silicon();

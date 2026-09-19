@@ -10,7 +10,9 @@
 //! Run scoped: `cargo test -p pyscf-pbc-scf --test cphf_k`
 
 use pyscf_algebra::solve_linear;
-use pyscf_pbc_scf::cphf::{KCPHF_DEFAULT_MAX_CYCLE, KCPHF_DEFAULT_TOL, KcphfInput, dense_kvind, run_kcphf};
+use pyscf_pbc_scf::cphf::{
+    KCPHF_DEFAULT_MAX_CYCLE, KCPHF_DEFAULT_TOL, KcphfInput, dense_kvind, run_kcphf,
+};
 use pyscf_pbc_scf::response::{
     PbcKohnShamBase, ResponseError, ResponseJkBackend, RksGenResponse, resolve_jk_route,
 };
@@ -37,25 +39,27 @@ fn two_k_fixture() -> TwoK {
     let h1_1: Vec<f64> = vec![0.25, -0.15];
     // Diagonally-dominant dense kernels per k (vir-major ndim²).
     let kmat_0: Vec<f64> = (0..36)
-        .map(|i| if i % 7 == 0 { 0.05 } else { 0.001 * ((i % 5) as f64) })
+        .map(|i| {
+            if i % 7 == 0 {
+                0.05
+            } else {
+                0.001 * ((i % 5) as f64)
+            }
+        })
         .collect();
     let kmat_1: Vec<f64> = vec![0.04, 0.002, 0.002, 0.04];
 
     let e_ai = |e: &[f64], o: &[f64]| -> Vec<f64> {
-        let eo: Vec<f64> = e.iter().zip(o.iter()).filter_map(|(&en, &oc)| {
-            if oc > 0.0 {
-                Some(en)
-            } else {
-                None
-            }
-        }).collect();
-        let ea: Vec<f64> = e.iter().zip(o.iter()).filter_map(|(&en, &oc)| {
-            if oc == 0.0 {
-                Some(en)
-            } else {
-                None
-            }
-        }).collect();
+        let eo: Vec<f64> = e
+            .iter()
+            .zip(o.iter())
+            .filter_map(|(&en, &oc)| if oc > 0.0 { Some(en) } else { None })
+            .collect();
+        let ea: Vec<f64> = e
+            .iter()
+            .zip(o.iter())
+            .filter_map(|(&en, &oc)| if oc == 0.0 { Some(en) } else { None })
+            .collect();
         let mut v = Vec::with_capacity(ea.len() * eo.len());
         for &a in &ea {
             for &i in &eo {
@@ -64,10 +68,7 @@ fn two_k_fixture() -> TwoK {
         }
         v
     };
-    let e_ai_k = vec![
-        e_ai(&mo_energy_0, &mo_occ_0),
-        e_ai(&mo_energy_1, &mo_occ_1),
-    ];
+    let e_ai_k = vec![e_ai(&mo_energy_0, &mo_occ_0), e_ai(&mo_energy_1, &mo_occ_1)];
     TwoK {
         input: KcphfInput {
             mo_energy_k: vec![mo_energy_0, mo_energy_1],
@@ -98,8 +99,13 @@ fn dense_ref(kmat: &[f64], e_ai: &[f64], h1: &[f64]) -> Vec<f64> {
 fn kcphf_matches_per_k_dense_reference() {
     let fix = two_k_fixture();
     let fvind = dense_kvind(&fix.kmat_k);
-    let z = run_kcphf(&fix.input, &fvind, KCPHF_DEFAULT_MAX_CYCLE, KCPHF_DEFAULT_TOL)
-        .expect("kcphf must converge");
+    let z = run_kcphf(
+        &fix.input,
+        &fvind,
+        KCPHF_DEFAULT_MAX_CYCLE,
+        KCPHF_DEFAULT_TOL,
+    )
+    .expect("kcphf must converge");
     assert_eq!(z.len(), 2);
     for k in 0..2 {
         let ref_k = dense_ref(&fix.kmat_k[k], &fix.e_ai_k[k], &fix.input.h1_k[k]);
@@ -123,8 +129,13 @@ fn kcphf_routes_through_the_one_cphf_solver() {
         calls.fetch_add(1, Ordering::SeqCst);
         dense_kvind(&fix.kmat_k)(k, z)
     };
-    let z = run_kcphf(&fix.input, &counted, KCPHF_DEFAULT_MAX_CYCLE, KCPHF_DEFAULT_TOL)
-        .expect("kcphf must converge");
+    let z = run_kcphf(
+        &fix.input,
+        &counted,
+        KCPHF_DEFAULT_MAX_CYCLE,
+        KCPHF_DEFAULT_TOL,
+    )
+    .expect("kcphf must converge");
     assert!(calls.load(Ordering::SeqCst) > 0, "fvind was never entered");
     // (b) Delegation, not reimplementation: each block is bit-identical to a
     // direct `pyscf_grad::cphf::solve` call on the same block.
@@ -143,7 +154,11 @@ fn kcphf_routes_through_the_one_cphf_solver() {
         .expect("direct solve must converge");
         assert_eq!(z[k].len(), direct.len());
         for (a, b) in z[k].iter().zip(direct.iter()) {
-            assert_eq!(a.to_bits(), b.to_bits(), "block {k} is not the solver's own output");
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "block {k} is not the solver's own output"
+            );
         }
     }
 }
@@ -189,11 +204,22 @@ fn kcphf_deterministic_across_thread_counts() {
     let run = || {
         let fix = two_k_fixture();
         let fvind = dense_kvind(&fix.kmat_k);
-        run_kcphf(&fix.input, &fvind, KCPHF_DEFAULT_MAX_CYCLE, KCPHF_DEFAULT_TOL)
-            .expect("kcphf must converge")
+        run_kcphf(
+            &fix.input,
+            &fvind,
+            KCPHF_DEFAULT_MAX_CYCLE,
+            KCPHF_DEFAULT_TOL,
+        )
+        .expect("kcphf must converge")
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let z1 = pool1.install(run);
     let z8 = pool8.install(run);
     assert_eq!(z1.len(), z8.len());

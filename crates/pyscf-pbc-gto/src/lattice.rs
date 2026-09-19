@@ -77,6 +77,34 @@ pub fn get_lattice_ls_default(cell: &Cell) -> Result<Vec<[f64; 3]>, PyscfRsError
     get_lattice_ls(cell, None, None, true)
 }
 
+/// The EVAL-variant image list for `pbc_eval_gto` —
+/// `eval_gto.py:136-138,192-257`.
+///
+/// `rcut` is the caller-supplied cutoff (the eval path passes
+/// `rcut = max(_estimate_rcut(...))`, NOT `cell.rcut`); `dimension` resolves
+/// as in [`get_lattice_ls`]. Unlike [`get_lattice_ls`] there is no `discard`
+/// flag: the eval variant always applies its grid-edge mask.
+///
+/// The result is NOT sorted: like upstream, sorting by norm (stable) is the
+/// caller's job — it is part of the accumulation order the C driver relies on
+/// (`grid_ao.c:58-62`: the screener assumes distance-sorted `Ls`).
+///
+/// # Errors
+/// [`pyscf_core::CoreError::InvalidMolecule`] if the lattice is singular
+/// (through `get_scaled_atom_coords`).
+pub fn get_lattice_ls_eval(cell: &Cell, rcut: f64) -> Result<Vec<[f64; 3]>, PyscfRsError> {
+    let dimension = lattice_sum_dimension(cell);
+    if dimension == 0 || rcut <= 0.0 || cell.mol.natm == 0 {
+        return Ok(vec![[0.0; 3]]);
+    }
+    let a = cell.lattice_vectors();
+    let scaled = cell.get_scaled_atom_coords()?;
+    let coords = cell.mol.atom_coords();
+    Ok(core::get_lattice_ls_eval(
+        &a, &scaled, &coords, rcut, dimension,
+    ))
+}
+
 /// Evaluate whether the lattice summation range `ls` is sufficient.
 /// Ports `check_lattice_sum_range` (`pbc.py:663-676`).
 ///

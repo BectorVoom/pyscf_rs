@@ -97,6 +97,33 @@ fn find_boundary(a_perm: &[[f64; 3]; 3], dr_basis: &[[f64; 3]; 3], rcut: f64) ->
     (rcut + tail) / r2[2].abs()
 }
 
+/// `find_boundary` for the eval variant (`eval_gto.py:218-222`).
+///
+/// Same QR, but the stacked rows are the CLAMPED per-axis bounds (`bound1`,
+/// `bound2`, `dim` rows each) and the tail is a `max`, not a `sum`.
+fn eval_find_boundary(
+    a_perm: &[[f64; 3]; 3],
+    bound1: &[[f64; 3]],
+    bound2: &[[f64; 3]],
+    dim: usize,
+    rcut: f64,
+) -> f64 {
+    let mut cols: Vec<[f64; 3]> = Vec::with_capacity(3 + 2 * dim);
+    cols.extend_from_slice(a_perm);
+    for d in 0..dim {
+        cols.push(bound1[d]);
+    }
+    for d in 0..dim {
+        cols.push(bound2[d]);
+    }
+    let r2 = qr_row2(&cols);
+    let mut tail = f64::NEG_INFINITY;
+    for v in &r2[3..] {
+        tail = tail.max(v.abs());
+    }
+    (rcut + tail) / r2[2].abs()
+}
+
 /// The (Cartesian, unitful) lattice translation vectors for nearby images —
 /// the geometry core of `get_lattice_Ls` (`pbc.py:601-661`).
 ///
@@ -195,6 +222,169 @@ pub fn get_lattice_ls(
         let dist_max = max_atom_pair_distance(atom_coords);
         let limit = rcut + dist_max;
         ls.retain(|l| norm3(l) < limit);
+    }
+    ls
+}
+
+/// The EVAL variant lattice list — the geometry core of `eval_gto.py:192-257`
+/// (`get_lattice_Ls` for `pbc_eval_gto`).
+///
+/// This is NOT the same list [`get_lattice_ls`] builds: the boundary uses the
+/// CLAMPED per-axis atom extents with a `max` (not `sum`) tail, and the box is
+/// then filtered through the grid-edge wrap (`eval_gto.py:239-256`) instead of
+/// the atom-pair `discard`. On the He-fcc gate cell (`sto-3g`, `precision`
+/// 1e-8) the eval list has 246 images where the tools list has 343
+/// (`discard = false`) / 177 (`discard = true`) at the same `rcut` — the eval
+/// driver (`grid_ao.c`, whose screener assumes distance-sorted `Ls`) consumes
+/// this variant, so `eval_ao_kpts` must build it.
+///
+/// Like upstream, the result is NOT sorted here: `eval_gto.py:137-138` sorts
+/// by norm (stable) at the call site, and the sort is part of the accumulation
+/// order the C driver relies on.
+///
+/// # Arguments
+/// Same as [`get_lattice_ls`] minus `discard` (the eval variant always applies
+/// its own edge mask).
+pub fn get_lattice_ls_eval(
+    a: &[[f64; 3]; 3],
+    scaled_atom_coords: &[[f64; 3]],
+    atom_coords: &[[f64; 3]],
+    rcut: f64,
+    dimension: usize,
+) -> Vec<[f64; 3]> {
+    // eval_gto.py:205.
+    if dimension == 0 || rcut <= 0.0 || atom_coords.is_empty() {
+        return vec![[0.0; 3]];
+    }
+    let dim = dimension.min(3);
+
+    // eval_gto.py:208-216 — per-axis extents over the first `dim` scaled
+    // columns, clamped to [-1, 1] (one-sided each: max above at 1, min below
+    // at -1), times the first `dim` lattice rows.
+    let mut bmax = [f64::NEG_INFINITY; 3];
+    let mut bmin = [f64::INFINITY; 3];
+    for s in scaled_atom_coords {
+        for d in 0..dim {
+            bmax[d] = bmax[d].max(s[d]);
+            bmin[d] = bmin[d].min(s[d]);
+        }
+    }
+    for d in 0..dim {
+        if bmax[d] > 1.0 {
+            bmax[d] = 1.0;
+        }
+        if bmin[d] < -1.0 {
+            bmin[d] = -1.0;
+        }
+    }
+    let mut bound1 = [[0.0_f64; 3]; 3];
+    let mut bound2 = [[0.0_f64; 3]; 3];
+    for d in 0..dim {
+        for j in 0..3 {
+            bound1[d][j] = bmax[d] * a[d][j];
+            bound2[d][j] = bmin[d] * a[d][j];
+        }
+    }
+
+    // eval_gto.py:224-233 — one boundary per axis, same cyclic permutations
+    // as the tools variant.
+    let xb = eval_find_boundary(&[a[1], a[2], a[0]], &bound1, &bound2, dim, rcut);
+    let yb = if dim > 1 {
+        eval_find_boundary(&[a[2], a[0], a[1]], &bound1, &bound2, dim, rcut)
+    } else {
+        0.0
+    };
+    let zb = if dim > 2 {
+        eval_find_boundary(a, &bound1, &bound2, dim, rcut)
+    } else {
+        0.0
+    };
+    // np.ceil(...).astype(int): exact for the magnitudes here.
+    let bounds = [xb.ceil() as i64, yb.ceil() as i64, zb.ceil() as i64];
+
+    // eval_gto.py:234-237 — cartesian_prod(-b..=b), last index fastest;
+    // Ls = Ts[:, :dimension] . a[:dimension]. An empty range (negative bound)
+    // yields no images, as upstream's `arange` does.
+    let mut ls: Vec<[f64; 3]> = Vec::new();
+    if bounds.iter().all(|b| *b >= 0) {
+        for tx in -bounds[0]..=bounds[0] {
+            for ty in -bounds[1]..=bounds[1] {
+                for tz in -bounds[2]..=bounds[2] {
+                    let t = [tx as f64, ty as f64, tz as f64];
+                    let mut l = [0.0_f64; 3];
+                    for (j, lj) in l.iter_mut().enumerate() {
+                        let mut acc = 0.0;
+                        for d in 0..dim {
+                            acc += t[d] * a[d][j];
+                        }
+                        *lj = acc;
+                    }
+                    ls.push(l);
+                }
+            }
+        }
+    }
+
+    // eval_gto.py:239-256 — the grid-edge wrap filter. `grids_edge` are the
+    // box corners `[-.5, 1]^dim` in Cartesian; each (atom, image) pair is
+    // wrapped back toward the box edge-by-edge (strict comparisons), pairs
+    // fully inside are zeroed, and an image survives when any atom lands
+    // within `rcut` (strict) of the wrapped position, measured over the first
+    // `dim` components.
+    if ls.len() > 1 {
+        let mut edge_lb = [f64::INFINITY; 3];
+        let mut edge_ub = [f64::NEG_INFINITY; 3];
+        for mask in 0..(1usize << dim) {
+            let mut corner = [0.0_f64; 3];
+            for (j, cj) in corner.iter_mut().enumerate() {
+                let mut acc = 0.0;
+                for d in 0..dim {
+                    let e = if (mask >> d) & 1 == 0 { -0.5 } else { 1.0 };
+                    acc += e * a[d][j];
+                }
+                *cj = acc;
+            }
+            for j in 0..3 {
+                edge_lb[j] = edge_lb[j].min(corner[j]);
+                edge_ub[j] = edge_ub[j].max(corner[j]);
+            }
+        }
+        let mut keep = vec![false; ls.len()];
+        for r in atom_coords {
+            for (i, l) in ls.iter().enumerate() {
+                if keep[i] {
+                    continue;
+                }
+                let mut inside_norm = 0.0_f64;
+                for ax in 0..dim {
+                    let o = l[ax] + r[ax];
+                    let mut g = o;
+                    // Element-wise: wrap when strictly outside, zero when
+                    // strictly inside on that axis (the two cases are disjoint
+                    // because both comparisons are strict).
+                    if !(g > edge_lb[ax]) {
+                        g -= edge_lb[ax];
+                    }
+                    if !(g < edge_ub[ax]) {
+                        g -= edge_ub[ax];
+                    }
+                    if o > edge_lb[ax] && o < edge_ub[ax] {
+                        g = 0.0;
+                    }
+                    inside_norm += g * g;
+                }
+                if inside_norm.sqrt() < rcut {
+                    keep[i] = true;
+                }
+            }
+        }
+        let mut filtered = Vec::with_capacity(ls.len());
+        for (i, l) in ls.iter().enumerate() {
+            if keep[i] {
+                filtered.push(*l);
+            }
+        }
+        ls = filtered;
     }
     ls
 }

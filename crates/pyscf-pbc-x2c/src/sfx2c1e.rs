@@ -31,7 +31,14 @@ pub const LIGHT_SPEED: f64 = 137.035999084;
 /// The LinAlgError fallback branch (canonical-orthonormalization retry) is
 /// implemented: on [`pyscf_algebra::AlgebraError::Singular`] the solve
 /// retries in the metric-orthogonalized basis exactly as upstream does.
-pub fn xmatrix(t: &[f64], v: &[f64], w: &[f64], s: &[f64], nao: usize, c: f64) -> Result<Vec<f64>, PbcX2cError> {
+pub fn xmatrix(
+    t: &[f64],
+    v: &[f64],
+    w: &[f64],
+    s: &[f64],
+    nao: usize,
+    c: f64,
+) -> Result<Vec<f64>, PbcX2cError> {
     check_blocks(t, v, w, s, nao)?;
     let n2 = 2 * nao;
     let (mut h, mut m) = (vec![0.0f64; n2 * n2], vec![0.0f64; n2 * n2]);
@@ -95,7 +102,14 @@ pub fn xmatrix(t: &[f64], v: &[f64], w: &[f64], s: &[f64], nao: usize, c: f64) -
 /// metric never raises. This port implements the arm's own comment instead —
 /// `X = B·A⁻¹ = B·Aᵀ·S` with the large-component overlap `S` (`nao × nao`) —
 /// which is dimensionally sound and mathematically what the comment states.
-fn xmatrix_fallback(h: &[f64], m_full: &[f64], s: &[f64], n2: usize, nao: usize, c: f64) -> Result<Vec<f64>, PbcX2cError> {
+fn xmatrix_fallback(
+    h: &[f64],
+    m_full: &[f64],
+    s: &[f64],
+    n2: usize,
+    nao: usize,
+    c: f64,
+) -> Result<Vec<f64>, PbcX2cError> {
     const LIN_DEP: f64 = 1e-12;
     let ident: Vec<f64> = {
         let mut s = vec![0.0f64; n2 * n2];
@@ -112,7 +126,10 @@ fn xmatrix_fallback(h: &[f64], m_full: &[f64], s: &[f64], n2: usize, nao: usize,
         }
     }
     if keep.is_empty() {
-        return Err(PbcX2cError::ShapeMismatch { expected: 1, got: 0 });
+        return Err(PbcX2cError::ShapeMismatch {
+            expected: 1,
+            got: 0,
+        });
     }
     // t_orth[i][k] = evec_k[i]/sqrt(d_k), F-order columns.
     let nk = keep.len();
@@ -160,7 +177,10 @@ fn xmatrix_fallback(h: &[f64], m_full: &[f64], s: &[f64], n2: usize, nao: usize,
         }
     }
     if cols.len() < nao {
-        return Err(PbcX2cError::ShapeMismatch { expected: nao, got: cols.len() });
+        return Err(PbcX2cError::ShapeMismatch {
+            expected: nao,
+            got: cols.len(),
+        });
     }
     // X = cs·clᵀ·s with cl = col[..nao], cs = col[nao..] over kept columns:
     // X[i,j] = Σ_col cs_col[i] · Σ_q cl_col[q]·s[q,j].
@@ -185,10 +205,21 @@ fn xmatrix_fallback(h: &[f64], m_full: &[f64], s: &[f64], n2: usize, nao: usize,
 ///
 /// `s1 = S + XᵀTX/2c²`; `h1 = V + TX + (TX)ᵀ − XᵀTX + XᵀWX/4c²`;
 /// `h1 → Rᵀ·h1·R` with [`renorm_r`]. All blocks row-major `nao × nao`.
-pub fn hcore_fw(t: &[f64], v: &[f64], w: &[f64], s: &[f64], x: &[f64], nao: usize, c: f64) -> Result<Vec<f64>, PbcX2cError> {
+pub fn hcore_fw(
+    t: &[f64],
+    v: &[f64],
+    w: &[f64],
+    s: &[f64],
+    x: &[f64],
+    nao: usize,
+    c: f64,
+) -> Result<Vec<f64>, PbcX2cError> {
     check_blocks(t, v, w, s, nao)?;
     if x.len() != nao * nao {
-        return Err(PbcX2cError::ShapeMismatch { expected: nao * nao, got: x.len() });
+        return Err(PbcX2cError::ShapeMismatch {
+            expected: nao * nao,
+            got: x.len(),
+        });
     }
     let c2 = c * c;
     // tx = T·X.
@@ -220,8 +251,7 @@ pub fn hcore_fw(t: &[f64], v: &[f64], w: &[f64], s: &[f64], x: &[f64], nao: usiz
     let mut h1 = vec![0.0f64; nao * nao];
     for i in 0..nao {
         for j in 0..nao {
-            h1[i * nao + j] = v[i * nao + j] + tx[i * nao + j] + tx[j * nao + i]
-                - xtx[i * nao + j]
+            h1[i * nao + j] = v[i * nao + j] + tx[i * nao + j] + tx[j * nao + i] - xtx[i * nao + j]
                 + xwx[i * nao + j] * (0.25 / c2);
         }
     }
@@ -252,7 +282,10 @@ pub fn hcore_fw(t: &[f64], v: &[f64], w: &[f64], s: &[f64], x: &[f64], nao: usiz
 /// Renormalization matrix (`x2c._get_r`): `R = S^{-1/2}[S^{-1/2}S̃S^{-1/2}]^{-1/2}S^{1/2}`.
 pub fn renorm_r(s: &[f64], s_tilde: &[f64], nao: usize) -> Result<Vec<f64>, PbcX2cError> {
     if s.len() != nao * nao || s_tilde.len() != nao * nao {
-        return Err(PbcX2cError::ShapeMismatch { expected: nao * nao, got: s.len().min(s_tilde.len()) });
+        return Err(PbcX2cError::ShapeMismatch {
+            expected: nao * nao,
+            got: s.len().min(s_tilde.len()),
+        });
     }
     let ident: Vec<f64> = {
         let mut v = vec![0.0f64; nao * nao];
@@ -269,7 +302,10 @@ pub fn renorm_r(s: &[f64], s_tilde: &[f64], nao: usize) -> Result<Vec<f64>, PbcX
         }
     }
     if idx.is_empty() {
-        return Err(PbcX2cError::ShapeMismatch { expected: 1, got: 0 });
+        return Err(PbcX2cError::ShapeMismatch {
+            expected: 1,
+            got: 0,
+        });
     }
     let nkeep = idx.len();
     // v_keep[i][k] (row-major i, k), w_sqrt/w_invsqrt per k.
@@ -334,7 +370,10 @@ pub fn renorm_r(s: &[f64], s_tilde: &[f64], nao: usize) -> Result<Vec<f64>, PbcX
             let mut acc = 0.0f64;
             for k in 0..nkeep {
                 for l in 0..nkeep {
-                    acc += vkeep[i * nkeep + k] * winv[k] * rmid[k * nkeep + l] * wsqrt[l]
+                    acc += vkeep[i * nkeep + k]
+                        * winv[k]
+                        * rmid[k * nkeep + l]
+                        * wsqrt[l]
                         * vkeep[j * nkeep + l];
                 }
             }
@@ -350,7 +389,13 @@ pub fn renorm_r(s: &[f64], s_tilde: &[f64], nao: usize) -> Result<Vec<f64>, PbcX
 /// caller passes an explicit speed (upstream's `lib.light_speed(c)` test hook
 /// is mirrored by taking `c` as a parameter; see [`sfx2c1e_hcore_at_c`]).
 /// Complex-Hermitian blocks are refused (see module docs), never truncated.
-pub fn sfx2c1e_hcore(t: &[f64], v: &[f64], w: &[f64], s: &[f64], nao: usize) -> Result<Vec<f64>, PbcX2cError> {
+pub fn sfx2c1e_hcore(
+    t: &[f64],
+    v: &[f64],
+    w: &[f64],
+    s: &[f64],
+    nao: usize,
+) -> Result<Vec<f64>, PbcX2cError> {
     sfx2c1e_hcore_at_c(t, v, w, s, nao, LIGHT_SPEED)
 }
 

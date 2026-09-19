@@ -44,11 +44,17 @@ fn run() -> Result<()> {
     if !bad.is_empty() {
         bail!(
             "second CPHF solver site(s) outside {ALLOWED}:\n  {}",
-            bad.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ")
+            bad.iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
         );
     }
     if sites.len() != 1 {
-        bail!("expected exactly one `pub fn solve(` site, found {}: {sites:?}", sites.len());
+        bail!(
+            "expected exactly one `pub fn solve(` site, found {}: {sites:?}",
+            sites.len()
+        );
     }
     println!("check-single-cphf: PASS (sole site: {ALLOWED})");
     Ok(())
@@ -72,7 +78,10 @@ fn visit(dir: &std::path::Path, sites: &mut Vec<String>) -> Result<()> {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             // Skip build artefacts and test trees: the rule governs shipped
             // `src/` code (mirrors check-dependency-wall's scope note).
             if name == "target" || name == "tests" || name == ".git" {

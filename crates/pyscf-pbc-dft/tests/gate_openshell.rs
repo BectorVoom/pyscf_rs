@@ -359,7 +359,7 @@ fn run_row(cell: Cell, basis: &str, o: &Oracle, tol: f64, label: &str) {
 
 /// **U-a.** `KUKS(Li, Gamma, PBE)`, all-electron, `spin = 1`.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuks_li_atom_gamma_pbe_matches_upstream() {
     run_row(
         li_atom_spin1(),
@@ -379,7 +379,7 @@ fn kuks_li_atom_gamma_pbe_matches_upstream() {
 /// **U-a, LDA.** No `sigma` anywhere, so it separates the open-shell density
 /// and potential machinery from the GGA chain rule.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuks_li_atom_gamma_lda_matches_upstream() {
     run_row(
         li_atom_spin1(),
@@ -400,7 +400,7 @@ fn kuks_li_atom_gamma_lda_matches_upstream() {
 /// an odd-electron cell with an EVEN k-count is rejected by upstream and by
 /// this port identically, so the multi-k open-shell row must use an odd count.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuks_li_atom_113_pbe_matches_upstream() {
     run_row(
         li_atom_spin1(),
@@ -420,7 +420,7 @@ fn kuks_li_atom_113_pbe_matches_upstream() {
 /// **The no-XC control for U-a.** `KUHF` on the same cell: whatever this
 /// deviates by is a floor the open-shell KS path inherits rather than creates.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuhf_li_atom_gamma_is_the_open_shell_floor() {
     run_row(
         li_atom_spin1(),
@@ -449,7 +449,7 @@ fn kuhf_li_atom_gamma_is_the_open_shell_floor() {
 /// asserts that the two implementations agree while following the SAME guess,
 /// not that a spin-broken minimum is reached.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuks_h2_stretched_gamma_pbe_matches_upstream() {
     run_row(
         h2_stretched_spin0(),
@@ -468,7 +468,7 @@ fn kuks_h2_stretched_gamma_pbe_matches_upstream() {
 
 /// **U-b, LDA.**
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuks_h2_stretched_gamma_lda_matches_upstream() {
     run_row(
         h2_stretched_spin0(),
@@ -489,7 +489,7 @@ fn kuks_h2_stretched_gamma_lda_matches_upstream() {
 /// break, since there is no functional in the way of it. Upstream reference:
 /// `e = -1.068175084799650`, `<S^2> = 0`, `(Na,Nb) = (1,1)`.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuhf_h2_stretched_gamma_matches_upstream() {
     run_row(
         h2_stretched_spin0(),
@@ -514,7 +514,7 @@ fn kuhf_h2_stretched_gamma_matches_upstream() {
 /// `veff.rs` J/K dispatch and `sub_scaled(.., 1.0, vk)` — `KUKS` subtracts the
 /// FULL `vk`, not `0.5 vk` — on two channels that are genuinely different.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuks_li_atom_gamma_pbe0_matches_upstream() {
     run_row(
         li_atom_spin1(),
@@ -534,7 +534,7 @@ fn kuks_li_atom_gamma_pbe0_matches_upstream() {
 /// **U-c on the H2 cell**, so the hybrid path is exercised on a `spin = 0`
 /// unrestricted run as well as on a polarised one.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuks_h2_stretched_gamma_pbe0_matches_upstream() {
     run_row(
         h2_stretched_spin0(),

@@ -13,9 +13,9 @@
 //! Run scoped: `cargo test -p pyscf-pbc-gw --test krgw_cd`
 
 use num_complex::Complex64;
-use pyscf_pbc_gw::krgw_ac::{kernel_krgw_ac, AcMode};
+use pyscf_pbc_gw::krgw_ac::{AcMode, kernel_krgw_ac};
 use pyscf_pbc_gw::krgw_cd::{
-    ac_cd_split, kernel_krgw_cd, sigma_cd_real, sigma_imag_quad, sigma_residue, CdConfig, CdPole,
+    CdConfig, CdPole, ac_cd_split, kernel_krgw_cd, sigma_cd_real, sigma_imag_quad, sigma_residue,
 };
 use pyscf_pbc_gw::sigma::imag_grid;
 use pyscf_pbc_gw::types::{GwConfig, GwRoute, QpResult};

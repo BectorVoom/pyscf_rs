@@ -39,7 +39,7 @@ fn maxdiff(a: &ZArr, b: &ZArr) -> f64 {
 /// swap: they have the SAME SHAPE, so nothing but a numerical comparison
 /// distinguishes them.
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn update_amps_at_zero_amplitudes_reproduces_init_amps() {
     let cell = common::diamond([15, 15, 15]);
     let kpts = cell.make_kpts([1, 1, 2]).expect("kpts");

@@ -9,7 +9,8 @@
 //! that drops eigenvalues ≤ `lindep` and returns a rank-revealing fit factor.
 //!
 //! Algorithm (matches `pyscf` DF, eigh route):
-//!   1. `(P|Q) = V·diag(w)·Vᵀ` (self-adjoint eigh, faer 0.24).
+//!   1. `(P|Q) = V·diag(w)·Vᵀ` (self-adjoint eigh via `lapack_rs` DSYEVD,
+//!      see [`crate::lapack_backend`]).
 //!   2. Keep eigenvalues `w_i > lindep` (drop near-zero / negative — the
 //!      linear-dependency removal, upstream `LINEAR_DEP_THRESHOLD`).
 //!   3. Fit factor `W[P,k] = V[P, j(k)] · w_{j(k)}^{-1/2}` (n × rank), so
@@ -24,8 +25,6 @@
 //! contiguous for an `oracle_dot` against a gathered `(μν|·)` row.
 
 use crate::AlgebraError;
-use faer::linalg::solvers::SelfAdjointEigen;
-use faer::{Mat, Side};
 
 /// Linear-dependency cutoff for the DF 2-center metric: eigenvalues `≤` this
 /// are dropped. Matches the order of upstream PySCF's DF `LINEAR_DEP_THRESHOLD`
@@ -42,7 +41,7 @@ pub const DF_METRIC_LINEAR_DEP: f64 = 1e-9;
 /// # Errors
 /// - [`AlgebraError::ShapeMismatch`] if `j2c.len() != n*n`.
 /// - [`AlgebraError::Singular`] if every eigenvalue is `≤ lindep` (rank 0).
-/// - [`AlgebraError::CubeclRuntime`] on faer evd failure (rare; usually a
+/// - [`AlgebraError::CubeclRuntime`] on LAPACK driver failure (rare; usually a
 ///   non-self-adjoint input — symmetrize before calling).
 pub fn df_metric_fit(
     j2c: &[f64],
@@ -59,15 +58,11 @@ pub fn df_metric_fit(
         return Err(AlgebraError::Singular);
     }
 
-    // (P|Q) = V·diag(w)·Vᵀ. Input is row-major; the metric is symmetric so
-    // Side::Lower reads the lower triangle (matches eigh_gen).
-    let a = Mat::<f64>::from_fn(n, n, |i, j| j2c[i * n + j]);
-    let evd = SelfAdjointEigen::new(a.as_ref(), Side::Lower)
-        .map_err(|e| AlgebraError::CubeclRuntime(format!("eigh((P|Q)) failed: {e:?}")))?;
-    let evals = evd.S();
-    let evecs = evd.U();
+    // (P|Q) = V·diag(w)·Vᵀ via lapack_rs DSYEVD. `evecs_col` is column-major:
+    // element (P, j) at `evecs_col[P + j*n]`. Eigenvalues ascending.
+    let (evals, evecs_col) = crate::lapack_backend::sym_eigh(j2c, n)?;
 
-    // Keep eigenvalues > lindep (linear-dependency removal). faer returns
+    // Keep eigenvalues > lindep (linear-dependency removal). LAPACK returns
     // eigenvalues nondecreasing, so the kept set is the trailing block, but we
     // scan all to be layout-agnostic.
     let kept: Vec<(usize, f64)> = (0..n)
@@ -90,7 +85,7 @@ pub fn df_metric_fit(
     for (k, &(j, inv_sqrt)) in kept.iter().enumerate() {
         let base = k * n;
         for p in 0..n {
-            w[base + p] = evecs[(p, j)] * inv_sqrt;
+            w[base + p] = evecs_col[p + j * n] * inv_sqrt;
         }
     }
 

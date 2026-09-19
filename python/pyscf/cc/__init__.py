@@ -33,6 +33,19 @@ from pyscf._native.cc import CCSD, RCCSD, UCCSD, DFCCSD, Scanner  # type: ignore
 
 __all__ = ["CCSD", "RCCSD", "UCCSD", "DFCCSD", "Scanner"]
 
+# 20-19 A: fall through to upstream PySCF for submodules (`extend_path`) and for
+# top-level names this overlay does not bind (`__getattr__`, pyscf/_passthrough.py).
+# Silent (not a PBC family); the native names above stay module globals, so
+# `pyscf.cc.<native name> is pyscf._native.cc.<native name>` is unchanged.
+import pkgutil as _pkgutil  # noqa: E402
+
+__path__ = _pkgutil.extend_path(__path__, __name__)
+del _pkgutil
+
+from pyscf._passthrough import package_getattr as _package_getattr  # noqa: E402
+
+__getattr__ = _package_getattr(globals(), ("pyscf._native.cc",))
+
 
 def _graft_ccsd_onto_scf() -> None:
     """Graft `mf.CCSD()` onto the Rust SCF base classes (the upstream

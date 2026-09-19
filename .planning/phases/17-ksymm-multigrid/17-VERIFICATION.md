@@ -123,7 +123,7 @@ Every comparison in this phase that could have been written elementwise on
 | **`KRHF` ksymm vs full BZ, FFTDF** | `1e-14` / `1e-9` | 6.9e-14 … 2.8e-13 | **8.793e-14** (`si [2,2,2]`) |
 | **`KRHF` ksymm vs full BZ, GDF** | " | 5.5e-10 … 9.4e-12 | **2.486e-10** (`si [2,2,2]`) |
 | `KRKS` ksymm vs full BZ, FFTDF | " | 6.8e-14 … 1.5e-13 | **3.109e-14 / 2.842e-14** (both `use_ao_symmetry` branches) |
-| `KRKS` ksymm vs full BZ, **GDF** | " | 1.8e-11 … 1.6e-10 | **1.432e-06 — NOT MET**, recorded, see §10 |
+| `KRKS` ksymm vs full BZ, **GDF** | " | 1.8e-11 … 1.6e-10 | **1.432e-06 — NOT MET**, recorded, see §10. *Note 2026-09-14 (Phase 20, 20-04 + fix): the cause was the full-BZ arm gridding XC on the GDF mesh; after the fix measured **2.1997e-10** — MET (`20-04-FIX-SUMMARY.md`).* |
 | DFT+U `E_U` IBZ vs full BZ | — | — | **6.939e-18** |
 | `numint` unfolded-IBZ density vs full-BZ density | — | — | **1.054e-13** (tol 1e-11) |
 

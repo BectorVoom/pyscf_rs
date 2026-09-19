@@ -20,6 +20,7 @@ pub mod format_ecp; // Plan 02-07 — GTO-05 (loading half: format_ecp + make_ec
 pub mod intor; // Plan 02-05 — GTO-06 (mol.intor(name) dispatcher).
 pub mod layout_table; // Wave 0 (plan 02-01); consumed by intor.rs in 02-05.
 pub mod make_env; // Plan 02-04 — GTO-04 (flat-array projection, D-03).
+pub mod svml_pow; // SVML `__svml_pow8` scalar port (numpy's `**` on AVX-512).
 pub mod projection; // Plan 02-04 — GTO-11 (zero-copy cintx_core::BasisSet build).
 pub mod range_coulomb; // Plan 04-07 — DFT-05 (range-coulomb env[8] set/restore for RSH).
 pub mod set_geom; // Plan 02-08 — GTO-10 (in-place geometry mutation, Pattern 5).

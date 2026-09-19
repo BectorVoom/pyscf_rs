@@ -68,14 +68,16 @@ pub fn fftfreq_scaled(n: usize) -> Vec<f64> {
         .collect()
 }
 
-/// `np.fft.fftfreq(n)` — [`fftfreq_scaled`] divided by `n`, i.e. the FRACTIONAL
+/// `np.fft.fftfreq(n)` — [`fftfreq_scaled`] times `1/n`, i.e. the FRACTIONAL
 /// frequencies in `[-0.5, 0.5)`. Used by [`get_uniform_grids`] with
 /// `wrap_around = true`.
+///
+/// numpy computes `results * (1.0 / (n * d))` — a MULTIPLY by the rounded
+/// reciprocal, not a divide by `n`. The two round differently (e.g. `n = 11`),
+/// which moved one grid coordinate in four by an ulp.
 pub fn fftfreq(n: usize) -> Vec<f64> {
-    fftfreq_scaled(n)
-        .into_iter()
-        .map(|f| f / n as f64)
-        .collect()
+    let val = 1.0 / n as f64;
+    fftfreq_scaled(n).into_iter().map(|f| f * val).collect()
 }
 
 /// The return of [`get_gv_weights`] — upstream's `(Gv, Gvbase, weights)` tuple.
@@ -349,7 +351,8 @@ pub fn get_si(
             let [mx, my, mz] = base.mesh;
             let ngrids = mx * my * mz;
 
-            // rb = np.dot(coords, b.T)  ->  rb[a][i] = coords[a] . b[i]
+            // `rb = np.dot(coords, b.T)`: plain left-to-right 3-term sums,
+            // no FMA (1.2M random trials, 0 mismatches).
             let bt = transpose3(&b);
             let rb: Vec<[f64; 3]> = coords
                 .iter()
@@ -362,17 +365,24 @@ pub fn get_si(
                 })
                 .collect();
 
-            // SIx[a][g] = exp(-1j * rb[a][0] * basex[g]), and likewise y, z.
+            // `SIx = np.exp(-1j*np.einsum('z,g->zg', rb[:,0], basex))`:
+            // the einsum accumulates onto +0.0 (`E = 0.0 + rb*f`, which only
+            // matters for the -0.0/+0.0 of an atom at the origin), and
+            // numpy's complex `exp` of the pure-imaginary array is
+            // `(cos(E), -sin(E))` in scalar-libm rounding.
             let axis = |a: usize, i: usize| -> (Vec<f64>, Vec<f64>) {
                 base.gvbase[i]
                     .iter()
                     .map(|f| {
-                        let theta = -(rb[a][i] * f);
-                        (theta.cos(), theta.sin())
+                        let e = 0.0 + rb[a][i] * f;
+                        (e.cos(), -e.sin())
                     })
                     .unzip()
             };
 
+            // `(SIx[:,:,None,None] * SIy[:,None,:,None]) * SIz[:,None,None,:]`:
+            // numpy's complex array product, which is FMA on both planes —
+            // `(fma(ar,br,-(ai*bi)), fma(ar,bi,ai*br))` — applied `(x*y)*z`.
             let mut re = vec![0.0_f64; natm * ngrids];
             let mut im = vec![0.0_f64; natm * ngrids];
             for a in 0..natm {
@@ -382,12 +392,12 @@ pub fn get_si(
                 for gx in 0..mx {
                     // SIx * SIy, hoisted out of the innermost loop.
                     for gy in 0..my {
-                        let pr = xr[gx] * yr[gy] - xi[gx] * yi[gy];
-                        let pi = xr[gx] * yi[gy] + xi[gx] * yr[gy];
+                        let pr = xr[gx].mul_add(yr[gy], -(xi[gx] * yi[gy]));
+                        let pi = xr[gx].mul_add(yi[gy], xi[gx] * yr[gy]);
                         let row = a * ngrids + gx * my * mz + gy * mz;
                         for gz in 0..mz {
-                            re[row + gz] = pr * zr[gz] - pi * zi[gz];
-                            im[row + gz] = pr * zi[gz] + pi * zr[gz];
+                            re[row + gz] = pr.mul_add(zr[gz], -(pi * zi[gz]));
+                            im[row + gz] = pr.mul_add(zi[gz], pi * zr[gz]);
                         }
                     }
                 }

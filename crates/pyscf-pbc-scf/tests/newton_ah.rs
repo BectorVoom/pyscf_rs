@@ -13,7 +13,9 @@
 //!
 //! Run scoped: `cargo test -p pyscf-pbc-scf --test newton_ah`
 
-use pyscf_pbc_scf::newton_ah::{NewtonConfig, NewtonModel, PbscfNewtonError, ah_step, kernel_newton};
+use pyscf_pbc_scf::newton_ah::{
+    NewtonConfig, NewtonModel, PbscfNewtonError, ah_step, kernel_newton,
+};
 
 /// Analytic 2-level closed shell: Hcore + on-site U on function 0, one pair.
 /// Orbital angle θ: |o> = cosθ|0> + sinθ|1>, D = 2|o><o|.
@@ -60,7 +62,11 @@ impl TwoLevel {
             // Ground state: pick the branch continuously connected (lowest E).
             let e_a = self.energy_of(phi);
             let e_b = self.energy_of(phi + std::f64::consts::FRAC_PI_2);
-            let th_new = if e_a < e_b { phi } else { phi + std::f64::consts::FRAC_PI_2 };
+            let th_new = if e_a < e_b {
+                phi
+            } else {
+                phi + std::f64::consts::FRAC_PI_2
+            };
             // Damped orbital update toward the diagonalizer.
             th += 0.5 * angle_diff(th_new, th);
             let e = self.energy_of(th);
@@ -103,7 +109,13 @@ impl NewtonModel for TwoLevel {
 }
 
 fn model() -> TwoLevel {
-    TwoLevel { h11: -1.0, h22: -0.2, h12: -0.3, u: 0.5, theta: 0.9 }
+    TwoLevel {
+        h11: -1.0,
+        h22: -0.2,
+        h12: -0.3,
+        u: 0.5,
+        theta: 0.9,
+    }
 }
 
 /// AH micro-cycles converge to the Newton point on a quadratic.
@@ -152,7 +164,12 @@ fn newton_and_first_order_agree_on_energy() {
     let m = model();
     let e_first = m.roothaan(0.9);
     let mut n = model();
-    let cfg = NewtonConfig { conv_tol_grad: 1e-10, max_macro: 50, max_micro: 20, max_step: 10.0 };
+    let cfg = NewtonConfig {
+        conv_tol_grad: 1e-10,
+        max_macro: 50,
+        max_micro: 20,
+        max_step: 10.0,
+    };
     let (e_second, _cycles) = kernel_newton(&mut n, &cfg).expect("Newton must converge");
     assert!(
         (e_second - e_first).abs() < 1e-8,
@@ -185,11 +202,22 @@ fn trust_region_caps_step() {
 fn newton_deterministic_across_thread_counts() {
     let run = || {
         let mut n = model();
-        let cfg = NewtonConfig { conv_tol_grad: 1e-10, max_macro: 50, max_micro: 20, max_step: 10.0 };
+        let cfg = NewtonConfig {
+            conv_tol_grad: 1e-10,
+            max_macro: 50,
+            max_micro: 20,
+            max_step: 10.0,
+        };
         kernel_newton(&mut n, &cfg).expect("Newton must converge").0
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.to_bits(), b.to_bits());
 }
@@ -198,7 +226,7 @@ fn newton_deterministic_across_thread_counts() {
 /// k-point mean field. Needs `--release` + DF grids; upstream's number
 /// (`test_newton.py::test_nr_rhf`, 8dp) is committed for the manual run.
 #[test]
-#[ignore = "live-cell human-verify: needs --release + DF grids (19-04 Task 3)"]
+#[ignore = "T1: live-cell human-verify: needs --release + DF grids (19-04 Task 3)"]
 fn live_newton_matches_upstream_energy() {
     // Upstream: H2-like cell, RHF.newton(), e_tot = -10.137043711032916 (8dp).
     // This arm converges `kernel_newton` over the live KRHF Fock build and

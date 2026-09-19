@@ -1109,7 +1109,7 @@ impl KsymRccsdInputs {
                     .collect()
             })
             .collect();
-        let ovlp = pyscf_pbc_gto::get_ovlp(cell, &kpts.kpts)
+        let ovlp = pyscf_pbc_gto::get_ovlp_scf(cell, &kpts.kpts)
             .map_err(|e| shape(format!("get_ovlp: {e}")))?;
         let ovlp_rows: Vec<Vec<num_complex::Complex64>> = ovlp
             .iter()

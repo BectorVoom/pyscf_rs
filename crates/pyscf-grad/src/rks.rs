@@ -317,7 +317,225 @@ fn get_veff(refr: &RksReference, dm0: &[f64]) -> Result<Vec<f64>, PyscfRsError> 
     Ok(veff)
 }
 
-/// The XC-potential derivative on the grid (`rks.py:112-157` `get_vxc`):
+/// `rks_grad._d1_dot_` with the derivative on the bra
+/// (`pyscf/grad/rks.py:216-225`, `dR1_on_bra=True`) — the GRAD-10 shared
+/// AO-derivative accumulator (one implementation; the periodic KRKS/KUKS
+/// `get_vxc` in `pyscf-pbc-grad` calls this rather than forking it).
+///
+/// `vmat[x,mu,nu] +=` the grid sum. The `.real` lives INSIDE the contraction
+/// (D-PBC-31 clause 4): one real partial per grid point through
+/// [`oracle_sum`], with the complex product split into its planes:
+/// ```text
+/// t1 = wv[g] * dao_re;  t2 = wv[g] * dao_im
+/// re += t1 * ao0_re + t2 * ao0_im
+/// im += t1 * ao0_im - t2 * ao0_re
+/// ```
+///
+/// Layouts: `dao_re[x]` / `ao0_re` are F-order `(mu*ngrids + g)` blocks
+/// matching `GTOval_sph_deriv1`; `vmat_re`/`vmat_im` are component-leading
+/// `[3, nao, nao]` column-major `(mu + nu*nao)` and are ACCUMULATED into (a
+/// multi-block caller passes the running buffer; the update itself is a
+/// two-term `oracle_sum`, so block order is the only order in the result).
+///
+/// The molecular caller passes real AO data (`dao_im`/`ao0_im` = `None`).
+/// That path forms `(wv*dao)*ao0` per grid point — the same association the
+/// pre-extraction inline loop used — so the molecular result is
+/// bit-identical. The periodic caller passes the complex k-point AO planes.
+pub fn d1_dot_add(
+    vmat_re: &mut [f64],
+    vmat_im: &mut [f64],
+    dao_re: [&[f64]; 3],
+    dao_im: Option<[&[f64]; 3]>,
+    ao0_re: &[f64],
+    ao0_im: Option<&[f64]>,
+    wv: &[f64],
+    nao: usize,
+    ngrids: usize,
+) {
+    debug_assert_eq!(vmat_re.len(), 3 * nao * nao);
+    debug_assert_eq!(vmat_im.len(), 3 * nao * nao);
+    debug_assert_eq!(wv.len(), ngrids);
+    let n2 = nao * nao;
+    match (dao_im, ao0_im) {
+        (None, None) => {
+            for x in 0..3 {
+                for mu in 0..nao {
+                    for nu in 0..nao {
+                        let mut terms = Vec::with_capacity(ngrids);
+                        for g in 0..ngrids {
+                            terms.push(
+                                (wv[g] * dao_re[x][mu * ngrids + g]) * ao0_re[nu * ngrids + g],
+                            );
+                        }
+                        let idx = x * n2 + mu + nu * nao;
+                        vmat_re[idx] = oracle_sum(&[vmat_re[idx], oracle_sum(&terms)]);
+                    }
+                }
+            }
+        }
+        _ => {
+            let di = |x: usize, m: usize| dao_im.map(|s| s[x][m]).unwrap_or(0.0);
+            let ai = |m: usize| ao0_im.map(|s| s[m]).unwrap_or(0.0);
+            for x in 0..3 {
+                for mu in 0..nao {
+                    for nu in 0..nao {
+                        let mut tr = Vec::with_capacity(ngrids);
+                        let mut ti = Vec::with_capacity(ngrids);
+                        for g in 0..ngrids {
+                            let (dr, ddi) = (dao_re[x][mu * ngrids + g], di(x, mu * ngrids + g));
+                            let (ar, aai) = (ao0_re[nu * ngrids + g], ai(nu * ngrids + g));
+                            let t1 = wv[g] * dr;
+                            let t2 = wv[g] * ddi;
+                            tr.push(t1 * ar + t2 * aai);
+                            ti.push(t1 * aai - t2 * ar);
+                        }
+                        let idx = x * n2 + mu + nu * nao;
+                        vmat_re[idx] = oracle_sum(&[vmat_re[idx], oracle_sum(&tr)]);
+                        vmat_im[idx] = oracle_sum(&[vmat_im[idx], oracle_sum(&ti)]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The pre-weighted core behind [`gga_grad_sum_add`]: `vmat += Σ_g
+/// conj(dao)·aow` with `aow` already carrying its weights (the GGA `aow`
+/// weighting is a four-term sum that cannot be un-factored into a `wv`
+/// row, so this entry point takes it as built).
+fn d1_dot_preweighted(
+    vmat_re: &mut [f64],
+    vmat_im: &mut [f64],
+    dao_re: [&[f64]; 3],
+    dao_im: Option<[&[f64]; 3]>,
+    aow_re: &[f64],
+    aow_im: Option<&[f64]>,
+    nao: usize,
+    ngrids: usize,
+) {
+    let di = |x: usize, m: usize| dao_im.map(|s| s[x][m]).unwrap_or(0.0);
+    let ai = |m: usize| aow_im.map(|s| s[m]).unwrap_or(0.0);
+    let n2 = nao * nao;
+    for x in 0..3 {
+        for mu in 0..nao {
+            for nu in 0..nao {
+                let mut tr = Vec::with_capacity(ngrids);
+                let mut ti = Vec::with_capacity(ngrids);
+                for g in 0..ngrids {
+                    let (dr, ddi) = (dao_re[x][mu * ngrids + g], di(x, mu * ngrids + g));
+                    let (ar, aai) = (aow_re[nu * ngrids + g], ai(nu * ngrids + g));
+                    tr.push(dr * ar + ddi * aai);
+                    ti.push(dr * aai - ddi * ar);
+                }
+                let idx = x * n2 + mu + nu * nao;
+                vmat_re[idx] = oracle_sum(&[vmat_re[idx], oracle_sum(&tr)]);
+                // The molecular caller never reaches this core (it has no GGA
+                // branch), so no bit-identity obligation constrains `vmat_im`;
+                // still accumulate rather than assign, for multi-block callers.
+                vmat_im[idx] = oracle_sum(&[vmat_im[idx], oracle_sum(&ti)]);
+            }
+        }
+    }
+}
+
+/// `rks_grad._gga_grad_sum_` (`pyscf/grad/rks.py:227-234`) — the GRAD-10
+/// shared GGA accumulator. Home is this module (not `pyscf-pbc-grad`): the
+/// molecular gradient owns no GGA branch (its `get_vxc` is LDA-only), so the
+/// periodic KRKS/KUKS `get_vxc` is currently the only caller — but the single
+/// implementation lives here, where a future molecular GGA branch would call
+/// it rather than fork it.
+///
+/// ```text
+/// aow[g,nu] = Σ_c ao[c,g,nu]·wv[c,g]          (rks.py:229, _scale_ao)
+/// vmat += _d1_dot_(ao[1:4], aow)              (:230)
+/// aow2 = _make_dR_dao_w(ao, wv)               (:199-214, :231)
+/// vmat += _d1_dot_(aow2, ao[0])               (:232)
+/// ```
+///
+/// `ao_re[c]` are the 10 F-order deriv-2 rows (value, 3 gradients, `xx, xy,
+/// xz, yy, yz, zz`); the Hessian index map is upstream's comment at `:226`
+/// (`XX, XY, XZ = 4, 5, 6; YX, YY, YZ = 5, 7, 8; ZX, ZY, ZZ = 6, 8, 9`).
+/// `wv[c]` are the UNSCALED real weight rows (`weight * vxc`); the
+/// `wv[0] *= .5` (`rks.py` via `krks.py:101` — the factor that makes the
+/// double-counting correct) is applied INSIDE, so no caller can drop it.
+/// Layouts and the real-inside reduction are as in [`d1_dot_add`].
+pub fn gga_grad_sum_add(
+    vmat_re: &mut [f64],
+    vmat_im: &mut [f64],
+    ao_re: [&[f64]; 10],
+    ao_im: Option<[&[f64]; 10]>,
+    wv: [&[f64]; 4],
+    nao: usize,
+    ngrids: usize,
+) {
+    debug_assert_eq!(vmat_re.len(), 3 * nao * nao);
+    debug_assert_eq!(vmat_im.len(), 3 * nao * nao);
+    let ai = |c: usize, m: usize| ao_im.map(|s| s[c][m]).unwrap_or(0.0);
+    // `aow[g,nu]`, F-order `(nu*ngrids + g)`, complex.
+    let mut aow_re = vec![0.0_f64; nao * ngrids];
+    let mut aow_im = vec![0.0_f64; nao * ngrids];
+    for nu in 0..nao {
+        for g in 0..ngrids {
+            let mut tr = Vec::with_capacity(4);
+            let mut ti = Vec::with_capacity(4);
+            for c in 0..4 {
+                // Row 0 carries the .5 (upstream krks.py:101).
+                let w = if c == 0 { 0.5 * wv[c][g] } else { wv[c][g] };
+                tr.push(ao_re[c][nu * ngrids + g] * w);
+                ti.push(ai(c, nu * ngrids + g) * w);
+            }
+            aow_re[nu * ngrids + g] = oracle_sum(&tr);
+            aow_im[nu * ngrids + g] = oracle_sum(&ti);
+        }
+    }
+    let complex = ao_im.is_some();
+    d1_dot_preweighted(
+        vmat_re,
+        vmat_im,
+        [ao_re[1], ao_re[2], ao_re[3]],
+        ao_im.map(|s| [s[1], s[2], s[3]]),
+        &aow_re,
+        complex.then_some(aow_im.as_slice()),
+        nao,
+        ngrids,
+    );
+    // `_make_dR_dao_w` (rks.py:199-214): `aow2[x]` is the x-th gradient row
+    // re-weighted by `wv[0]` plus the x-th Hessian row contracted with
+    // `wv[1:4]`. F-order `(mu*ngrids + g)`, complex.
+    const HESS: [[usize; 3]; 3] = [[4, 5, 6], [5, 7, 8], [6, 8, 9]];
+    let mut aow2_re = vec![0.0_f64; 3 * nao * ngrids];
+    let mut aow2_im = vec![0.0_f64; 3 * nao * ngrids];
+    for x in 0..3 {
+        for mu in 0..nao {
+            for g in 0..ngrids {
+                let idx = [1 + x, HESS[x][0], HESS[x][1], HESS[x][2]];
+                let mut tr = Vec::with_capacity(4);
+                let mut ti = Vec::with_capacity(4);
+                for (c, &row) in idx.iter().enumerate() {
+                    let w = if c == 0 { 0.5 * wv[c][g] } else { wv[c][g] };
+                    tr.push(ao_re[row][mu * ngrids + g] * w);
+                    ti.push(ai(row, mu * ngrids + g) * w);
+                }
+                aow2_re[(x * nao + mu) * ngrids + g] = oracle_sum(&tr);
+                aow2_im[(x * nao + mu) * ngrids + g] = oracle_sum(&ti);
+            }
+        }
+    }
+    let (a2r0, a2r_rest) = aow2_re.split_at(nao * ngrids);
+    let (a2r1, a2r2) = a2r_rest.split_at(nao * ngrids);
+    let (a2i0, a2i_rest) = aow2_im.split_at(nao * ngrids);
+    let (a2i1, a2i2) = a2i_rest.split_at(nao * ngrids);
+    d1_dot_preweighted(
+        vmat_re,
+        vmat_im,
+        [a2r0, a2r1, a2r2],
+        complex.then_some([a2i0, a2i1, a2i2]),
+        ao_re[0],
+        ao_im.map(|s| s[0]),
+        nao,
+        ngrids,
+    );
+}
 /// `vmat[x,μ,ν] = -Σ_g w_g · (∂f/∂ρ)_g · ∇_x(AO_μ)_g · AO_ν,g` (the `-` from
 /// `∇_X = -∇_x`). Closed-shell LDA/GGA path.
 ///
@@ -363,23 +581,35 @@ fn get_vxc(refr: &RksReference, dm0: &[f64]) -> Result<Vec<f64>, PyscfRsError> {
 
     // vmat[x,μ,ν] = -Σ_g w_g · vxc_pp_g · (∇_x AO_μ)_g · AO_ν,g.
     // AO F-order index: ao.values[comp*ngrids*nao + (g + mu*ngrids)].
-    let ao_at =
-        |comp: usize, g: usize, mu: usize| ao.values[comp * ngrids * nao + (g + mu * ngrids)];
+    // The accumulation is the GRAD-10 shared `_d1_dot_` primitive above
+    // (real path: `(wv*dao)*ao0` per grid point — the same association the
+    // inline loop used, so this rewrite is bit-identical); the `-` is
+    // `∇_X = -∇_x` (rks.py:156).
+    let wv: Vec<f64> = weights
+        .iter()
+        .zip(vxc_pp.iter())
+        .map(|(w, v)| w * v)
+        .collect();
+    let row = |c: usize| &ao.values[c * ngrids * nao..(c + 1) * ngrids * nao];
     let n2 = nao * nao;
+    let mut vmat_re = vec![0.0_f64; NCOMP * n2];
+    let mut vmat_im = vec![0.0_f64; NCOMP * n2];
+    d1_dot_add(
+        &mut vmat_re,
+        &mut vmat_im,
+        [row(1), row(2), row(3)],
+        None,
+        row(0),
+        None,
+        &wv,
+        nao,
+        ngrids,
+    );
     let mut vmat = vec![0.0_f64; NCOMP * n2];
-    let mut terms = vec![0.0_f64; ngrids];
-    for x in 0..NCOMP {
-        for mu in 0..nao {
-            for nu in 0..nao {
-                for g in 0..ngrids {
-                    // ∇_x AO_μ is comp (x+1); AO_ν is comp 0.
-                    terms[g] = weights[g] * vxc_pp[g] * ao_at(x + 1, g, mu) * ao_at(0, g, nu);
-                }
-                // - sign: ∇_X = -∇_x (rks.py:156).
-                vmat[x * n2 + mu + nu * nao] = -oracle_sum(&terms);
-            }
-        }
+    for (slot, v) in vmat.iter_mut().zip(&vmat_re) {
+        *slot = -v;
     }
+    debug_assert!(vmat_im.iter().all(|v| *v == 0.0));
     Ok(vmat)
 }
 

@@ -106,14 +106,21 @@ pub fn sr_loop(
     let b = cderi.get(ki, kj).ok_or_else(|| missing_pair(ki, kj))?;
     // `(k, k)` is Hermitian in `(mu, nu)`, so it is its own conjugate pair.
     let conj_pair = if ki == kj { Some(b) } else { cderi.get(kj, ki) };
-    let mut out = vec![reshape_block(b, conj_pair, cderi.aosym, nao, compact, ki, kj)?];
+    let mut out = vec![reshape_block(
+        b,
+        conj_pair,
+        cderi.aosym,
+        nao,
+        compact,
+        ki,
+        kj,
+    )?];
     if let Some(neg) = &b.negative {
         let nb = negative_block(neg, b.nao_pair);
         let nc = if ki == kj {
             Some(nb.clone())
         } else {
-            conj_pair
-                .and_then(|u| u.negative.as_ref().map(|n| negative_block(n, u.nao_pair)))
+            conj_pair.and_then(|u| u.negative.as_ref().map(|n| negative_block(n, u.nao_pair)))
         };
         let mut m = reshape_block(&nb, nc.as_ref(), cderi.aosym, nao, compact, ki, kj)?;
         m.sign = -1;

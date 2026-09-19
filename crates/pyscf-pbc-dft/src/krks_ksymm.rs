@@ -313,7 +313,7 @@ impl KOverrideHooks for KsymAdaptedKrks {
     fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         Ok(pyscf_pbc_scf::krhf::to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
+            pyscf_pbc_gto::get_ovlp_scf(self.cell(), self.kpts())?,
             nao,
         ))
     }
@@ -798,7 +798,7 @@ impl KOverrideHooks for KsymAdaptedKuks {
     fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         Ok(pyscf_pbc_scf::krhf::to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
+            pyscf_pbc_gto::get_ovlp_scf(self.cell(), self.kpts())?,
             nao,
         ))
     }
@@ -910,8 +910,10 @@ impl KOverrideHooks for KsymAdaptedKuks {
 /// One upstream detail worth naming: `kukspu.py:68-70` applies **the same
 /// `C_ao_lo` to both spins** (`if C_ao_lo[0][0].ndim != 2: C_ao_lo =
 /// [C_ao_lo, C_ao_lo]`). The projectors are spin-independent, which is why
-/// [`crate::kspu::add_vhubbard_weighted`] needs no spin-aware change here —
-/// it already loops over whatever density channels it is handed.
+/// [`crate::kspu::add_vhubbard_weighted`] takes the same projectors for both
+/// channels. It is NOT the restricted expression per channel: a two-channel
+/// density selects `kukspu.py:96-97` (`Tr P - Tr P^2`, `(1 - 2P) U/2`), which
+/// 20-13-FIX restored (20-13 D3).
 #[derive(Debug)]
 pub struct KsymAdaptedKukspu {
     /// The underlying k-symmetric unrestricted KS object.

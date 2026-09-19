@@ -79,7 +79,7 @@ fn maxdiff(a: &ZArr, b: &ZArr) -> f64 {
 /// (`test_krccsd.py:250-256`); this one is same-process, same code, same
 /// inputs, so it is a **bit-identity** (gate G8).
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn eris_incore_and_spilled_are_bit_identical() {
     let f = diamond_scf([1, 1, 2], [15, 15, 15]);
     let mut cc = Krccsd::new(&f.scf, &f.df).expect("KRCCSD builds");
@@ -118,7 +118,8 @@ fn eris_incore_and_spilled_are_bit_identical() {
     for ((ba, a), (bb, b)) in all_blocks(&incore).iter().zip(all_blocks(&spilled).iter()) {
         assert_eq!(ba, bb);
         assert_eq!(
-            a, b,
+            a,
+            b,
             "{} differs between the incore and spilled tiers",
             ba.name()
         );
@@ -141,7 +142,7 @@ fn eris_incore_and_spilled_are_bit_identical() {
 /// `vvvv` is the control: it is built by `ao2mo_7d` in BOTH paths, so it must
 /// be bit-identical, and upstream's own measurement agrees (`2.08e-17`).
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn symm_map_loop_matches_the_all_triples_loop() {
     let f = diamond_scf([1, 1, 2], [15, 15, 15]);
     let mut cc = Krccsd::new(&f.scf, &f.df).expect("KRCCSD builds");
@@ -185,7 +186,7 @@ fn symm_map_loop_matches_the_all_triples_loop() {
 /// the in-process half, which is what a regression in the accumulation order
 /// would break first.
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn amplitudes_and_energy_are_bit_reproducible() {
     let f = diamond_scf([1, 1, 2], [15, 15, 15]);
     let mut cc = Krccsd::new(&f.scf, &f.df).expect("KRCCSD builds");
@@ -214,7 +215,7 @@ fn amplitudes_and_energy_are_bit_reproducible() {
 /// them anyway would be asserting the Madelung shift is zero. Suppressing the
 /// re-add on the CC side is what makes them the same quantity.
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn init_amps_emp2_equals_kmp2() {
     let f = diamond_scf([1, 1, 2], [15, 15, 15]);
     let mut cc = Krccsd::new(&f.scf, &f.df).expect("KRCCSD builds");
@@ -235,7 +236,10 @@ fn init_amps_emp2_equals_kmp2() {
     let res = mp2.kernel().expect("KMP2 kernel");
 
     let d = (emp2 - res.e_corr).abs();
-    println!("init_amps emp2 {emp2} vs KMP2 e_corr {}  |Δ| {d:e}", res.e_corr);
+    println!(
+        "init_amps emp2 {emp2} vs KMP2 e_corr {}  |Δ| {d:e}",
+        res.e_corr
+    );
     // MEASURED at `2.17e-10`. The two are the same quantity but not the same
     // code path — the CC side takes its orbital energies from a REBUILT Fock
     // matrix's diagonal (`kccsd_rhf.py:750-754`) while `KMP2` uses the SCF's
@@ -251,7 +255,7 @@ fn init_amps_emp2_equals_kmp2() {
 /// The complex arena's peak in-memory bytes stay at the exact per-tensor count
 /// — D-PBC-29 clause 1's accounting, measured on a real `_ERIS`.
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn eris_charges_exactly_what_it_allocates() {
     let f = diamond_scf([1, 1, 2], [15, 15, 15]);
     let mut cc = Krccsd::new(&f.scf, &f.df).expect("KRCCSD builds");
@@ -292,7 +296,7 @@ fn eris_charges_exactly_what_it_allocates() {
 /// `exxdiv = None` on both sides: with the Ewald correction the two are NOT
 /// equal, because the Madelung constant of a cell and of its supercell differ.
 #[test]
-#[ignore = "converges two SCFs, one of them a 4-atom supercell; run with --release"]
+#[ignore = "T2: converges two SCFs, one of them a 4-atom supercell; run with --release"]
 fn krccsd_matches_the_supercell_at_gamma() {
     // --- the k-mesh side
     let cell = common::diamond([15, 15, 15]);

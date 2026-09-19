@@ -26,7 +26,7 @@ use pyscf_runtime::ZWorkspacePool;
 /// (`measurements/README.md §5`); the plan's `1e-10` would fail a correct
 /// implementation. Here BOTH sides are this port's, on their own mean fields.
 #[test]
-#[ignore = "converges two SCFs; run with --release"]
+#[ignore = "T2: converges two SCFs; run with --release"]
 fn kgccsd_equals_krccsd_on_a_closed_shell() {
     let cell = common::diamond([15, 15, 15]);
     let kpts = cell.make_kpts([1, 1, 2]).expect("kpts");
@@ -64,7 +64,9 @@ fn kgccsd_equals_krccsd_on_a_closed_shell() {
     let gdf = Fftdf::new(cell.clone(), &kpts).expect("fftdf");
     let khelper = KptsHelper::without_symm_map(&cell.a, &kpts);
     let geris = gcc.ao2mo(&gdf, &khelper).expect("spin-orbital _ERIS");
-    let gres = gcc.kernel(&geris, &khelper.kconserv).expect("KGCCSD kernel");
+    let gres = gcc
+        .kernel(&geris, &khelper.kconserv)
+        .expect("KGCCSD kernel");
     assert!(gres.converged, "KGCCSD must converge");
 
     let d = (gres.e_corr - rres.e_corr).abs();
@@ -88,7 +90,7 @@ fn kgccsd_equals_krccsd_on_a_closed_shell() {
 /// `blksize` reduces the peak by `(blksize/nvir)³` — and the energy does not
 /// move.
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn ccsd_t_peak_memory_is_bounded_by_one_block() {
     let cell = common::diamond([15, 15, 15]);
     let kpts = cell.make_kpts([1, 1, 2]).expect("kpts");
@@ -125,10 +127,7 @@ fn ccsd_t_peak_memory_is_bounded_by_one_block() {
              unblocked would be {full})"
         );
         assert_eq!(peak, want, "the peak cache is not one block's worth");
-        assert!(
-            peak <= full,
-            "blocking must not increase the peak"
-        );
+        assert!(peak <= full, "blocking must not increase the peak");
         let _ = expect_blocks;
         if last != 0.0 {
             assert!(
@@ -168,7 +167,7 @@ fn ccsd_t_peak_memory_is_bounded_by_one_block() {
 /// buffer whose recursion tree depends only on that length — and this proves
 /// the construction was not broken somewhere.
 #[test]
-#[ignore = "converges an SCF; run with --release"]
+#[ignore = "T1: converges an SCF; run with --release"]
 fn amplitudes_are_bit_identical_across_thread_counts() {
     let cell = common::diamond([15, 15, 15]);
     let kpts = cell.make_kpts([1, 1, 2]).expect("kpts");

@@ -31,10 +31,12 @@ pub mod scalar;
 pub use eval_gto::{
     AO_FUSED_BATCH_MAX, AoBlockDevice, AoGridDevice, EvalGtoBuffers, EvalGtoDeviceContext,
     EvalGtoImage, FUSED_VALS_CAP, FusedImage, cart_powers, cart2sph_l_matrix, common_fac_sp,
-    eval_ao_k_fused_batch, eval_gto_batch_into_image_batch, eval_gto_cart_deriv1,
+    eval_ao_k_fused_batch, eval_ao_k_resident, eval_gto_batch_into_image_batch,
+    eval_gto_cart_deriv1,
     eval_gto_device_capable, eval_gto_sph, eval_gto_sph_deriv1, eval_gto_sph_deriv1_into,
     eval_gto_sph_deriv1_into_screened, eval_gto_sph_deriv1_into_target, eval_gto_sph_into,
     eval_gto_sph_into_screened, eval_gto_sph_into_target, fused_values_per_image,
+    RESIDENT_ACC_VECS,
 };
 pub use multigrid_collocate::{PshellGridTable, collocate};
 pub use multigrid_gspace::{get_gga_vrho_gs, gradient_gs};

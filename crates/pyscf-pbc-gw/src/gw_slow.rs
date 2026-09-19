@@ -8,7 +8,7 @@
 //! implementation. **Do not optimise it.**
 
 use crate::error::PbcGwError;
-use crate::kgw_slow::{kernel_slow_orbital, LehmannPole, SLOW_ETA};
+use crate::kgw_slow::{LehmannPole, SLOW_ETA, kernel_slow_orbital};
 use crate::types::{GwConfig, GwRoute, QpResult};
 
 /// Gamma-point slow G0W0 reference driver (the `gw_slow` alias shape).

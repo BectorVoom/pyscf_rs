@@ -185,7 +185,7 @@ fn assert_matches(got: &KScfResult, want: &serde_json::Value, tol: f64, label: &
 
 /// **THE PHASE-12 GATE.** `KRKS(Si, 2x2x2, PBE)` against upstream-with-xcfun.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krks_si_222_pbe_matches_upstream() {
     let cell = silicon();
     let Some(want) = upstream(
@@ -213,7 +213,7 @@ fn krks_si_222_pbe_matches_upstream() {
 /// The LDA gate on the same cell — no `sigma` anywhere, so it isolates the
 /// density/potential machinery from the GGA chain rule.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krks_si_222_lda_matches_upstream() {
     let cell = silicon();
     let Some(want) = upstream(
@@ -244,7 +244,7 @@ fn krks_si_222_lda_matches_upstream() {
 /// runs — AO block loop, complex `eval_rho`, `eval_xc_eff` chain rule,
 /// `_vxc_mat` back-contraction, `ecoul`/`exc` book-keeping.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krks_he_all_electron_222_pbe_matches_upstream() {
     let cell = he_all_electron();
     let Some(want) = upstream(
@@ -273,7 +273,7 @@ fn krks_he_all_electron_222_pbe_matches_upstream() {
 /// k-mesh, with no exchange-correlation functional anywhere. Whatever this
 /// deviates by is a floor Phase 12 inherits rather than creates.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T2: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krhf_si_222_is_the_pseudopotential_floor() {
     let cell = silicon();
     let Some(want) = upstream(
@@ -302,7 +302,7 @@ fn krhf_si_222_is_the_pseudopotential_floor() {
 /// path shares no code with `nr_rks` (`nr_uks`, the full-vs-half `vk`, the
 /// cross-spin `_stack_fg` assembly).
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuks_si_222_pbe_matches_upstream() {
     let cell = silicon();
     let Some(want) = upstream(
@@ -333,7 +333,7 @@ fn kuks_si_222_pbe_matches_upstream() {
 /// A HYBRID functional, which routes through the `veff.rs` J/K dispatch and
 /// builds an exchange matrix the pure-functional gates never touch.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T2: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krks_si_222_pbe0_matches_upstream() {
     let cell = silicon();
     let Some(want) = upstream(
@@ -365,7 +365,7 @@ fn krks_si_222_pbe0_matches_upstream() {
 /// measurement ran the other way round, and its magnitude is why the gates
 /// could not use a default-configured upstream.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krks_si_222_pbe_against_xcfun() {
     let cell = silicon();
     let Some(want) = upstream(

@@ -1691,7 +1691,12 @@ fn run_ksymm(args: &[String]) {
             || time_ms(|| mf.kernel(&cfg).expect("ksymm KUKS kernel")),
         );
         let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
-        let (_, unfold_ms) = time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
+        let (_, unfold_ms) = time_ms(|| match &mf.ni {
+            pyscf_pbc_dft::numint::KsNumInt::Grid(g) => {
+                g.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold").len()
+            }
+            _ => 0,
+        });
         (r, ms, veff_ms, unfold_ms)
     } else {
         let mut mf =
@@ -1704,7 +1709,12 @@ fn run_ksymm(args: &[String]) {
             || time_ms(|| mf.kernel(&cfg).expect("ksymm KRKS kernel")),
         );
         let (_, veff_ms) = time_ms(|| mf.get_veff_tagged(&r.dm, None).expect("get_veff"));
-        let (_, unfold_ms) = time_ms(|| mf.ni.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold"));
+        let (_, unfold_ms) = time_ms(|| match &mf.ni {
+            pyscf_pbc_dft::numint::KsNumInt::Grid(g) => {
+                g.unfold_kdms(mf.cell(), &r.dm, nao).expect("unfold").len()
+            }
+            _ => 0,
+        });
         (r, ms, veff_ms, unfold_ms)
     };
 
@@ -2050,6 +2060,295 @@ fn run_ao(args: &[String]) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// `bands` — KUKS/KRKS `get_bands` stage profile (the Python `mf.get_bands`
+// path: `pyscf-py/src/pbc/dft.rs` calls `Kuks::get_bands` directly).
+// ---------------------------------------------------------------------------
+
+/// Wall time per span NAME, over every span entered inside a timed region.
+/// Nested spans double-count by design: read it as a tree, not a sum.
+#[derive(Clone, Default)]
+struct SpanTotalsLayer {
+    inner: Arc<SpanTotalsInner>,
+}
+
+#[derive(Default)]
+struct SpanTotalsInner {
+    entered: Mutex<HashMap<Id, Instant>>,
+    totals: Mutex<HashMap<&'static str, (u64, Duration)>>,
+}
+
+impl SpanTotalsLayer {
+    fn take(&self) -> Vec<(&'static str, u64, f64)> {
+        let mut t = self.inner.totals.lock().expect("span totals mutex");
+        let mut v: Vec<_> = t
+            .drain()
+            .map(|(k, (n, d))| (k, n, d.as_secs_f64() * 1e3))
+            .collect();
+        v.sort_by(|a, b| b.2.total_cmp(&a.2));
+        v
+    }
+}
+
+impl<S> Layer<S> for SpanTotalsLayer
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
+        if attrs.metadata().name() == "pbc_eval_ao_kpts" {
+            struct V(String);
+            impl Visit for V {
+                fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                    self.0.push_str(&format!(" {}={:?}", f.name(), v));
+                }
+            }
+            let mut v = V(String::new());
+            attrs.record(&mut v);
+            eprintln!("  [eval_ao_kpts{}]", v.0);
+        }
+    }
+
+    fn on_enter(&self, id: &Id, _ctx: Context<'_, S>) {
+        self.inner
+            .entered
+            .lock()
+            .expect("span entered mutex")
+            .insert(id.clone(), Instant::now());
+    }
+
+    fn on_exit(&self, id: &Id, ctx: Context<'_, S>) {
+        let Some(span) = ctx.span(id) else { return };
+        let Some(t0) = self.inner.entered.lock().expect("span entered mutex").remove(id) else {
+            return;
+        };
+        if span.metadata().name() == "pbc_eval_ao_kpts" {
+            eprintln!("  [eval_ao_kpts done in {:.1} ms]", t0.elapsed().as_secs_f64() * 1e3);
+        }
+        let mut totals = self.inner.totals.lock().expect("span totals mutex");
+        let e = totals.entry(span.metadata().name()).or_default();
+        e.0 += 1;
+        e.1 += t0.elapsed();
+    }
+}
+
+#[derive(Serialize)]
+struct BandsReport {
+    cell: String,
+    basis: String,
+    driver: String,
+    xc: String,
+    nk: [usize; 3],
+    nband: usize,
+    nao: usize,
+    ngrids: usize,
+    scf_ms: f64,
+    get_bands_ms: Vec<f64>,
+    hcore_ms: f64,
+    ovlp_ms: f64,
+    nr_xc_ms: f64,
+    get_j_ms: f64,
+    eig_ms: f64,
+    spans: Vec<(String, u64, f64)>,
+    bands_checksum: f64,
+}
+
+/// `bands --driver kuks --cell si --nk 2,2,2 --nband 40 --xc pbe [--json f]`
+///
+/// Runs one SCF on the cell's default mesh (exactly what the Python binding
+/// builds), then times `get_bands` end to end (`--reps` times, first one
+/// cold) and each of its stages separately, warm.
+fn run_bands(args: &[String]) {
+    let cell_name = arg_value(args, "--cell").unwrap_or_else(|| "si".into());
+    let basis = arg_value(args, "--basis").unwrap_or_else(|| "gth-szv".into());
+    let nk = parse_triple(&arg_value(args, "--nk").unwrap_or_else(|| "2,2,2".into()));
+    let xc = arg_value(args, "--xc").unwrap_or_else(|| "pbe".into());
+    let driver = arg_value(args, "--driver").unwrap_or_else(|| "kuks".into());
+    let nband: usize = arg_value(args, "--nband").map_or(40, |s| s.parse().expect("--nband"));
+    let reps: usize = arg_value(args, "--reps").map_or(3, |s| s.parse().expect("--reps"));
+    let json_path = arg_value(args, "--json");
+    assert!(driver == "kuks" || driver == "krks", "--driver kuks|krks");
+
+    let layer = SpanTotalsLayer::default();
+    tracing_subscriber::registry().with(layer.clone()).init();
+
+    let cell = cell_by_name(&cell_name, &basis);
+    let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
+    // L -> Gamma -> X, `nband` points, scaled -> absolute.
+    let path = [[0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.5, 0.0, 0.5]];
+    let half = nband / 2;
+    let mut scaled = Vec::with_capacity(nband);
+    for seg in 0..2 {
+        for i in 0..half {
+            let t = i as f64 / half as f64;
+            scaled.push(std::array::from_fn(|x| {
+                path[seg][x] + t * (path[seg + 1][x] - path[seg][x])
+            }));
+        }
+    }
+    let kband = cell.get_abs_kpts(&scaled).expect("abs kpts");
+    let cfg = KScfConfig {
+        conv_tol: 1e-9,
+        max_cycle: 40,
+        ..KScfConfig::default()
+    };
+    let df = Fftdf::new(cell.clone(), &kpts).expect("FFTDF");
+    let ngrids = df.ngrids();
+    let mut get_bands_ms = Vec::new();
+    let mut checksum = 0.0;
+    let (scf_ms, hcore_ms, ovlp_ms, nr_xc_ms, get_j_ms, eig_ms);
+    if driver == "kuks" {
+        let mf = Kuks::from_df(Box::new(df), &xc).expect("KUKS");
+        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KUKS kernel"));
+        scf_ms = ms;
+        let _ = layer.take();
+        for _ in 0..reps {
+            let ((e, _), ms) = time_ms(|| mf.get_bands(&kband, &r.dm).expect("get_bands"));
+            checksum = e.iter().flatten().sum();
+            get_bands_ms.push(ms);
+            if let Some(path) = arg_value(args, "--dump") {
+                std::fs::write(path, serde_json::to_string(&e).expect("json")).expect("dump");
+            }
+        }
+        hcore_ms = time_ms(|| get_hcore(mf.with_df.as_ref(), &kband).expect("hcore")).1;
+        ovlp_ms = time_ms(|| pyscf_pbc_gto::get_ovlp_scf(&cell, &kband).expect("ovlp")).1;
+        let sets = [vec![r.dm[0].clone()], vec![r.dm[1].clone()]];
+        nr_xc_ms = time_ms(|| {
+            mf.ni
+                .nr_uks(&cell, &mf.grids, &xc, &sets, 1, &kpts, Some(&kband))
+                .expect("nr_uks")
+        })
+        .1;
+        let df_j = Fftdf::new(cell.clone(), &kpts).expect("FFTDF");
+        let _ = df_j.ao_kpts(&kpts).expect("warm SCF AO");
+        get_j_ms = time_ms(|| {
+            get_j_kpts(&df_j, &r.dm, 1, &kpts, Some(&kband), None).expect("j")
+        })
+        .1;
+        let h = get_hcore(mf.with_df.as_ref(), &kband).expect("hcore");
+        let s = pyscf_pbc_gto::get_ovlp_scf(&cell, &kband).expect("ovlp");
+        let nao = cell.mol.nao_nr;
+        let s = pyscf_pbc_scf::krhf::to_row_major(s, nao);
+        eig_ms = time_ms(|| pyscf_pbc_scf::krhf::eig_channel(&h, &s, nao).expect("eig")).1 * 2.0;
+    } else {
+        let mf = Krks::from_df(Box::new(df), &xc).expect("KRKS");
+        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KRKS kernel"));
+        scf_ms = ms;
+        let _ = layer.take();
+        for _ in 0..reps {
+            let ((e, _), ms) = time_ms(|| mf.get_bands(&kband, &r.dm).expect("get_bands"));
+            checksum = e.iter().flatten().sum();
+            get_bands_ms.push(ms);
+            if let Some(path) = arg_value(args, "--dump") {
+                std::fs::write(path, serde_json::to_string(&e).expect("json")).expect("dump");
+            }
+        }
+        hcore_ms = time_ms(|| get_hcore(mf.with_df.as_ref(), &kband).expect("hcore")).1;
+        ovlp_ms = time_ms(|| pyscf_pbc_gto::get_ovlp_scf(&cell, &kband).expect("ovlp")).1;
+        nr_xc_ms = time_ms(|| {
+            mf.ni
+                .nr_rks(&cell, &mf.grids, &xc, &r.dm, 1, &kpts, Some(&kband))
+                .expect("nr_rks")
+        })
+        .1;
+        let df_j = Fftdf::new(cell.clone(), &kpts).expect("FFTDF");
+        let _ = df_j.ao_kpts(&kpts).expect("warm SCF AO");
+        get_j_ms = time_ms(|| {
+            get_j_kpts(&df_j, &r.dm, 1, &kpts, Some(&kband), None).expect("j")
+        })
+        .1;
+        let h = get_hcore(mf.with_df.as_ref(), &kband).expect("hcore");
+        let s = pyscf_pbc_gto::get_ovlp_scf(&cell, &kband).expect("ovlp");
+        let nao = cell.mol.nao_nr;
+        let s = pyscf_pbc_scf::krhf::to_row_major(s, nao);
+        eig_ms = time_ms(|| pyscf_pbc_scf::krhf::eig_channel(&h, &s, nao).expect("eig")).1;
+    }
+    {
+        // Overlap anatomy: image list, neighbor list, integrals.
+        let precision = cell.precision * pyscf_pbc_gto::hcore::SCF_OVLP_PRECISION_FACTOR;
+        let (rc, t_rc) = time_ms(|| pyscf_pbc_gto::cutoff::estimate_rcut(&cell, precision));
+        let rcut = rc.max(cell.try_rcut().expect("rcut"));
+        let (ls, t_ls) = time_ms(|| {
+            pyscf_pbc_gto::lattice::get_lattice_ls(&cell, Some(rcut), None, true).expect("ls")
+        });
+        eprintln!(
+            "  ovlp anatomy: estimate_rcut {t_rc:.1} ms, get_lattice_ls {t_ls:.1} ms ({} images), use_loose_rcut={}",
+            ls.len(),
+            cell.use_loose_rcut
+        );
+        for nk in [1usize, 8, 40] {
+            let ks = &kband[..nk.min(kband.len())];
+            let (_, t) = time_ms(|| {
+                pyscf_pbc_gto::pbc_intor::intor_cross_with_images(
+                    "int1e_ovlp",
+                    &cell,
+                    &cell,
+                    ks,
+                    pyscf_pbc_gto::pbc_intor::PbcIntorOpts {
+                        comp: None,
+                        hermi: 0,
+                        screen: false,
+                        omega: None,
+                    },
+                    &ls,
+                    None,
+                )
+                .expect("intor")
+            });
+            eprintln!("  intor_cross_with_images(ovlp, {} k) = {t:.1} ms", ks.len());
+        }
+        let hp = time_ms(|| pyscf_pbc_gto::hcore::get_hcore_parts(&cell, &kband).expect("parts")).1;
+        eprintln!("  get_hcore_parts(T + V_nl + V_loc2, {} k) = {hp:.1} ms", kband.len());
+    }
+    let spans = layer.take();
+    let report = BandsReport {
+        cell: cell_name,
+        basis,
+        driver,
+        xc,
+        nk,
+        nband: kband.len(),
+        nao: cell.mol.nao_nr,
+        ngrids,
+        scf_ms,
+        get_bands_ms,
+        hcore_ms,
+        ovlp_ms,
+        nr_xc_ms,
+        get_j_ms,
+        eig_ms,
+        spans: spans.iter().map(|(n, c, t)| ((*n).to_string(), *c, *t)).collect(),
+        bands_checksum: checksum,
+    };
+    println!(
+        "{} {} nk={:?} nband={} nao={} ngrids={} xc={}\n  scf = {:.1} ms\n  get_bands = {:?} ms\n  \
+         stages (warm, once each): hcore {:.1} | ovlp {:.1} | nr_xc {:.1} | get_j {:.1} | eig {:.1} ms\n  \
+         checksum = {:.15e}",
+        report.driver,
+        report.cell,
+        report.nk,
+        report.nband,
+        report.nao,
+        report.ngrids,
+        report.xc,
+        report.scf_ms,
+        report.get_bands_ms,
+        report.hcore_ms,
+        report.ovlp_ms,
+        report.nr_xc_ms,
+        report.get_j_ms,
+        report.eig_ms,
+        report.bands_checksum
+    );
+    println!("  spans after SCF (get_bands reps + stages), top 25:");
+    for (n, c, t) in spans.iter().take(25) {
+        println!("    {n:<40} x{c:<7} {t:>10.1} ms");
+    }
+    if let Some(p) = json_path {
+        let json = serde_json::to_string_pretty(&report).expect("json");
+        std::fs::write(p, json).expect("write json");
+    }
+}
+
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
         .position(|a| a == key)
@@ -2077,9 +2376,10 @@ fn main() {
         "ksymm" => run_ksymm(rest),
         "ao" => run_ao(rest),
         "multigrid" => run_multigrid(rest),
+        "bands" => run_bands(rest),
         other => {
             eprintln!(
-                "unknown subcommand {other:?} (expected transform|jk|contract|ksymm|ao|multigrid)"
+                "unknown subcommand {other:?} (expected transform|jk|contract|ksymm|ao|multigrid|bands)"
             );
             std::process::exit(1);
         }

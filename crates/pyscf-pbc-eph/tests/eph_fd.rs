@@ -26,7 +26,8 @@ fn central_difference_exact_on_linear() {
 fn central_difference_converges_quadratically() {
     // q(R) = R³ + R, q'(0) = 1; central difference at ±d/2 errs by d²/4·q'''/6.
     let f = |r: f64| r * r * r + r;
-    let err = |d: f64| (central_difference(&[f(d / 2.0)], &[f(-d / 2.0)], d).unwrap()[0] - 1.0).abs();
+    let err =
+        |d: f64| (central_difference(&[f(d / 2.0)], &[f(-d / 2.0)], d).unwrap()[0] - 1.0).abs();
     let (e1, e2) = (err(1e-2), err(5e-3));
     let ratio = e1 / e2;
     assert!((ratio - 4.0).abs() < 0.05, "expected ~4x, got {ratio}");
@@ -63,8 +64,14 @@ fn eph_fd_deterministic_across_thread_counts() {
         let em: Vec<f64> = (0..64).map(|i| (i as f64).cos()).collect();
         eph_fd_coupling(&ep, &em, EPH_FD_DEFAULT_DISP).expect("must run")
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     for (x, y) in a.iter().zip(b.iter()) {
         assert_eq!(x.to_bits(), y.to_bits());

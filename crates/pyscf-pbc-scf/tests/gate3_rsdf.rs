@@ -90,7 +90,7 @@ fn krhf_energy(cell: &Cell, kpts: &[[f64; 3]], prefer_ccdf: bool) -> f64 {
 }
 
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T2: requires PYSCF_ORACLE_VENV"]
 fn gate3_both_routes_match_upstream_he_fcc() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping the upstream oracle", common::GATE);
@@ -144,7 +144,7 @@ fn gate3_both_routes_match_upstream_he_fcc() {
 /// minutes-to-hours run at 2x2x2 (`14-VERIFICATION.md` §3, Gate 1b is PARTIAL
 /// for exactly that reason), and gamma exercises the same `get_pp` path.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV; diamond is slow"]
+#[ignore = "T3: requires PYSCF_ORACLE_VENV; diamond is slow"]
 fn gate3_both_routes_match_upstream_diamond_gamma() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping the upstream oracle", common::GATE);
@@ -283,7 +283,7 @@ fn mdf_energy(cell: &Cell, kpts: &[[f64; 3]], prefer_ccdf: bool) -> (f64, [usize
 /// 1.160e-6 away, which is that deferral and not an algebra defect; the ladder
 /// below is the evidence, since a wrong contraction would not converge.
 #[test]
-#[ignore = "requires PYSCF_ORACLE_VENV"]
+#[ignore = "T3: requires PYSCF_ORACLE_VENV"]
 fn rs_mdf_matches_upstream_he_fcc() {
     let Some(py) = common::oracle_python() else {
         eprintln!("{} unset — skipping the upstream oracle", common::GATE);

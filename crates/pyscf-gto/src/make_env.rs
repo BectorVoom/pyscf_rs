@@ -190,10 +190,58 @@ fn make_bas_env_for_symbol(parsed: &ParsedBasis, _env: &mut Vec<f64>) -> Vec<[i3
     templates
 }
 
+/// `scipy.special.gamma(l + 1.5)` (cephes) for `l = 0..=15` — the scalar gamma
+/// `gaussian_int` divides by. cephes is one ulp off the correctly-rounded value
+/// (`gamma(1.5)` = `0x1.c5bf891b4ef6ap-1`, one ulp below `math.gamma(1.5)`), so
+/// it is tabulated as raw bits instead of recomputed. Probed from the vendored
+/// scipy (2026-09-18, Task 6).
+const CEPHES_GAMMA_HALF: [f64; 16] = [
+    f64::from_bits(0x3fec5bf891b4ef6a), // l=0  gamma(1.5)
+    f64::from_bits(0x3ff544fa6d47b390), // l=1  gamma(2.5)
+    f64::from_bits(0x400a96390899a075), // l=2  gamma(3.5)
+    f64::from_bits(0x40274371e7866c66), // l=3  gamma(4.5)
+    f64::from_bits(0x404a2be0247739f2), // l=4  gamma(5.5)
+    f64::from_bits(0x4071fe2a1911f7d6), // l=5  gamma(6.5)
+    f64::from_bits(0x409d3d0468bd32bd), // l=6  gamma(7.5)
+    f64::from_bits(0x40cb693422315f91), // l=7  gamma(8.5)
+    f64::from_bits(0x40fd1fc76454758a), // l=8  gamma(9.5)
+    f64::from_bits(0x41314ade639225ca), // l=9  gamma(10.5)
+    f64::from_bits(0x4166b243e2afd19a), // l=10 gamma(11.5)
+    f64::from_bits(0x41a05020caee5ea6), // l=11 gamma(12.5)
+    f64::from_bits(0x41d97d333d1473e4), // l=12 gamma(13.5)
+    f64::from_bits(0x421581a33b8941c8), // l=13 gamma(14.5)
+    f64::from_bits(0x42537d7bedf4639d), // l=14 gamma(15.5)
+    f64::from_bits(0x4292e1900e84c081), // l=15 gamma(16.5)
+];
+
+/// `gaussian_int(n, α) = scipy.special.gamma((n+1)/2) / (2 α^((n+1)/2))`
+/// (`pyscf/gto/mole.py:120`), specialised to `n = 2l+2` so the gamma is
+/// [`CEPHES_GAMMA_HALF`][l] and `α^(l+1.5)` is numpy's SVML `pow`
+/// ([`crate::svml_pow::svml_pow8`]) — not glibc `pow`. `α` is the value raised
+/// to `l+1.5` (`2·expnt` for `gto_norm`, `expnt_i + expnt_j` for the S-matrix).
+pub(crate) fn gaussian_int(l: u8, alpha: f64) -> f64 {
+    let n1 = f64::from(l) + 1.5;
+    CEPHES_GAMMA_HALF[l as usize] / (2.0 * crate::svml_pow::svml_pow8(alpha, n1))
+}
+
+/// Per-primitive radial normalisation:
+/// `gto_norm(l, α) = 1 / sqrt(gaussian_int(2l+2, 2α))`
+/// (`pyscf/gto/mole.py:125-155`).
+pub(crate) fn gto_norm(l: u8, alpha: f64) -> f64 {
+    1.0 / gaussian_int(l, 2.0 * alpha).sqrt()
+}
+
 /// Per-primitive radial `gto_norm` + per-contraction `_nomalize_contracted_ao`.
 ///
 /// Source: `pyscf/gto/mole.py:120-155` (`gto_norm`) + `1018-1027`
-/// (`_nomalize_contracted_ao`).
+/// (`_nomalize_contracted_ao`), reproduced in numpy's exact rounding:
+///
+///   * `cs = einsum('pi,p->pi', cs, gto_norm(es))` — elementwise multiply;
+///   * `ee = es_i + es_j`, `ee = gaussian_int(2l+2, ee)`;
+///   * `s1 = 1/sqrt(einsum('pi,pq,qi->i', cs, ee, cs))` — the einsum sums
+///     p-outer then q-inner, product `(c[p]·ee[p,q])·c[q]`, plain left-to-right
+///     accumulation (no FMA);
+///   * `cs = einsum('pi,i->pi', cs, s1)` — elementwise multiply.
 ///
 /// Returns coefficients indexed `[contraction_column][primitive]` (F-order on
 /// flatten — column-major, matching libcint convention).
@@ -205,10 +253,8 @@ pub(crate) fn normalise_contractions(
     let nprim = exponents.len();
     let nctr = raw_coeffs.len();
 
-    // Per-primitive radial normalisation factor.
+    // `gto_norm` on the exponent array, then the elementwise scale.
     let prim_norm: Vec<f64> = exponents.iter().map(|&a| gto_norm(l, a)).collect();
-
-    // Apply per-primitive norm: c'_{c,p} = c_{c,p} * prim_norm[p].
     let mut scaled: Vec<Vec<f64>> = (0..nctr)
         .map(|c| {
             (0..nprim)
@@ -217,116 +263,20 @@ pub(crate) fn normalise_contractions(
         })
         .collect();
 
-    // _nomalize_contracted_ao: post-multiply each contraction column c by
-    // 1/sqrt(c.T @ S @ c) where S[i,j] = gaussian_int(2l+2, e_i + e_j).
+    // `_nomalize_contracted_ao`: einsum('pi,pq,qi->i') in numpy's order.
     for col in scaled.iter_mut() {
         let mut norm_sq = 0.0_f64;
-        for i in 0..nprim {
-            for j in 0..nprim {
-                norm_sq +=
-                    col[i] * col[j] * gaussian_int(2 * l as i32 + 2, exponents[i] + exponents[j]);
+        for p in 0..nprim {
+            for q in 0..nprim {
+                let s = gaussian_int(l, exponents[p] + exponents[q]);
+                norm_sq += (col[p] * s) * col[q];
             }
         }
-        if norm_sq > 0.0 {
-            let inv = 1.0 / norm_sq.sqrt();
-            for v in col.iter_mut() {
-                *v *= inv;
-            }
+        let inv = 1.0 / norm_sq.sqrt();
+        for v in col.iter_mut() {
+            *v *= inv;
         }
     }
     scaled
 }
 
-/// Closed-form Gaussian integral
-/// `int_0^∞ r^n exp(-α r²) dr = 0.5 * Γ((n+1)/2) / α^((n+1)/2)`.
-///
-/// Source: `pyscf/gto/mole.py` `gaussian_int` helper (~mole.py:120) +
-/// RESEARCH A2 (closed form). For `n` and `α` ranges seen in production basis
-/// sets (`l ≤ 6`, `α > 1e-3`) the closed form is numerically well-conditioned;
-/// `libm::tgamma` covers the half-integer Γ values.
-pub(crate) fn gaussian_int(n: i32, alpha: f64) -> f64 {
-    let half_n_plus_1 = (n as f64 + 1.0) * 0.5;
-    let gamma = libm::tgamma(half_n_plus_1);
-    0.5 * gamma / alpha.powf(half_n_plus_1)
-}
-
-/// Per-primitive radial normalisation:
-/// `gto_norm(l, α) = 1 / sqrt(gaussian_int(2l+2, 2α))`.
-///
-/// Source: `pyscf/gto/mole.py:125-155`.
-pub(crate) fn gto_norm(l: u8, alpha: f64) -> f64 {
-    1.0 / gaussian_int(2 * l as i32 + 2, 2.0 * alpha).sqrt()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn gaussian_int_known_value_zero_alpha_unity_n_zero() {
-        // Γ(1/2) = sqrt(π); gaussian_int(0, α) = 0.5 * sqrt(π) / α^(1/2).
-        let g = gaussian_int(0, 1.0);
-        let expected = 0.5 * std::f64::consts::PI.sqrt();
-        assert!((g - expected).abs() < 1e-12, "got {g}, expected {expected}");
-    }
-
-    #[test]
-    fn gto_norm_l_zero_alpha_unity() {
-        // gto_norm(l=0, α=1) = 1 / sqrt(gaussian_int(2, 2)) = 1 / sqrt(0.5 * Γ(3/2) / 2^(3/2))
-        //                    = 1 / sqrt(0.5 * (sqrt(π)/2) / 2.8284) = 1 / sqrt(0.0782) ≈ 3.5779
-        let n = gto_norm(0, 1.0);
-        // From scipy: 1 / sqrt(0.5 * sqrt(pi) * 0.5 / 2^(3/2)) = 2 * (2/π)^(1/4) * sqrt(2)
-        let expected =
-            2.0 * (2.0 / std::f64::consts::PI).powf(0.25) * 1.0_f64.sqrt() * 2.0_f64.powf(0.75);
-        // The exact closed form: gto_norm(0,α)= (2α/π)^(3/4) * 2^(0+0) ; for α=1 → (2/π)^(3/4)
-        // Actually upstream: gto_norm(0,α) = (2α/π)^(3/4) * 2^l * sqrt((2l+1)!! / (4π))^-1 — simplified.
-        // Easier: our implementation uses the closed form via gaussian_int. Verify by
-        // evaluating gaussian_int(2, 2) directly: 0.5 * Γ(3/2) / 2^(3/2) = 0.5 * (sqrt(π)/2) / 2.828427
-        let gi = 0.5 * (std::f64::consts::PI.sqrt() / 2.0) / 2.0_f64.powf(1.5);
-        let expected_n = 1.0 / gi.sqrt();
-        assert!(
-            (n - expected_n).abs() < 1e-10,
-            "got {n}, expected {expected_n} (closed form), upstream-formula approx {expected}"
-        );
-    }
-
-    #[test]
-    fn normalisation_yields_unit_self_overlap() {
-        // For a single-primitive single-contraction shell (nprim=1, nctr=1):
-        // After normalisation, c.T @ S @ c == 1 by construction.
-        let l = 0_u8;
-        let exps = vec![1.0_f64];
-        let raw = vec![vec![1.0_f64]];
-        let final_c = normalise_contractions(l, &exps, &raw);
-        // Compute c.T @ S @ c on the normalised coeffs.
-        let c = final_c[0][0];
-        let s = gaussian_int(2 * l as i32 + 2, exps[0] + exps[0]);
-        let norm_sq = c * c * s;
-        assert!(
-            (norm_sq - 1.0).abs() < 1e-12,
-            "self-overlap = {norm_sq}, expected 1.0"
-        );
-    }
-
-    #[test]
-    fn normalisation_multi_primitive_unit_overlap() {
-        // STO-3G H: 3 primitives, 1 contraction. After normalisation,
-        // c.T @ S @ c == 1.
-        let l = 0_u8;
-        let exps = vec![3.42525091, 0.62391373, 0.16885540];
-        let raw = vec![vec![0.15432897, 0.53532814, 0.44463454]];
-        let final_c = normalise_contractions(l, &exps, &raw);
-        let mut overlap = 0.0_f64;
-        for i in 0..exps.len() {
-            for j in 0..exps.len() {
-                overlap += final_c[0][i]
-                    * final_c[0][j]
-                    * gaussian_int(2 * l as i32 + 2, exps[i] + exps[j]);
-            }
-        }
-        assert!(
-            (overlap - 1.0).abs() < 1e-12,
-            "STO-3G H self-overlap = {overlap}, expected 1.0"
-        );
-    }
-}

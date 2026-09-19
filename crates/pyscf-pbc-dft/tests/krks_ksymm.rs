@@ -495,7 +495,7 @@ fn hubbard_e_u_over_the_ibz_matches_the_full_bz() {
 /// genuinely two-channel SCF — and the test asserts that, rather than trusting
 /// it.
 #[test]
-#[ignore = "needs an open-shell fixture whose FULL-BZ solution is star-symmetric; see the doc comment"]
+#[ignore = "T2: needs an open-shell fixture whose FULL-BZ solution is star-symmetric; see the doc comment"]
 fn kuks_ibz_energy_matches_full_bz() {
     use pyscf_gto::{AtomInput, BasisInput, MoleBuildArgs, Unit};
     use pyscf_pbc_dft::krks_ksymm::KsymAdaptedKuks;
@@ -778,7 +778,7 @@ const GDF_E_TOL: f64 = 1e-8;
 ///     krks_ibz_energy_matches_full_bz_on_gdf -- --ignored --nocapture
 /// ```
 #[test]
-#[ignore = "two full GDF SCFs; minutes-scale make_j3c. Run explicitly -- see the doc comment"]
+#[ignore = "T3: two full GDF SCFs; minutes-scale make_j3c. Run explicitly -- see the doc comment"]
 fn krks_ibz_energy_matches_full_bz_on_gdf() {
     use pyscf_pbc_df::Gdf;
     use pyscf_pbc_dft::krks::Krks;
@@ -876,7 +876,7 @@ fn krks_ibz_energy_matches_full_bz_on_gdf() {
 ///   ksymm layer is exonerated.
 /// * If they agree, the loss is in the ksymm layer and this plan owns it.
 #[test]
-#[ignore = "one GDF build; minutes-scale. Diagnostic for the GDF Gate C failure"]
+#[ignore = "T3: one GDF build; minutes-scale. Diagnostic for the GDF Gate C failure"]
 fn gdf_band_route_matches_the_direct_route() {
     use pyscf_pbc_df::{Gdf, JkOpts, PeriodicDf};
     use pyscf_pbc_dft::krks::Krks;

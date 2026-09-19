@@ -32,14 +32,17 @@
 //! inputs.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
-
-use pyscf_algebra::CTensor;
-use pyscf_pbc_gto::{
-    Cell, CoulGArgs, ExxDiv, UniformGrids, eval_ao_kpts, get_coulg, get_coulg_at_gv, get_gv,
-    get_si, is_zero,
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
-use pyscf_pbc_tools::ifft;
+
+use pyscf_algebra::{CTensor, openblas_emu};
+use pyscf_pbc_gto::{
+    Cell, CoulGArgs, ExxDiv, UniformGrids, eval_ao_kpts, eval_ao_kpts_upstream, get_coulg,
+    get_coulg_at_gv, get_gv, get_si, is_zero,
+};
+use pyscf_pbc_tools::{ifft, ifft_upstream};
 
 use crate::df_jk::KMats;
 use crate::error::PbcDfError;
@@ -451,34 +454,22 @@ impl Fftdf {
     }
 }
 
-/// `get_nuc(mydf, kpts)` — `fft.py:40-80`.
-///
-/// ```text
-/// rhoG  = -sum_a Z_a SI[a, G]          (nuclear charge density in G space)
-/// vneG  = rhoG * coulG
-/// vneR  = ifft(vneG).real
-/// vne_k = sum_g conj(ao_k) vneR ao_k
-/// ```
-///
-/// # Why there is no `vol/ngrids` factor
-///
-/// The real-space potential is `V(r) = (1/vol) sum_G vneG e^{iGr}` while `ifft`
-/// computes `(1/ngrids) sum_G ...`, and the quadrature that follows carries
-/// `vol/ngrids`. The two cancel exactly, which is why upstream's line 71 has no
-/// weight in it. Adding one is the classic factor-of-`vol` bug here.
-///
-/// # Errors
-/// Propagates the G-vector, structure-factor, `coulG` and AO evaluations.
-pub fn get_nuc(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
+/// `vneR` — the nuclear attraction potential in real space (`fft.py:63-67`).
+fn nuc_local_potential_r(df: &Fftdf) -> Result<Vec<f64>, PbcDfError> {
     let cell = &df.cell;
     let mesh = df.mesh;
     let gv = get_gv(cell, Some(mesh))?;
     let ngrids = gv.len();
-    let si = get_si(cell, Some(&gv), None, None)?;
+    // fft.py:63 — `cell.get_SI(mesh=mesh)` passes no Gv, i.e. the SEPARABLE
+    // branch (products of per-axis phases with numpy's FMA complex multiply),
+    // not the dense `exp(-1j*coords@Gv.T)`. He at the origin hid this: every
+    // phase there is exactly 1 either way.
+    let si = get_si(cell, None, Some(mesh), None)?;
     let charges = cell.atom_charges();
     let natm = cell.mol.natm;
 
-    // fft.py:60-63 — charge = -atom_charges; rhoG = charge . SI.
+    // fft.py:64 — `rhoG = numpy.dot(charge, SI)`: plain left-to-right
+    // accumulation over atoms, no FMA (natm up to 64 probed).
     let mut rho_re = vec![0.0_f64; ngrids];
     let mut rho_im = vec![0.0_f64; ngrids];
     for ia in 0..natm {
@@ -496,10 +487,175 @@ pub fn get_nuc(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError
         rho_re[g] *= coulg[g];
         rho_im[g] *= coulg[g];
     }
-    let vner = ifft(&CTensor::from_planes(rho_re, rho_im), mesh)?.re;
+    let vneg = CTensor::from_planes(rho_re, rho_im);
+    let vner = ifft_upstream(&vneg, mesh)?.re;
+    Ok(vner)
+}
 
-    let ao = df.ao_kpts(kpts)?;
-    Ok(df.contract_local_potential(&ao, &vner, kpts.len()))
+/// `KNumInt.block_loop` (`pyscf/pbc/dft/numint.py:1058-1100`) as seen from
+/// `FFTDF.aoR_loop` (`pyscf/pbc/df/fft.py:297-319`) for `get_nuc` (`deriv = 0`,
+/// hence `comp = 1`).
+///
+/// Upstream computes, with `BLKSIZE = 56`:
+///
+/// ```text
+/// blksize = int(max_memory*1e6/(comp*2*nao*16*BLKSIZE))
+/// blksize = max(4, min(blksize, ngrids//BLKSIZE+1, 2400)) * BLKSIZE
+/// ```
+///
+/// `nkpts` is deliberately NOT in the formula — `block_loop` sizes the grid
+/// blocks from `comp`, `nao` and `max_memory` only (checked against the source
+/// line before writing this; the parameter is kept so call sites read like the
+/// Python call).
+///
+/// `max_memory_mb` is the constant `2000.0`: Rust has no `lib.current_memory()`
+/// RSS reading, and the oracle pins `mydf.max_memory = 0`, so upstream's
+/// `max(2000, 0 - rss)` is exactly `2000`. Do NOT pass `df.max_memory` here.
+pub fn aor_loop_blocks(
+    ngrids: usize,
+    nao: usize,
+    _nkpts: usize,
+    max_memory_mb: f64,
+) -> Vec<(usize, usize)> {
+    const BLKSIZE: usize = 56;
+    const COMP: f64 = 1.0; // deriv = 0
+    let blksize =
+        (max_memory_mb * 1e6 / (COMP * 2.0 * nao as f64 * 16.0 * BLKSIZE as f64)) as usize;
+    let blksize = (4usize.max(blksize.min(ngrids / BLKSIZE + 1).min(2400))) * BLKSIZE;
+    let mut out = Vec::new();
+    let mut p0 = 0;
+    while p0 < ngrids {
+        let p1 = (p0 + blksize).min(ngrids);
+        out.push((p0, p1));
+        p0 = p1;
+    }
+    out
+}
+/// `get_nuc(mydf, kpts)` — `fft.py:40-80`.
+///
+/// ```text
+/// rhoG  = -sum_a Z_a SI[a, G]          (nuclear charge density in G space)
+/// vneG  = rhoG * coulG
+/// vneR  = ifft(vneG).real
+/// vne_k = sum_g conj(ao_k) vneR ao_k
+/// ```
+///
+/// # Why there is no `vol/ngrids` factor
+///
+/// The real-space potential is `V(r) = (1/vol) sum_G vneG e^{iGr}` while `ifft`
+/// computes `(1/ngrids) sum_G ...`, and the quadrature that follows carries
+/// `vol/ngrids`. The two cancel exactly, which is why upstream's line 71 has no
+/// weight in it. Adding one is the classic factor-of-`vol` bug here.
+///
+/// # Upstream's bits
+///
+/// Every stage follows upstream's rounding, not just its mathematics, so the
+/// result is bit-identical to PySCF 2.12.1's `FFTDF.get_nuc` run with
+/// `OMP_NUM_THREADS=1` (He/STO-3G 2x2x2, mesh 11 — `tests/fftdf.rs`):
+///
+/// * `vneR` through [`pyscf_pbc_tools::ifft_upstream`] — the pocketfft route
+///   (`cfftp`/Bluestein per axis) or, on all-`_EXCLUDE` meshes, upstream's
+///   `_ifftn_blas` GEMM route;
+/// * the AO table through [`pyscf_pbc_gto::eval_ao_kpts_upstream`]
+///   (`PBCeval_sph_iter`'s screen and image sum), not the cached
+///   [`Fftdf::ao_kpts`];
+/// * `lib.dot(ao.T.conj()*vneR, ao)` through the Barcelona OpenBLAS emulation
+///   ([`pyscf_algebra::openblas_emu`]).
+///
+/// Where a stage is out of reach — a basis with `l >= 5`, or more than one
+/// atom (`numpy.dot(charge, SI)` runs on numpy's own BLAS, unmodelled) — that
+/// stage keeps this port's own arithmetic, which agrees to ~1e-12 but not to
+/// the bit. Upstream's multi-threaded `NPdgemm` merges per-thread partial sums
+/// in `omp critical` order, so its own bits vary with the thread count; the
+/// single-threaded result is the reference.
+///
+/// # Errors
+/// Propagates the G-vector, structure-factor, `coulG` and AO evaluations.
+pub fn get_nuc(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
+    let cell = &df.cell;
+    let vner = nuc_local_potential_r(df)?;
+
+    match eval_ao_kpts_upstream(cell, &df.grids.coords, kpts)? {
+        Some(ao) => Ok(contract_local_potential_upstream(&ao, &vner)),
+        None => {
+            let ao = df.ao_kpts(kpts)?;
+            Ok(df.contract_local_potential(&ao, &vner, kpts.len()))
+        }
+    }
+}
+
+/// `vne[k] = 0 + lib.dot(ao.T.conj() * vR, ao)` (`fft.py:70-74`) in upstream's
+/// rounding, over every `aoR_loop` block.
+///
+/// `lib.dot` lands in `dgemm_`/`zgemm_('N', 'T', nao, nao, kblk, ao, w)` with
+/// `w = conj(ao) * vR` (`NPdgemm` swaps the operands to get a row-major
+/// result), so `C[i + j*nao] = sum_g ao_i(g) w_j(g)` is `vne[j, i]` — the
+/// column-major `C` IS the row-major `vne`. A gamma k-point's AO table is real
+/// upstream, so it takes the real `dgemm_` and has an exactly-zero imaginary
+/// part.
+///
+/// Each block's GEMM result passes through `c = 0; c += cpriv` (`NPdgemm`'s
+/// `+ 0.0` normalisation) and then accumulates `vne[k] += block` element-wise
+/// from `0.0`. When `NPdgemm`'s `if ((k/m) > 3 && (k/n) > 3)` branch is false
+/// upstream calls `dgemm_` directly with `beta = 0` (no `+ 0.0` step), but
+/// OpenBLAS zeroes `C` first so the value is identical — the `+ 0.0` is kept.
+/// The AO table stays whole-grid: `blksize` is a multiple of the 56-point
+/// `BLKSIZE`, so per-block evaluation is identical point by point.
+fn contract_local_potential_upstream(
+    ao: &pyscf_pbc_gto::EvalAoKptsOutput,
+    vr: &[f64],
+) -> Vec<CTensor> {
+    let (nao, ngrids) = (ao.nao, ao.ngrids);
+    let blocks = aor_loop_blocks(ngrids, nao, ao.kaos.len(), 2000.0);
+    ao.kaos
+        .iter()
+        .zip(&ao.gamma)
+        .map(|(a, &gamma)| {
+            let mut acc_re = vec![0.0; nao * nao];
+            let mut acc_im = vec![0.0; nao * nao];
+            for &(p0, p1) in &blocks {
+                let kblk = p1 - p0;
+                // Column-major `nao x kblk` operands over this block's columns:
+                // A[i + g*nao] = ao_i(p0+g).
+                let mut a_re = vec![0.0; nao * kblk];
+                let mut w_re = vec![0.0; nao * kblk];
+                for i in 0..nao {
+                    for (gg, g) in (p0..p1).enumerate() {
+                        let x = a.re[i * ngrids + g];
+                        a_re[i + gg * nao] = x;
+                        w_re[i + gg * nao] = x * vr[g];
+                    }
+                }
+                let mut c_re = vec![0.0; nao * nao];
+                let mut c_im = vec![0.0; nao * nao];
+                if gamma {
+                    openblas_emu::dgemm_nt(nao, nao, kblk, &a_re, &w_re, &mut c_re);
+                } else {
+                    let mut a_im = vec![0.0; nao * kblk];
+                    let mut w_im = vec![0.0; nao * kblk];
+                    for i in 0..nao {
+                        for (gg, g) in (p0..p1).enumerate() {
+                            let y = a.im[i * ngrids + g];
+                            a_im[i + gg * nao] = y;
+                            // conj(ao) * vR: numpy's complex-by-real product.
+                            w_im[i + gg * nao] = -y * vr[g];
+                        }
+                    }
+                    openblas_emu::zgemm_nt(
+                        nao, nao, kblk, &a_re, &a_im, &w_re, &w_im, &mut c_re, &mut c_im,
+                    );
+                }
+                for v in c_re.iter_mut().chain(c_im.iter_mut()) {
+                    *v += 0.0;
+                }
+                for i in 0..nao * nao {
+                    acc_re[i] += c_re[i];
+                    acc_im[i] += c_im[i];
+                }
+            }
+            CTensor::from_planes(acc_re, acc_im)
+        })
+        .collect()
 }
 
 /// `get_pp(mydf, kpts)` — `fft.py:82-178`, with the non-local half taken from
@@ -509,6 +665,16 @@ pub fn get_nuc(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError
 /// Propagates the G-space local factors, the FFT, `get_pp_nl` and the AO
 /// evaluation.
 pub fn get_pp(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
+    let cell = &df.cell;
+    let vpplocr = pp_local_potential_r(df)?;
+    let ao = df.ao_kpts(kpts)?;
+    let mut vpp = df.contract_local_potential(&ao, &vpplocr, kpts.len());
+    vpp_add_nonlocal(cell, kpts, &mut vpp)?;
+    Ok(vpp)
+}
+
+/// `vpplocR` — the local GTH potential in real space (`fft.py:101-112`).
+fn pp_local_potential_r(df: &Fftdf) -> Result<Vec<f64>, PbcDfError> {
     let cell = &df.cell;
     let mesh = df.mesh;
     let gv = get_gv(cell, Some(mesh))?;
@@ -529,10 +695,15 @@ pub fn get_pp(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError>
     }
 
     // fft.py:106-112 — the local part, evaluated in real space.
-    let vpplocr = ifft(&CTensor::from_planes(re, im), mesh)?.re;
-    let ao = df.ao_kpts(kpts)?;
-    let mut vpp = df.contract_local_potential(&ao, &vpplocr, kpts.len());
+    Ok(ifft(&CTensor::from_planes(re, im), mesh)?.re)
+}
 
+/// `vpp += V_nl` and the gamma-point `.real` of `fft.py:114-176`.
+fn vpp_add_nonlocal(
+    cell: &Cell,
+    kpts: &[[f64; 3]],
+    vpp: &mut [CTensor],
+) -> Result<(), PbcDfError> {
     // fft.py:114-176 — the non-local part. Phase 10 owns it in real space.
     let vnl = pyscf_pbc_gto::pseudo::get_pp_nl(cell, kpts)?;
     let nao = cell.mol.nao_nr;
@@ -547,7 +718,27 @@ pub fn get_pp(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError>
             }
         }
     }
-    Ok(vpp)
+    Ok(())
+}
+
+/// BAND-03 — `hcore` at `kpts` WITHOUT its local grid term: `T + V_nl` for a
+/// pseudopotential cell, `T` for an all-electron one. Adding
+/// `Σ_g conj(ao_p) ao_q v[g]` with `v` from [`PeriodicDf::local_potential_r`]
+/// gives [`get_hcore`] back (up to summation order).
+///
+/// # Errors
+/// Propagates `get_pp_nl` and `pbc_intor('int1e_kin')`.
+pub fn get_hcore_nonlocal(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
+    let nao = cell.mol.nao_nr;
+    let mut h = vec![CTensor::zeros(nao * nao); kpts.len()];
+    if cell.pseudo.is_some() {
+        vpp_add_nonlocal(cell, kpts, &mut h)?;
+    }
+    let t = pyscf_pbc_gto::get_t(cell, kpts)?;
+    for (k, m) in h.iter_mut().enumerate() {
+        zadd_assign(m, &forder_to_c(&t[k], nao, nao));
+    }
+    Ok(h)
 }
 
 /// `get_hcore` for a periodic cell — `khf.py:66-90`.
@@ -600,6 +791,13 @@ impl PeriodicDf for Fftdf {
     }
     fn get_pp(&self, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
         get_pp(self, kpts)
+    }
+    fn local_potential_r(&self) -> Result<Option<Vec<f64>>, PbcDfError> {
+        if self.cell.pseudo.is_some() {
+            pp_local_potential_r(self).map(Some)
+        } else {
+            nuc_local_potential_r(self).map(Some)
+        }
     }
     fn get_jk(
         &self,

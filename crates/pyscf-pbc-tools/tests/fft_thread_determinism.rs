@@ -35,7 +35,7 @@ fn corpus() -> (CTensor, [usize; 3]) {
 }
 
 #[test]
-#[ignore = "spawned by fft_stockham_is_bit_identical_across_rayon_thread_counts"]
+#[ignore = "T1: spawned by fft_stockham_is_bit_identical_across_rayon_thread_counts"]
 fn fft_thread_child_emits_bits() {
     let (x, mesh) = corpus();
     let fwd = fft_stockham(&x, mesh, false).expect("fft");

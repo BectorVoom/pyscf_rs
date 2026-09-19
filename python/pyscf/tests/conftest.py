@@ -18,6 +18,29 @@ import textwrap
 import pytest
 
 
+def _refuse_overlay_backed_upstream(mod):
+    """20-19 A: refuse an `_upstream_pyscf` whose `gto`/`scf` are the OVERLAY packages.
+
+    The molecular overlay packages now fall through to upstream, so executing the
+    vendored `pyscf/__init__.py` SUCCEEDS — but its `from pyscf import gto, scf` binds
+    the overlay packages, whose `M`/`RHF`/`UHF` are the native classes. An oracle built
+    from that module compares pyscf-rs against itself (a vacuous pass). The same holds
+    for the half-upstream module `test_intor_spinor.py` caches (its `gto` is upstream,
+    its `scf` is the overlay). The genuine oracle is the `PYSCF_RS_UPSTREAM_PYTHON`
+    subprocess (ci.yml).
+    """
+    overlay_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for sub in ("gto", "scf"):
+        f = getattr(getattr(mod, sub, None), "__file__", None)
+        if f is None or os.path.abspath(f).startswith(overlay_dir + os.sep):
+            raise RuntimeError(
+                f"in-process upstream loader is not upstream: `_upstream_pyscf.{sub}` is "
+                f"{getattr(mod, sub, None)!r}, the pyscf-rs overlay (20-19 A), so an oracle "
+                "built from it would be vacuous; set PYSCF_RS_UPSTREAM_PYTHON to use the "
+                "subprocess oracle"
+            )
+
+
 def _load_upstream():
     """Load upstream PySCF (the original `pyscf/` tree under repo root)
     under the namespace `_upstream_pyscf` so it coexists with the overlay.
@@ -35,7 +58,9 @@ def _load_upstream():
 
     # Cache hit if already loaded.
     if "_upstream_pyscf" in sys.modules:
-        return sys.modules["_upstream_pyscf"]
+        mod = sys.modules["_upstream_pyscf"]
+        _refuse_overlay_backed_upstream(mod)
+        return mod
 
     spec = importlib.util.spec_from_file_location(
         "_upstream_pyscf",
@@ -44,7 +69,16 @@ def _load_upstream():
     )
     mod = importlib.util.module_from_spec(spec)
     sys.modules["_upstream_pyscf"] = mod
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        sys.modules.pop("_upstream_pyscf", None)
+        raise
+    try:
+        _refuse_overlay_backed_upstream(mod)
+    except RuntimeError:
+        sys.modules.pop("_upstream_pyscf", None)
+        raise
     return mod
 
 

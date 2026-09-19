@@ -15,7 +15,9 @@ pub enum PbcGwError {
     #[error("gw/{module}: not yet implemented (lands in Phase 19)")]
     NotYetImplemented { module: &'static str },
 
-    #[error("gw: AC and CD are different approximations — a route-blind comparison is refused (19-01 Task 3)")]
+    #[error(
+        "gw: AC and CD are different approximations — a route-blind comparison is refused (19-01 Task 3)"
+    )]
     RouteBlindComparison,
 
     #[error("gw: Padé continuation failed ({reason})")]
@@ -27,8 +29,6 @@ pub enum PbcGwError {
 
 impl From<PbcGwError> for pyscf_core::PyscfRsError {
     fn from(e: PbcGwError) -> Self {
-        pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!(
-            "{e}"
-        )))
+        pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!("{e}")))
     }
 }

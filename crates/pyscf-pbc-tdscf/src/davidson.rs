@@ -45,7 +45,9 @@ pub fn tda_with_dipoles(
     dipoles: Option<&[f64]>,
 ) -> Result<TdaResult, PbcTdscfError> {
     if !cfg.tda {
-        return Err(PbcTdscfError::NotYetImplemented { module: "full-TDHF non-symmetric eigensolver" });
+        return Err(PbcTdscfError::NotYetImplemented {
+            module: "full-TDHF non-symmetric eigensolver",
+        });
     }
     if a.len() != dim * dim {
         return Err(PbcTdscfError::ShapeMismatch {
@@ -54,10 +56,16 @@ pub fn tda_with_dipoles(
         });
     }
     if dim == 0 {
-        return Err(PbcTdscfError::ShapeMismatch { expected: 1, got: 0 });
+        return Err(PbcTdscfError::ShapeMismatch {
+            expected: 1,
+            got: 0,
+        });
     }
     if cfg.nroots > dim {
-        return Err(PbcTdscfError::TooManyRoots { nroots: cfg.nroots, dim });
+        return Err(PbcTdscfError::TooManyRoots {
+            nroots: cfg.nroots,
+            dim,
+        });
     }
     if let Some(d) = dipoles {
         if d.len() != 3 * dim {

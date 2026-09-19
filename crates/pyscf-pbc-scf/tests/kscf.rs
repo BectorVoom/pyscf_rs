@@ -450,7 +450,7 @@ fn assert_matches(got: &KScfResult, want: &serde_json::Value, tol: f64, label: &
 /// has converged; see the tolerance note on
 /// [`krhf_he_all_electron_matches_upstream`] for what the residual is made of.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF; ~4 min"]
+#[ignore = "T2: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF; ~4 min"]
 fn krhf_diamond_222_matches_upstream() {
     let cell = diamond();
     let Some(want) = upstream_energy(&cell, "gth-szv", "gth-pade", [2, 2, 2], MESH_GATE, "KRHF")
@@ -474,7 +474,7 @@ fn krhf_diamond_222_matches_upstream() {
 /// is the few-1e-12 floor of the pseudopotential gate. `get_nuc` has no such
 /// component, so He agrees to 1e-13.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krhf_he_all_electron_matches_upstream() {
     let cell = he_all_electron();
     let mesh = [15, 15, 15];
@@ -491,7 +491,7 @@ fn krhf_he_all_electron_matches_upstream() {
 /// `KUHF` on the same closed-shell cell — the unrestricted driver, its two
 /// global Fermi levels and its `vj[a] + vj[b] - vk[s]` potential.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn kuhf_he_all_electron_matches_upstream() {
     let cell = he_all_electron();
     let mesh = [15, 15, 15];
@@ -510,7 +510,7 @@ fn kuhf_he_all_electron_matches_upstream() {
 /// from `KRHF(cell, kpts).kernel()` with no mesh override. Slow (tens of
 /// minutes), so it is a separate test from the CI-sized one.
 #[test]
-#[ignore = "needs PYSCF_ORACLE_VENV; runs at the default mesh 47^3 (~30 min)"]
+#[ignore = "T3: needs PYSCF_ORACLE_VENV; runs at the default mesh 47^3 (~30 min)"]
 fn krhf_diamond_222_matches_upstream_at_the_default_mesh() {
     let cell = diamond();
     let mesh = cell.try_mesh().expect("cell mesh");

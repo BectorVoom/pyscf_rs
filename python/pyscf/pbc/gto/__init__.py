@@ -63,8 +63,19 @@ def __getattr__(name):
 
     if name in ("cell", "basis", "pseudo", "neighborlist", "ecp"):
         return importlib.import_module(f"{__name__}.{name}")
+    if name.startswith("__"):
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     for src in _UPSTREAM_SOURCES:
-        mod = importlib.import_module(src)
+        # 20-17: an upstream source that fails to import under the overlay must not
+        # turn `hasattr(gto, name)` into an ImportError (the passthrough is announced
+        # by `pyscf.pbc._unported`; the failure is recorded in docs/pbc-status.md).
+        try:
+            mod = importlib.import_module(src)
+        except ImportError as exc:
+            raise AttributeError(
+                f"module {__name__!r} has no native attribute {name!r}, and the upstream "
+                f"fallthrough {src} failed to import: {exc}"
+            ) from exc
         if hasattr(mod, name):
             return getattr(mod, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

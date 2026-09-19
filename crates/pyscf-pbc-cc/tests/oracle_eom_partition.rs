@@ -58,7 +58,7 @@ fn refused(out: &str, key: &str) {
 /// crate returns for a partition: if upstream ever starts implementing one,
 /// this fails and the refusal stops being honest.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn upstream_refuses_every_partition_the_drivers_are_given() {
     let Some(out) = emit("partition") else { return };
 
@@ -118,7 +118,7 @@ fn upstream_refuses_every_partition_the_drivers_are_given() {
 /// synthetic amplitudes `krccsd_eom` uses — so this measures the equations,
 /// not a converged answer.
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn rhf_partition_mp_matches_upstream() {
     let Some(out) = emit("partition") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -227,7 +227,7 @@ fn rhf_partition_mp_matches_upstream() {
 /// `'mp'` branch carries a sign upstream's own `None` branch does not — the
 /// gate is what settles that it was transcribed and not "corrected".
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn ghf_partition_mp_diagonals_match_upstream() {
     let Some(out) = emit("partition") else { return };
     let f = diamond_scf([1, 1, 2]);

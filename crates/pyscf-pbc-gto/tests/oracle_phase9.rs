@@ -309,7 +309,7 @@ fn flat3(v: &[[f64; 3]]) -> Vec<f64> {
 
 /// Success criterion 4 — `Cell::build` scalars: `vol`, `rcut`, `mesh`, `b`.
 #[test]
-#[ignore = "venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
+#[ignore = "T1: venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
 fn cell_scalars_match_upstream() {
     gate!(py);
     for r in EWALD_REFERENCES.iter() {
@@ -378,7 +378,7 @@ fn cell_scalars_match_upstream() {
 
 /// Success criterion 5 — `get_Gv` element-wise, and `|SI| == 1`.
 #[test]
-#[ignore = "venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
+#[ignore = "T1: venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
 fn gv_and_si_match_upstream() {
     gate!(py);
     for r in EWALD_REFERENCES.iter() {
@@ -420,7 +420,7 @@ fn gv_and_si_match_upstream() {
 
 /// Success criterion 6, first half — `get_lattice_Ls` count and values.
 #[test]
-#[ignore = "venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
+#[ignore = "T1: venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
 fn lattice_ls_match_upstream() {
     gate!(py);
     for r in EWALD_REFERENCES.iter() {
@@ -442,7 +442,7 @@ fn lattice_ls_match_upstream() {
 
 /// Success criterion 6, second half — `make_kpts` and the `get_kconserv` table.
 #[test]
-#[ignore = "venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
+#[ignore = "T1: venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
 fn kpts_and_kconserv_match_upstream() {
     gate!(py);
     for r in EWALD_REFERENCES.iter() {
@@ -480,7 +480,7 @@ fn kpts_and_kconserv_match_upstream() {
 /// ships. Graphene (`dimension = 2`) must instead defer with the typed Phase 12
 /// error while upstream returns a number.
 #[test]
-#[ignore = "venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
+#[ignore = "T1: venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
 fn ewald_matches_upstream() {
     gate!(py);
     for r in EWALD_REFERENCES.iter() {
@@ -509,7 +509,7 @@ fn ewald_matches_upstream() {
 /// `make_kpts` non-default flag combinations, so the oracle covers the whole
 /// surface plan 09-07 shipped and not just the default.
 #[test]
-#[ignore = "venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
+#[ignore = "T1: venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
 fn make_kpts_variants_match_upstream() {
     gate!(py);
     const VARIANT_PY: &str = r#"
@@ -569,7 +569,7 @@ print(json.dumps({
 /// nothing more. Asserting a two-sided bound turns a silent constant drift into
 /// a test failure if either side ever changes its constant.
 #[test]
-#[ignore = "venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
+#[ignore = "T1: venv-gated upstream oracle; set PYSCF_ORACLE_VENV and pass --ignored"]
 fn angstrom_lattices_match_upstream_within_the_codata_gap() {
     gate!(py);
     /// `1.8897261339213 / (1 / 0.52917721092) - 1`

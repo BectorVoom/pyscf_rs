@@ -279,3 +279,20 @@
   - Vasp CHGCAR-format writer
   - TrexIO interface
   - Qcscheme interface
+
+
+* pyscf-rs: native periodic (PBC) Python bindings (Phase 20, 2026-09-14)
+
+  - pyscf.pbc.gto / df / scf / dft / symm / mp / cc / ci / ao2mo re-export the
+    native Rust objects (pyscf._native.pbc.*): Cell, M, FFTDF, AFTDF, GDF, MDF,
+    RSDF, KRHF, KUHF, KROHF, KGHF, KRKS, KUKS, KROKS, KGKS (+ ksymm and DFT+U
+    variants), KPoints, KMP2, KRCCSD/KUCCSD/KGCCSD, EOM-IP/EA, KCIS
+  - Python subclass overrides of the 11 k-point SCF hooks (get_hcore, get_veff,
+    get_fock, eig, get_occ, ...), bitwise-identical to Rust when not overridden
+  - Smearing, chkfile, get_bands, GDF/MDF get_jk(omega), pbc.tools FFT helpers,
+    pbc.lib.kpts_helper
+  - Unported families (grad, geomopt, tdscf, gw, adc, x2c, eph, tddft, mpi)
+    announce the upstream fallthrough once; pyscf.pbc._unported.which_impl()
+  - Not supported: periodic meta-GGA, .newton(), gamma-point post-HF shapes,
+    running the upstream pyscf/pbc test suite on top of the overlay (11/815)
+  - Status and measured gates: .planning/phases/20-pbc-python-bindings/20-VERIFICATION.md

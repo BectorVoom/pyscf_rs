@@ -72,7 +72,7 @@ fn eom_opts(nroots: usize) -> EomOpts {
 
 /// **The spin-orbital `T3[2]` and the `(T)a` roots.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T2: opt-in PySCF oracle"]
 fn ghf_t3p2_and_ta_roots_match_upstream() {
     let Some(out) = emit("t3p2_ghf") else { return };
     let f = diamond_scf([1, 1, 2]);
@@ -215,7 +215,7 @@ fn ghf_t3p2_and_ta_roots_match_upstream() {
 
 /// **The spin-adapted `T3[2]` and the `(T)a` roots.**
 #[test]
-#[ignore = "opt-in PySCF oracle"]
+#[ignore = "T1: opt-in PySCF oracle"]
 fn rhf_t3p2_and_ta_roots_match_upstream() {
     let Some(out) = emit("t3p2_rhf") else { return };
     let f = diamond_scf([1, 1, 2]);

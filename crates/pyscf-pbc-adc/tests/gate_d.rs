@@ -21,7 +21,9 @@ use pyscf_pbc_adc::types::AdcConfig;
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name);
     serde_json::from_str(&std::fs::read_to_string(&path).expect("fixture must exist")).unwrap()
 }
 
@@ -43,7 +45,10 @@ fn flat(v: &Value) -> Vec<f64> {
 }
 
 fn max_diff(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f64::max)
 }
 
 /// Chunk builders vs direct three-index contractions.
@@ -75,13 +80,18 @@ fn df_chunks_match_direct_contraction() {
                 for b in 0..nv {
                     let mut acc = (0.0f64, 0.0f64);
                     for x in 0..naux {
-                        let (tr, ti) = (lov.re[(x * no + i) * nv + c], lov.im[(x * no + i) * nv + c]);
-                        let (vr, vi) = (lvv.re[(x * nv + a) * nv + b], lvv.im[(x * nv + a) * nv + b]);
+                        let (tr, ti) =
+                            (lov.re[(x * no + i) * nv + c], lov.im[(x * no + i) * nv + c]);
+                        let (vr, vi) =
+                            (lvv.re[(x * nv + a) * nv + b], lvv.im[(x * nv + a) * nv + b]);
                         acc.0 += tr * vr - ti * vi;
                         acc.1 += tr * vi + ti * vr;
                     }
                     let o = ((i * nv + c) * nv + a) * nv + b;
-                    assert!((ch.re[o] - acc.0).abs() < 1e-12, "ovvv chunk re [{i},{c},{a},{b}]");
+                    assert!(
+                        (ch.re[o] - acc.0).abs() < 1e-12,
+                        "ovvv chunk re [{i},{c},{a},{b}]"
+                    );
                     assert!((ch.im[o] - acc.1).abs() < 1e-12, "ovvv chunk im");
                 }
             }
@@ -107,8 +117,10 @@ fn df_chunks_match_direct_contraction() {
                 for d in 0..nv {
                     let mut acc = (0.0f64, 0.0f64);
                     for x in 0..naux {
-                        let (tr, ti) = (lvv.re[(x * nv + a) * nv + b], lvv.im[(x * nv + a) * nv + b]);
-                        let (vr, vi) = (lvv.re[(x * nv + c) * nv + d], lvv.im[(x * nv + c) * nv + d]);
+                        let (tr, ti) =
+                            (lvv.re[(x * nv + a) * nv + b], lvv.im[(x * nv + a) * nv + b]);
+                        let (vr, vi) =
+                            (lvv.re[(x * nv + c) * nv + d], lvv.im[(x * nv + c) * nv + d]);
                         acc.0 += tr * vr - ti * vi;
                         acc.1 += tr * vi + ti * vr;
                     }
@@ -150,7 +162,10 @@ fn load_df() -> (DfFix, Value) {
     let _ = v["block_shape"].as_array().unwrap();
     let mut lpq = Vec::new();
     for b in v["Lpq_mo"].as_array().unwrap() {
-        lpq.push(CTensor { re: flat(&b["re"]), im: flat(&b["im"]) });
+        lpq.push(CTensor {
+            re: flat(&b["re"]),
+            im: flat(&b["im"]),
+        });
     }
     // Slice Lov (naux,nocc,nvir) / Lvv (naux,nvir,nvir) per pair.
     let mut lov = Vec::new();
@@ -178,7 +193,21 @@ fn load_df() -> (DfFix, Value) {
     let kc: Vec<usize> = flat(&v["kconserv"]).iter().map(|x| *x as usize).collect();
     let e_occ = vec![flat(&v["e_occ"][0]), flat(&v["e_occ"][1])];
     let e_vir = vec![flat(&v["e_vir"][0]), flat(&v["e_vir"][1])];
-    (DfFix { nk, no, nv, naux, lpq, lov, lvv, kc, e_occ, e_vir }, v)
+    (
+        DfFix {
+            nk,
+            no,
+            nv,
+            naux,
+            lpq,
+            lov,
+            lvv,
+            kc,
+            e_occ,
+            e_vir,
+        },
+        v,
+    )
 }
 
 /// DF IP vs upstream DF IP (same kernel_ip — DF is an ERI source).
@@ -191,8 +220,16 @@ fn gate_d_df_ip() {
     assert!(eris.ovvv.re.iter().all(|x| x.is_nan()));
     let amps = t2_first_order(&eris, &f.e_occ, &f.e_vir, &f.kc).expect("t2 must build");
     let m = build_m_ij(&amps, &eris, &f.e_occ, &f.kc).expect("M_ij must build");
-    let roots = kernel_ip(&m, &eris, &f.e_occ, &f.e_vir, &f.kc, 0, &AdcConfig::default())
-        .expect("DF IP must solve");
+    let roots = kernel_ip(
+        &m,
+        &eris,
+        &f.e_occ,
+        &f.e_vir,
+        &f.kc,
+        0,
+        &AdcConfig::default(),
+    )
+    .expect("DF IP must solve");
     let eref = flat(&v["ip_roots_df"]);
     let d = max_diff(&roots.energies, &eref[..3]);
     assert!(d < 5e-5, "Gate D DF-IP deviates {d:e}");
@@ -208,7 +245,15 @@ fn gate_d_df_ea() {
     let amps = t2_first_order(&eris, &f.e_occ, &f.e_vir, &f.kc).expect("t2 must build");
     let m = build_m_ab(&amps, &eris, &f.e_vir, &f.kc).expect("M_ab must build");
     let roots = kernel_ea_df(
-        &m, &eris, &f.lov, &f.lvv, f.naux, &f.e_occ, &f.e_vir, &f.kc, 0,
+        &m,
+        &eris,
+        &f.lov,
+        &f.lvv,
+        f.naux,
+        &f.e_occ,
+        &f.e_vir,
+        &f.kc,
+        0,
         &AdcConfig::default(),
     )
     .expect("DF EA must solve");
@@ -228,11 +273,17 @@ fn gate_d_rollup_per_route() {
     let vd = fixture("kadc_he2_df.json");
     let (ip_df, ea_df) = (flat(&vd["ip_roots_df"]), flat(&vd["ea_roots_df"]));
     // IP is route-insensitive here (no ovvv at ADC(2)): stated, not gated.
-    eprintln!("IP incore-vs-DF gap: {:e}", max_diff(&ip_inc[..3], &ip_df[..3]));
+    eprintln!(
+        "IP incore-vs-DF gap: {:e}",
+        max_diff(&ip_inc[..3], &ip_df[..3])
+    );
     // EA routes DIFFER (ovvv treatment): gating one against the other cannot
     // pass — the guard that makes cross-gating mechanically impossible here.
     let ea_gap = max_diff(&ea_inc[..3], &ea_df[..3]);
-    assert!(ea_gap > 1e-6, "EA routes unexpectedly identical ({ea_gap:e})");
+    assert!(
+        ea_gap > 1e-6,
+        "EA routes unexpectedly identical ({ea_gap:e})"
+    );
     eprintln!("EA incore-vs-DF gap (different approximations): {ea_gap:e}");
     // Each route's gate lives in its own test (ip.rs, ea.rs, above); the
     // rollup cites them: Gate D = {IP-incore 4dp, EA-incore 4dp, IP-DF 4dp,
@@ -249,12 +300,29 @@ fn gate_d_deterministic_across_thread_counts() {
             .expect("DF blocks must build");
         let amps = t2_first_order(&eris, &f.e_occ, &f.e_vir, &f.kc).expect("t2 must build");
         let m = build_m_ab(&amps, &eris, &f.e_vir, &f.kc).expect("M_ab must build");
-        kernel_ea_df(&m, &eris, &f.lov, &f.lvv, f.naux, &f.e_occ, &f.e_vir, &f.kc, 0, &AdcConfig::default())
-            .expect("DF EA must solve")
-            .energies
+        kernel_ea_df(
+            &m,
+            &eris,
+            &f.lov,
+            &f.lvv,
+            f.naux,
+            &f.e_occ,
+            &f.e_vir,
+            &f.kc,
+            0,
+            &AdcConfig::default(),
+        )
+        .expect("DF EA must solve")
+        .energies
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.len(), b.len());
     for (x, y) in a.iter().zip(b.iter()) {

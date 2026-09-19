@@ -110,7 +110,7 @@ fn he_fcc_rsdf_dd_block_seam_is_live() {
 /// energy numbers are the oracle test in `pyscf-pbc-scf`; this just proves
 /// the seam is live and does not panic or silently no-op.
 #[test]
-#[ignore = "slow — diamond's real-space aux_e2 is minutes in a debug build \
+#[ignore = "T3: slow — diamond's real-space aux_e2 is minutes in a debug build \
             (see tests/gdf_builder.rs's cderi_fingerprint_matches_upstream_diamond), \
             and this test runs it twice (dd=true adds a THIRD, smaller pass)"]
 fn diamond_gdf_both_routes_produce_a_cderi() {

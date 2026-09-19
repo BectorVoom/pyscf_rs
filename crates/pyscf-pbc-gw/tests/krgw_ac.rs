@@ -47,7 +47,10 @@ fn flat(v: &Value) -> Vec<f64> {
 }
 
 fn max_diff(a: &[f64], b: &[f64]) -> f64 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max)
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0, f64::max)
 }
 
 /// Grid pinned: my scaled-Legendre nodes/weights vs the recorded grid.
@@ -59,7 +62,11 @@ fn imag_grid_matches_upstream() {
     let (om, _w) = imag_grid(nw, 0.5).expect("grid must build");
     let recorded = flat(&v["freqs"]);
     assert_eq!(om.len(), recorded.len());
-    assert!(max_diff(&om, &recorded) < 1e-12, "grid deviates {:e}", max_diff(&om, &recorded));
+    assert!(
+        max_diff(&om, &recorded) < 1e-12,
+        "grid deviates {:e}",
+        max_diff(&om, &recorded)
+    );
 }
 
 /// Thiele + Padé recurrences on a fixture row (literal port check).
@@ -70,10 +77,17 @@ fn pade_recurrences_match_upstream_shape() {
     let (sre, sim) = (flat(&v["sigmaI"]["re"]), flat(&v["sigmaI"]["im"]));
     let nrow = sre.len() / 21; // 3 kpts × 7 orbs = 21 rows
     assert_eq!(sre.len(), 21 * nrow);
-    let row: Vec<Complex64> = sre[..nrow].iter().zip(sim[..nrow].iter()).map(|(r, i)| Complex64::new(*r, *i)).collect();
+    let row: Vec<Complex64> = sre[..nrow]
+        .iter()
+        .zip(sim[..nrow].iter())
+        .map(|(r, i)| Complex64::new(*r, *i))
+        .collect();
     let (wre, wim) = (flat(&v["omega"]["re"]), flat(&v["omega"]["im"]));
-    let wrow: Vec<Complex64> =
-        wre[..nrow].iter().zip(wim[..nrow].iter()).map(|(r, i)| Complex64::new(*r, *i)).collect();
+    let wrow: Vec<Complex64> = wre[..nrow]
+        .iter()
+        .zip(wim[..nrow].iter())
+        .map(|(r, i)| Complex64::new(*r, *i))
+        .collect();
     assert_eq!(wrow.len(), nrow);
     // Coefficients build without refusal on live data.
     let (coeff, zn) = ac_pade_fit_row(&row, &wrow).expect("Padé fit must run");
@@ -121,9 +135,21 @@ fn gate_c_ac_qp_energies() {
                 .collect(),
         );
     }
-    let mf_energy = vec![flat(&v["mf_energy"][0]), flat(&v["mf_energy"][1]), flat(&v["mf_energy"][2])];
-    let vk_diag = vec![flat(&v["vk_diag"][0]), flat(&v["vk_diag"][1]), flat(&v["vk_diag"][2])];
-    let vmf_diag = vec![flat(&v["vmf_diag"][0]), flat(&v["vmf_diag"][1]), flat(&v["vmf_diag"][2])];
+    let mf_energy = vec![
+        flat(&v["mf_energy"][0]),
+        flat(&v["mf_energy"][1]),
+        flat(&v["mf_energy"][2]),
+    ];
+    let vk_diag = vec![
+        flat(&v["vk_diag"][0]),
+        flat(&v["vk_diag"][1]),
+        flat(&v["vk_diag"][2]),
+    ];
+    let vmf_diag = vec![
+        flat(&v["vmf_diag"][0]),
+        flat(&v["vmf_diag"][1]),
+        flat(&v["vmf_diag"][2]),
+    ];
     // Fermi level: (max occ + min vir)/2 over the gated k-points (nocc=4).
     let mut homo = f64::NEG_INFINITY;
     let mut lumo = f64::INFINITY;
@@ -132,10 +158,24 @@ fn gate_c_ac_qp_energies() {
         lumo = lumo.min(mf_energy[k][4]);
     }
     let ef = (homo + lumo) / 2.0;
-    let cfg = GwConfig { nomega: 100, max_cycle: 100, conv_tol: 1e-6, orlo: 0, orhi: 7 };
+    let cfg = GwConfig {
+        nomega: 100,
+        max_cycle: 100,
+        conv_tol: 1e-6,
+        orlo: 0,
+        orhi: 7,
+    };
     let out = kernel_krgw_ac(
-        &sigma_imag, &omegas, &mf_energy, &vk_diag, &vmf_diag, ef, 0..7, &cfg,
-        AcMode::Pade, false,
+        &sigma_imag,
+        &omegas,
+        &mf_energy,
+        &vk_diag,
+        &vmf_diag,
+        ef,
+        0..7,
+        &cfg,
+        AcMode::Pade,
+        false,
     )
     .expect("G0W0-AC must solve");
     assert_eq!(out.route, GwRoute::AnalyticContinuation);
@@ -146,7 +186,10 @@ fn gate_c_ac_qp_energies() {
     for (k, o) in [(0usize, 3usize), (0, 4), (1, 3), (1, 4)] {
         let mine = out.qp_energy[k * norbs + o];
         let want = qp_ref[k * 8 + o];
-        assert!((mine - want).abs() < 5e-5, "AC QP k={k} orb={o}: {mine} vs {want}");
+        assert!(
+            (mine - want).abs() < 5e-5,
+            "AC QP k={k} orb={o}: {mine} vs {want}"
+        );
     }
 }
 
@@ -161,7 +204,10 @@ fn qp_solvers_agree_on_model() {
     // Linearized G0W0 is first-order in dσ/de — it differs from the Newton
     // root by the linearization error (here 3.9e-4 on a strong-σ model), not
     // by solver error. Both must be finite and close.
-    assert!((e_lin - e_newt).abs() < 1e-3, "linearized {e_lin} vs newton {e_newt}");
+    assert!(
+        (e_lin - e_newt).abs() < 1e-3,
+        "linearized {e_lin} vs newton {e_newt}"
+    );
     assert!(e_newt.is_finite());
 }
 
@@ -181,8 +227,14 @@ fn gw_ac_deterministic_across_thread_counts() {
         // Deterministic reduction over the grid (ordered).
         pyscf_algebra::oracle_sum(&om)
     };
-    let pool1 = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
-    let pool8 = rayon::ThreadPoolBuilder::new().num_threads(8).build().unwrap();
+    let pool1 = rayon::ThreadPoolBuilder::new()
+        .num_threads(1)
+        .build()
+        .unwrap();
+    let pool8 = rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build()
+        .unwrap();
     let (a, b) = (pool1.install(run), pool8.install(run));
     assert_eq!(a.to_bits(), b.to_bits());
 }

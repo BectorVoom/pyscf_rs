@@ -169,7 +169,7 @@ fn screened_matches_unscreened_on_both_cells() {
 /// The child entry point. `#[ignore]`d so a normal run never executes it; the
 /// parent invokes it explicitly with `--ignored --exact`.
 #[test]
-#[ignore = "child process of screened_matches_unscreened_on_both_cells"]
+#[ignore = "T1: child process of screened_matches_unscreened_on_both_cells"]
 fn print_reference_unscreened() {
     let which = std::env::var("PYSCF_AO_SCREEN_TEST_CELL").unwrap_or_else(|_| "si".into());
     let cell = if which == "si" {

@@ -253,19 +253,130 @@ impl Krks {
         dms: &KDms,
     ) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
-        let mut fock = pyscf_pbc_df::get_hcore(self.with_df.as_ref(), kpts_band).map_err(df_err)?;
-        let (veff, _) = self
-            .get_veff_tagged(dms, Some(kpts_band))
-            .map_err(unwrap_err)?;
-        for (k, f) in fock.iter_mut().enumerate() {
-            for i in 0..f.len() {
-                f.re[i] += veff[0][k].re[i];
-                f.im[i] += veff[0][k].im[i];
+        let fused = fused_band_fock(
+            self.with_df.as_ref(),
+            &self.xc,
+            &self.grids,
+            &self.ni,
+            &[&dms[0]],
+            kpts_band,
+        )
+        .map_err(unwrap_err)?;
+        let fock = match fused {
+            Some(mut f) => f.swap_remove(0),
+            None => {
+                let mut fock =
+                    pyscf_pbc_df::get_hcore(self.with_df.as_ref(), kpts_band).map_err(df_err)?;
+                let (veff, _) = self
+                    .get_veff_tagged(dms, Some(kpts_band))
+                    .map_err(unwrap_err)?;
+                for (k, f) in fock.iter_mut().enumerate() {
+                    for i in 0..f.len() {
+                        f.re[i] += veff[0][k].re[i];
+                        f.im[i] += veff[0][k].im[i];
+                    }
+                }
+                fock
             }
-        }
-        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp(self.cell(), kpts_band)?, nao);
+        };
+        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp_scf(self.cell(), kpts_band)?, nao);
         eig_channel(&fock, &s1e, nao)
     }
+}
+
+/// BAND-02/03 — the Fock matrices `hcore + veff` at `kpts_band`, one per spin
+/// channel, for a pure (non-hybrid) functional over FFTDF and the grid numint,
+/// with ONE band AO evaluation serving every local term.
+///
+/// The generic route evaluates the band AO table twice — with derivatives in
+/// `nr_rks`/`nr_uks` for Vxc, and without in `get_pp`/`get_nuc` and
+/// `get_j_kpts` — and contracts each. Every one of those terms but the
+/// gradient part of Vxc is `Σ_g ao^† v(g) ao` for a potential on the SAME
+/// uniform grid: the local pseudopotential (or nuclear) potential
+/// (`PeriodicDf::local_potential_r`) and J's `vR` (built from the numint's own
+/// SCF density, `coulomb_potential_from_rho`). They are folded into the LDA
+/// slot of each spin's XC weights — `wv0/2 + v/2`, contracted and `+ h.c.`, is
+/// exactly `ao^† v ao` — so one `band_vmats` pass returns `V_loc + J + Vxc`,
+/// and `T + V_nl` comes from the (image-cached) lattice sums. The result
+/// differs from the generic route only in summation order; band energies are
+/// gated against upstream at 1e-9, not bitwise.
+///
+/// `dms` holds one channel (restricted) or two (alpha, beta). Returns `None`
+/// — the caller takes the generic route — for a hybrid or range-separated
+/// functional, a non-FFTDF `with_df`, a multigrid or k-symmetric numint, an XC
+/// grid other than the FFT mesh, or `PYSCF_PBC_BAND_FUSED=0`.
+///
+/// # Errors
+/// Propagates the numint, the potentials and the AO/lattice-sum evaluations.
+pub(crate) fn fused_band_fock(
+    with_df: &dyn PeriodicDf,
+    xc: &str,
+    grids: &PeriodicGrids,
+    ni: &KsNumInt,
+    dms: &[&KMats],
+    kpts_band: &[[f64; 3]],
+) -> Result<Option<Vec<KMats>>, PbcDftError> {
+    if std::env::var("PYSCF_PBC_BAND_FUSED").is_ok_and(|v| v == "0") {
+        return Ok(None);
+    }
+    let KsNumInt::Grid(knum) = ni else {
+        return Ok(None);
+    };
+    let PeriodicGrids::Uniform(g) = grids else {
+        return Ok(None);
+    };
+    // Any range separation (ω ≠ 0, even without exact exchange) would need
+    // the ranged coulG for J, which `coulomb_potential_from_rho` does not take.
+    let (omega, _, _) = crate::xc::rsh_and_hybrid_coeff(xc)?;
+    if hybrid(xc)? || omega != 0.0 || with_df.name() != "FFTDF" || knum.ksymm().is_some() {
+        return Ok(None);
+    }
+    if g.mesh != with_df.mesh() || g.weights.is_empty() {
+        return Ok(None);
+    }
+    // The J and local potentials live on the FFT box's canonical grid; fold
+    // them only into weights sampled on exactly that grid.
+    let canonical = pyscf_pbc_gto::UniformGrids::build(with_df.cell(), Some(g.mesh))
+        .map_err(|e| crate::xc::err(format!("band grid check: {e}")))?;
+    let same = |a: &[f64], b: &[f64]| a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+    if canonical.coords.len() != g.coords.len()
+        || !canonical
+            .coords
+            .iter()
+            .zip(&g.coords)
+            .all(|(a, b)| same(a, b))
+        || !same(&canonical.weights, &g.weights)
+    {
+        return Ok(None);
+    }
+    let df_err = |what: &str, e: pyscf_pbc_df::PbcDfError| crate::xc::err(format!("{what}: {e}"));
+    let Some(vloc) = with_df
+        .local_potential_r()
+        .map_err(|e| df_err("band local potential", e))?
+    else {
+        return Ok(None);
+    };
+    let cell = with_df.cell();
+    let (mut wvs, rho) = knum.band_xc_weights(cell, grids, xc, dms)?;
+    let vj = pyscf_pbc_df::fft_jk::coulomb_potential_from_rho(cell, g.mesh, &rho, g.weights[0])
+        .map_err(|e| df_err("band Coulomb potential", e))?;
+    for wv in wvs.iter_mut() {
+        for ((w, j), l) in wv[0].iter_mut().zip(&vj).zip(&vloc) {
+            *w += 0.5 * (j + l);
+        }
+    }
+    let mut fock = knum.band_vmats(cell, grids, kpts_band, xc, &wvs)?;
+    let hnl = pyscf_pbc_df::fftdf::get_hcore_nonlocal(cell, kpts_band)
+        .map_err(|e| df_err("band T + V_nl", e))?;
+    for set in fock.iter_mut() {
+        for (f, h) in set.iter_mut().zip(&hnl) {
+            for i in 0..f.len() {
+                f.re[i] += h.re[i];
+                f.im[i] += h.im[i];
+            }
+        }
+    }
+    Ok(Some(fock))
 }
 
 /// Flatten a [`PbcDftError`] back into the core error type the hook surface
@@ -291,7 +402,7 @@ impl KOverrideHooks for Krks {
     fn get_ovlp(&self) -> Result<KMats, PyscfRsError> {
         let nao = self.cell().mol.nao_nr;
         Ok(to_row_major(
-            pyscf_pbc_gto::get_ovlp(self.cell(), self.kpts())?,
+            pyscf_pbc_gto::get_ovlp_scf(self.cell(), self.kpts())?,
             nao,
         ))
     }

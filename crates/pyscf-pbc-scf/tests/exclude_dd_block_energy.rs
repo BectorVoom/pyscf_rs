@@ -61,7 +61,7 @@ fn dd_block_energies(cell: pyscf_pbc_gto::Cell, kmesh: [usize; 3]) -> (f64, f64,
 /// this plan: `2.9002556800605817e-08` (`scratchpad/ddblock_energy.py`,
 /// same `_CCGDFBuilder`/`make_j3c(aosym='s2')`/`KRHF` recipe this test uses).
 #[test]
-#[ignore = "slow — run with --release; see this file's module docs"]
+#[ignore = "T3: slow — run with --release; see this file's module docs"]
 fn diamond_gamma_matches_upstream() {
     let (e_true, e_false, conv_true, conv_false) = dd_block_energies(diamond(), [1, 1, 1]);
     assert!(conv_true && conv_false, "both SCFs must converge");
@@ -75,7 +75,7 @@ fn diamond_gamma_matches_upstream() {
 
 /// **Oracle target (D-PBC-23 / `measurements/ddblock.py`): 1.835e-08 Ha.**
 #[test]
-#[ignore = "slow — run with --release; see this file's module docs"]
+#[ignore = "T3: slow — run with --release; see this file's module docs"]
 fn diamond_2x2x2_matches_upstream() {
     let (e_true, e_false, conv_true, conv_false) = dd_block_energies(diamond(), [2, 2, 2]);
     assert!(conv_true && conv_false, "both SCFs must converge");

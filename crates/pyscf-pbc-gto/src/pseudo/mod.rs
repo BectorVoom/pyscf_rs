@@ -41,7 +41,9 @@ pub use vnl::{
     FakeCellVnl, HlBlock, MAX_NPROJ, PLI_FAC, VNL_INTORS, fake_cell_vnl, get_pp_nl, int_vnl,
 };
 
-pub use vnl_grad::{VNL_IP2_INTORS, contract_ppnl_nuc_grad, int_vnl_ip2, vppnl_nuc_grad};
+pub use vnl_grad::{
+    VNL_IP2_INTORS, contract_ppnl_nuc_grad, int_vnl_ip2, vppnl_nuc_grad, vppnl_nuc_grad_kdm,
+};
 
 /// Parsed GTH pseudopotential data for one cell, keyed by ELEMENT SYMBOL
 /// (upper-cased alphabetic prefix, matching `Mole::_basis`' convention).
