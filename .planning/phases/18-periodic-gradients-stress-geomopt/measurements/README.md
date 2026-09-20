@@ -1,3 +1,44 @@
+# Phase 18 gates A–E, restated from measured floors (18-21)
+
+Written 2026-09-20 by plan 18-21 from the three measurement plans' files —
+every number below is COPIED from `18-01` (`README.md` gradient section),
+`18-16` (`gate-a-tiers.md`, `gate-e-gamma.md`, `parseval.md`) or `18-17`
+(`sizings.md`), never invented or predicted. Gate A keeps its three tiers
+(D-PBC-31 clause 1); the stress gate is in Ha/Bohr³ with `vol` in the
+expression. The same text reads identically in `18-CONTEXT.md §2.3`,
+`ROADMAP.md:464` and `PBC-MASTER-PLAN.md §7`/`§8.10`.
+
+| gate | measured floor (upstream, vendored 2.12.1) | chosen tolerance | margin |
+|---|---|---|---|
+| **A1** 13 component tests (`test_rks_stress.py` `:43–315`, 22 assertions) | **9.90842297099448e-10** (stable-reference max; raw upstream mode reproduces the 1.0564055741291156e-9 `test_get_vxc_lda` failure at `:277` — retained as history in `gate-a-tiers.md`) | **1e-9** | **1.01× — razor-thin and stated as such** |
+| **A2** `test_get_j` `:340`, `test_get_nuc` `:363` | **5.007928238764947e-10** | **2e-9** | 4× |
+| **A3** `test_get_pp` `:388` | **3.4214315824954156e-9** | **1e-8** | 2.9× |
+| **B** KRHF/PBE central-difference minima | **5.278303349953717e-10** (KRHF @ full `h = 1e-5`); **4.3241903113777624e-10** (PBE @ full `h = 1e-4`) | **1e-6 Ha/Bohr** (`FD_TOL`; **5e-6** for `krkspu`/`kukspu`) | ~2000× |
+| **C** `lib.fp(g)` residuals vs committed constants | **1.7184753731136482e-8** (KRHF/KUHF); **1.4789633961953541e-9** (LDA); **1.4540251502825896e-9** (GGA); **1.5506402828435739e-9** (hybrid); **8.3159923391917800e-9** (DFT+U) | upstream's own decimal count (6; 5 for DFT+U) | 29× / 340× / 340× / 320× / 600× |
+| **D** stress vs FD of `E(ε)` | no separate upstream floor was measured; the tolerance inherits upstream's own assertion `\|dat[i,j] − (E₊−E₋)/2h/vol\| < 1e-6` (`test_rks_stress.py:406`, `:424`, `:442`) | **1e-6 Ha/Bohr³** (`h = 1e-3`, `/vol` in the assertion) | exactly upstream's |
+| **E** gamma (multigrid-v2) `max\|analytic − FD\|` | **9.103e-11** (he_fcc); **7.520e-10** (diamond); **3.842e-10** (si); **6.241e-09** (lif); graphene excluded (upstream 2D Ewald gap, `ewald_methods.py:290`) | **1e-8 Ha/Bohr** (never Gate B's number) | 1.6× (lif) … 110× (he_fcc) |
+
+Supporting rulings both 18-16/18-17 measured and 18-05/18-04/18-11 cite:
+
+* Parseval (`parseval.md`): `|real-space − G-space|` relative **4.667e-14**
+  (si) … **1.539e-12** (graphene), absolute ≤ **3.135e-12** — the ~1e-13
+  scale 18-05's fused `hcore` contraction gates against. Explicitly NOT
+  bit-identity.
+* `blksize` buffer multiplicity **2** (slope 2.2 rho-units; 18-04 keeps the
+  multiplicity, drops only the doubled `mem_now`).
+* `_contract_vhf_dm` screening: difference **0.0** on every reference cell —
+  keep upstream default `True`; both branches stay.
+* Clause-5 fusion: strain-call arithmetic share **96 %** — **DO NOT FUSE**
+  on traffic grounds; 18-11 ships the separate kernel.
+
+Reproduction commands and the per-step tables that produced every floor
+above live in the files named: `gradient_floors.py` + `anchors.out` +
+`gradient-sweep.out` (Gate B/C), `strain_floors.py` + `strain-stable.out` /
+`strain-original.out` (Gate A), `parseval.py` + `parseval.out` (Parseval),
+`gamma_floors.py` + `gate-e-<cell>.out` (Gate E).
+
+---
+
 # Phase 18 measurements: gradient floors (18-01)
 
 Measured 2026-09-12 with vendored PySCF 2.12.1, one OpenMP and BLAS thread.

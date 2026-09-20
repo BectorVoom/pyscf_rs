@@ -361,7 +361,7 @@ pub fn svml_pow8(x: f64, y: f64) -> f64 {
 
     // Bound check from the assembly: the rare path also needs
     // `|y*log2(x)| >= 1021.5`, impossible for the `_env` inputs.
-    let masked = (y_high.to_bits() & 0x7FF8_0000_0000_0000) as f64;
+    let masked = f64::from_bits(y_high.to_bits() & 0x7FF8_0000_0000_0000);
     debug_assert!(
         !(masked >= 1021.5),
         "svml_pow8: |y*log2(x)| too large for the fast path"

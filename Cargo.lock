@@ -5817,6 +5817,7 @@ dependencies = [
  "pyscf-algebra",
  "pyscf-core",
  "pyscf-geomopt",
+ "pyscf-gto",
  "pyscf-pbc-df",
  "pyscf-pbc-grad",
  "pyscf-pbc-gto",

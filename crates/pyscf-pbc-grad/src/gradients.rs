@@ -118,8 +118,9 @@ pub trait Gradients {
     /// refusal is mirrored exactly — it is upstream's behaviour (18-CONTEXT
     /// §1.7), not a port gap: the geomeTRIC path is reachable only through
     /// `pbc.geomopt.optimize`, which 18-14 ports. The `'ase'` branch itself
-    /// belongs to Phase 20's `tools/pyscf_ase` and is a named refusal until
-    /// then.
+    /// belongs to Phase 20's `tools/pyscf_ase` and is a `NotYetImplemented
+    /// { phase: 20 }` seam here — a *different* error from the `RuntimeError`
+    /// an unrecognised solver gets (18-14 Task 3).
     fn optimizer(&self, solver: &str) -> Result<(), PyscfRsError> {
         if solver != "ase" {
             return Err(PbcGradError::UnsupportedOptimizer {
@@ -128,7 +129,7 @@ pub trait Gradients {
             .into());
         }
         Err(PbcGradError::NotYetImplemented {
-            phase: 18,
+            phase: 20,
             what: "ASE optimizer",
         }
         .into())

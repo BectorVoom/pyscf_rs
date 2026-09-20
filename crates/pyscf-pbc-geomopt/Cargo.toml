@@ -20,3 +20,10 @@ pyscf-pbc-scf    = { path = "../pyscf-pbc-scf" }
 pyscf-pbc-grad   = { path = "../pyscf-pbc-grad" }
 thiserror        = { workspace = true }
 tracing          = { workspace = true }
+
+[dev-dependencies]
+pyscf-pbc-gto = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
+pyscf-gto = { path = "../pyscf-gto" }
+pyscf-core = { path = "../pyscf-core" }
+pyscf-pbc-df = { path = "../pyscf-pbc-df" }
+pyscf-pbc-scf = { path = "../pyscf-pbc-scf" }

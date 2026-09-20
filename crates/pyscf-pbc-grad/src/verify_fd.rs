@@ -48,10 +48,13 @@ fn invalid(message: &str) -> PyscfRsError {
 /// Swap atom coordinates into a clone of `cell`, preserving lattice, mesh,
 /// pseudopotential and every periodic build setting.
 ///
-/// `pub(crate)` so the 18-19 scanner's geometry overload (`set_geom_`) shares
-/// the single pin-the-mesh implementation (18-CONTEXT trap 5) instead of
-/// forking it.
-pub(crate) fn with_coords(cell: &Cell, coords: &[[f64; 3]]) -> Result<Cell, PyscfRsError> {
+/// Shared by the finite-difference harness, the 18-19 scanner's geometry
+/// overload (`set_geom_`) and 18-14's optimizer step — one pin-the-mesh
+/// implementation (18-CONTEXT trap 5) instead of three forks. The lattice
+/// is never touched: upstream's optimizer moves atoms and nothing else
+/// (`geometric_solver.py:80-81`), and variable-cell relaxation is a
+/// post-v2.0 feature, not a port (`18-CONTEXT §1.7`).
+pub fn with_coords(cell: &Cell, coords: &[[f64; 3]]) -> Result<Cell, PyscfRsError> {
     if coords.len() != cell.natm {
         return Err(PbcGradError::ShapeMismatch {
             expected: cell.natm,

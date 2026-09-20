@@ -342,9 +342,13 @@ tier and must not be collapsed into the same number:
 `test_rks_stress.py:388` asserts `abs(dat[i,j] - de/2e-5) < 1e-8` for the
 individual `ovlp` / `kin` / `weight` / `coulG` / AO strain derivatives.
 
-### 2.3 The replacement: five gates, and 18-01 measures every floor before any of them is written
+### 2.3 The replacement: five gates, restated 2026-09-20 by 18-21 with the measured floors
 
 Following 17-01's ruling exactly — *measure the floor, then write the gate*.
+Every floor below is copied from `measurements/` (18-01/18-16/18-17); the
+tolerances are unchanged from the pre-measurement draft, now with the margin
+stated. The same text reads identically in `measurements/README.md`,
+`ROADMAP.md:464` and `PBC-MASTER-PLAN.md §7`/`§8.10`.
 
 * **Gate A — component strain derivatives, port vs its own finite difference.**
   `ovlp`, `kin`, `weight`, `coulG`, `vpplocG`, and the strain AO at
@@ -365,38 +369,51 @@ Following 17-01's ruling exactly — *measure the floor, then write the gate*.
   | **A2** | **2e-9** | 2 (`test_get_j`, `test_get_nuc`) | `:340` get_j · `:363` get_nuc (2 total) | the assembled Coulomb terms |
   | **A3** | **1e-8** | 1 (`test_get_pp`) | `:388` get_pp (1 total) | the pseudopotential term alone |
 
-  An earlier draft of this section stated Gate A as a flat **1e-8** citing
-  `:388`. That is the loosest assertion in the file, and gating every test at
-  it is **10× looser than upstream on the thirteen A1 tests** and **5× looser
-  than upstream on the two A2 tests** — precisely the tests whose job is to
-  localise a wrong term. 18-01 measures the port's floor **per tier**; a
-  measured floor above its tier is a finding with a number, not a licence to
-  fall back to 1e-8.
+   An earlier draft of this section stated Gate A as a flat **1e-8** citing
+   `:388`. That is the loosest assertion in the file, and gating every test at
+   it is **10× looser than upstream on the thirteen A1 tests** and **5× looser
+   than upstream on the two A2 tests** — precisely the tests whose job is to
+   localise a wrong term. 18-16 measured the port's floor **per tier**
+   (stable-reference maxima: A1 **9.90842297099448e-10**, A2
+   **5.007928238764947e-10**, A3 **3.4214315824954156e-9**,
+   `measurements/gate-a-tiers.md`); the A1 margin is 1.01× — razor-thin and
+   stated as such, not rounded away. A measured floor above its tier is a
+   finding with a number, not a licence to fall back to 1e-8.
 * **Gate B — analytic gradient vs this port's `verify_fd`, per method.**
-  **1e-6 Ha/Bohr** (`FD_TOL`) for KRHF/KUHF/KRKS/KUKS and the gamma bodies;
-  **5e-6** for `krkspu`/`kukspu`, because upstream's own DFT+U assertions are
-  5-decimal (`test_krkspu.py:87,92`) and a blanket 1e-6 would fail on upstream's
-  own numbers. Needs no PySCF.
+   **1e-6 Ha/Bohr** (`FD_TOL`) for KRHF/KUHF/KRKS/KUKS and the gamma bodies;
+   **5e-6** for `krkspu`/`kukspu`, because upstream's own DFT+U assertions are
+   5-decimal (`test_krkspu.py:87,92`) and a blanket 1e-6 would fail on upstream's
+   own numbers.    Measured floors (18-01): KRHF **5.278303349953717e-10** at full
+   `h = 1e-5`, PBE **4.3241903113777624e-10** at full `h = 1e-4` — ~2000×
+   inside the tolerance. Needs no PySCF.
 * **Gate C — analytic gradient vs upstream, per method**, at upstream's
-  published `lib.fp(g)` values: `-0.9017171774435333` (KRHF and KUHF,
-  `test_krhf.py:50` / `test_kuhf.py:49`), `-0.22166962318360375` (LDA),
-  `-0.21844074846755882` (GGA), `-0.19544969829285652` (hybrid),
-  `-0.42370983409650914` (DFT+U), each at the decimal count upstream itself
-  uses.
+   published `lib.fp(g)` values: `-0.9017171774435333` (KRHF and KUHF,
+   `test_krhf.py:50` / `test_kuhf.py:49`), `-0.22166962318360375` (LDA),
+   `-0.21844074846755882` (GGA), `-0.19544969829285652` (hybrid),
+   `-0.42370983409650914` (DFT+U), each at the decimal count upstream itself
+   uses. Measured residuals (18-01): **1.7184753731136482e-8** (KRHF/KUHF),
+   **1.4789633961953541e-9** (LDA), **1.4540251502825896e-9** (GGA),
+   **1.5506402828435739e-9** (hybrid), **8.3159923391917800e-9** (DFT+U) —
+   margins 29×/340×/340×/320×/600× against the 6-decimal (5 for DFT+U) bars.
 * **Gate D — stress vs finite difference of `E(ε)`**, at **1e-6 Ha/Bohr³**,
-  i.e. `|dat[i,j] − (E₊−E₋)/2h/vol|`, `h = 1e-3` (`test_rks_stress.py:390-406`).
-  Stated in pressure units, with `vol` named in the assertion so the dimension
-  cannot drift again.
+   i.e. `|dat[i,j] − (E₊−E₋)/2h/vol|`, `h = 1e-3` (`test_rks_stress.py:390-406`).
+   Stated in pressure units, with `vol` named in the assertion so the dimension
+   cannot drift again. No separate upstream floor was measured for D; the
+   tolerance inherits upstream's own assertion exactly.
 * **Gate E — the gamma-point multigrid-v2 bodies are NOT held to B or C at the
-  same tolerance.** `17-12-SUMMARY.md` records v2's accuracy floor against the
-  reference route as the screening floor `precision · EXTRA_PREC` (~1e-6 on
-  the electron count), and 17-01 measured v2 carrying a *mesh-independent*
-  ~2e-8 (diamond) / 1.5e-7 (si) definitional gap against FFTDF. A gradient
-  built on v2 inherits both. 18-01 measures the gamma-path floor and 18-10
-  gates against the measurement, never against the k-point number.
+   same tolerance.** `17-12-SUMMARY.md` records v2's accuracy floor against the
+   reference route as the screening floor `precision · EXTRA_PREC` (~1e-6 on
+   the electron count), and 17-01 measured v2 carrying a *mesh-independent*
+   ~2e-8 (diamond) / 1.5e-7 (si) definitional gap against FFTDF. A gradient
+   built on v2 inherits both. 18-16 measured the gamma-path floor
+   (`measurements/gate-e-gamma.md`): **9.103e-11** (he_fcc), **7.520e-10**
+   (diamond), **3.842e-10** (si), **6.241e-09** (lif; graphene excluded —
+   upstream has no 2D Ewald nuclear gradient, `ewald_methods.py:290`). Gate E
+   is **1e-8 Ha/Bohr** (margin 1.6× on lif, 13–110× elsewhere); 18-10 gates
+   against this number, never against the k-point number.
 
-`ROADMAP.md:464` and `PBC-MASTER-PLAN §8.10`'s 18-07 row are both restated by
-18-01, in one edit, with the measured numbers.
+`ROADMAP.md:464` and `PBC-MASTER-PLAN §8.10`'s 18-07 row were restated by
+18-21 on 2026-09-20, in one edit, with the measured numbers above.
 
 ---
 
