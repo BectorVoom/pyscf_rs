@@ -153,6 +153,30 @@ fn kpt_key(kpts: &[[f64; 3]]) -> Vec<[u64; 3]> {
         .collect()
 }
 
+/// When [`Fftdf::local_vmat`] takes the K-14f fused route, from
+/// `PYSCF_PBC_HCORE_FUSE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HcoreFuse {
+    /// `0` — never. The pre-K-14f route: evaluate the whole AO table, read it
+    /// back, cache it, reduce on the host. The bit-identity reference arm.
+    Never,
+    /// Unset (the default), or `auto` — fuse exactly when the table would NOT
+    /// be admitted to the AO cache. See [`Fftdf::local_vmat`] for why that is
+    /// the right predicate and not a memory threshold of its own.
+    Auto,
+    /// `1` — always, whatever the cache would have done. The measurement arm,
+    /// and the setting for a one-shot `get_hcore` on a memory-tight machine.
+    Always,
+}
+
+fn hcore_fuse_mode() -> HcoreFuse {
+    match std::env::var("PYSCF_PBC_HCORE_FUSE").as_deref() {
+        Ok("0") => HcoreFuse::Never,
+        Ok("1") => HcoreFuse::Always,
+        _ => HcoreFuse::Auto,
+    }
+}
+
 impl Fftdf {
     /// Build an `FFTDF` for `cell` at `kpts` (empty = gamma), using
     /// `cell.mesh`.
@@ -259,13 +283,22 @@ impl Fftdf {
         });
         // 16 bytes per complex entry; keep the cache under a quarter of the
         // memory budget so the J/K scratch still fits.
-        let bytes = 16.0 * (block.nao * block.ngrids * kpts.len()) as f64;
-        if bytes < 0.25 * self.max_memory * 1e6 {
+        if self.ao_table_fits_cache(kpts.len()) {
             if let Ok(mut c) = self.ao_cache.lock() {
                 c.insert(key, Arc::clone(&block));
             }
         }
         Ok(block)
+    }
+
+    /// How many AO tables the cache holds.
+    ///
+    /// Exposed for the K-14f gate: the fused local contraction must leave the
+    /// cache COLD (it evaluates and reduces in one pass and keeps nothing),
+    /// while the host route caches the table it built. A test cannot tell
+    /// those apart from the returned matrices, which are bit-identical.
+    pub fn ao_cache_len(&self) -> usize {
+        self.ao_cache.lock().map_or(0, |c| c.len())
     }
 
     /// Drop the AO cache and the W-01 `coulG`/`expmikr` caches — call after
@@ -415,6 +448,124 @@ impl Fftdf {
             }
             Some(CTensor::from_planes(re, im))
         }
+    }
+
+    /// Whether a `(nkpts, nao, ngrids)` complex AO table is small enough for
+    /// the AO cache to keep — 16 bytes per entry, under a quarter of the
+    /// memory budget so the J/K scratch still fits.
+    ///
+    /// [`Fftdf::ao_kpts`] decides admission with it and [`Fftdf::local_vmat`]
+    /// routes on it, so the two cannot drift apart: the fused contraction
+    /// engages exactly on the tables the cache was going to refuse.
+    fn ao_table_fits_cache(&self, nkpts: usize) -> bool {
+        let bytes = 16.0 * (self.cell.mol.nao_nr * self.ngrids() * nkpts) as f64;
+        bytes < 0.25 * self.max_memory * 1e6
+    }
+
+    /// The AO table at `kpts` IF IT IS ALREADY CACHED — never an evaluation.
+    ///
+    /// [`Fftdf::local_vmat`] needs to know whether the table it is about to
+    /// contract exists anyway (an SCF's `get_j`/`get_k` will want it again, so
+    /// reducing the cached copy is free) or would have to be built for this
+    /// one reduction and then thrown away (where materialising it is pure
+    /// cost). `ao_kpts` cannot answer that: it evaluates on a miss.
+    ///
+    /// The S-08 subset rule is honoured — a band k-list that is a bitwise
+    /// subset of the sampling list is served from the sampling table — but
+    /// only when that sampling table is itself already cached, since building
+    /// it is the evaluation this is trying to avoid.
+    fn ao_cached(&self, kpts: &[[f64; 3]]) -> Option<Arc<AoKpts>> {
+        let key = kpt_key(kpts);
+        if let Ok(c) = self.ao_cache.lock() {
+            if let Some(v) = c.get(&key) {
+                return Some(Arc::clone(v));
+            }
+        }
+        let reuse = !std::env::var("PYSCF_PBC_BAND_AO_REUSE").is_ok_and(|v| v == "0");
+        if !reuse || kpts.len() >= self.kpts.len() {
+            return None;
+        }
+        let full = {
+            let c = self.ao_cache.lock().ok()?;
+            Arc::clone(c.get(&kpt_key(&self.kpts))?)
+        };
+        let same =
+            |a: &[f64; 3], b: &[f64; 3]| a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+        let map: Vec<usize> = kpts
+            .iter()
+            .map(|b| self.kpts.iter().position(|k| same(k, b)))
+            .collect::<Option<_>>()?;
+        Some(Arc::new(AoKpts {
+            nao: full.nao,
+            ngrids: full.ngrids,
+            aot: map.iter().map(|&k| Arc::clone(&full.aot[k])).collect(),
+        }))
+    }
+
+    /// `v[k][p, q] = Σ_g conj(ao_k[p, g]) vR[g] ao_k[q, g]` — the local half of
+    /// `get_nuc` / `get_pp`, and so of `get_hcore`.
+    ///
+    /// Two routes, bit-identical to each other:
+    ///
+    /// * the table is already cached — reduce it on the host
+    ///   ([`Fftdf::contract_local_potential`]). Nothing is allocated that was
+    ///   not going to exist anyway.
+    /// * it is not — evaluate and contract in one pass on the device
+    ///   ([`pyscf_pbc_gto::eval_ao_kpts_local_vmat`]). The table never crosses
+    ///   to the host: of the three live copies of `16 · nkpts · nao · ngrids`
+    ///   bytes the first route holds at its peak — the device accumulator, the
+    ///   read-back buffer and the per-k planes it keeps — only the accumulator
+    ///   remains, and what comes home is the `16 · nkpts · nao²` answer.
+    ///
+    /// The second route does NOT populate the AO cache, which is both the
+    /// point and the reason the default is conditional. Fusing unconditionally
+    /// would cost an SCF an extra COLD AO PASS: today `get_hcore` evaluates the
+    /// table and leaves it cached for `get_j`/`get_k`, so the run pays one
+    /// evaluation; a fused `get_hcore` that kept nothing would make `get_j`
+    /// pay a second one. On the cold-AO-dominated cells this tree profiles,
+    /// that trade is a loss.
+    ///
+    /// So [`HcoreFuse::Auto`] — the default — fuses exactly when the table
+    /// would NOT have been admitted to the cache
+    /// ([`Fftdf::ao_table_fits_cache`]). That predicate already answers "is
+    /// this table worth keeping?", and it splits the two cases cleanly:
+    ///
+    /// * it fits — the old route evaluates once and the whole SCF reuses it;
+    ///   fusing would only add an evaluation. Take the host route.
+    /// * it does not — the old route evaluates it, reads it back, allocates
+    ///   the per-k planes, reduces, and THROWS IT AWAY. Nothing downstream
+    ///   benefits and the peak is paid for nothing. Fuse.
+    ///
+    /// `PYSCF_PBC_HCORE_FUSE=1` forces the fused route and `=0` pins the
+    /// pre-K-14f one; those are the two arms the `hcore` profile measures
+    /// against each other.
+    fn local_vmat(&self, vr: &[f64], kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
+        if kpts.is_empty() {
+            // The pre-K-14f route sized its output from `kpts.len()`, so an
+            // empty k-list yielded no matrices even though `eval_ao_kpts`
+            // substitutes gamma internally. Preserved rather than "fixed":
+            // every caller passes a real k-list, and redefining what an empty
+            // one means is not this change's business.
+            return Ok(Vec::new());
+        }
+        if let Some(ao) = self.ao_cached(kpts) {
+            return Ok(self.contract_local_potential(&ao, vr, kpts.len()));
+        }
+        let fuse = match hcore_fuse_mode() {
+            HcoreFuse::Never => false,
+            HcoreFuse::Always => true,
+            HcoreFuse::Auto => !self.ao_table_fits_cache(kpts.len()),
+        };
+        if fuse {
+            return Ok(pyscf_pbc_gto::eval_ao_kpts_local_vmat(
+                &self.cell,
+                &self.grids.coords,
+                kpts,
+                vr,
+            )?);
+        }
+        let ao = self.ao_kpts(kpts)?;
+        Ok(self.contract_local_potential(&ao, vr, kpts.len()))
     }
 
     /// Contract a REAL local potential on the grid into `nao x nao` matrices:
@@ -577,10 +728,7 @@ pub fn get_nuc(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError
 
     match eval_ao_kpts_upstream(cell, &df.grids.coords, kpts)? {
         Some(ao) => Ok(contract_local_potential_upstream(&ao, &vner)),
-        None => {
-            let ao = df.ao_kpts(kpts)?;
-            Ok(df.contract_local_potential(&ao, &vner, kpts.len()))
-        }
+        None => df.local_vmat(&vner, kpts),
     }
 }
 
@@ -667,8 +815,7 @@ fn contract_local_potential_upstream(
 pub fn get_pp(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
     let cell = &df.cell;
     let vpplocr = pp_local_potential_r(df)?;
-    let ao = df.ao_kpts(kpts)?;
-    let mut vpp = df.contract_local_potential(&ao, &vpplocr, kpts.len());
+    let mut vpp = df.local_vmat(&vpplocr, kpts)?;
     vpp_add_nonlocal(cell, kpts, &mut vpp)?;
     Ok(vpp)
 }

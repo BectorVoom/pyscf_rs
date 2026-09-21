@@ -77,7 +77,8 @@ pub use cutoff::{
 };
 pub use dumps_loads::{CellPack, dumps, loads, pack, unpack};
 pub use eval_gto::{
-    EvalAoKptsOutput, estimate_rcut_for_eval, eval_ao_kpts, eval_ao_kpts_with_images,
+    EvalAoKptsOutput, estimate_rcut_for_eval, eval_ao_kpts, eval_ao_kpts_local_vmat,
+    eval_ao_kpts_with_images,
 };
 pub use eval_gto_upstream::eval_ao_kpts_upstream;
 pub use ewald::{

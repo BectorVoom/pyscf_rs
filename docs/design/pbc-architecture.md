@@ -289,6 +289,7 @@ via `pyscf_algebra::dispatch_backend!`. Each gets a CPU-vs-host-reference test i
 | **K-12** | `fft_stockham_kernel` | `pbc/fft.rs` | butterflies | radix-2/3/5 Stockham autosort, per-axis; Bluestein for prime factors > 5 | 11 (perf) |
 | **K-13** | `rho_k_kernel` | `pbc/rho_k.rs` | grid pt | `ρ(r) = (1/N_k)·Σ_k Σ_μν ao*_μk(r)·D^k_μν·ao_νk(r)` — done as `zgemm` + row-wise `zdotc` | 11 |
 | **K-14** | `vmat_ao_kernel` | `pbc/vmat.rs` | `(AO, AO)` | `V^k_μν = Σ_r ao*_μk(r)·v(r)·ao_νk(r)·w` — `zgemm_h_dense` | 11 |
+| **K-14f** | `local_vmat_kernel` | `pbc/local_vmat.rs` | `(k, AO, AO)` | the same `V^k_μν` as K-14, but FUSED: it reduces `AoKAccumulator`'s device-resident AO planes in place, so the `nkpts·nao·ngrids` complex table is never read back. One lane per output element, serial `g` loop — bit-identical to the host contraction it replaces. Routed by `Fftdf::local_vmat` / `PYSCF_PBC_HCORE_FUSE` | 11 (perf) |
 | **K-15** | `ft_aopair_kernel` | `pbc/ft_aopair.rs` | `(shell-pair, G)` | analytic FT of a contracted Gaussian pair; see `§8.13` for the derivation and the exact recursion | 13 |
 | **K-16** | `kconserv_kernel` | `pbc/kconserv.rs` | `(ki,kj,kk)` | integer table `kl = ki − kj + kk (mod BZ)` | 15 |
 | **K-17** | `kbatched_zgemm` | `pbc/kbatched.rs` | `(k, tile)` | batched complex GEMM over the k-index for KCCSD contractions | 16 |

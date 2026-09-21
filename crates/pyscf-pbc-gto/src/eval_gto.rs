@@ -335,21 +335,42 @@ pub fn eval_ao_kpts(
     eval_ao_kpts_with_images(cell, eval_name, coords, kpts, &ls)
 }
 
-/// [`eval_ao_kpts`] against a caller-supplied image list.
+/// [`eval_ao_kpts_accumulate`]'s output: the device-resident lattice sum plus
+/// the shape needed to interpret it.
+struct AoAccumulated {
+    /// The backend the accumulator's planes live on.
+    client: pyscf_algebra::AlgebraClient,
+    /// The two `(nkpts, n)` planes, or `None` when every image was screened
+    /// out (or the image list was empty) and nothing was ever allocated.
+    acc: Option<pyscf_kernels::pbc::AoKAccumulator>,
+    /// Reals per k-point, `comp * ngrids * nao`.
+    n: usize,
+    /// Component count.
+    comp: usize,
+}
+
+/// The lattice-image loop behind [`eval_ao_kpts_with_images`], stopping one
+/// step short of the read-back.
 ///
-/// Exposed for the same reason [`crate::pbc_intor::intor_cross_with_images`] is:
-/// callers that evaluate several eval names over one grid should build `Ls`
-/// once, and the `rcut`-convergence test needs to vary it deliberately.
+/// Returns the k-resolved accumulator STILL RESIDENT on the device, so a
+/// caller that only wants a reduction of the AO table
+/// ([`eval_ao_kpts_local_vmat`]) never pays for materialising it on the host.
+/// [`eval_ao_kpts_with_images`] is the caller that does want the table and
+/// reads it back.
+///
+/// Refuses the `strain_tensor` family — that path has its own image list and
+/// its own kernel, and never builds one of these accumulators; the public
+/// wrapper routes it before calling here.
 ///
 /// # Errors
 /// As [`eval_ao_kpts`].
-pub fn eval_ao_kpts_with_images(
+fn eval_ao_kpts_accumulate(
     cell: &Cell,
     eval_name: &str,
     coords: &[[f64; 3]],
     kpts: &[[f64; 3]],
     ls: &[[f64; 3]],
-) -> Result<EvalAoKptsOutput, PyscfRsError> {
+) -> Result<AoAccumulated, PyscfRsError> {
     let owned_gamma = [[0.0_f64; 3]];
     let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
     let nkpts = kpts.len();
@@ -373,13 +394,6 @@ pub fn eval_ao_kpts_with_images(
             )))
         })?
         .client;
-
-    // 18-11: the strain-tensor family bypasses the value path entirely —
-    // different image list (order-dependent rcut), different kernel, and a
-    // refusal (not a fall-through) for anything outside the four names.
-    if eval_name.contains("strain_tensor") {
-        return eval_strain_ao_kpts(cell, eval_name, coords, kpts);
-    }
 
     // K-07 — the same `exp(+i k·L)` table the 1-electron driver uses.
     let kflat: Vec<f64> = kpts.iter().flatten().copied().collect();
@@ -791,11 +805,53 @@ pub fn eval_ao_kpts_with_images(
     }
 
     // W-09: every image may have been screened out (an empty basis, or a grid
-    // nothing can reach). `n` is then still 0 and the split below yields the
-    // correctly-shaped empty planes, exactly as an empty image list does.
+    // nothing can reach). `n` is then still 0 and the callers' shape handling
+    // yields the correctly-shaped empty output, exactly as an empty image list
+    // does.
     if n == 0 {
         comp = 1;
     }
+
+    Ok(AoAccumulated {
+        client,
+        acc,
+        n,
+        comp,
+    })
+}
+
+/// [`eval_ao_kpts`] against a caller-supplied image list.
+///
+/// Exposed for the same reason [`crate::pbc_intor::intor_cross_with_images`] is:
+/// callers that evaluate several eval names over one grid should build `Ls`
+/// once, and the `rcut`-convergence test needs to vary it deliberately.
+///
+/// # Errors
+/// As [`eval_ao_kpts`].
+pub fn eval_ao_kpts_with_images(
+    cell: &Cell,
+    eval_name: &str,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+    ls: &[[f64; 3]],
+) -> Result<EvalAoKptsOutput, PyscfRsError> {
+    let owned_gamma = [[0.0_f64; 3]];
+    let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
+    // 18-11: the strain-tensor family bypasses the value path entirely —
+    // different image list (order-dependent rcut), different kernel, and a
+    // refusal (not a fall-through) for anything outside the four names.
+    if eval_name.contains("strain_tensor") {
+        return eval_strain_ao_kpts(cell, eval_name, coords, kpts);
+    }
+    let nkpts = kpts.len();
+    let ngrids = coords.len();
+    let nao = cell.mol.nao_nr;
+    let AoAccumulated {
+        client,
+        acc,
+        n,
+        comp,
+    } = eval_ao_kpts_accumulate(cell, eval_name, coords, kpts, ls)?;
 
     // One read-back for the whole lattice sum. An empty image list never built
     // an accumulator, and `n` is then 0, so the split below yields no planes.
@@ -831,6 +887,94 @@ pub fn eval_ao_kpts_with_images(
         comp,
         gamma,
     })
+}
+
+/// The LDA AO table evaluated and contracted with a real local potential on
+/// the device, without ever materialising the table on the host.
+///
+/// ```text
+/// v[k][p, q] = Σ_g conj(ao_k[p, g]) · vR[g] · ao_k[q, g]
+/// ```
+///
+/// Same lattice sum, same image list and same `GTOval_sph` kernel as
+/// [`eval_ao_kpts`] — only the ending differs: the k-resolved accumulator is
+/// handed to `pyscf_kernels::pbc::local_vmat_resident` instead of being read
+/// back and split into per-k host planes. The AO table is `nkpts · nao ·
+/// ngrids` complex and the result is `nkpts · nao²`, so for a caller that
+/// wants only the contraction — `FFTDF::get_pp` / `get_nuc`, and through them
+/// `get_hcore` — the read-back is the whole memory cost of the call and none
+/// of its value.
+///
+/// The output is ROW-MAJOR `[p · nao + q]` per k-point, which is the layout
+/// `pyscf_pbc_df` assembles `V_pp` in (NOT the F-order `pbc_intor` returns).
+///
+/// # Errors
+/// As [`eval_ao_kpts`], plus a shape error from the contraction kernel if
+/// `vr` does not have one entry per grid point.
+pub fn eval_ao_kpts_local_vmat(
+    cell: &Cell,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+    vr: &[f64],
+) -> Result<Vec<CTensor>, PyscfRsError> {
+    if !cell.mol._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "eval_ao_kpts_local_vmat: the cell must be built first".into(),
+        )));
+    }
+    // The image list `eval_ao_kpts` builds for the value variant, identically:
+    // same rcut, same `get_lattice_ls_eval`, same norm sort. The accumulation
+    // order IS this order, so it is load-bearing for bit-identity, not just
+    // for the screen.
+    let rcut = estimate_rcut_for_eval(cell, deriv_count("GTOval_sph"))?;
+    let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
+    let mut ls = crate::lattice::get_lattice_ls_eval(cell, rmax)?;
+    ls.sort_by(|a, b| pyscf_pbc_tools::mat3::norm3(a).total_cmp(&pyscf_pbc_tools::mat3::norm3(b)));
+
+    let owned_gamma = [[0.0_f64; 3]];
+    let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
+    let nkpts = kpts.len();
+    let ngrids = coords.len();
+    let nao = cell.mol.nao_nr;
+    let gamma: Vec<bool> = kpts.iter().map(is_gamma).collect();
+
+    let AoAccumulated {
+        client,
+        acc,
+        n,
+        comp,
+    } = eval_ao_kpts_accumulate(cell, "GTOval_sph", coords, kpts, &ls)?;
+    if comp != 1 {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "eval_ao_kpts_local_vmat: GTOval_sph produced {comp} components, expected 1"
+        ))));
+    }
+
+    // W-09 again: every image screened out (or an empty basis/grid) leaves no
+    // accumulator at all. The contraction of an all-zero table is an all-zero
+    // matrix, which is what the host route produces from its empty planes too.
+    let Some(acc) = acc else {
+        return Ok((0..nkpts)
+            .map(|_| CTensor::from_planes(vec![0.0; nao * nao], vec![0.0; nao * nao]))
+            .collect());
+    };
+    if n != nao * ngrids {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "eval_ao_kpts_local_vmat: accumulator holds {n} reals per k-point, expected \
+             nao·ngrids = {}",
+            nao * ngrids
+        ))));
+    }
+    let planes = pyscf_kernels::pbc::local_vmat_resident(&client, acc, vr, nao, ngrids, &gamma)
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts_local_vmat: K-14f contraction failed: {e}"
+            )))
+        })?;
+    Ok(planes
+        .into_iter()
+        .map(|(re, im)| CTensor::from_planes(re, im))
+        .collect())
 }
 
 /// The component count of the two eval names the device kernels serve —

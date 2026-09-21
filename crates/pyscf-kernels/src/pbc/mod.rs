@@ -20,6 +20,7 @@ pub mod eval_ao_k;
 pub mod ewald;
 pub mod ft_aopair;
 pub mod gv;
+pub mod local_vmat;
 pub mod multigrid_grad;
 pub mod strain_ao;
 pub mod struct_factor;
@@ -30,6 +31,7 @@ pub use eval_ao_k::{AO_IMAGE_BATCH_MAX, AoImageBatch, AoKAccumulator, eval_ao_k_
 pub use ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use ft_aopair::{FtAopairTables, ft_aopair};
 pub use gv::gv;
+pub use local_vmat::{AoPlanes, KMatPlanes, local_vmat, local_vmat_resident};
 pub use strain_ao::{
     Deriv2AoOutput, StrainAoOutput, eval_ao_deriv2, eval_strain_ao, strain_block_map, strain_comp,
     strain_nblocks, strain_scale,

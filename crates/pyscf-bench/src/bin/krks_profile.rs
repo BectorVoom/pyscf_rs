@@ -1397,6 +1397,39 @@ fn peak_rss_mib() -> f64 {
         .map_or(f64::NAN, |kb| kb / 1024.0)
 }
 
+/// Resident set size right now, from `/proc/self/status`'s `VmRSS`.
+fn rss_mib() -> f64 {
+    status_kb("VmRSS:").map_or(f64::NAN, |kb| kb / 1024.0)
+}
+
+/// One `/proc/self/status` field, in kB.
+fn status_kb(field: &str) -> Option<f64> {
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines().find(|l| l.starts_with(field)).and_then(|l| {
+                l.split_whitespace()
+                    .nth(1)
+                    .and_then(|v| v.parse::<f64>().ok())
+            })
+        })
+}
+
+/// Reset the `VmHWM` high-water mark to the CURRENT `VmRSS`.
+///
+/// `echo 5 > /proc/self/clear_refs` is the kernel's own reset for it
+/// (`Documentation/filesystems/proc.rst`, Linux >= 4.0). Without it a peak-RSS
+/// reading is the maximum over the whole process lifetime, so two arms
+/// measured in ONE binary — which is the only way to compare them without the
+/// ±10 % cross-binary swing — would both report the larger one's peak.
+///
+/// Returns whether the reset actually happened; a kernel that refuses it makes
+/// the per-arm peaks meaningless, so the report says so rather than quoting
+/// numbers it cannot stand behind.
+fn reset_peak_rss() -> bool {
+    std::fs::write("/proc/self/clear_refs", "5\n").is_ok()
+}
+
 /// The 1-minute load average, printed with every report: RULE O invalidates a
 /// ratio measured on a contended machine, so the reader must be able to see
 /// whether this one was.
@@ -2349,6 +2382,250 @@ fn run_bands(args: &[String]) {
     }
 }
 
+#[derive(Serialize)]
+struct HcoreArmReport {
+    arm: &'static str,
+    ms: Vec<f64>,
+    peak_rss_mib: f64,
+    rss_after_mib: f64,
+}
+
+#[derive(Serialize)]
+struct HcoreReport {
+    cell: String,
+    basis: String,
+    nk: [usize; 3],
+    mesh: [usize; 3],
+    nao: usize,
+    ngrids: usize,
+    nkpts: usize,
+    /// `16 * nkpts * nao * ngrids` — one copy of the complex AO table.
+    ao_table_mib: f64,
+    /// `16 * nkpts * nao^2` — what the fused route brings home instead.
+    answer_mib: f64,
+    arms: Vec<HcoreArmReport>,
+    /// Whether this process ran a single arm (`--arm`), which is what makes
+    /// `peak_rss_mib` attributable.
+    isolated: bool,
+    warm_cache_ms: f64,
+    /// Which route `PYSCF_PBC_HCORE_FUSE` unset takes at this size and budget.
+    auto_fuses: bool,
+    max_memory_mib: f64,
+    bitwise_identical: bool,
+    peak_reset_supported: bool,
+    load_average: f64,
+}
+
+/// `hcore --cell si --basis gth-szv --nk 2,2,2 [--mesh a,b,c] [--reps 3] [--json f]`
+///
+/// The A/B for K-14f, interleaved inside ONE binary (cross-binary timings swing
+/// ±10 %, so two builds cannot resolve this):
+///
+/// * `host`  — `PYSCF_PBC_HCORE_FUSE=0`: evaluate the whole AO table, read it
+///   back, cache it, reduce it on the host. The pre-K-14f route.
+/// * `fused` — the K-14f route: evaluate and contract on the device, the table
+///   never reaching the host.
+///
+/// Each arm gets a FRESH `Fftdf`, so both start from a cold AO cache — which
+/// is the situation `get_hcore` is actually in, being the first thing an SCF
+/// asks for. Peak RSS is reset between arms (see [`reset_peak_rss`]), and the
+/// two arms' matrices are compared bit for bit, because a memory win that
+/// moves the numbers is not a win.
+///
+/// The `warm_cache_ms` line is the third case: `get_hcore` when `get_j`/`get_k`
+/// have already cached the table. Both arms take the same host route there —
+/// it is reported so a reader can see K-14f did not disturb it.
+fn run_hcore(args: &[String]) {
+    let cell_name = arg_value(args, "--cell").unwrap_or_else(|| "si".into());
+    let basis = arg_value(args, "--basis").unwrap_or_else(|| "gth-szv".into());
+    let nk = parse_triple(&arg_value(args, "--nk").unwrap_or_else(|| "2,2,2".into()));
+    let reps: usize = arg_value(args, "--reps").map_or(3, |s| s.parse().expect("--reps"));
+    // The AO-cache budget `auto` routes on. Left at the builder's default
+    // unless pinned, so the reported `auto` route is the one a real run takes.
+    let max_memory: Option<f64> =
+        arg_value(args, "--max-memory").map(|s| s.parse().expect("--max-memory"));
+    let json_path = arg_value(args, "--json");
+    let load0 = load_average();
+
+    let mut cell = cell_by_name(&cell_name, &basis);
+    if let Some(m) = arg_value(args, "--mesh") {
+        cell.mesh = parse_triple(&m);
+    }
+    let mesh = cell.try_mesh().expect("mesh");
+    let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
+    let nao = cell.mol.nao_nr;
+    let ngrids = mesh[0] * mesh[1] * mesh[2];
+    let nkpts = kpts.len();
+    let mib = |bytes: f64| bytes / (1024.0 * 1024.0);
+
+    let peak_reset_supported = reset_peak_rss();
+    // One arm per process when `--arm` is given. That matters for MEMORY and
+    // not for time: CubeCL's allocator pools device buffers per client, and
+    // the client is process-global, so a second arm in the same process starts
+    // with whatever the first arm's buffers left in the pool and its `VmHWM`
+    // reads high. Timing is the opposite case — cross-binary runs swing ±10 %,
+    // so the two-arm mode is the right one for `ms` and for the bitwise check.
+    let arms_to_run: Vec<(&str, &str)> = match arg_value(args, "--arm").as_deref() {
+        None => vec![("host", "0"), ("fused", "1")],
+        Some("host") => vec![("host", "0")],
+        Some("fused") => vec![("fused", "1")],
+        Some("auto") => vec![("auto", "auto")],
+        Some(other) => panic!("--arm must be host|fused|auto, got {other:?}"),
+    };
+    let isolated = arms_to_run.len() == 1;
+    let mut arms = Vec::new();
+    let mut first: Option<Vec<pyscf_algebra::CTensor>> = None;
+    let mut identical = true;
+    for (arm, flag) in arms_to_run {
+        // SAFETY-equivalent note: this profiler is single-threaded at this
+        // point and reads the switch on the next call only.
+        unsafe { std::env::set_var("PYSCF_PBC_HCORE_FUSE", flag) };
+        let _ = reset_peak_rss();
+        let mut ms = Vec::with_capacity(reps);
+        let mut last = None;
+        // Peak RSS is read after the FIRST rep, not after all of them. CubeCL's
+        // allocator pools device buffers and never returns them, so rep 2
+        // onwards runs against an already-grown pool: a peak taken at the end
+        // is the pool's high-water mark, which is the same for both routes and
+        // says nothing about either. The first rep is the only one that
+        // measures the call. `tests/hcore_peak_rss.rs` in `pyscf-pbc-df` is the
+        // one-call-per-process version of the same measurement, and the two
+        // agree; prefer it when the memory number is what you are after.
+        let mut first_rep_peak = f64::NAN;
+        for rep in 0..reps {
+            // A FRESH builder per rep. A shared one would let the host arm's
+            // second and later reps hit the AO cache its first rep filled and
+            // report a cached reduction as if it were the whole call — the
+            // very thing `warm_cache_ms` reports separately and honestly.
+            let mut df = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
+            if let Some(m) = max_memory {
+                df.max_memory = m;
+            }
+            let (h, t) = time_ms(|| get_hcore(&df, &kpts).expect("get_hcore"));
+            if rep == 0 {
+                first_rep_peak = peak_rss_mib();
+            }
+            ms.push(t);
+            last = Some(h);
+        }
+        arms.push(HcoreArmReport {
+            arm,
+            peak_rss_mib: first_rep_peak,
+            rss_after_mib: rss_mib(),
+            ms,
+        });
+        match (&first, last) {
+            (None, Some(h)) => first = Some(h),
+            (Some(a), Some(b)) => {
+                identical = a.len() == b.len()
+                    && a.iter().zip(&b).all(|(x, y)| {
+                        x.re.len() == y.re.len()
+                            && x.im.len() == y.im.len()
+                            && x.re
+                                .iter()
+                                .zip(&y.re)
+                                .all(|(u, v)| u.to_bits() == v.to_bits())
+                            && x.im
+                                .iter()
+                                .zip(&y.im)
+                                .all(|(u, v)| u.to_bits() == v.to_bits())
+                    });
+            }
+            _ => identical = false,
+        }
+    }
+
+    // The warm-cache case: the table exists because J/K built it.
+    unsafe { std::env::remove_var("PYSCF_PBC_HCORE_FUSE") };
+    let mut df = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
+    if let Some(m) = max_memory {
+        df.max_memory = m;
+    }
+    // Which route the DEFAULT (`auto`) takes here: the table is cached iff it
+    // fits a quarter of the budget, and `auto` fuses exactly when it does not.
+    let ao_table_bytes = 16.0 * (nkpts * nao * ngrids) as f64;
+    let auto_fuses = !(ao_table_bytes < 0.25 * df.max_memory * 1e6);
+    let _ = df.ao_kpts(&kpts).expect("warm the AO cache");
+    let warm_cache_ms = time_ms(|| get_hcore(&df, &kpts).expect("get_hcore")).1;
+
+    let report = HcoreReport {
+        cell: cell_name,
+        basis,
+        nk,
+        mesh,
+        nao,
+        ngrids,
+        nkpts,
+        ao_table_mib: mib(16.0 * (nkpts * nao * ngrids) as f64),
+        answer_mib: mib(16.0 * (nkpts * nao * nao) as f64),
+        arms,
+        isolated,
+        warm_cache_ms,
+        auto_fuses,
+        max_memory_mib: df.max_memory,
+        bitwise_identical: identical,
+        peak_reset_supported,
+        load_average: load0,
+    };
+    println!(
+        "hcore {} {} nk={:?} mesh={:?} nao={} ngrids={} nkpts={}\n  \
+         one AO table = {:.1} MiB, contracted answer = {:.3} MiB\n  \
+         load average at start = {:.2}, per-arm peak RSS reset = {}",
+        report.cell,
+        report.basis,
+        report.nk,
+        report.mesh,
+        report.nao,
+        report.ngrids,
+        report.nkpts,
+        report.ao_table_mib,
+        report.answer_mib,
+        report.load_average,
+        report.peak_reset_supported,
+    );
+    for a in &report.arms {
+        println!(
+            "  {:<6} {:>10.1} ms (reps {:?})  peak RSS {:>8.1} MiB  RSS after {:>8.1} MiB",
+            a.arm,
+            a.ms.iter().copied().fold(f64::INFINITY, f64::min),
+            a.ms.iter()
+                .map(|t| (t * 10.0).round() / 10.0)
+                .collect::<Vec<_>>(),
+            a.peak_rss_mib,
+            a.rss_after_mib,
+        );
+    }
+    if !report.isolated {
+        println!(
+            "  NOTE: both arms ran in one process, so peak RSS is NOT attributable —\n  \
+             CubeCL pools device buffers per (process-global) client, so the second\n  \
+             arm inherits the first arm's pool. Re-run with --arm host / --arm fused\n  \
+             for the memory numbers; the ms and the bitwise check are valid here."
+        );
+    }
+    println!(
+        "  warm AO cache (every setting takes the host route) = {:.1} ms\n  \
+         host vs fused bitwise identical = {}\n  \
+         default routing at max_memory = {:.0} MiB: auto {} here",
+        report.warm_cache_ms,
+        if report.isolated {
+            "not checked (single arm)".to_string()
+        } else {
+            report.bitwise_identical.to_string()
+        },
+        report.max_memory_mib,
+        if report.auto_fuses {
+            "FUSES (the table would not be cached)"
+        } else {
+            "takes the host route (the table is cached and reused)"
+        },
+    );
+    if let Some(path) = json_path {
+        std::fs::write(path, serde_json::to_string_pretty(&report).expect("json"))
+            .expect("write json");
+    }
+}
+
 fn arg_value(args: &[String], key: &str) -> Option<String> {
     args.iter()
         .position(|a| a == key)
@@ -2377,9 +2654,10 @@ fn main() {
         "ao" => run_ao(rest),
         "multigrid" => run_multigrid(rest),
         "bands" => run_bands(rest),
+        "hcore" => run_hcore(rest),
         other => {
             eprintln!(
-                "unknown subcommand {other:?} (expected transform|jk|contract|ksymm|ao|multigrid|bands)"
+                "unknown subcommand {other:?} (expected transform|jk|contract|ksymm|ao|multigrid|bands|hcore)"
             );
             std::process::exit(1);
         }
