@@ -196,3 +196,22 @@ fn device_scatter_path_matches_zero_filled_slice_bit_exact() {
     .expect("zero-filled slice accumulate");
     assert_eq!(got, expected);
 }
+
+/// T4 — `client.empty` recycles dirty buffers, so a second accumulator built
+/// after the first is dropped must still read back all-zero.
+#[test]
+fn a_recycled_accumulator_is_still_zero() {
+    let client = select_backend().expect("backend must resolve").client;
+    let (nkpts, n) = (4usize, 64usize * 1024);
+    drop(pyscf_kernels::pbc::AoKAccumulator::zeros(&client, nkpts, n));
+    let acc = pyscf_kernels::pbc::AoKAccumulator::zeros(&client, nkpts, n);
+    let (re, im) = acc.into_planes(&client);
+    assert!(
+        re.iter().all(|v| v.to_bits() == 0.0_f64.to_bits()),
+        "re not zero"
+    );
+    assert!(
+        im.iter().all(|v| v.to_bits() == 0.0_f64.to_bits()),
+        "im not zero"
+    );
+}

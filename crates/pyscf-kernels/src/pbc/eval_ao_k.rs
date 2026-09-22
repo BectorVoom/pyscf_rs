@@ -39,8 +39,8 @@
 //! of periodic AO evaluation, and none of it is arithmetic.
 //!
 //! [`AoKAccumulator`] holds the two planes in device buffers for the life of the
-//! image loop: zeros uploaded once, one launch per image writing in place, one
-//! read-back at the end. Per image the transfer drops to just the new AO block
+//! image loop: zero-filled once on the device, one launch per image writing in
+//! place, one read-back at the end. Per image the transfer drops to just the new AO block
 //! (`n` reals) and the `2·nkpts` phase factors — independent of how many images
 //! came before. The buffers are opaque (the cubecl `Handle`s are private
 //! fields), so `pyscf-pbc-gto` drives the loop without naming a cubecl type and
@@ -578,26 +578,28 @@ impl core::fmt::Debug for AoKAccumulator {
 impl AoKAccumulator {
     /// Allocate both `(nkpts, n)` planes on the device, zero-filled.
     ///
-    /// The zeros are uploaded rather than produced by a fill kernel: it is one
-    /// transfer for the whole loop either way, and a `create_from_slice` needs
-    /// no launch, no extra kernel variant, and no guarantee about what
-    /// `client.empty` leaves in the buffer.
+    /// The planes are `client.empty` allocations zeroed by a device fill kernel
+    /// ([`crate::pbc::fill`], B-01), not uploaded from a host
+    /// `vec![0.0; nkpts · n]`: that host buffer was 0.5× the AO table of
+    /// allocation whose only job was to be zero, and it crossed to the device
+    /// twice. `empty` hands back a DIRTY recycled buffer, so the fill is
+    /// mandatory, not an optimisation.
     ///
     /// A degenerate `nkpts * n == 0` allocates nothing; [`Self::accumulate`] is
     /// then a no-op and [`Self::into_planes`] returns empty vectors.
     pub fn zeros(client: &AlgebraClient, nkpts: usize, n: usize) -> Self {
-        // `max(1)`: a zero-length allocation is not something every cubecl
-        // backend is obliged to handle, and this path is reachable from public
-        // API (an empty grid or an empty basis). The extra element is never
-        // read — `accumulate` and `into_planes` both short-circuit on an empty
-        // shape — so one wasted f64 buys the degenerate case out entirely.
-        let zeros = vec![0.0f64; (nkpts * n).max(1)];
-        let (re, im) = dispatch_backend!(
-            client,
-            c,
-            Rt,
-            (upload(c, zeros.as_slice()), upload(c, zeros.as_slice()))
-        );
+        // `max(1)`: a zero-length allocation is not something every cubecl backend is
+        // obliged to handle. T4 — `empty` hands back a DIRTY recycled buffer, so the
+        // fill is mandatory, not an optimisation.
+        let len = (nkpts * n).max(1);
+        let bytes = len * core::mem::size_of::<f64>();
+        let (re, im) = dispatch_backend!(client, c, Rt, {
+            let re = c.empty(bytes);
+            let im = c.empty(bytes);
+            crate::pbc::fill::fill_zero::<Rt, f64>(c, &re, len);
+            crate::pbc::fill::fill_zero::<Rt, f64>(c, &im, len);
+            (re, im)
+        });
         Self {
             re,
             im,

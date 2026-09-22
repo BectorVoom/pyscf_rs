@@ -370,7 +370,15 @@ fn eval_ao_kpts_accumulate(
     coords: &[[f64; 3]],
     kpts: &[[f64; 3]],
     ls: &[[f64; 3]],
+    // Grid range this call covers: `coords[g0..g1]`. `0..coords.len()` is the
+    // whole grid and reproduces the pre-B-03 behaviour exactly.
+    // (`///` as written in the plan does not compile on a parameter.)
+    grid: std::ops::Range<usize>,
 ) -> Result<AoAccumulated, PyscfRsError> {
+    // B-03a: the sub-grid this call covers. Every use of `coords`/`ngrids`
+    // below — screen boxes, batch sizing, fused grid, gather — sees the slice,
+    // so a `0..len` range is exactly the old whole-grid call.
+    let coords = &coords[grid.clone()];
     let owned_gamma = [[0.0_f64; 3]];
     let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
     let nkpts = kpts.len();
@@ -477,7 +485,7 @@ fn eval_ao_kpts_accumulate(
     let mut eval_first_slot = 0usize;
     if let Some(comp_expected) = comp_of_eval_name(eval_name) {
         let n_expected = comp_expected * ngrids * nao;
-        let capacity = image_batch_capacity(n_expected);
+        let capacity = image_batch_capacity(n_expected, 2 * nkpts * n_expected * 8);
         if capacity > 1 && n_expected > 0 && pyscf_kernels::eval_gto_device_capable(&cell.mol._bas)
         {
             n = n_expected;
@@ -851,7 +859,7 @@ pub fn eval_ao_kpts_with_images(
         acc,
         n,
         comp,
-    } = eval_ao_kpts_accumulate(cell, eval_name, coords, kpts, ls)?;
+    } = eval_ao_kpts_accumulate(cell, eval_name, coords, kpts, ls, 0..coords.len())?;
 
     // One read-back for the whole lattice sum. An empty image list never built
     // an accumulator, and `n` is then 0, so the split below yields no planes.
@@ -889,6 +897,67 @@ pub fn eval_ao_kpts_with_images(
     })
 }
 
+/// How `PYSCF_PBC_AO_GRID_BLOCK` asks the local contraction to be driven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GridBlockMode {
+    /// One block — the pre-B-03 whole-grid path, and the bit-identity reference.
+    WholeGrid,
+    /// A fixed block size — pinned by the caller, or [`AO_GRID_BLOCK_DEFAULT`]
+    /// when the switch is unset.
+    Fixed(usize),
+}
+
+/// `BLK` when `PYSCF_PBC_AO_GRID_BLOCK` is unset: B-04's row-1 verdict.
+///
+/// Measured at all three shapes: −14 / −29 / −34 % peak for +5.2 / +2.6 / +2.2 %
+/// time, i.e. inside the ≤ 10 % time gate. A fixed constant, not a derived or
+/// tuned one: CubeCL 0.10's `DeviceProperties` exposes no cache size to derive
+/// it from, and an autotuned `BLK` was tried and removed — a cold key cost 26
+/// full evaluations (175 s against 6.2 s at diamond gth-dzvp 3³/41³), paid again
+/// for every new shape, and at both shapes where it had a choice it picked 8192.
+const AO_GRID_BLOCK_DEFAULT: usize = 8192;
+
+/// `PYSCF_PBC_AO_GRID_BLOCK` — how the local contraction's grid is blocked.
+///
+/// | value | behaviour |
+/// |---|---|
+/// | unset | [`AO_GRID_BLOCK_DEFAULT`] (8192) — the measured B-04 default |
+/// | `0` | one block — the whole-grid reference |
+/// | a positive multiple of [`SCREEN_BLKSIZE`] | that `BLK` |
+/// | anything else | one block, plus a warning naming the bad value |
+fn ao_grid_block_mode() -> GridBlockMode {
+    match std::env::var("PYSCF_PBC_AO_GRID_BLOCK") {
+        Err(_) => GridBlockMode::Fixed(AO_GRID_BLOCK_DEFAULT),
+        Ok(v) => {
+            let t = v.trim();
+            match t.parse::<usize>() {
+                Ok(0) => GridBlockMode::WholeGrid,
+                Ok(n) if n % SCREEN_BLKSIZE == 0 => GridBlockMode::Fixed(n),
+                Ok(_) | Err(_) => {
+                    tracing::warn!(
+                        value = t,
+                        "PYSCF_PBC_AO_GRID_BLOCK: expected unset, 0, or a positive multiple \
+                         of {SCREEN_BLKSIZE}; using one block"
+                    );
+                    GridBlockMode::WholeGrid
+                }
+            }
+        }
+    }
+}
+
+/// The image list `eval_ao_kpts` builds for the value variant, identically:
+/// same rcut, same `get_lattice_ls_eval`, same norm sort. The accumulation
+/// order IS this order, so it is load-bearing for bit-identity, not just for
+/// the screen.
+fn local_vmat_image_list(cell: &Cell) -> Result<Vec<[f64; 3]>, PyscfRsError> {
+    let rcut = estimate_rcut_for_eval(cell, deriv_count("GTOval_sph"))?;
+    let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
+    let mut ls = crate::lattice::get_lattice_ls_eval(cell, rmax)?;
+    ls.sort_by(|a, b| pyscf_pbc_tools::mat3::norm3(a).total_cmp(&pyscf_pbc_tools::mat3::norm3(b)));
+    Ok(ls)
+}
+
 /// The LDA AO table evaluated and contracted with a real local potential on
 /// the device, without ever materialising the table on the host.
 ///
@@ -908,6 +977,10 @@ pub fn eval_ao_kpts_with_images(
 /// The output is ROW-MAJOR `[p · nao + q]` per k-point, which is the layout
 /// `pyscf_pbc_df` assembles `V_pp` in (NOT the F-order `pbc_intor` returns).
 ///
+/// `PYSCF_PBC_AO_GRID_BLOCK` chooses the grid blocking: unset is the measured
+/// default `BLK` = [`AO_GRID_BLOCK_DEFAULT`], `0` is the whole-grid reference,
+/// and a multiple of 128 pins that `BLK`. All three are bit-identical.
+///
 /// # Errors
 /// As [`eval_ao_kpts`], plus a shape error from the contraction kernel if
 /// `vr` does not have one entry per grid point.
@@ -922,14 +995,21 @@ pub fn eval_ao_kpts_local_vmat(
             "eval_ao_kpts_local_vmat: the cell must be built first".into(),
         )));
     }
-    // The image list `eval_ao_kpts` builds for the value variant, identically:
-    // same rcut, same `get_lattice_ls_eval`, same norm sort. The accumulation
-    // order IS this order, so it is load-bearing for bit-identity, not just
-    // for the screen.
-    let rcut = estimate_rcut_for_eval(cell, deriv_count("GTOval_sph"))?;
-    let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
-    let mut ls = crate::lattice::get_lattice_ls_eval(cell, rmax)?;
-    ls.sort_by(|a, b| pyscf_pbc_tools::mat3::norm3(a).total_cmp(&pyscf_pbc_tools::mat3::norm3(b)));
+    match ao_grid_block_mode() {
+        GridBlockMode::WholeGrid => local_vmat_whole_grid(cell, coords, kpts, vr),
+        GridBlockMode::Fixed(blk) => eval_ao_kpts_local_vmat_blocked(cell, coords, kpts, vr, blk),
+    }
+}
+
+/// The whole-grid local contraction: the pre-B-03 path and the bit-identity
+/// reference for every blocked route.
+fn local_vmat_whole_grid(
+    cell: &Cell,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+    vr: &[f64],
+) -> Result<Vec<CTensor>, PyscfRsError> {
+    let ls = local_vmat_image_list(cell)?;
 
     let owned_gamma = [[0.0_f64; 3]];
     let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
@@ -943,7 +1023,7 @@ pub fn eval_ao_kpts_local_vmat(
         acc,
         n,
         comp,
-    } = eval_ao_kpts_accumulate(cell, "GTOval_sph", coords, kpts, &ls)?;
+    } = eval_ao_kpts_accumulate(cell, "GTOval_sph", coords, kpts, &ls, 0..coords.len())?;
     if comp != 1 {
         return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
             "eval_ao_kpts_local_vmat: GTOval_sph produced {comp} components, expected 1"
@@ -977,6 +1057,142 @@ pub fn eval_ao_kpts_local_vmat(
         .collect())
 }
 
+/// The LDA AO table evaluated and contracted in GRID BLOCKS of `blk` points,
+/// without ever holding the whole table on the device.
+///
+/// Same result as [`eval_ao_kpts_local_vmat`]: each block is evaluated by
+/// [`eval_ao_kpts_accumulate`] over `coords[g0..g1]` and folded into one
+/// device-carried output ([`pyscf_kernels::pbc::CarriedVmat`]), so peak device
+/// memory holds one block's AO planes instead of the whole grid. The price is
+/// re-running the lattice-image loop once per block — B-04's decision gate
+/// measures whether that trade wins.
+///
+/// `blk` must be a multiple of [`SCREEN_BLKSIZE`]: the W-09 screen partitions
+/// the grid into 128-point chunks via `block_boxes`, and a block must contain
+/// whole chunks. This reuses that partition; no second one is introduced.
+///
+/// Q3: comp-1-only, like its sibling — `GTOval_sph` is hardcoded and any other
+/// component count is refused, so deriv-1 (comp 4) never reaches this path.
+///
+/// # Errors
+/// As [`eval_ao_kpts_local_vmat`], plus an error when `blk` is `0` or not a
+/// multiple of [`SCREEN_BLKSIZE`].
+pub fn eval_ao_kpts_local_vmat_blocked(
+    cell: &Cell,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+    vr: &[f64],
+    blk: usize,
+) -> Result<Vec<CTensor>, PyscfRsError> {
+    // `blk == 0` would never advance `g0` below (`g1 = min(g0 + 0, ngrids)`) and
+    // loop forever, and a non-multiple of `SCREEN_BLKSIZE` would split the W-09
+    // screen's 128-point chunks across blocks. The env switch maps both to
+    // whole-grid before reaching here, but this is public API: refuse, don't
+    // hang or panic.
+    if blk == 0 || blk % SCREEN_BLKSIZE != 0 {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "eval_ao_kpts_local_vmat_blocked: blk must be a positive multiple of \
+             {SCREEN_BLKSIZE}, got {blk}"
+        ))));
+    }
+    if !cell.mol._built {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(
+            "eval_ao_kpts_local_vmat_blocked: the cell must be built first".into(),
+        )));
+    }
+    let ngrids = coords.len();
+    if vr.len() != ngrids {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "eval_ao_kpts_local_vmat_blocked: vr of length ngrids = {ngrids}, got {}",
+            vr.len(),
+        ))));
+    }
+
+    let owned_gamma = [[0.0_f64; 3]];
+    let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
+    let nkpts = kpts.len();
+    let nao = cell.mol.nao_nr;
+    let gamma: Vec<bool> = kpts.iter().map(is_gamma).collect();
+
+    // The image list `eval_ao_kpts` builds for the value variant, identically.
+    // Built ONCE here and shared by every block — the hoisted item. (The bloch
+    // table, device context and screen boxes are rebuilt per block inside
+    // `eval_ao_kpts_accumulate`, deliberately: that path is the bit-gated
+    // whole-grid implementation, reused byte-for-byte, and its per-block setup
+    // is milliseconds against the re-run image loop's seconds. B-04's
+    // time_cost includes it.)
+    let ls = local_vmat_image_list(cell)?;
+
+    // §2.4: increasing g order, SERIAL, one carried output accumulator.
+    // Do NOT parallelise this loop. Do NOT sum blocks independently and merge.
+    let mut carried: Option<pyscf_kernels::pbc::CarriedVmat> = None;
+    let mut g0 = 0usize;
+    while g0 < ngrids {
+        let g1 = (g0 + blk).min(ngrids);
+        let AoAccumulated {
+            client,
+            acc,
+            n,
+            comp,
+        } = eval_ao_kpts_accumulate(cell, "GTOval_sph", coords, kpts, &ls, g0..g1)?;
+        if comp != 1 {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts_local_vmat_blocked: GTOval_sph produced {comp} components, \
+                 expected 1"
+            ))));
+        }
+        if n != nao * (g1 - g0) {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts_local_vmat_blocked: block [{g0}, {g1}) holds {n} reals per \
+                 k-point, expected nao·blk = {}",
+                nao * (g1 - g0),
+            ))));
+        }
+        if let Some(acc) = acc {
+            // First contributing block builds the carried output from its own
+            // client; later blocks fold into it. A block with no accumulator
+            // (every image screened out over its points) contributes nothing.
+            if carried.is_none() {
+                carried = Some(pyscf_kernels::pbc::CarriedVmat::new(
+                    &client, nkpts, nao, ngrids,
+                ));
+            }
+            if let Some(c) = carried.as_mut() {
+                c.accumulate_block(&client, acc, g0, &vr[g0..g1], &gamma)
+                    .map_err(|e| {
+                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                            "eval_ao_kpts_local_vmat_blocked: block [{g0}, {g1}) failed: {e}"
+                        )))
+                    })?;
+            }
+        }
+        // contract coords[g0..g1] into the CARRIED output with accumulate = 1
+        g0 = g1;
+    }
+    let Some(c) = carried else {
+        // W-09 again: every image screened out (or an empty basis/grid) leaves
+        // no accumulator at all. The contraction of an all-zero table is an
+        // all-zero matrix, which is what the sibling returns too.
+        return Ok((0..nkpts)
+            .map(|_| CTensor::from_planes(vec![0.0; nao * nao], vec![0.0; nao * nao]))
+            .collect());
+    };
+    // `finish` needs a client: re-select the process-global backend — the same
+    // one every block already used (`eval_ao_kpts_accumulate` selects it per
+    // call too).
+    let client = select_backend()
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "eval_ao_kpts_local_vmat_blocked: backend selection failed: {e}"
+            )))
+        })?
+        .client;
+    Ok(c.finish(&client)
+        .into_iter()
+        .map(|(re, im)| CTensor::from_planes(re, im))
+        .collect())
+}
+
 /// The component count of the two eval names the device kernels serve —
 /// what K-09 needs before the first image is evaluated. `None` for anything
 /// else (the host fallback decides its own shape).
@@ -992,7 +1208,7 @@ fn comp_of_eval_name(eval_name: &str) -> Option<usize> {
 /// (`1` = one launch per image, the pre-K-09 path); unset, the batch buffer is
 /// sized under [`AO_IMAGE_BATCH_BUDGET_BYTES`] and capped at
 /// `AO_IMAGE_BATCH_MAX`.
-fn image_batch_capacity(block_len: usize) -> usize {
+fn image_batch_capacity(block_len: usize, accumulator_bytes: usize) -> usize {
     if let Some(v) = std::env::var("PYSCF_PBC_AO_IMAGE_BATCH")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
@@ -1000,7 +1216,13 @@ fn image_batch_capacity(block_len: usize) -> usize {
         return v.clamp(1, pyscf_kernels::pbc::AO_IMAGE_BATCH_MAX);
     }
     let block_bytes = block_len.saturating_mul(core::mem::size_of::<f64>()).max(1);
-    (AO_IMAGE_BATCH_BUDGET_BYTES / block_bytes).clamp(1, pyscf_kernels::pbc::AO_IMAGE_BATCH_MAX)
+    // The batch used to be capped only by an absolute 256 MiB, chosen when it was
+    // the only large buffer in the call. It is now up to 1.2x the AO table, and
+    // after B-03 it would be the LARGEST buffer in a blocked evaluation. Tie it to
+    // the accumulator so blocking shrinks both.
+    let budget = AO_IMAGE_BATCH_BUDGET_BYTES
+        .min(accumulator_bytes.saturating_mul(AO_IMAGE_BATCH_ACC_NUM) / AO_IMAGE_BATCH_ACC_DEN);
+    (budget / block_bytes).clamp(1, pyscf_kernels::pbc::AO_IMAGE_BATCH_MAX)
 }
 
 /// K-10's per-call staging: the resident unshifted grid and the images
@@ -1154,6 +1376,15 @@ fn eval_batch_size(capacity: usize) -> usize {
 /// `si gth-dzvp deriv 1 mesh 31` a block is 25 MB, so ten images share a
 /// launch, and at gth-szv sixteen (the cap).
 pub const AO_IMAGE_BATCH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+
+/// The image batch's budget as a fraction of the accumulator: NUM/DEN.
+/// Measured (B-04): peak and time are flat across capacities 2–32 at the
+/// flagship shape, so the fraction is non-binding there — 1/2 stands as a
+/// safe ceiling that preserves the K-09 batching. The only cliff is capacity
+/// 1 (the legacy per-image fallback): −41% peak for 8.6× time. Do not lower
+/// this toward 1 chasing memory; the exchange rate is prohibitive.
+const AO_IMAGE_BATCH_ACC_NUM: usize = 1;
+const AO_IMAGE_BATCH_ACC_DEN: usize = 2;
 
 /// K-09: fold the registered images into the accumulator in one launch and
 /// empty the batch. `m` names the image just registered, for the error.

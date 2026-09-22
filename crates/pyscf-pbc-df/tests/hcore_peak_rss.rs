@@ -139,3 +139,37 @@ fn fused_route() {
     std::hint::black_box(&v);
     p.finish();
 }
+
+/// The accumulator alone, EXECUTED — its two device planes, resident.
+///
+/// Building the accumulator only QUEUES its fill kernels: CubeCL launches are
+/// lazy, and `client.empty` maps address space without faulting a page. An
+/// earlier version of this probe stopped there and so measured reservations —
+/// 9.4 MiB for 227 MiB of planes after B-01. This one forces execution by
+/// contracting the planes with `local_vmat_resident`: the queued fills run and
+/// every page is read, while what comes back is only `nkpts · nao²` numbers, so
+/// no host copy of the table enters the measurement. Zero planes contract to a
+/// zero matrix; the value is irrelevant, only the residency is measured.
+#[test]
+#[ignore = "instrument, not a gate"]
+fn accumulator_only() {
+    let (cell, kpts, mesh) = setup();
+    let df = Fftdf::with_mesh(cell.clone(), &kpts, mesh).expect("FFTDF");
+    let (nkpts, nao, ngrids) = (kpts.len(), cell.mol.nao_nr, df.ngrids());
+    let client = pyscf_algebra::select_backend().expect("backend").client;
+    let vr = vec![0.0f64; ngrids];
+    let gamma = vec![false; nkpts];
+    let p = Probe::start("accumulator_only", nkpts, nao, ngrids);
+    let acc = pyscf_kernels::pbc::AoKAccumulator::zeros(&client, nkpts, nao * ngrids);
+    let v = pyscf_kernels::pbc::local_vmat_resident(&client, acc, &vr, nao, ngrids, &gamma)
+        .expect("contract to force execution");
+    std::hint::black_box(&v);
+    p.finish();
+}
+
+// There is deliberately no `image_batch_only` probe. The K-09 image batch's
+// slots are written only by the AO evaluator, so no probe can make them
+// resident without running the evaluation that `ao_table_only` already
+// measures; a probe that merely constructs the batch measures an unfaulted
+// reservation (8.9 MiB for a 134.4 MiB batch) and was removed as misleading.
+// B-02's route peaks, not a batch probe, are the evidence for the batch.

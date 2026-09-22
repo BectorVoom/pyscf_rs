@@ -35,8 +35,9 @@
 //! CubeCL's CPU runtime — the default here (ALG-03) — "device" memory is the
 //! same RAM, so the accumulator's one copy is the floor and the saving is the
 //! other two: a ~3× cut in the call's peak, not an unbounded one. Driving the
-//! grid in blocks would cut the remaining copy too, at the cost of re-running
-//! the lattice-image loop per block; that is a separate item, not this one.
+//! grid in blocks cuts the remaining copy too: [`CarriedVmat`] (B-03) carries
+//! this contraction across grid blocks, so the device holds one block's planes
+//! at a time, at the cost of re-running the lattice-image loop per block.
 //!
 //! # Why not a GEMM
 //!
@@ -68,7 +69,7 @@
 //! `eval_ao_kpts` drops the imaginary plane (`eval_gto.py:157-158`) by handing
 //! the host a freshly zeroed `Vec` — so the host contraction reads `+0.0`
 //! there, while the accumulator still holds the lattice sum's roundoff
-//! residue. [`zero_imag_kernel`] writes the same literal `0.0` over that plane
+//! residue. [`crate::pbc::fill::fill_zero_kernel`] writes the same literal `0.0` over that plane
 //! on the device before the contraction runs, so the sign of every zero
 //! matches too. Multiplying the plane by `0.0` instead would NOT: that
 //! preserves the residue's sign bit, and `pr·(−0.0) + (−0.0)·qr` is `−0.0`
@@ -133,6 +134,7 @@ fn local_vmat_kernel<F: Float>(
     stride_e: usize,
     lane0: usize,
     lanes: usize,
+    accumulate: u32,
 ) {
     let local = ABSOLUTE_POS;
     if local < lanes {
@@ -145,8 +147,19 @@ fn local_vmat_kernel<F: Float>(
         // First element of AO `p` (resp. `q`) at k-point `k`.
         let pb = k * stride_k + p * ngrids * stride_e;
         let qb = k * stride_k + q * ngrids * stride_e;
+        // `accumulate == 1` carries the sum across grid blocks (B-03): the lane
+        // LOADS the running sum, extends the SAME serial chain over this
+        // block's grid points, and STORES it back. §2.4 requires one carried
+        // accumulator — adding a from-zero block sum into the output instead
+        // reassociates and moves the last bits (verified: serial vs block-+=
+        // differ in the last hex digit on 1000 random terms, load-store is
+        // exact). The plan's B-03b sketch shows `+=`; this is the §2.4 form.
         let mut sr = F::from_int(0);
         let mut si = F::from_int(0);
+        if accumulate == 1 {
+            sr = out_re[i];
+            si = out_im[i];
+        }
         for g in 0..ngrids {
             let off = g * stride_e;
             // conj(ao[p, g]) · ao[q, g] · vR[g]
@@ -160,19 +173,6 @@ fn local_vmat_kernel<F: Float>(
         }
         out_re[i] = sr;
         out_im[i] = si;
-    }
-}
-
-/// Write a literal `0.0` over one k-point's imaginary plane, in place.
-///
-/// `base` is that k-point's first element and `stride` the distance between
-/// its successive `(mu, g)` entries, so this serves both accumulator layouts.
-/// See the module docs for why the plane is overwritten rather than scaled.
-#[cube(launch_unchecked)]
-fn zero_imag_kernel<F: Float>(im: &mut Array<F>, base: usize, stride: usize, n: usize) {
-    let i = ABSOLUTE_POS;
-    if i < n {
-        im[base + i * stride] = F::from_int(0);
     }
 }
 
@@ -212,11 +212,12 @@ fn launch_on_handles<R: Runtime, F: DeviceScalar>(
     ngrids: usize,
     stride_k: usize,
     stride_e: usize,
+    accumulate: u32,
 ) {
     let total = nkpts * nao * nao;
     launch_range::<R, F>(
         client, ao_re, ao_im, vr, out_re, out_im, ao_len, total, nao, ngrids, stride_k, stride_e,
-        0, total,
+        0, total, accumulate,
     );
 }
 
@@ -238,6 +239,7 @@ fn launch_range<R: Runtime, F: DeviceScalar>(
     stride_e: usize,
     range0: usize,
     range_len: usize,
+    accumulate: u32,
 ) {
     let end = range0 + range_len;
     let mut lane0 = range0;
@@ -271,6 +273,7 @@ fn launch_range<R: Runtime, F: DeviceScalar>(
                 stride_e,
                 lane0,
                 lanes,
+                accumulate,
             );
         }
         lane0 += lanes;
@@ -311,21 +314,7 @@ fn zero_gamma_plane<R: Runtime, F: DeviceScalar>(
     stride: usize,
     n: usize,
 ) {
-    let (count, dim) = launch_1d(client, n, 1);
-    unsafe {
-        zero_imag_kernel::launch_unchecked::<F, R>(
-            client,
-            count,
-            dim,
-            // SAFETY: `base + (n - 1) * stride < ao_len` for both layouts —
-            // k-major (`base = k*n`, `stride = 1`) and point-major
-            // (`base = k`, `stride = nkpts`) — and the kernel guards `i < n`.
-            ArrayArg::from_raw_parts(im.clone(), ao_len),
-            base,
-            stride,
-            n,
-        );
-    }
+    crate::pbc::fill::fill_range::<R, F>(client, im, ao_len, base, stride, n);
 }
 
 /// A HOST-resident AO table, `(nkpts, nao · ngrids)` row-major per plane.
@@ -388,6 +377,7 @@ pub fn local_vmat(
             nao,
             ngrids,
             gamma,
+            0, // overwrite mode — B-03c passes 1 for carried blocks
         )
     });
     Ok(out)
@@ -451,6 +441,7 @@ pub fn local_vmat_resident(
             nao,
             ngrids,
             gamma,
+            0, // overwrite mode — B-03c passes 1 for carried blocks
         )
     );
     Ok(out)
@@ -485,9 +476,15 @@ fn check_shapes(
     Ok(None)
 }
 
-/// Zero the gamma planes, launch the contraction, read the answer back.
+/// Upload `vr`, zero the gamma planes, and launch the contraction into
+/// `out_re`/`out_im` — the launch half of [`run`], shared with
+/// [`CarriedVmat::accumulate_block`] (B-03c).
+///
+/// `blk_len` is the grid count this launch covers: `ngrids` for a whole-table
+/// call, the block width for a blocked one. `vr` holds exactly those entries;
+/// `out_*` hold `nkpts · nao²` in both cases.
 #[allow(clippy::too_many_arguments)]
-fn run<R: Runtime>(
+fn contract_into<R: Runtime>(
     client: &ComputeClient<R>,
     ao_re: &Handle,
     ao_im: &Handle,
@@ -495,20 +492,18 @@ fn run<R: Runtime>(
     stride_k: usize,
     stride_e: usize,
     vr: &[f64],
+    out_re: &Handle,
+    out_im: &Handle,
     nkpts: usize,
     nao: usize,
-    ngrids: usize,
+    blk_len: usize,
     gamma: &[bool],
-) -> KMatPlanes {
-    let n = nao * ngrids;
+    accumulate: u32,
+) {
+    let n = nao * blk_len;
     let vr_h = upload::<R, f64>(client, vr);
     let npair = nao * nao;
     let total = nkpts * npair;
-    // Every one of the `total` slots is written by exactly one lane, so an
-    // uninitialised allocation is sound here — unlike the accumulating
-    // kernels, which must start from a zeroed buffer.
-    let out_re = client.empty(total * core::mem::size_of::<f64>());
-    let out_im = client.empty(total * core::mem::size_of::<f64>());
 
     if stride_e == 1 {
         // K-major planes: a lane's `g` walk is already contiguous.
@@ -518,7 +513,8 @@ fn run<R: Runtime>(
             }
         }
         launch_on_handles::<R, f64>(
-            client, ao_re, ao_im, &vr_h, &out_re, &out_im, ao_len, nkpts, nao, ngrids, stride_k, 1,
+            client, ao_re, ao_im, &vr_h, out_re, out_im, ao_len, nkpts, nao, blk_len, stride_k, 1,
+            accumulate,
         );
     } else {
         // POINT-MAJOR planes (the K-10v fused AO path): successive `g` of one
@@ -548,19 +544,55 @@ fn run<R: Runtime>(
                 &scratch_re,
                 &scratch_im,
                 &vr_h,
-                &out_re,
-                &out_im,
+                out_re,
+                out_im,
                 n,
                 total,
                 nao,
-                ngrids,
+                blk_len,
                 0,
                 1,
                 k * npair,
                 npair,
+                accumulate,
             );
         }
     }
+}
+
+/// Zero the gamma planes, launch the contraction, read the answer back.
+#[allow(clippy::too_many_arguments)]
+fn run<R: Runtime>(
+    client: &ComputeClient<R>,
+    ao_re: &Handle,
+    ao_im: &Handle,
+    ao_len: usize,
+    stride_k: usize,
+    stride_e: usize,
+    vr: &[f64],
+    nkpts: usize,
+    nao: usize,
+    ngrids: usize,
+    gamma: &[bool],
+    accumulate: u32,
+) -> KMatPlanes {
+    let npair = nao * nao;
+    let total = nkpts * npair;
+    // Every one of the `total` slots is written by exactly one lane, so an
+    // uninitialised allocation is sound here — unlike the accumulating
+    // kernels, which must start from a zeroed buffer.
+    let out_re = client.empty(total * core::mem::size_of::<f64>());
+    let out_im = client.empty(total * core::mem::size_of::<f64>());
+    // B-03b: in carry mode the first block LOADS these outputs as its running
+    // sums, so they must start zeroed — `fill_zero`, not unwritten `empty` (T4).
+    if accumulate == 1 {
+        crate::pbc::fill::fill_zero::<R, f64>(client, &out_re, total);
+        crate::pbc::fill::fill_zero::<R, f64>(client, &out_im, total);
+    }
+    contract_into::<R>(
+        client, ao_re, ao_im, ao_len, stride_k, stride_e, vr, &out_re, &out_im, nkpts, nao, ngrids,
+        gamma, accumulate,
+    );
     // The read is where the lazily launched kernels actually execute, so this
     // span holds them too.
     let _span = tracing::info_span!(
@@ -582,4 +614,163 @@ fn run<R: Runtime>(
             )
         })
         .collect()
+}
+
+/// B-03c — the device-carried `nkpts · nao²` output of a grid-blocked
+/// `local_vmat`.
+///
+/// One lane owns one `(k, p, q)` element, and every block's kernel extends the
+/// SAME serial chain: it LOADS the running sum, adds this block's grid points
+/// in increasing `g` order, and STORES it back (§2.4 — one carried
+/// accumulator, never per-block-then-merged). `finish` therefore returns the
+/// bit-identical whole-grid contraction while peak device memory holds one
+/// block's AO planes, never the whole table.
+///
+/// The buffers are cubecl `Handle`s, but only as PRIVATE fields — the
+/// `AoKAccumulator` precedent, so the algebra wall (ALG-06) holds.
+///
+/// Blocks must arrive in increasing `g` order through [`accumulate_block`],
+/// serially — the `&mut self` receiver makes a parallel block loop a compile
+/// error. See `eval_ao_kpts_local_vmat_blocked`.
+pub struct CarriedVmat {
+    re: Handle,
+    im: Handle,
+    nkpts: usize,
+    nao: usize,
+    ngrids: usize,
+}
+
+impl CarriedVmat {
+    /// Zeroed output planes for `(nkpts, nao)` over `ngrids` grid points.
+    pub fn new(client: &AlgebraClient, nkpts: usize, nao: usize, ngrids: usize) -> Self {
+        // `max(1)`: the same degenerate-guard rationale as
+        // `AoKAccumulator::zeros`. T4 — `empty` recycles dirty buffers, so the
+        // fill is mandatory, not an optimisation: the first block LOADS these
+        // zeros as its running sums.
+        let total = (nkpts * nao * nao).max(1);
+        let bytes = total * core::mem::size_of::<f64>();
+        let (re, im) = dispatch_backend!(client, c, Rt, {
+            let re = c.empty(bytes);
+            let im = c.empty(bytes);
+            crate::pbc::fill::fill_zero::<Rt, f64>(c, &re, total);
+            crate::pbc::fill::fill_zero::<Rt, f64>(c, &im, total);
+            (re, im)
+        });
+        Self {
+            re,
+            im,
+            nkpts,
+            nao,
+            ngrids,
+        }
+    }
+
+    /// Fold one grid block's resident accumulator into the carried sums.
+    /// `vr_block` is that block's `vr[g0..g0+len]`; the block accumulator is
+    /// CONSUMED, so peak holds one block's planes at a time.
+    ///
+    /// # Errors
+    /// [`AlgebraError::ShapeMismatch`] when the accumulator's width is not
+    /// `nao · vr_block.len()`, the block range leaves `ngrids`, or `gamma`
+    /// disagrees with `nkpts`.
+    pub fn accumulate_block(
+        &mut self,
+        client: &AlgebraClient,
+        acc: AoKAccumulator,
+        g0: usize,
+        vr_block: &[f64],
+        gamma: &[bool],
+    ) -> Result<(), AlgebraError> {
+        let blk_len = vr_block.len();
+        let (ankpts, n) = acc.shape();
+        if ankpts != self.nkpts || n != self.nao * blk_len || blk_len == 0 {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!(
+                    "block accumulator (nkpts, nao·blk>0) = ({}, {}·{blk_len})",
+                    self.nkpts, self.nao,
+                ),
+                actual: format!("({ankpts}, {n})"),
+            });
+        }
+        if gamma.len() != self.nkpts {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("one gamma flag per k-point, nkpts = {}", self.nkpts),
+                actual: gamma.len().to_string(),
+            });
+        }
+        if g0.saturating_add(blk_len) > self.ngrids {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("block [g0, g0+blk) within ngrids = {}", self.ngrids),
+                actual: format!("[{g0}, {})", g0.saturating_add(blk_len)),
+            });
+        }
+        let (stride_k, stride_e) = if acc.is_point_major() {
+            (1, self.nkpts)
+        } else {
+            (n, 1)
+        };
+        let (re, im) = acc.planes();
+        let (re, im) = (re.clone(), im.clone());
+        // Peak intent: the block's planes are queued into the launches below
+        // and released here; the barrier at the end of the dispatch returns
+        // them to the pool before the next block allocates.
+        drop(acc);
+        dispatch_backend!(client, c, Rt, {
+            contract_into::<Rt>(
+                c,
+                &re,
+                &im,
+                self.nkpts * n,
+                stride_k,
+                stride_e,
+                vr_block,
+                &self.re,
+                &self.im,
+                self.nkpts,
+                self.nao,
+                blk_len,
+                gamma,
+                1, // carry mode — §2.4, one carried accumulator
+            );
+            // Execution barrier: `read` syncs the stream, so this block's
+            // kernels complete and its AO planes return to the pool BEFORE the
+            // next block allocates. Without it every block's planes stay
+            // referenced until `finish` and blocking would save no memory. The
+            // payload is the `nkpts·nao²` running sums — read for the sync and
+            // discarded; `finish` reads them for real.
+            let _ = c.read(vec![self.re.clone(), self.im.clone()]);
+        });
+        Ok(())
+    }
+
+    /// Read the carried sums home: one `(re, im)` pair of `nao · nao` reals
+    /// per k-point, the same layout [`local_vmat`] returns.
+    pub fn finish(self, client: &AlgebraClient) -> KMatPlanes {
+        let npair = self.nao * self.nao;
+        let bytes = dispatch_backend!(
+            client,
+            c,
+            Rt,
+            c.read(vec![self.re.clone(), self.im.clone()])
+        );
+        // The read is where the lazily launched kernels actually execute, so
+        // this span holds them too.
+        let _span = tracing::info_span!(
+            "pbc_local_vmat",
+            nkpts = self.nkpts as u64,
+            nao = self.nao as u64,
+            ngrids = self.ngrids as u64
+        )
+        .entered();
+        let re: &[f64] = bytemuck::cast_slice(&bytes[0]);
+        let im: &[f64] = bytemuck::cast_slice(&bytes[1]);
+        (0..self.nkpts)
+            .map(|k| {
+                (
+                    re[k * npair..(k + 1) * npair].to_vec(),
+                    im[k * npair..(k + 1) * npair].to_vec(),
+                )
+            })
+            .collect()
+    }
 }
