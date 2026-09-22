@@ -1206,9 +1206,16 @@ fn comp_of_eval_name(eval_name: &str) -> Option<usize> {
 
 /// K-09's images per accumulate launch. `PYSCF_PBC_AO_IMAGE_BATCH=<n>` pins it
 /// (`1` = one launch per image, the pre-K-09 path); unset, the batch buffer is
-/// sized under [`AO_IMAGE_BATCH_BUDGET_BYTES`] and capped at
-/// `AO_IMAGE_BATCH_MAX`.
-fn image_batch_capacity(block_len: usize, accumulator_bytes: usize) -> usize {
+/// sized under [`AO_IMAGE_BATCH_BUDGET_BYTES`], floored at
+/// [`AO_IMAGE_BATCH_MIN`] and capped at `AO_IMAGE_BATCH_MAX`.
+///
+/// `block_len` is the reals in ONE image's AO block (`comp · ngrids · nao`) and
+/// `accumulator_bytes` the two device planes (`2 · nkpts · block_len · 8`).
+///
+/// Public for `tests/ao_image_batch.rs`, which gates the floor: capacity 1 is
+/// the per-image fallback and costs 2.3× time, and nothing else catches a
+/// formula that silently asks for it.
+pub fn image_batch_capacity(block_len: usize, accumulator_bytes: usize) -> usize {
     if let Some(v) = std::env::var("PYSCF_PBC_AO_IMAGE_BATCH")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
@@ -1220,9 +1227,20 @@ fn image_batch_capacity(block_len: usize, accumulator_bytes: usize) -> usize {
     // the only large buffer in the call. It is now up to 1.2x the AO table, and
     // after B-03 it would be the LARGEST buffer in a blocked evaluation. Tie it to
     // the accumulator so blocking shrinks both.
-    let budget = AO_IMAGE_BATCH_BUDGET_BYTES
-        .min(accumulator_bytes.saturating_mul(AO_IMAGE_BATCH_ACC_NUM) / AO_IMAGE_BATCH_ACC_DEN);
-    (budget / block_bytes).clamp(1, pyscf_kernels::pbc::AO_IMAGE_BATCH_MAX)
+    let abs_cap = (AO_IMAGE_BATCH_BUDGET_BYTES / block_bytes).max(1);
+    let acc_cap = (accumulator_bytes.saturating_mul(AO_IMAGE_BATCH_ACC_NUM)
+        / AO_IMAGE_BATCH_ACC_DEN.max(1)
+        / block_bytes)
+        .max(1);
+    // The accumulator term reduces to `nkpts` (see `AO_IMAGE_BATCH_ACC_NUM`), so
+    // on its own it would hand gamma the capacity-1 per-image fallback. Floor it
+    // — but never above what the absolute budget allows, so the floor cannot
+    // push the batch past 256 MiB.
+    let floor = AO_IMAGE_BATCH_MIN.min(abs_cap);
+    abs_cap
+        .min(acc_cap)
+        .max(floor)
+        .clamp(1, pyscf_kernels::pbc::AO_IMAGE_BATCH_MAX)
 }
 
 /// K-10's per-call staging: the resident unshifted grid and the images
@@ -1383,8 +1401,25 @@ pub const AO_IMAGE_BATCH_BUDGET_BYTES: usize = 256 * 1024 * 1024;
 /// safe ceiling that preserves the K-09 batching. The only cliff is capacity
 /// 1 (the legacy per-image fallback): −41% peak for 8.6× time. Do not lower
 /// this toward 1 chasing memory; the exchange rate is prohibitive.
+///
+/// NOTE the algebra, which is why [`AO_IMAGE_BATCH_MIN`] exists: the caller
+/// passes `accumulator_bytes = 2·nkpts·n·8` and `block_bytes = n·8`, so this
+/// fraction reduces the accumulator term to exactly `nkpts`. It therefore
+/// binds hardest where memory pressure is LOWEST, and at gamma (`nkpts = 1`)
+/// it asks for capacity 1 — the cliff above. B-04's claim that capacity 1 is
+/// "never produced by the formula at real shapes" was wrong: gamma is a real
+/// shape, and the unfloored formula produced it (measured 2.3× slower).
 const AO_IMAGE_BATCH_ACC_NUM: usize = 1;
 const AO_IMAGE_BATCH_ACC_DEN: usize = 2;
+
+/// The capacity the accumulator fraction may never push the batch below.
+///
+/// B-04 measured peak and time flat across capacities 2–32 at the flagship
+/// shape and a cliff only at 1, so a floor costs no measurable memory while
+/// keeping K-09 batching alive at small `nkpts`. It is itself capped by the
+/// absolute [`AO_IMAGE_BATCH_BUDGET_BYTES`] budget, so flooring can never make
+/// the batch exceed 256 MiB.
+pub const AO_IMAGE_BATCH_MIN: usize = 8;
 
 /// K-09: fold the registered images into the accumulator in one launch and
 /// empty the batch. `m` names the image just registered, for the error.

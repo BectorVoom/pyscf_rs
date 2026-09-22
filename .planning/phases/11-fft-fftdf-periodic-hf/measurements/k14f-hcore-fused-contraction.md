@@ -360,3 +360,38 @@ JIT overhead of the first launches. `image_batch_only` is deleted rather than
 fixed: its slots are written only by the AO evaluator, so no probe can make them
 resident without running the evaluation `ao_table_only` already measures. Treat
 the `image_batch_only` rows above as void.
+
+## B-02 correction (2026-09-23) — the batch budget collapsed at small `nkpts`
+
+B-02's accumulator-relative budget reduces, algebraically, to `nkpts`: the
+driver passes `accumulator_bytes = 2·nkpts·n·8` and `block_bytes = n·8`, so
+`accumulator/2 / block_bytes == nkpts`. The term therefore binds hardest where
+memory pressure is LOWEST, and at gamma it asked for capacity **1** — the
+pre-K-09 per-image fallback. B-04's note that capacity 1 is "never produced by
+the formula at real shapes" was wrong; gamma is a real shape.
+
+No bit-identity gate could catch it (batching is bit-exact at any capacity), so
+it showed only as wall clock. Measured on the `hcore_block`
+`blocked_local_vmat_is_bit_identical` body (gamma + 2×2×2, small k throughout):
+
+| batch capacity | before the floor | after the floor |
+|---|---|---|
+| default (computed) | 1.80 s | **0.93 s** |
+| pinned 32 | 0.77 s | 0.76 s |
+| pinned 1 (fallback) | — | 2.04 s |
+
+Fix: `AO_IMAGE_BATCH_MIN = 8` floors the capacity, itself capped by the
+absolute 256 MiB budget so the floor can never enlarge the batch past it.
+Justified by B-04's own sweep — peak and time flat across capacities 2–32 at
+the flagship, cliff only at 1.
+
+Residual: the default (floor 8) is still ~1.2× slower than a pinned 32 at
+gamma, because the accumulator term still caps capacity below the absolute
+budget there. Raising the floor to 32 would recover it and would make the
+accumulator term inert — which is arguably what the measurements say it should
+be. Left at 8 as the conservative choice; revisit with a peak measurement at
+gamma before raising.
+
+Gate: `crates/pyscf-pbc-gto/tests/ao_image_batch_floor.rs` — a deterministic
+capacity assertion over `(nkpts, nao, ngrids)` shapes (the one to trust), plus
+a same-process wall-clock ratio against a pinned capacity 1.
