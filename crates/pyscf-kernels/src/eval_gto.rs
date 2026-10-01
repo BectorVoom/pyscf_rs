@@ -3525,17 +3525,27 @@ fn eval_gto_general_values(
                 acc += coef * ao_exp(-alpha * r2, exp_mode);
             }
             let radial = acc * fac1;
+            // BAND-11: each Cartesian term once (it used to be recomputed for
+            // every spherical `m`), scattered into the `m` slots. Per slot the
+            // sum is still `ci` ascending from `+0.0`, and a zero cart→sph
+            // coefficient adds `±0.0`, which never changes such a sum — so
+            // skipping it and reordering the loops are both bit-identical.
             for m in 0..nsph_l {
-                let mut v = 0.0_f64;
-                for ci in 0..ncart_l {
-                    let lx = cpow_lx[cpow_off + ci] as u32;
-                    let ly = cpow_ly[cpow_off + ci] as u32;
-                    let lz = cpow_lz[cpow_off + ci] as u32;
-                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
-                    let cart_val = mono * radial;
-                    v += c2s_flat[c2s_off + m * ncart_l + ci] * cart_val;
+                vals[vbase + c_idx * nsph_l + m] = 0.0_f64;
+            }
+            for ci in 0..ncart_l {
+                let lx = cpow_lx[cpow_off + ci] as u32;
+                let ly = cpow_ly[cpow_off + ci] as u32;
+                let lz = cpow_lz[cpow_off + ci] as u32;
+                let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
+                let cart_val = mono * radial;
+                for m in 0..nsph_l {
+                    let t = c2s_flat[c2s_off + m * ncart_l + ci];
+                    if t != 0.0_f64 {
+                        let q = vbase + c_idx * nsph_l + m;
+                        vals[q] += t * cart_val;
+                    }
                 }
-                vals[vbase + c_idx * nsph_l + m] = v;
             }
         }
     } else {
@@ -3624,34 +3634,39 @@ fn eval_gto_deriv1_values(
             let radial = acc * fac1;
             let radial_2a = acc2a * fac1;
 
+            // BAND-11: see `eval_gto_general_values` — each Cartesian term and
+            // its three derivatives once, scattered into the `m` slots, zero
+            // coefficients skipped; per slot the same `ci`-ascending sum from
+            // `+0.0`, so bit-identical to the `m`-outer loop it replaces.
             for m in 0..nsph_l {
-                let mut v = 0.0_f64;
-                let mut vx = 0.0_f64;
-                let mut vy = 0.0_f64;
-                let mut vz = 0.0_f64;
-                for ci in 0..ncart_l {
-                    let lx = cpow_lx[cpow_off + ci] as u32;
-                    let ly = cpow_ly[cpow_off + ci] as u32;
-                    let lz = cpow_lz[cpow_off + ci] as u32;
-                    let mono = ipow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
-                    let cval = mono * radial;
-                    let cdx =
-                        radial_2a * dx * mono + radial * dpow(dx, lx) * ipow(dy, ly) * ipow(dz, lz);
-                    let cdy =
-                        radial_2a * dy * mono + radial * ipow(dx, lx) * dpow(dy, ly) * ipow(dz, lz);
-                    let cdz =
-                        radial_2a * dz * mono + radial * ipow(dx, lx) * ipow(dy, ly) * dpow(dz, lz);
-                    let t = c2s_flat[c2s_off + m * ncart_l + ci];
-                    v += t * cval;
-                    vx += t * cdx;
-                    vy += t * cdy;
-                    vz += t * cdz;
-                }
                 let q = c_idx * nsph_l + m;
-                vals[vbase + q] = v;
-                vals[vbase + qn + q] = vx;
-                vals[vbase + 2 * qn + q] = vy;
-                vals[vbase + 3 * qn + q] = vz;
+                vals[vbase + q] = 0.0_f64;
+                vals[vbase + qn + q] = 0.0_f64;
+                vals[vbase + 2 * qn + q] = 0.0_f64;
+                vals[vbase + 3 * qn + q] = 0.0_f64;
+            }
+            for ci in 0..ncart_l {
+                let lx = cpow_lx[cpow_off + ci] as u32;
+                let ly = cpow_ly[cpow_off + ci] as u32;
+                let lz = cpow_lz[cpow_off + ci] as u32;
+                let px = ipow(dx, lx);
+                let py = ipow(dy, ly);
+                let pz = ipow(dz, lz);
+                let mono = px * py * pz;
+                let cval = mono * radial;
+                let cdx = radial_2a * dx * mono + radial * dpow(dx, lx) * py * pz;
+                let cdy = radial_2a * dy * mono + radial * px * dpow(dy, ly) * pz;
+                let cdz = radial_2a * dz * mono + radial * px * py * dpow(dz, lz);
+                for m in 0..nsph_l {
+                    let t = c2s_flat[c2s_off + m * ncart_l + ci];
+                    if t != 0.0_f64 {
+                        let q = vbase + c_idx * nsph_l + m;
+                        vals[q] += t * cval;
+                        vals[q + qn] += t * cdx;
+                        vals[q + 2 * qn] += t * cdy;
+                        vals[q + 3 * qn] += t * cdz;
+                    }
+                }
             }
         }
     } else {
@@ -3886,6 +3901,114 @@ fn resident_fold<N: Size>(
     }
 }
 
+/// Register-block edge of [`resident_fold_blocked`]: `FOLD_BLK × FOLD_BLK`
+/// `(q, k)` accumulators per block.
+const FOLD_BLK: usize = 4;
+
+/// BAND-12 — [`resident_fold`] register-blocked.
+///
+/// MEASURED 2026-09-24 on a Kaggle T4 (KTaO3): the exponentials are ~23 % of
+/// the resident AO kernel (`PYSCF_PBC_AO_EXP=none` 3.73 → 2.86 s per call);
+/// the rest is this fold, ~170 GFLOP per `get_bands` at ~¼ of FP64 peak,
+/// because each `(q, k, image)` multiply-add pair loaded a value and two
+/// phases. Here a `4 × 4` block of `(q, k)` accumulators stays in unrolled
+/// (register) arrays across the staged images, so each loaded value feeds
+/// four k-points and each loaded phase four components.
+///
+/// Every `(q, k)` accumulator still adds `pr · v` / `pi · v` image by image in
+/// ascending `j` from the value [`resident_fold`] would have held — the same
+/// operations in the same order, so the planes are bit-identical. Padding
+/// lanes of a partial block compute on zeros and are never stored.
+#[cube]
+fn resident_fold_blocked<N: Size>(
+    vals: &Array<f64>,
+    idx: &Array<u32>,
+    nb: usize,
+    qtot: usize,
+    nkt: usize,
+    kv0: usize,
+    nkv: usize,
+    pr: &Array<Vector<f64, N>>,
+    pi: &Array<Vector<f64, N>>,
+    acc_re: &mut Array<Vector<f64, N>>,
+    acc_im: &mut Array<Vector<f64, N>>,
+) {
+    let zero = Vector::<f64, N>::new(0.0);
+    for qb in range_stepped(0usize, qtot, FOLD_BLK) {
+        for tb in range_stepped(0usize, nkt, FOLD_BLK) {
+            let mut r = Array::<Vector<f64, N>>::new(FOLD_BLK * FOLD_BLK);
+            let mut s = Array::<Vector<f64, N>>::new(FOLD_BLK * FOLD_BLK);
+            #[unroll]
+            for a in 0..FOLD_BLK {
+                #[unroll]
+                for b in 0..FOLD_BLK {
+                    let q = qb + a;
+                    let t = tb + b;
+                    let mut vr = zero;
+                    let mut vi = zero;
+                    if q < qtot {
+                        if t < nkt {
+                            vr = acc_re[q * nkt + t];
+                            vi = acc_im[q * nkt + t];
+                        }
+                    }
+                    r[a * FOLD_BLK + b] = vr;
+                    s[a * FOLD_BLK + b] = vi;
+                }
+            }
+            for j in 0..nb {
+                let m = idx[j] as usize;
+                let mut v = Array::<Vector<f64, N>>::new(FOLD_BLK);
+                let mut cr = Array::<Vector<f64, N>>::new(FOLD_BLK);
+                let mut ci = Array::<Vector<f64, N>>::new(FOLD_BLK);
+                #[unroll]
+                for a in 0..FOLD_BLK {
+                    let q = qb + a;
+                    let mut x = 0.0_f64;
+                    if q < qtot {
+                        x = vals[j * qtot + q];
+                    }
+                    v[a] = Vector::<f64, N>::new(x);
+                }
+                #[unroll]
+                for b in 0..FOLD_BLK {
+                    let t = tb + b;
+                    let mut p = zero;
+                    let mut pp = zero;
+                    if t < nkt {
+                        p = pr[m * nkv + kv0 + t];
+                        pp = pi[m * nkv + kv0 + t];
+                    }
+                    cr[b] = p;
+                    ci[b] = pp;
+                }
+                #[unroll]
+                for a in 0..FOLD_BLK {
+                    #[unroll]
+                    for b in 0..FOLD_BLK {
+                        r[a * FOLD_BLK + b] += cr[b] * v[a];
+                        s[a * FOLD_BLK + b] += ci[b] * v[a];
+                    }
+                }
+            }
+            #[unroll]
+            for a in 0..FOLD_BLK {
+                #[unroll]
+                for b in 0..FOLD_BLK {
+                    let q = qb + a;
+                    let t = tb + b;
+                    if q < qtot {
+                        if t < nkt {
+                            acc_re[q * nkt + t] = r[a * FOLD_BLK + b];
+                            acc_im[q * nkt + t] = s[a * FOLD_BLK + b];
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// BAND-06 — K-10 with the k-accumulators resident in the lane: ALL images
 /// in one launch per k-tile, written once. See [`eval_ao_k_resident`].
 #[allow(clippy::too_many_arguments)]
@@ -3933,6 +4056,7 @@ fn eval_ao_k_resident_kernel<N: Size>(
     lane0: usize,
     #[comptime] deriv1: bool,
     #[comptime] exp_mode: u32,
+    #[comptime] acc_cap: usize,
 ) {
     // `lane0`: chunked on the CPU runtime — `vals` and `present` are stack per
     // iteration there (`launch_1d_chunked`).
@@ -3962,8 +4086,10 @@ fn eval_ao_k_resident_kernel<N: Size>(
         // accumulator in the lane instead of in the planes.
         let mut vals = Array::<f64>::new(FUSED_VALS_CAP);
         let mut idx = Array::<u32>::new(AO_FUSED_BATCH_MAX);
-        let mut acc_re = Array::<Vector<f64, N>>::new(RESIDENT_ACC_VECS);
-        let mut acc_im = Array::<Vector<f64, N>>::new(RESIDENT_ACC_VECS);
+        // BAND-10: `acc_cap` is RESIDENT_ACC_VECS on the CPU runtime (stack)
+        // and GPU_RESIDENT_ACC_VECS on a GPU, so every k-point fits one tile.
+        let mut acc_re = Array::<Vector<f64, N>>::new(acc_cap);
+        let mut acc_im = Array::<Vector<f64, N>>::new(acc_cap);
         let zero = Vector::<f64, N>::new(0.0);
         for i in 0..qtot * nkt {
             acc_re[i] = zero;
@@ -4054,7 +4180,7 @@ fn eval_ao_k_resident_kernel<N: Size>(
                 idx[nb] = m as u32;
                 nb += 1;
                 if nb == bcap {
-                    resident_fold(
+                    resident_fold_blocked(
                         &vals, &idx, nb, qtot, nkt, kv0, nkv, pr, pi, &mut acc_re, &mut acc_im,
                     );
                     nb = 0;
@@ -4062,7 +4188,7 @@ fn eval_ao_k_resident_kernel<N: Size>(
             }
         }
         if nb > 0 {
-            resident_fold(
+            resident_fold_blocked(
                 &vals, &idx, nb, qtot, nkt, kv0, nkv, pr, pi, &mut acc_re, &mut acc_im,
             );
         }
@@ -4084,9 +4210,55 @@ fn eval_ao_k_resident_kernel<N: Size>(
 }
 
 
+/// `PYSCF_PBC_AO_RESIDENT_NKT=<n>` — the resident kernel's k-tile cap
+/// (measurement dial; unset or `0` leaves the accumulator-sized default).
+fn resident_nkt_override() -> Option<usize> {
+    std::env::var("PYSCF_PBC_AO_RESIDENT_NKT")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+}
+
 /// The per-lane accumulator of [`eval_ao_k_resident_kernel`], in k-VECTORS per
 /// plane: `Q · nkt <= RESIDENT_ACC_VECS`, the host tiles k to fit.
 pub const RESIDENT_ACC_VECS: usize = 512;
+
+/// BAND-10 — the largest resident accumulator on a runtime with hardware
+/// planes.
+///
+/// MEASURED 2026-09-24 on a Kaggle T4 (KTaO3, d shell with gradients:
+/// `Q = 20`, 33 band k-points, 30 grid blocks per `get_bands`): at 512 the
+/// k-loop needs two tiles (25 + 8) and every tile re-evaluates every lattice
+/// image — AO kernel 12.6 s, `get_bands` 5.56 s. One tile at 1 024: 10.25 s /
+/// 4.77 s; at 2 048 the same time but 7.87 GB GPU memory instead of 6.59 GB,
+/// because a GPU lane's local arrays are reserved at the cap. Hence the cap
+/// is the smallest power of two holding `Q · nkpts`, within
+/// [`RESIDENT_ACC_VECS`, `GPU_RESIDENT_ACC_VECS`].
+pub const GPU_RESIDENT_ACC_VECS: usize = 2048;
+
+/// The accumulator cap the resident kernel is compiled with on `client` for
+/// a widest shell of `qmax` values and `nkpts` k-points.
+///
+/// The CPU runtime keeps [`RESIDENT_ACC_VECS`] (its locals are worker stack
+/// per iteration). `PYSCF_PBC_AO_RESIDENT_ACC=<n>` pins it (measurement
+/// dial). The k-tiling adapts to the cap and never changes a `(q, k)` chain,
+/// so the planes are bit-identical for any value.
+fn resident_acc_cap(client: &AlgebraClient, qmax: usize, nkpts: usize) -> usize {
+    if let Some(n) = std::env::var("PYSCF_PBC_AO_RESIDENT_ACC")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+    {
+        return n;
+    }
+    if client.has_planes() {
+        (qmax * nkpts)
+            .next_power_of_two()
+            .clamp(RESIDENT_ACC_VECS, GPU_RESIDENT_ACC_VECS)
+    } else {
+        RESIDENT_ACC_VECS
+    }
+}
 
 /// The most images one fused batch may hold.
 pub const AO_FUSED_BATCH_MAX: usize = 32;
@@ -4322,9 +4494,10 @@ pub fn eval_ao_k_resident(
             pi.len()
         )));
     }
-    if qmax == 0 || qmax > FUSED_VALS_CAP || qmax > RESIDENT_ACC_VECS {
+    let acc_cap = resident_acc_cap(client, qmax, nkpts);
+    if qmax == 0 || qmax > FUSED_VALS_CAP || qmax > acc_cap {
         return Err(err(format!(
-            "BAND-06: Q = {qmax} exceeds the lane arrays ({FUSED_VALS_CAP} values, {RESIDENT_ACC_VECS} accumulators)"
+            "BAND-06: Q = {qmax} exceeds the lane arrays ({FUSED_VALS_CAP} values, {acc_cap} accumulators)"
         )));
     }
     let nblocks = ngrids.div_ceil(blk.max(1)).max(1);
@@ -4367,9 +4540,16 @@ pub fn eval_ao_k_resident(
         let nkv = nkpts / line;
         let local_bytes = FUSED_VALS_CAP * core::mem::size_of::<f64>()
             + AO_FUSED_BATCH_MAX * core::mem::size_of::<u32>()
-            + 2 * RESIDENT_ACC_VECS * line * core::mem::size_of::<f64>();
+            + 2 * acc_cap * line * core::mem::size_of::<f64>();
         // k-tiles so the widest shell's `Q · nkt` fits the accumulator.
-        let nkt_max = (RESIDENT_ACC_VECS / qmax).max(1);
+        // `PYSCF_PBC_AO_RESIDENT_NKT=<n>` caps the tile (GPU-shape dial,
+        // 2026-09-23): a smaller tile shrinks the lane's live accumulator at
+        // the price of re-evaluating the images once per tile. Every `(q, k)`
+        // chain is the same image-ordered sum whichever tile holds it, so
+        // the planes are bit-identical for any cap.
+        let nkt_max = (acc_cap / qmax)
+            .max(1)
+            .min(resident_nkt_override().unwrap_or(usize::MAX));
         // SAFETY: every handle length is its slice's length; the kernel
         // guards `tid < ngrids·nbas`; the two planes are the only `&mut`.
         let mut kv0 = 0usize;
@@ -4424,6 +4604,7 @@ pub fn eval_ao_k_resident(
                         chunk.lane0,
                         deriv1,
                         ctx.exp_mode,
+                        acc_cap,
                     );
                 }
             }

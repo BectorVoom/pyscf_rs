@@ -34,7 +34,7 @@ use pyscf_pbc_df::{Fftdf, Gdf, PeriodicDf, get_hcore, get_j_kpts, get_k_kpts, ge
 use pyscf_pbc_dft::krks::{Krks, hybrid};
 use pyscf_pbc_dft::kuks::Kuks;
 use pyscf_pbc_gto::hcore::get_ovlp;
-use pyscf_pbc_gto::{ALattice, Cell, CellBuildArgs, make_kpts_default};
+use pyscf_pbc_gto::{ALattice, BravaisLattice, Cell, CellBuildArgs, band_path, make_kpts_default};
 use pyscf_pbc_scf::KScfConfig;
 use pyscf_pbc_tools::coulg::ExxDiv;
 use serde::Serialize;
@@ -126,6 +126,41 @@ fn he_all_electron(basis: &str) -> Cell {
         ..Default::default()
     })
     .expect("He cell must build")
+}
+
+/// KTaO3 — cubic perovskite (Pm-3m, a = 3.9885 Å): the Ta/O stand-in for the
+/// YTa7O19 band run (2026-09-23). Same GTH-PBE Ta q13 (l = 2 projectors) and
+/// O q6 as the 54-atom cell, an insulator (so an independent SCF is a sound
+/// fixture, unlike CsCl YTa), five atoms. `ke` is the plane-wave cutoff in
+/// Hartree (`None` = the cell's basis-derived default); `ncopy` builds a
+/// supercell so the workload can be scaled toward the real cell's `nao`.
+fn ktao3(basis: &str, ke: Option<f64>, ncopy: [usize; 3]) -> Cell {
+    let a = 3.9885;
+    let h = 0.5 * a;
+    let cell = Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![
+                ("K".into(), [0.0, 0.0, 0.0]),
+                ("Ta".into(), [h, h, h]),
+                ("O".into(), [h, h, 0.0]),
+                ("O".into(), [h, 0.0, h]),
+                ("O".into(), [0.0, h, h]),
+            ]),
+            basis: BasisInput::Name(basis.into()),
+            unit: Unit::Ang,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[a, 0.0, 0.0], [0.0, a, 0.0], [0.0, 0.0, a]]),
+        pseudo: Some("gth-pbe".into()),
+        ke_cutoff: ke,
+        ..Default::default()
+    })
+    .expect("KTaO3 cell must build");
+    if ncopy == [1, 1, 1] {
+        cell
+    } else {
+        pyscf_pbc_gto::super_cell(&cell, ncopy, false).expect("KTaO3 supercell must build")
+    }
 }
 
 fn cell_by_name(name: &str, basis: &str) -> Cell {
@@ -2166,6 +2201,7 @@ where
 
 #[derive(Serialize)]
 struct BandsReport {
+    backend: String,
     cell: String,
     basis: String,
     driver: String,
@@ -2182,6 +2218,7 @@ struct BandsReport {
     get_j_ms: f64,
     eig_ms: f64,
     spans: Vec<(String, u64, f64)>,
+    scf_spans: Vec<(String, u64, f64)>,
     bands_checksum: f64,
 }
 
@@ -2190,9 +2227,17 @@ struct BandsReport {
 /// Runs one SCF on the cell's default mesh (exactly what the Python binding
 /// builds), then times `get_bands` end to end (`--reps` times, first one
 /// cold) and each of its stages separately, warm.
+///
+/// GPU-vs-CPU profiling (2026-09-23): `--cell ktao3 [--ke Ha] [--super a,b,c]`
+/// is the Ta/O stand-in for YTa7O19, `--lattice cubic` walks the lattice's
+/// standard band path instead of L-Γ-X, and `--require-backend cuda|cpu`
+/// aborts when `PYSCF_BACKEND` resolved to anything else.
 fn run_bands(args: &[String]) {
     let cell_name = arg_value(args, "--cell").unwrap_or_else(|| "si".into());
-    let basis = arg_value(args, "--basis").unwrap_or_else(|| "gth-szv".into());
+    let basis = arg_value(args, "--basis").unwrap_or_else(|| {
+        // `gth-szv` has no K/Ta entries; the perovskite needs the MOLOPT set.
+        if cell_name == "ktao3" { "gth-szv-molopt-sr".into() } else { "gth-szv".into() }
+    });
     let nk = parse_triple(&arg_value(args, "--nk").unwrap_or_else(|| "2,2,2".into()));
     let xc = arg_value(args, "--xc").unwrap_or_else(|| "pbe".into());
     let driver = arg_value(args, "--driver").unwrap_or_else(|| "kuks".into());
@@ -2204,21 +2249,63 @@ fn run_bands(args: &[String]) {
     let layer = SpanTotalsLayer::default();
     tracing_subscriber::registry().with(layer.clone()).init();
 
-    let cell = cell_by_name(&cell_name, &basis);
-    let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
-    // L -> Gamma -> X, `nband` points, scaled -> absolute.
-    let path = [[0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.5, 0.0, 0.5]];
-    let half = nband / 2;
-    let mut scaled = Vec::with_capacity(nband);
-    for seg in 0..2 {
-        for i in 0..half {
-            let t = i as f64 / half as f64;
-            scaled.push(std::array::from_fn(|x| {
-                path[seg][x] + t * (path[seg + 1][x] - path[seg][x])
-            }));
+    // Resolve the backend exactly as the kernels will, and refuse to quote a
+    // silent CPU fallback as a GPU number (`--require-backend cuda`).
+    let backend = {
+        let sel = pyscf_algebra::select_backend().expect("backend must resolve");
+        let name = sel.kind.name().to_string();
+        eprintln!("  backend resolved: {name} (PYSCF_BACKEND={:?})", sel.raw_env);
+        if let Some(want) = arg_value(args, "--require-backend") {
+            assert_eq!(name, want, "--require-backend {want} but the backend resolved to {name}");
         }
-    }
-    let kband = cell.get_abs_kpts(&scaled).expect("abs kpts");
+        name
+    };
+
+    let cell = if cell_name == "ktao3" {
+        let ke = arg_value(args, "--ke").map(|s| s.parse().expect("--ke"));
+        let ncopy = arg_value(args, "--super").map_or([1, 1, 1], |s| parse_triple(&s));
+        ktao3(&basis, ke, ncopy)
+    } else {
+        cell_by_name(&cell_name, &basis)
+    };
+    eprintln!(
+        "  cell {cell_name}: natm={} nao={} nelectron={} mesh={:?} ke_cutoff={:?}",
+        cell.mol.natm,
+        cell.mol.nao_nr,
+        cell.tot_electrons(1),
+        cell.mesh,
+        cell.ke_cutoff
+    );
+    let kpts = make_kpts_default(&cell, nk).expect("k-mesh");
+    let kband = match arg_value(args, "--lattice") {
+        // The lattice's standard path (`band_path`), `nband` points in total.
+        Some(l) => {
+            let lattice = match l.as_str() {
+                "cubic" => BravaisLattice::Cubic,
+                "fcc" => BravaisLattice::Fcc,
+                "bcc" => BravaisLattice::Bcc,
+                "hexagonal" => BravaisLattice::Hexagonal,
+                "tetragonal" => BravaisLattice::Tetragonal,
+                other => panic!("--lattice {other:?}: cubic|fcc|bcc|hexagonal|tetragonal"),
+            };
+            band_path(&cell, lattice, nband).expect("band path").abs
+        }
+        None => {
+            // L -> Gamma -> X, `nband` points, scaled -> absolute.
+            let path = [[0.5, 0.5, 0.5], [0.0, 0.0, 0.0], [0.5, 0.0, 0.5]];
+            let half = nband / 2;
+            let mut scaled = Vec::with_capacity(nband);
+            for seg in 0..2 {
+                for i in 0..half {
+                    let t = i as f64 / half as f64;
+                    scaled.push(std::array::from_fn(|x| {
+                        path[seg][x] + t * (path[seg + 1][x] - path[seg][x])
+                    }));
+                }
+            }
+            cell.get_abs_kpts(&scaled).expect("abs kpts")
+        }
+    };
     let cfg = KScfConfig {
         conv_tol: 1e-9,
         max_cycle: 40,
@@ -2229,11 +2316,14 @@ fn run_bands(args: &[String]) {
     let mut get_bands_ms = Vec::new();
     let mut checksum = 0.0;
     let (scf_ms, hcore_ms, ovlp_ms, nr_xc_ms, get_j_ms, eig_ms);
+    // Span totals of the SCF itself (taken right after it), so a profile
+    // shows where the SCF's time goes, not only the band step's.
+    let mut scf_spans: Vec<(&'static str, u64, f64)> = Vec::new();
     if driver == "kuks" {
         let mf = Kuks::from_df(Box::new(df), &xc).expect("KUKS");
         let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KUKS kernel"));
         scf_ms = ms;
-        let _ = layer.take();
+        scf_spans = layer.take();
         for _ in 0..reps {
             let ((e, _), ms) = time_ms(|| mf.get_bands(&kband, &r.dm).expect("get_bands"));
             checksum = e.iter().flatten().sum();
@@ -2264,9 +2354,57 @@ fn run_bands(args: &[String]) {
         eig_ms = time_ms(|| pyscf_pbc_scf::krhf::eig_channel(&h, &s, nao).expect("eig")).1 * 2.0;
     } else {
         let mf = Krks::from_df(Box::new(df), &xc).expect("KRKS");
-        let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KRKS kernel"));
-        scf_ms = ms;
-        let _ = layer.take();
+        // `--dm-in f`: skip the SCF and take a density dumped by `--dm-out`
+        // (bit-exact, as u64 bit patterns), so two backends' band steps can
+        // be compared on ONE density instead of two independent SCFs.
+        let dm: pyscf_pbc_scf::types::KDms = if let Some(path) = arg_value(args, "--dm-in") {
+            scf_ms = 0.0;
+            let raw: Vec<Vec<(Vec<u64>, Vec<u64>)>> =
+                serde_json::from_str(&std::fs::read_to_string(&path).expect("read --dm-in"))
+                    .expect("parse --dm-in");
+            eprintln!("  density loaded from {path} (SCF skipped)");
+            raw.into_iter()
+                .map(|set| {
+                    set.into_iter()
+                        .map(|(re, im)| {
+                            pyscf_algebra::CTensor::from_planes(
+                                re.into_iter().map(f64::from_bits).collect(),
+                                im.into_iter().map(f64::from_bits).collect(),
+                            )
+                        })
+                        .collect()
+                })
+                .collect()
+        } else {
+            let (r, ms) = time_ms(|| mf.kernel(&cfg).expect("KRKS kernel"));
+            scf_ms = ms;
+            eprintln!(
+                "  SCF converged={} cycles={} e_tot={:.15e}",
+                r.converged, r.cycles, r.e_tot
+            );
+            r.dm
+        };
+        if let Some(path) = arg_value(args, "--dm-out") {
+            let raw: Vec<Vec<(Vec<u64>, Vec<u64>)>> = dm
+                .iter()
+                .map(|set| {
+                    set.iter()
+                        .map(|m| {
+                            (
+                                m.re.iter().map(|x| x.to_bits()).collect(),
+                                m.im.iter().map(|x| x.to_bits()).collect(),
+                            )
+                        })
+                        .collect()
+                })
+                .collect();
+            std::fs::write(&path, serde_json::to_string(&raw).expect("json")).expect("write --dm-out");
+        }
+        struct R {
+            dm: pyscf_pbc_scf::types::KDms,
+        }
+        let r = R { dm };
+        scf_spans = layer.take();
         for _ in 0..reps {
             let ((e, _), ms) = time_ms(|| mf.get_bands(&kband, &r.dm).expect("get_bands"));
             checksum = e.iter().flatten().sum();
@@ -2334,6 +2472,7 @@ fn run_bands(args: &[String]) {
     }
     let spans = layer.take();
     let report = BandsReport {
+        backend,
         cell: cell_name,
         basis,
         driver,
@@ -2350,13 +2489,15 @@ fn run_bands(args: &[String]) {
         get_j_ms,
         eig_ms,
         spans: spans.iter().map(|(n, c, t)| ((*n).to_string(), *c, *t)).collect(),
+        scf_spans: scf_spans.iter().map(|(n, c, t)| ((*n).to_string(), *c, *t)).collect(),
         bands_checksum: checksum,
     };
     println!(
-        "{} {} nk={:?} nband={} nao={} ngrids={} xc={}\n  scf = {:.1} ms\n  get_bands = {:?} ms\n  \
+        "{} {} backend={} nk={:?} nband={} nao={} ngrids={} xc={}\n  scf = {:.1} ms\n  get_bands = {:?} ms\n  \
          stages (warm, once each): hcore {:.1} | ovlp {:.1} | nr_xc {:.1} | get_j {:.1} | eig {:.1} ms\n  \
          checksum = {:.15e}",
         report.driver,
+        report.backend,
         report.cell,
         report.nk,
         report.nband,
@@ -2372,6 +2513,10 @@ fn run_bands(args: &[String]) {
         report.eig_ms,
         report.bands_checksum
     );
+    println!("  spans during the SCF, top 25:");
+    for (n, c, t) in report.scf_spans.iter().take(25) {
+        println!("    {n:<40} x{c:<7} {t:>10.1} ms");
+    }
     println!("  spans after SCF (get_bands reps + stages), top 25:");
     for (n, c, t) in spans.iter().take(25) {
         println!("    {n:<40} x{c:<7} {t:>10.1} ms");

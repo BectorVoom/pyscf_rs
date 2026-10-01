@@ -80,6 +80,20 @@ pub fn get_j_kpts(
     )?;
     let ngrids = coulg.len();
 
+    // Large cells: walk the grid in blocks instead of building the whole
+    // table (see `Fftdf::j_grid_blocks`).
+    // Block when EITHER table the one-table route would build is over budget
+    // and not already cached: the sampling table (density) or the band table
+    // (vj) — a cached small sampling table must not wave through a large
+    // band list.
+    let oversized = |ks: &[[f64; 3]]| !df.ao_is_cached(ks) && df.j_grid_blocks(ks.len()).is_some();
+    if oversized(kpts) || kpts_band.is_some_and(oversized) {
+        let nk = kpts.len().max(kpts_band.map_or(0, <[_]>::len));
+        if let Some(blocks) = df.j_grid_blocks(nk) {
+            return get_j_kpts_blocked(df, dms, hermi, kpts, kpts_band, &coulg, &blocks);
+        }
+    }
+
     let ao = df.ao_kpts(kpts)?;
     // fft_jk.py:63 — the density is REAL when the DMs are Hermitian or the
     // sampling is gamma-only. Upstream keeps two separate branches; the
@@ -87,11 +101,33 @@ pub fn get_j_kpts(
     // `real_rho` flag selects here.
     let real_rho = hermi == 1 || all_gamma(kpts);
 
+    // SCF-01: both grid contractions on the device when this backend has
+    // hardware planes (or `PYSCF_PBC_FFTJK_DEVICE=1`), Hermitian case only.
+    let device = if real_rho { fftjk_device_client()? } else { None };
     let mut vr: Vec<CTensor> = Vec::with_capacity(nset);
     for dmset in dms.iter().take(nset) {
         let mut rho = CTensor::zeros(ngrids);
         for k in 0..nkpts {
-            accumulate_rho(&mut rho, ao.at(k), &dmset[k], nao, ngrids);
+            match device.as_ref() {
+                Some(client) => {
+                    let (re, im) = pyscf_kernels::pbc::rho_k(
+                        client,
+                        &ao.at(k).re,
+                        &ao.at(k).im,
+                        &dmset[k].re,
+                        &dmset[k].im,
+                        1,
+                        nao,
+                        ngrids,
+                    )
+                    .map_err(|e| device_err("get_j_kpts rho", e))?;
+                    for g in 0..ngrids {
+                        rho.re[g] += re[g];
+                        rho.im[g] += im[g];
+                    }
+                }
+                None => accumulate_rho(&mut rho, ao.at(k), &dmset[k], nao, ngrids),
+            }
         }
         // fft_jk.py:84 — rhoR *= 1./nkpts
         zscale_real(&mut rho, 1.0 / nkpts as f64);
@@ -133,9 +169,156 @@ pub fn get_j_kpts(
     for v in vr.iter() {
         let mut per_k = Vec::with_capacity(band.len());
         for k in 0..band.len() {
-            per_k.push(contract_ao_v_ao(ao_band.at(k), v, nao, ngrids));
+            let a = ao_band.at(k);
+            match device.as_ref() {
+                Some(client) => {
+                    // `vR` is real here (`real_rho`): `Σ_g conj(ao_p) vR ao_q`
+                    // is BAND-08's contraction with one weight.
+                    let planes = pyscf_kernels::pbc::band_vmat(
+                        client,
+                        &pyscf_kernels::pbc::AoPlanes { re: &a.re, im: &a.im },
+                        &v.re,
+                        1,
+                        1,
+                        1,
+                        nao,
+                        ngrids,
+                        &[false],
+                    )
+                    .map_err(|e| device_err("get_j_kpts vj", e))?;
+                    let (re, im) = planes.into_iter().next().unwrap_or_default();
+                    per_k.push(CTensor::from_planes(re, im));
+                }
+                None => per_k.push(contract_ao_v_ao(a, v, nao, ngrids)),
+            }
         }
         out.push(per_k);
+    }
+    Ok(out)
+}
+
+/// [`get_j_kpts`] over grid blocks: pass 1 evaluates each block's AO table
+/// at `kpts` and accumulates the density there (a grid point's density does
+/// not depend on the partition, so `rho` is bitwise the one-table value),
+/// pass 2 re-evaluates each block at the band k-points and accumulates
+/// `Σ_g conj(ao) vR ao` block by block (a different summation order over
+/// `g` than the one-table route — last bits only). Peak memory is one
+/// block's table instead of the whole grid's.
+fn get_j_kpts_blocked(
+    df: &Fftdf,
+    dms: &[KMats],
+    hermi: i32,
+    kpts: &[[f64; 3]],
+    kpts_band: Option<&[[f64; 3]]>,
+    coulg: &[f64],
+    blocks: &[(usize, usize)],
+) -> Result<Vec<KMats>, PbcDfError> {
+    let mesh = df.mesh;
+    let nset = dms.len();
+    let nkpts = kpts.len();
+    let nao = df.cell.mol.nao_nr;
+    let ngrids = coulg.len();
+    let real_rho = hermi == 1 || all_gamma(kpts);
+    let device = if real_rho { fftjk_device_client()? } else { None };
+    tracing::info!(ngrids, nblocks = blocks.len(), blksize = blocks[0].1 - blocks[0].0,
+                   "get_j_kpts: AO-budget grid blocking");
+
+    let mut rhos: Vec<CTensor> = (0..nset).map(|_| CTensor::zeros(ngrids)).collect();
+    for &(p0, p1) in blocks {
+        let n = p1 - p0;
+        let ao = tracing::info_span!("fftjk_block_ao", p0, n).in_scope(|| df.ao_kpts_block(kpts, p0, p1))?;
+        for (rho, dmset) in rhos.iter_mut().zip(dms.iter().take(nset)) {
+            let mut part = CTensor::zeros(n);
+            for k in 0..nkpts {
+                match device.as_ref() {
+                    Some(client) => {
+                        let (re, im) = pyscf_kernels::pbc::rho_k(
+                            client,
+                            &ao.at(k).re,
+                            &ao.at(k).im,
+                            &dmset[k].re,
+                            &dmset[k].im,
+                            1,
+                            nao,
+                            n,
+                        )
+                        .map_err(|e| device_err("get_j_kpts rho", e))?;
+                        for g in 0..n {
+                            part.re[g] += re[g];
+                            part.im[g] += im[g];
+                        }
+                    }
+                    None => accumulate_rho(&mut part, ao.at(k), &dmset[k], nao, n),
+                }
+            }
+            rho.re[p0..p1].copy_from_slice(&part.re);
+            rho.im[p0..p1].copy_from_slice(&part.im);
+        }
+    }
+
+    let weight = df.weight();
+    let mut vr: Vec<CTensor> = Vec::with_capacity(nset);
+    for mut rho in rhos {
+        zscale_real(&mut rho, 1.0 / nkpts as f64);
+        if real_rho {
+            for v in rho.im.iter_mut() {
+                *v = 0.0;
+            }
+        }
+        let mut rhog = fft(&rho, mesh)?;
+        for g in 0..ngrids {
+            rhog.re[g] *= coulg[g];
+            rhog.im[g] *= coulg[g];
+        }
+        let mut v = ifft(&rhog, mesh)?;
+        if real_rho {
+            for t in v.im.iter_mut() {
+                *t = 0.0;
+            }
+        }
+        zscale_real(&mut v, weight);
+        vr.push(v);
+    }
+
+    let band = format_kpts_band(kpts_band, kpts);
+    let mut out: Vec<KMats> = (0..nset)
+        .map(|_| (0..band.len()).map(|_| CTensor::zeros(nao * nao)).collect())
+        .collect();
+    for &(p0, p1) in blocks {
+        let n = p1 - p0;
+        let ao = tracing::info_span!("fftjk_block_ao", p0, n).in_scope(|| df.ao_kpts_block(band, p0, p1))?;
+        for (v, per_k) in vr.iter().zip(out.iter_mut()) {
+            let vb = CTensor {
+                re: v.re[p0..p1].to_vec(),
+                im: v.im[p0..p1].to_vec(),
+            };
+            for (k, acc) in per_k.iter_mut().enumerate() {
+                let a = ao.at(k);
+                let m = match device.as_ref() {
+                    Some(client) => {
+                        let planes = pyscf_kernels::pbc::band_vmat(
+                            client,
+                            &pyscf_kernels::pbc::AoPlanes { re: &a.re, im: &a.im },
+                            &vb.re,
+                            1,
+                            1,
+                            1,
+                            nao,
+                            n,
+                            &[false],
+                        )
+                        .map_err(|e| device_err("get_j_kpts vj", e))?;
+                        let (re, im) = planes.into_iter().next().unwrap_or_default();
+                        CTensor::from_planes(re, im)
+                    }
+                    None => contract_ao_v_ao(a, &vb, nao, n),
+                };
+                for t in 0..acc.re.len() {
+                    acc.re[t] += m.re[t];
+                    acc.im[t] += m.im[t];
+                }
+            }
+        }
     }
     Ok(out)
 }
@@ -180,6 +363,32 @@ pub fn coulomb_potential_from_rho(
     }
     let v = ifft(&rhog, mesh)?;
     Ok(v.re.iter().map(|x| x * weight).collect())
+}
+
+/// SCF-01 — the device client when `get_j_kpts`'s two grid contractions
+/// (the density and `Σ_g conj(ao) vR ao`) should run on the device.
+/// `PYSCF_PBC_FFTJK_DEVICE` = `1`/`0` pins it; unset = on for a runtime with
+/// hardware planes, off on the CPU runtime (the bit-exact host reference).
+fn fftjk_device_client() -> Result<Option<pyscf_algebra::AlgebraClient>, PbcDfError> {
+    let want = match std::env::var("PYSCF_PBC_FFTJK_DEVICE").ok().as_deref().map(str::trim) {
+        Some("1") => Some(true),
+        Some("0") => Some(false),
+        _ => None,
+    };
+    if want == Some(false) {
+        return Ok(None);
+    }
+    let client = pyscf_algebra::select_backend()
+        .map_err(|e| device_err("backend selection", e))?
+        .client;
+    let on = want.unwrap_or_else(|| client.has_planes());
+    Ok(on.then_some(client))
+}
+
+fn device_err(what: &str, e: impl std::fmt::Display) -> PbcDfError {
+    PbcDfError::Core(pyscf_core::PyscfRsError::Core(
+        pyscf_core::CoreError::InvalidMolecule(format!("{what} (device route): {e}")),
+    ))
 }
 
 /// `rho[g] += sum_{mu,nu} conj(ao[mu,g]) dm[nu,mu] ao[nu,g]` — upstream's

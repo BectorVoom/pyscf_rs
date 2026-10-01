@@ -291,6 +291,59 @@ impl Fftdf {
         Ok(block)
     }
 
+    /// The grid blocks [`crate::fft_jk::get_j_kpts`] walks when the whole
+    /// `(nkpts, nao, ngrids)` table at `kpts` would exceed
+    /// `PYSCF_PBC_FFTJK_AO_BUDGET_MB` (default 4096 MB) and is not already
+    /// cached — `None` keeps the one-table route (and its bits).
+    ///
+    /// The unblocked route materialises the table on the device AND reads it
+    /// back to the host (twice its size during the plane split): 33 GB at
+    /// nao 910, 9 k-points and 253k points, every SCF cycle.
+    pub fn j_grid_blocks(&self, nkpts: usize) -> Option<Vec<(usize, usize)>> {
+        let budget = std::env::var("PYSCF_PBC_FFTJK_AO_BUDGET_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(4096.0)
+            * 1024.0
+            * 1024.0;
+        let per_point = 16.0 * (self.cell.mol.nao_nr * nkpts.max(1)) as f64;
+        let ngrids = self.ngrids();
+        if per_point * ngrids as f64 <= budget {
+            return None;
+        }
+        let blk = ((budget / per_point) as usize).max(64);
+        let mut out = Vec::new();
+        let mut p0 = 0usize;
+        while p0 < ngrids {
+            let p1 = (p0 + blk).min(ngrids);
+            out.push((p0, p1));
+            p0 = p1;
+        }
+        tracing::debug!(ngrids, nkpts, blksize = blk, nblocks = out.len(), "get_j_kpts: AO-budget grid blocks");
+        Some(out)
+    }
+
+    /// The `(nao, p1 - p0)` AO table at `kpts` on grid points `p0..p1` —
+    /// never cached.
+    ///
+    /// # Errors
+    /// Propagates [`eval_ao_kpts`].
+    pub fn ao_kpts_block(&self, kpts: &[[f64; 3]], p0: usize, p1: usize) -> Result<AoKpts, PbcDfError> {
+        let out = eval_ao_kpts(&self.cell, "GTOval_sph", &self.grids.coords[p0..p1], kpts)?;
+        debug_assert_eq!(out.comp, 1, "the LDA AO path evaluates one component");
+        Ok(AoKpts {
+            nao: out.nao,
+            ngrids: out.ngrids,
+            aot: out.kaos.into_iter().map(Arc::new).collect(),
+        })
+    }
+
+    /// Whether the table at `kpts` is in the AO cache (no evaluation).
+    pub fn ao_is_cached(&self, kpts: &[[f64; 3]]) -> bool {
+        self.ao_cached(kpts).is_some()
+    }
+
     /// How many AO tables the cache holds.
     ///
     /// Exposed for the K-14f gate: the fused local contraction must leave the

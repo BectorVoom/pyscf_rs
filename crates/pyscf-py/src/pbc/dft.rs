@@ -1516,6 +1516,7 @@ impl PyKohnShamDft {
             init_guess,
             chkfile: None,
             verbose: self.verbose >= 5,
+            ..Default::default()
         }
     }
 

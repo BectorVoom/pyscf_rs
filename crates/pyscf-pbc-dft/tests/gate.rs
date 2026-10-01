@@ -272,6 +272,12 @@ fn krks_he_all_electron_222_pbe_matches_upstream() {
 /// **The no-XC control.** `KRHF` on the SAME Si cell, the same mesh, the same
 /// k-mesh, with no exchange-correlation functional anywhere. Whatever this
 /// deviates by is a floor Phase 12 inherits rather than creates.
+///
+/// **Superseded 2026-09-14 by 20-19 D** (`20-19-D-SUMMARY.md`): with the SCF
+/// overlap at upstream's `precision*1e-5` (`pbc/scf/hf.py:47-55`) this floor
+/// fell 4.158e-12 → **2.931e-14**, so the "~4e-12 inherited from `get_pp`"
+/// reading is refuted — most of it was the overlap precision, not the
+/// pseudopotential. Tolerance unchanged at 1e-11.
 #[test]
 #[ignore = "T2: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
 fn krhf_si_222_is_the_pseudopotential_floor() {

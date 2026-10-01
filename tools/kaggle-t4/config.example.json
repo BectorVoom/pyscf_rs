@@ -1,0 +1,50 @@
+{
+  "run_name": "yta7o19-dzvp-ke60-k331",
+  "local_dir": "~/ktrun",
+  "session_hours": 11.5,
+
+  "kaggle": {
+    "user": "your-kaggle-username",
+    "token_file": "~/.kaggle/access_token",
+    "accelerator": "t4"
+  },
+
+  "runner": {
+    "binary": "~/Documents/workspace/.yta_bundle/runner/yta7o19_bands",
+    "pyscf_data_dir": "~/Documents/workspace/pyscf_rs/pyscf"
+  },
+
+  "env": {
+    "PYSCF_BACKEND": "cuda",
+    "YTA_REQUIRE_BACKEND": "cuda",
+    "YTA_REQUIRE_XC": "Libxc",
+
+    "YTA_BASIS": "gth-dzvp-molopt-sr",
+    "YTA_PRE_BASIS": "gth-szv-molopt-sr",
+    "YTA_PRE_CONV": "1e-4",
+    "YTA_KE": "60",
+    "YTA_KMESH": "3,3,1",
+    "YTA_NPATH": "16",
+    "YTA_CHUNK": "4",
+
+    "YTA_CONV": "1e-6",
+    "YTA_MAXCYC": "80",
+    "YTA_REQUIRE_CONVERGED": "1",
+    "YTA_SMEARING": "gauss:0.03",
+    "YTA_DAMP": "0.7",
+    "YTA_LEVEL_SHIFT": "0.3",
+    "YTA_DIIS_START": "8",
+    "YTA_DIIS_SPACE": "16",
+    "YTA_REFINE_SMEARING": "gauss:0.002",
+    "YTA_REFINE_LEVEL_SHIFT": "0.1",
+
+    "PYSCF_MAX_MEMORY": "8000",
+    "PYSCF_PBC_NUMINT_AO_BUDGET_MB": "2500",
+    "PYSCF_PBC_FFTJK_AO_BUDGET_MB": "2000",
+    "PYSCF_PBC_AO_DEVICE_CACHE_MB": "1",
+    "PYSCF_PBC_BAND_AO_BUDGET_MB": "1024",
+    "PYSCF_PBC_INTOR_IMAGE_CACHE_MB": "0",
+    "PYSCF_PBC_INTOR_PAIR_BATCH": "1",
+    "MALLOC_ARENA_MAX": "2"
+  }
+}

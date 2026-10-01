@@ -58,3 +58,4 @@ pyscf-gto       = { path = "../pyscf-gto" }
 pyscf-pbc-gto   = { path = "../pyscf-pbc-gto", features = ["test-systems"] }
 serde_json      = { workspace = true }
 pyscf-grids     = { path = "../pyscf-grids" }
+tracing-subscriber = { workspace = true }

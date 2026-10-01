@@ -77,9 +77,10 @@ pub use cutoff::{
 };
 pub use dumps_loads::{CellPack, dumps, loads, pack, unpack};
 pub use eval_gto::{
-    AO_IMAGE_BATCH_MIN, EvalAoKptsOutput, estimate_rcut_for_eval, eval_ao_kpts,
-    eval_ao_kpts_local_vmat, eval_ao_kpts_local_vmat_blocked, eval_ao_kpts_with_images,
-    image_batch_capacity,
+    AO_IMAGE_BATCH_MIN, EvalAoKptsOutput, backend_has_planes, band_vmat_device_serves,
+    estimate_rcut_for_eval,
+    eval_ao_kpts, eval_ao_kpts_band_vmat, eval_ao_kpts_device, eval_ao_kpts_local_vmat,
+    eval_ao_kpts_local_vmat_blocked, eval_ao_kpts_with_images, image_batch_capacity,
 };
 pub use eval_gto_upstream::eval_ao_kpts_upstream;
 pub use ewald::{

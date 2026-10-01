@@ -244,6 +244,7 @@ c.build()
 mesh = json.loads(mesh_json)
 Gv = c.get_Gv(mesh)
 out = {
+    'version': __import__('pyscf').__version__,
     'nao': int(c.nao_nr()),
     'coulG': tools.get_coulG(c, Gv=Gv).ravel().tolist(),
     'vlocG_part1': pp_int.get_gth_vlocG_part1(c, Gv).ravel().tolist(),
@@ -355,7 +356,7 @@ fn oracle(cell: &Cell) -> Option<serde_json::Value> {
     let a: Vec<Vec<f64>> = cell.a.iter().map(|r| r.to_vec()).collect();
     let xyz: Vec<Vec<f64>> = cell.mol.atom_coords().iter().map(|r| r.to_vec()).collect();
     let sym: Vec<String> = cell.mol._atom.iter().map(|(s, _)| s.clone()).collect();
-    Some(run_python(
+    let v = run_python(
         &py,
         ORACLE_PY,
         &[
@@ -364,7 +365,14 @@ fn oracle(cell: &Cell) -> Option<serde_json::Value> {
             serde_json::to_string(&sym).unwrap(),
             serde_json::to_string(&MESH.to_vec()).unwrap(),
         ],
-    ))
+    );
+    assert_eq!(
+        v["version"].as_str().expect("version"),
+        "2.12.1",
+        "the oracle must be the VENDORED PySCF 2.12.1, not site-packages 2.14.0 \
+         — see tests/common in pyscf-pbc-dft"
+    );
+    Some(v)
 }
 
 fn floats(v: &serde_json::Value, key: &str) -> Vec<f64> {
@@ -410,10 +418,17 @@ fn run_python(py: &PathBuf, script: &str, args: &[String]) -> serde_json::Value 
     let path =
         std::env::temp_dir().join(format!("gth_pp_loc_oracle_{}_{n}.py", std::process::id()));
     std::fs::write(&path, script).expect("write oracle script");
+    // Pin the VENDORED tree: the script's own (temp) directory lands on
+    // `sys.path[0]`, not the CWD, so without this `import pyscf` resolves to
+    // site-packages 2.14.0 instead of the 2.12.1 port target. Same contract as
+    // `pyscf-pbc-dft/tests/common/mod.rs::run_python` (carryover
+    // `20-oracle-harness-and-ci.md` item i).
+    let root = workspace_root();
     let out = Command::new(py)
         .arg(&path)
         .args(args)
-        .current_dir(workspace_root())
+        .env("PYTHONPATH", &root)
+        .current_dir(&root)
         .output()
         .expect("spawn upstream python");
     let _ = std::fs::remove_file(&path);

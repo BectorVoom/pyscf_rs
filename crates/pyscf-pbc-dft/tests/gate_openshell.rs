@@ -24,9 +24,13 @@
 //! | U-b | [`h2_stretched_spin0`] | `_break_dm_spin_symm` (`uhf.py:116-134`) — that this port now follows upstream's guess PATH, not just its answer. See the measured caveat below |
 //! | U-c | either, `pbe0` | the doubled K contractions and `sub_scaled(.., 1.0, vk)` on genuinely different channels |
 //!
-//! Both fixtures are ALL-ELECTRON: the `gth-pade` cells floor at ~4e-12 Ha for
-//! reasons inherited from `get_pp`, so an open-shell gate on one of them would
-//! be measuring the pseudopotential, not the spin path.
+//! Both fixtures are ALL-ELECTRON: the `gth-pade` cells floored at ~4e-12 Ha
+//! before 20-19 D for reasons then attributed to `get_pp`, so an open-shell
+//! gate on one of them would have been measuring the pseudopotential, not the
+//! spin path. (**Superseded 2026-09-14 by 20-19 D**: the Si `gth` floor fell
+//! 4.158e-12 → 2.931e-14 once the SCF overlap used upstream's
+//! `precision*1e-5` — most of it was overlap precision, not `get_pp`.
+//! `20-19-D-SUMMARY.md`. The all-electron choice stands regardless.)
 //!
 //! # MEASURED CAVEAT on U-b — read before trusting it to prove U-02
 //!
@@ -104,8 +108,9 @@ const MESH_GATE: [usize; 3] = [31, 31, 31];
 /// (exponent 16.1195) in a 6-Bohr box at `mesh = 31`, i.e. a grid spacing of
 /// 0.19 Bohr against a Gaussian width of 0.176 — the all-electron `get_nuc`
 /// planewave sum is marginally resolved, the same size of effect the `gth-pade`
-/// cells inherit from `get_pp` (`KRHF Si` sits at 4.158e-12 in `gate.rs` for
-/// exactly this reason and its KS rows are gated at `1e-11` above it).
+/// cells showed before 20-19 D (`KRHF Si` sat at 4.158e-12 in `gate.rs`,
+/// **superseded 2026-09-14: 2.931e-14 after the SCF overlap fix**,
+/// and its KS rows are gated at `1e-11` above it).
 ///
 /// **1e-12 IS reachable all-electron, on a cell that can carry it.** The
 /// `h2_stretched_spin0` rows land at 7.8e-14 … 2.6e-13 and are gated at

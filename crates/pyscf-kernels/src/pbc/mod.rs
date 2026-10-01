@@ -15,6 +15,8 @@
 //! Phase 18 plan 18-11 adds the strain-tensor AO derivative collocation
 //! (`strain_ao`) — the stress half's only new cubecl kernel.
 
+pub mod ao_table;
+pub mod band_vmat;
 pub mod bloch;
 pub mod eval_ao_k;
 pub mod ewald;
@@ -22,16 +24,20 @@ pub mod fill;
 pub mod ft_aopair;
 pub mod gv;
 pub mod local_vmat;
+pub mod rho;
 pub mod multigrid_grad;
 pub mod strain_ao;
 pub mod struct_factor;
 pub mod zhadamard;
 
+pub use ao_table::DeviceAoTable;
+pub use band_vmat::{band_vmat, band_vmat_resident, band_vmat_table};
 pub use bloch::bloch_phase;
 pub use eval_ao_k::{AO_IMAGE_BATCH_MAX, AoImageBatch, AoKAccumulator, eval_ao_k_accumulate};
 pub use ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use ft_aopair::{FtAopairTables, ft_aopair};
 pub use gv::gv;
+pub use rho::{rho_k, rho_k_table};
 pub use local_vmat::{AoPlanes, CarriedVmat, KMatPlanes, local_vmat, local_vmat_resident};
 pub use strain_ao::{
     Deriv2AoOutput, StrainAoOutput, eval_ao_deriv2, eval_strain_ao, strain_block_map, strain_comp,

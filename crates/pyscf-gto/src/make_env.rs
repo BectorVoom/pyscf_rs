@@ -221,7 +221,7 @@ const CEPHES_GAMMA_HALF: [f64; 16] = [
 /// to `l+1.5` (`2·expnt` for `gto_norm`, `expnt_i + expnt_j` for the S-matrix).
 pub(crate) fn gaussian_int(l: u8, alpha: f64) -> f64 {
     let n1 = f64::from(l) + 1.5;
-    CEPHES_GAMMA_HALF[l as usize] / (2.0 * crate::svml_pow::svml_pow8(alpha, n1))
+    CEPHES_GAMMA_HALF[l as usize] / (2.0 * crate::svml_pow::numpy_pow(alpha, n1))
 }
 
 /// Per-primitive radial normalisation:

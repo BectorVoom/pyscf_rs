@@ -280,7 +280,7 @@ fn launch_range<R: Runtime, F: DeviceScalar>(
     }
 }
 
-fn gather_k<R: Runtime, F: DeviceScalar>(
+pub(crate) fn gather_k<R: Runtime, F: DeviceScalar>(
     client: &ComputeClient<R>,
     src: &Handle,
     dst: &Handle,

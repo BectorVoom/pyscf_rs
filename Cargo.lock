@@ -354,6 +354,7 @@ dependencies = [
  "cintx-ops",
  "cintx-runtime",
  "cubecl",
+ "cubecl-cuda",
  "cubecl-runtime",
  "lapack_rs",
  "rayon",
@@ -5427,8 +5428,10 @@ dependencies = [
 name = "pyscf-bench"
 version = "0.1.0"
 dependencies = [
+ "cintx-cubecl",
  "cubecl",
  "cubecl-cpu",
+ "cubecl-cuda",
  "cubecl-hip",
  "pyscf-algebra",
  "pyscf-ccsd",
@@ -5791,6 +5794,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

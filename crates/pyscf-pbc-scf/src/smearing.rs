@@ -228,20 +228,20 @@ pub fn grad_tril(
     nao: usize,
     nmo: usize,
 ) -> Vec<f64> {
+    // `(F C)[mu, j]` does not depend on `i`: build each column once, with the
+    // identical inner sum, instead of once per `(i, j)` pair. Every output
+    // element then sees the same operations in the same order (bit-identical),
+    // at O(nao^2 nmo + nmo^2 nao) instead of O(nmo^2 nao^2) — 80 min per
+    // cycle at nao 910, 9 k-points.
+    let fc = fock_times_columns(mo_coeff, fock, nao, 0..nmo.saturating_sub(1));
     let mut out = Vec::new();
     for i in 1..nmo {
         for j in 0..i {
+            let (fcr, fci) = (&fc.0[j * nao..(j + 1) * nao], &fc.1[j * nao..(j + 1) * nao]);
             let mut re = 0.0_f64;
             let mut im = 0.0_f64;
             for mu in 0..nao {
-                let mut fr = 0.0_f64;
-                let mut fi = 0.0_f64;
-                for nu in 0..nao {
-                    let (x, y) = (fock.re[mu * nao + nu], fock.im[mu * nao + nu]);
-                    let (u, v) = (mo_coeff.re[nu + j * nao], mo_coeff.im[nu + j * nao]);
-                    fr += x * u - y * v;
-                    fi += x * v + y * u;
-                }
+                let (fr, fi) = (fcr[mu], fci[mu]);
                 let (cr, ci) = (mo_coeff.re[mu + i * nao], -mo_coeff.im[mu + i * nao]);
                 re += cr * fr - ci * fi;
                 im += cr * fi + ci * fr;
@@ -251,4 +251,34 @@ pub fn grad_tril(
         }
     }
     out
+}
+
+/// `(F C)[:, j]` for each `j` in `cols`, planar, column `j` at
+/// `[j * nao .. (j + 1) * nao]` (slots of columns outside `cols` stay zero).
+/// The inner sum over `nu` is the one `grad_tril` / `kocc::get_grad` always
+/// used, in the same order.
+pub(crate) fn fock_times_columns(
+    mo_coeff: &pyscf_algebra::CTensor,
+    fock: &pyscf_algebra::CTensor,
+    nao: usize,
+    cols: impl Iterator<Item = usize>,
+) -> (Vec<f64>, Vec<f64>) {
+    let ncol = mo_coeff.re.len() / nao.max(1);
+    let mut fr_out = vec![0.0_f64; ncol * nao];
+    let mut fi_out = vec![0.0_f64; ncol * nao];
+    for j in cols {
+        for mu in 0..nao {
+            let mut fr = 0.0_f64;
+            let mut fi = 0.0_f64;
+            for nu in 0..nao {
+                let (x, y) = (fock.re[mu * nao + nu], fock.im[mu * nao + nu]);
+                let (u, v) = (mo_coeff.re[nu + j * nao], mo_coeff.im[nu + j * nao]);
+                fr += x * u - y * v;
+                fi += x * v + y * u;
+            }
+            fr_out[j * nao + mu] = fr;
+            fi_out[j * nao + mu] = fi;
+        }
+    }
+    (fr_out, fi_out)
 }

@@ -192,9 +192,10 @@ impl Krks {
         let ground_state = kpts_band.is_none();
 
         // krks.py:71-72 — the XC half.
-        let nr = self
-            .ni
-            .nr_rks(cell, &self.grids, &self.xc, dms, 1, self.kpts(), kpts_band)?;
+        let nr = tracing::info_span!("veff_nr_rks").in_scope(|| {
+            self.ni
+                .nr_rks(cell, &self.grids, &self.xc, dms, 1, self.kpts(), kpts_band)
+        })?;
         let mut vxc = nr.vmat;
         let mut exc = nr.exc;
 
@@ -202,16 +203,18 @@ impl Krks {
             ecoul
         } else {
             // krks.py:89 — J (and K for a hybrid).
-            let jk = get_jk(
-                self.with_df.as_ref(),
-                &self.xc,
-                dms,
-                1,
-                self.kpts(),
-                kpts_band,
-                self.exxdiv,
-                true,
-            )?;
+            let jk = tracing::info_span!("veff_get_jk").in_scope(|| {
+                get_jk(
+                    self.with_df.as_ref(),
+                    &self.xc,
+                    dms,
+                    1,
+                    self.kpts(),
+                    kpts_band,
+                    self.exxdiv,
+                    true,
+                )
+            })?;
             let vj = jk
                 .vj
                 .ok_or_else(|| err("KRKS: the density-fitting object returned no vj"))?;
@@ -279,7 +282,11 @@ impl Krks {
                 fock
             }
         };
-        let s1e = to_row_major(pyscf_pbc_gto::get_ovlp_scf(self.cell(), kpts_band)?, nao);
+        let s1e = {
+            let _s = tracing::info_span!("band_ovlp").entered();
+            to_row_major(pyscf_pbc_gto::get_ovlp_scf(self.cell(), kpts_band)?, nao)
+        };
+        let _s = tracing::info_span!("band_eig").entered();
         eig_channel(&fock, &s1e, nao)
     }
 }
@@ -350,24 +357,40 @@ pub(crate) fn fused_band_fock(
         return Ok(None);
     }
     let df_err = |what: &str, e: pyscf_pbc_df::PbcDfError| crate::xc::err(format!("{what}: {e}"));
-    let Some(vloc) = with_df
-        .local_potential_r()
-        .map_err(|e| df_err("band local potential", e))?
-    else {
+    let vloc = {
+        let _s = tracing::info_span!("band_vloc").entered();
+        with_df
+            .local_potential_r()
+            .map_err(|e| df_err("band local potential", e))?
+    };
+    let Some(vloc) = vloc else {
         return Ok(None);
     };
     let cell = with_df.cell();
-    let (mut wvs, rho) = knum.band_xc_weights(cell, grids, xc, dms)?;
-    let vj = pyscf_pbc_df::fft_jk::coulomb_potential_from_rho(cell, g.mesh, &rho, g.weights[0])
-        .map_err(|e| df_err("band Coulomb potential", e))?;
+    // Stage spans (BAND-08 profiling): `krks_profile bands` totals them.
+    let (mut wvs, rho) = {
+        let _s = tracing::info_span!("band_xc_weights").entered();
+        knum.band_xc_weights(cell, grids, xc, dms)?
+    };
+    let vj = {
+        let _s = tracing::info_span!("band_coulomb").entered();
+        pyscf_pbc_df::fft_jk::coulomb_potential_from_rho(cell, g.mesh, &rho, g.weights[0])
+            .map_err(|e| df_err("band Coulomb potential", e))?
+    };
     for wv in wvs.iter_mut() {
         for ((w, j), l) in wv[0].iter_mut().zip(&vj).zip(&vloc) {
             *w += 0.5 * (j + l);
         }
     }
-    let mut fock = knum.band_vmats(cell, grids, kpts_band, xc, &wvs)?;
-    let hnl = pyscf_pbc_df::fftdf::get_hcore_nonlocal(cell, kpts_band)
-        .map_err(|e| df_err("band T + V_nl", e))?;
+    let mut fock = {
+        let _s = tracing::info_span!("band_vmats", nk = kpts_band.len() as u64).entered();
+        knum.band_vmats(cell, grids, kpts_band, xc, &wvs)?
+    };
+    let hnl = {
+        let _s = tracing::info_span!("band_hcore_nl").entered();
+        pyscf_pbc_df::fftdf::get_hcore_nonlocal(cell, kpts_band)
+            .map_err(|e| df_err("band T + V_nl", e))?
+    };
     for set in fock.iter_mut() {
         for (f, h) in set.iter_mut().zip(&hnl) {
             for i in 0..f.len() {

@@ -120,10 +120,12 @@ fn cube(a: f64) -> [[f64; 3]; 3] {
 // exact fixed point of this port's SCF map (§2.2.1) — so the unrestricted path
 // degenerates to the restricted one and a passing test proves nothing about it.
 //
-// Both fixtures are ALL-ELECTRON on purpose. The `gth-pade` cells floor at
-// ~4e-12 Ha for structural reasons inherited from `get_pp`, and the
-// all-electron control is what proves a tighter number is reachable at all
-// (`KRKS He-fcc` sits at 9.81e-14). Do not gate the open-shell work on a
+// Both fixtures are ALL-ELECTRON on purpose. Before 20-19 D the `gth-pade`
+// cells floored at ~4e-12 Ha for reasons then attributed to `get_pp`
+// (**superseded 2026-09-14**: the Si `gth` floor fell 4.158e-12 → 2.931e-14
+// once the SCF overlap used upstream's `precision*1e-5`; `20-19-D-SUMMARY.md`),
+// and the all-electron control is what proves a tighter number is reachable at
+// all (`KRKS He-fcc` sits at 9.81e-14). Do not gate the open-shell work on a
 // pseudopotential cell.
 // ---------------------------------------------------------------------------
 

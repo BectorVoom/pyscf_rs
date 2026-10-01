@@ -275,6 +275,23 @@ fn fma_rz(a: f64, b: f64, c: f64) -> f64 {
     rtz(s, e)
 }
 
+/// numpy's `x ** y` for `x > 0`: [`svml_pow8`] (bit-exact to the AVX-512
+/// reference host) when this CPU has AVX-512, else `f64::powf`. The fallback
+/// is at most an ulp or so away — enough to run on hosts without AVX-512 (the
+/// Kaggle CPU machines), not enough to claim upstream's bits; a warning is
+/// logged once.
+pub fn numpy_pow(x: f64, y: f64) -> f64 {
+    #[cfg(target_arch = "x86_64")]
+    if is_x86_feature_detected!("avx512f") {
+        return svml_pow8(x, y);
+    }
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    WARNED.call_once(|| {
+        tracing::warn!("no AVX-512: basis normalisation uses powf, not the bit-exact SVML pow");
+    });
+    x.powf(y)
+}
+
 /// `__svml_pow8`'s fast path for `x > 0` finite, `y` finite. Scalar per-lane
 /// transcription of the vector kernel.
 pub fn svml_pow8(x: f64, y: f64) -> f64 {

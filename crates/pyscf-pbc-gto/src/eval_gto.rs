@@ -1193,6 +1193,210 @@ pub fn eval_ao_kpts_local_vmat_blocked(
         .collect())
 }
 
+/// BAND-08 — the band AO table evaluated and contracted with per-variable
+/// grid weights on the device, without ever materialising the table on the
+/// host.
+///
+/// ```text
+/// v[set][k][p, q] = Σ_g conj(ao_k^{(0)}[p, g]) · Σ_{n<nvar} wvs[set][n][g] · ao_k^{(n)}[q, g]
+/// ```
+///
+/// Same lattice sum, same image list and same device kernels as
+/// [`eval_ao_kpts`] for `eval_name` (`GTOval_sph` or `GTOval_sph_deriv1`);
+/// only the ending differs: the k-resolved accumulator is contracted where it
+/// lies (`pyscf_kernels::pbc::band_vmat_resident`), once per weight set, and
+/// only the `nkpts · nao²` matrices come home. Each `wvs[set]` holds `nvar`
+/// grid vectors, `nvar <= comp` (`1` for the value table, up to `4` for the
+/// deriv-1 table). The output is ROW-MAJOR `[p · nao + q]` per k-point, and
+/// is the half `_vxc_mat` accumulates before `add_conj_transpose`.
+///
+/// # Errors
+/// As [`eval_ao_kpts`]; plus [`CoreError::InvalidMolecule`] for an eval name
+/// without a device kernel, or weights of the wrong shape.
+pub fn eval_ao_kpts_band_vmat(
+    cell: &Cell,
+    eval_name: &str,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+    wvs: &[Vec<Vec<f64>>],
+) -> Result<Vec<Vec<CTensor>>, PyscfRsError> {
+    let invalid = |msg: String| PyscfRsError::Core(CoreError::InvalidMolecule(msg));
+    if !cell.mol._built {
+        return Err(invalid("eval_ao_kpts_band_vmat: the cell must be built first".into()));
+    }
+    let Some(comp) = comp_of_eval_name(eval_name) else {
+        return Err(invalid(format!(
+            "eval_ao_kpts_band_vmat: no device kernel for {eval_name:?} (GTOval_sph or \
+             GTOval_sph_deriv1)"
+        )));
+    };
+    let ngrids = coords.len();
+    let nao = cell.mol.nao_nr;
+    for (set, wv) in wvs.iter().enumerate() {
+        if wv.is_empty() || wv.len() > comp {
+            return Err(invalid(format!(
+                "eval_ao_kpts_band_vmat: weight set {set} has {} variables, expected 1..={comp}",
+                wv.len()
+            )));
+        }
+        if let Some(v) = wv.iter().find(|v| v.len() != ngrids) {
+            return Err(invalid(format!(
+                "eval_ao_kpts_band_vmat: weight set {set} has a vector of length {}, expected \
+                 ngrids = {ngrids}",
+                v.len()
+            )));
+        }
+    }
+    let owned_gamma = [[0.0_f64; 3]];
+    let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
+    let nkpts = kpts.len();
+    let gamma: Vec<bool> = kpts.iter().map(is_gamma).collect();
+
+    // The image list `eval_ao_kpts` builds for this eval variant, identically.
+    let rcut = estimate_rcut_for_eval(cell, deriv_count(eval_name))?;
+    let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
+    let mut ls = crate::lattice::get_lattice_ls_eval(cell, rmax)?;
+    ls.sort_by(|a, b| pyscf_pbc_tools::mat3::norm3(a).total_cmp(&pyscf_pbc_tools::mat3::norm3(b)));
+
+    let AoAccumulated {
+        client,
+        acc,
+        n,
+        comp: got,
+    } = eval_ao_kpts_accumulate(cell, eval_name, coords, kpts, &ls, 0..ngrids)?;
+    let zeros = || -> Vec<Vec<CTensor>> {
+        wvs.iter()
+            .map(|_| {
+                (0..nkpts)
+                    .map(|_| CTensor::from_planes(vec![0.0; nao * nao], vec![0.0; nao * nao]))
+                    .collect()
+            })
+            .collect()
+    };
+    // W-09 again: every image screened out (or an empty basis/grid) leaves no
+    // accumulator at all; the contraction of an all-zero table is all zeros.
+    let Some(acc) = acc else {
+        return Ok(zeros());
+    };
+    {
+        // Launches are lazy: without this barrier the AO kernels would execute
+        // inside the contraction's read and be attributed to it.
+        let _s = tracing::info_span!("pbc_eval_ao_exec").entered();
+        client.sync_device();
+    }
+    if got != comp || n != comp * ngrids * nao {
+        return Err(invalid(format!(
+            "eval_ao_kpts_band_vmat: {eval_name} produced {got} components and {n} reals per \
+             k-point, expected {comp} and comp·ngrids·nao = {}",
+            comp * ngrids * nao
+        )));
+    }
+    let mut out = Vec::with_capacity(wvs.len());
+    for wv in wvs {
+        let flat: Vec<f64> = wv.concat();
+        let planes = pyscf_kernels::pbc::band_vmat_resident(
+            &client,
+            &acc,
+            &flat,
+            wv.len(),
+            comp,
+            nao,
+            ngrids,
+            &gamma,
+        )
+        .map_err(|e| invalid(format!("eval_ao_kpts_band_vmat: BAND-08 contraction failed: {e}")))?;
+        out.push(
+            planes
+                .into_iter()
+                .map(|(re, im)| CTensor::from_planes(re, im))
+                .collect(),
+        );
+    }
+    Ok(out)
+}
+
+/// SCF-02 — the AO table of [`eval_ao_kpts`] left ON THE DEVICE as a k-major
+/// [`pyscf_kernels::pbc::DeviceAoTable`] (Γ imaginary planes zeroed, as the
+/// host table has them), for callers that contract it there every SCF cycle
+/// instead of reading ~`16 · nkpts · comp · nao · ngrids` bytes back and
+/// uploading them again.
+///
+/// Same image list, same lattice sum, same kernels as [`eval_ao_kpts`].
+///
+/// # Errors
+/// As [`eval_ao_kpts`]; plus an eval name without a device kernel.
+pub fn eval_ao_kpts_device(
+    cell: &Cell,
+    eval_name: &str,
+    coords: &[[f64; 3]],
+    kpts: &[[f64; 3]],
+) -> Result<pyscf_kernels::pbc::DeviceAoTable, PyscfRsError> {
+    let invalid = |msg: String| PyscfRsError::Core(CoreError::InvalidMolecule(msg));
+    if !cell.mol._built {
+        return Err(invalid("eval_ao_kpts_device: the cell must be built first".into()));
+    }
+    let Some(comp) = comp_of_eval_name(eval_name) else {
+        return Err(invalid(format!(
+            "eval_ao_kpts_device: no device kernel for {eval_name:?}"
+        )));
+    };
+    let owned_gamma = [[0.0_f64; 3]];
+    let kpts: &[[f64; 3]] = if kpts.is_empty() { &owned_gamma } else { kpts };
+    let nkpts = kpts.len();
+    let ngrids = coords.len();
+    let nao = cell.mol.nao_nr;
+    let gamma: Vec<bool> = kpts.iter().map(is_gamma).collect();
+
+    let rcut = estimate_rcut_for_eval(cell, deriv_count(eval_name))?;
+    let rmax = rcut.iter().copied().fold(0.0_f64, f64::max);
+    let mut ls = crate::lattice::get_lattice_ls_eval(cell, rmax)?;
+    ls.sort_by(|a, b| pyscf_pbc_tools::mat3::norm3(a).total_cmp(&pyscf_pbc_tools::mat3::norm3(b)));
+
+    let AoAccumulated {
+        client,
+        acc,
+        n,
+        comp: got,
+    } = eval_ao_kpts_accumulate(cell, eval_name, coords, kpts, &ls, 0..ngrids)?;
+    let Some(acc) = acc else {
+        return Ok(pyscf_kernels::pbc::DeviceAoTable::zeros(
+            &client, nkpts, comp, nao, ngrids,
+        ));
+    };
+    if got != comp || n != comp * ngrids * nao {
+        return Err(invalid(format!(
+            "eval_ao_kpts_device: {eval_name} produced {got} components and {n} reals per \
+             k-point, expected {comp} and {}",
+            comp * ngrids * nao
+        )));
+    }
+    Ok(pyscf_kernels::pbc::DeviceAoTable::from_accumulator(
+        &client, acc, comp, nao, ngrids, &gamma,
+    ))
+}
+
+/// Whether [`eval_ao_kpts_band_vmat`] has a device kernel for `eval_name`
+/// (`GTOval_sph` / `GTOval_sph_deriv1`); anything else is host-only.
+pub fn band_vmat_device_serves(eval_name: &str) -> bool {
+    comp_of_eval_name(eval_name).is_some()
+}
+
+/// Whether the resolved backend has hardware planes (a GPU-like runtime) —
+/// what a caller choosing between a host reduction and a device one keys on.
+///
+/// # Errors
+/// Propagates the backend selection.
+pub fn backend_has_planes() -> Result<bool, PyscfRsError> {
+    let client = select_backend()
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "backend_has_planes: backend selection failed: {e}"
+            )))
+        })?
+        .client;
+    Ok(client.has_planes())
+}
+
 /// The component count of the two eval names the device kernels serve —
 /// what K-09 needs before the first image is evaluated. `None` for anything
 /// else (the host fallback decides its own shape).
@@ -1293,6 +1497,36 @@ fn flush_resident(
 ) -> Result<(), PyscfRsError> {
     let span = tracing::info_span!("pbc_eval_ao_k08_accumulate", images = f.images.len() as u64);
     let _entered = span.enter();
+    if ao_stats_enabled() {
+        // Diagnostic (`PYSCF_PBC_AO_STATS=1`): the resident launch's shape —
+        // how much of the image × block space the W-09 screen keeps, and how
+        // many kept images have their `-L` partner staged too.
+        let nblk = f.images.iter().map(|i| i.keep_blocks.len()).max().unwrap_or(0).max(1);
+        let kept: usize = f
+            .images
+            .iter()
+            .map(|i| if i.keep_blocks.is_empty() { nblk } else { i.keep_blocks.iter().filter(|&&b| b != 0).count() })
+            .sum();
+        let bits: std::collections::HashSet<[u64; 3]> =
+            f.images.iter().map(|i| i.l.map(f64::to_bits)).collect();
+        let paired = f
+            .images
+            .iter()
+            .filter(|i| bits.contains(&i.l.map(|x| (-x).to_bits())))
+            .count();
+        eprintln!(
+            "[ao-stats] resident launch: images {} blocks {} kept image-blocks {} ({:.1}%) \
+             -L partners staged {} nkpts {} qmax {} n {}",
+            f.images.len(),
+            nblk,
+            kept,
+            100.0 * kept as f64 / (f.images.len() * nblk).max(1) as f64,
+            paired,
+            nkpts,
+            f.qmax,
+            n
+        );
+    }
     let accumulator = acc.get_or_insert_with(|| {
         pyscf_kernels::pbc::AoKAccumulator::zeros_point_major(client, nkpts, n)
     });
@@ -1610,6 +1844,12 @@ fn ao_point_screen_enabled() -> bool {
             )
         })
     })
+}
+
+fn ao_stats_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PYSCF_PBC_AO_STATS").is_ok_and(|v| v == "1"))
 }
 
 fn skip_k08_for_measurement() -> bool {

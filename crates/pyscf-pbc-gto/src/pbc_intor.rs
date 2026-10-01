@@ -595,7 +595,68 @@ fn lattice_sum(
     // identical sequence of additions: bit-identical to the uncached path.
     let npair = nbas_a * nbas_b;
     let key = image_block_key(ctx, cell1, cell2, ls, nl);
-    let blocks = match key.and_then(image_block_cache_get) {
+    let fold = |kmats: &mut [CTensor], m: usize, ish: usize, jsh: usize, block: &[f64]| {
+        let di = bra_cnt[ish];
+        let dj = ket_cnt[jsh];
+        let oi = bra_off[ish];
+        let oj = ket_off[jsh];
+        for (k, mat) in kmats.iter_mut().enumerate() {
+            let pr = expkl_re[k * ctx.nimgs + m];
+            let pi = expkl_im[k * ctx.nimgs + m];
+            for c in 0..comp {
+                let cb = c * di * dj;
+                let co = c * ni * nj;
+                for jj in 0..dj {
+                    for ii in 0..di {
+                        let v = block[cb + ii + jj * di];
+                        let o = co + (oi + ii) + (oj + jj) * ni;
+                        mat.re[o] += pr * v;
+                        mat.im[o] += pi * v;
+                    }
+                }
+            }
+        }
+    };
+
+    // Streaming: when the blocks could not be cached anyway (cache off, or an
+    // upper bound of their size over the cap), evaluate the images in waves
+    // and fold each wave at once, instead of holding EVERY image's blocks
+    // (~8 GB for a 54-atom DZVP overlap). Each output element still receives
+    // its additions in ascending image order, so the result is bit-identical;
+    // the peak drops to one wave's blocks.
+    let cached = key.and_then(image_block_cache_get);
+    let bound = ls.len().saturating_mul(ni * nj * comp);
+    if cached.is_none() && (key.is_none() || bound > image_block_cache_max_f64()) {
+        // Waves of `threads * MIN_PAIRS / npair` images (`PYSCF_PBC_INTOR_WAVE_IMAGES`
+        // overrides it, for tests), with ONE set of cintx contexts for the
+        // whole sum. Measured on a 54-atom DZVP overlap (CPU runtime): fresh
+        // contexts per wave cost more memory than they save (21 GB peak vs
+        // 15 GB with reused contexts and MALLOC_ARENA_MAX=2) — each context's
+        // executor allocates on creation and its metadata cache is freed
+        // only on drop, into fragmented malloc arenas.
+        let wave = std::env::var("PYSCF_PBC_INTOR_WAVE_IMAGES")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(image_block_threads() * MIN_PAIRS_PER_THREAD / npair.max(1))
+            .max(1);
+        let ectxs = image_contexts(ctx, ls.len(), npair);
+        let mut m0 = 0;
+        while m0 < ls.len() {
+            let m1 = (m0 + wave).min(ls.len());
+            for (slot, block) in eval_image_range(
+                ctx, cell1, cell2, ls, m0..m1, nl, nbas_a, nbas_b, &bra_cnt, &ket_cnt, &opts, &ectxs,
+            )? {
+                if block.is_empty() {
+                    continue;
+                }
+                let (m, pair) = (slot / npair, slot % npair);
+                fold(kmats, m, pair / nbas_b, pair % nbas_b, &block);
+            }
+            m0 = m1;
+        }
+        return Ok(());
+    }
+    let blocks = match cached {
         Some(b) => b,
         None => {
             let b = std::sync::Arc::new(eval_image_blocks(
@@ -610,31 +671,12 @@ fn lattice_sum(
 
     for m in 0..ls.len() {
         for ish in 0..nbas_a {
-            let di = bra_cnt[ish];
             for jsh in 0..nbas_b {
                 let block = &blocks[m * npair + ish * nbas_b + jsh];
                 if block.is_empty() {
                     continue;
                 }
-                let dj = ket_cnt[jsh];
-                let oi = bra_off[ish];
-                let oj = ket_off[jsh];
-                for (k, mat) in kmats.iter_mut().enumerate() {
-                    let pr = expkl_re[k * ctx.nimgs + m];
-                    let pi = expkl_im[k * ctx.nimgs + m];
-                    for c in 0..comp {
-                        let cb = c * di * dj;
-                        let co = c * ni * nj;
-                        for jj in 0..dj {
-                            for ii in 0..di {
-                                let v = block[cb + ii + jj * di];
-                                let o = co + (oi + ii) + (oj + jj) * ni;
-                                mat.re[o] += pr * v;
-                                mat.im[o] += pi * v;
-                            }
-                        }
-                    }
-                }
+                fold(kmats, m, ish, jsh, block);
             }
         }
     }
@@ -644,6 +686,13 @@ fn lattice_sum(
 /// Every surviving `(image, ish, jsh)` block of the lattice sum, flat at
 /// `[m * nbas_a * nbas_b + ish * nbas_b + jsh]`; screened, skipped or empty
 /// pairs stay empty vectors. Evaluated in the pre-BAND-01 order.
+///
+/// Images are split over threads (`PYSCF_NUM_THREADS`, else every core) in
+/// contiguous chunks, each worker with its own cintx `EvaluationContext`, as
+/// `aux_e2` does. Each block is a pure function of its `(image, ish, jsh)`
+/// and lands in its own slot, and the Bloch fold that consumes them is
+/// unchanged, so the result is bit-identical to the serial loop. A 54-atom
+/// DZVP cell (477 images, 178 shells) spent tens of minutes here on one core.
 #[allow(clippy::too_many_arguments)]
 fn eval_image_blocks(
     ctx: &LatticeSumCtx<'_>,
@@ -657,90 +706,300 @@ fn eval_image_blocks(
     ket_cnt: &[usize],
     opts: &ExecutionOptions,
 ) -> Result<Vec<Vec<f64>>, PyscfRsError> {
-    let comp = ctx.comp;
     let mut blocks: Vec<Vec<f64>> = vec![Vec::new(); ls.len() * nbas_a * nbas_b];
-    for (m, l) in ls.iter().enumerate() {
-        // Nothing survives screening for this image -> skip the basis build too.
-        if let Some(nl) = nl
-            && nl.per_image[m].is_empty()
-        {
+    let ectxs = image_contexts(ctx, ls.len(), nbas_a * nbas_b);
+    for (slot, block) in eval_image_range(
+        ctx, cell1, cell2, ls, 0..ls.len(), nl, nbas_a, nbas_b, bra_cnt, ket_cnt, opts, &ectxs,
+    )? {
+        blocks[slot] = block;
+    }
+    Ok(blocks)
+}
+
+/// The surviving blocks of images `range` as `(slot, block)` pairs in
+/// ascending slot order — i.e. in `(image, ish, jsh)` order, the order the
+/// Bloch fold consumes them. Threaded over contiguous image chunks.
+#[allow(clippy::too_many_arguments)]
+fn eval_image_range(
+    ctx: &LatticeSumCtx<'_>,
+    cell1: &Cell,
+    cell2: &Cell,
+    ls: &[[f64; 3]],
+    range: std::ops::Range<usize>,
+    nl: Option<&NeighborList>,
+    nbas_a: usize,
+    nbas_b: usize,
+    bra_cnt: &[usize],
+    ket_cnt: &[usize],
+    opts: &ExecutionOptions,
+    ectxs: &[cintx_rs::EvaluationContext],
+) -> Result<Vec<(usize, Vec<f64>)>, PyscfRsError> {
+    let nimg = range.len();
+    let nthreads = ectxs.len().min(nimg.max(1));
+    if nthreads <= 1 {
+        // A single context: the serial scalar route uses cintx's default one
+        // unless the pair batch needs an explicit context.
+        let batch_ctx = ectxs.first().filter(|_| pair_batch_serves(ctx));
+        let mut out = Vec::new();
+        for m in range {
+            out.extend(image_blocks_one(
+                ctx, cell1, cell2, m, &ls[m], nl, nbas_a, nbas_b, bra_cnt, ket_cnt, opts, batch_ctx,
+            )?);
+        }
+        return Ok(out);
+    }
+    let pairs = nimg * nbas_a * nbas_b;
+    tracing::debug!(nimgs = nimg, pairs, nthreads, "pbc_intor: threaded image blocks");
+    let chunk = nimg.div_ceil(nthreads);
+    let parts: Vec<Result<Vec<(usize, Vec<f64>)>, PyscfRsError>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = range
+            .clone()
+            .step_by(chunk)
+            .zip(ectxs)
+            .map(|(m0, ectx)| {
+                let m1 = (m0 + chunk).min(range.end);
+                scope.spawn(move || {
+                    let mut out = Vec::new();
+                    for m in m0..m1 {
+                        out.extend(image_blocks_one(
+                            ctx, cell1, cell2, m, &ls[m], nl, nbas_a, nbas_b, bra_cnt, ket_cnt,
+                            opts, Some(ectx),
+                        )?);
+                    }
+                    Ok(out)
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("pbc_intor image-block worker panicked"))
+            .collect()
+    });
+    let mut out = Vec::new();
+    for part in parts {
+        out.extend(part?);
+    }
+    Ok(out)
+}
+
+/// `PYSCF_PBC_INTOR_PAIR_BATCH=1`: evaluate each image's surviving shell pairs
+/// of `int1e_ovlp_sph` / `int1e_kin_sph` as ONE cintx `PairBatchRequest`
+/// instead of one `SessionRequest` (one kernel launch) per pair. Off by
+/// default: the batched kernel is a different code path, so its blocks are
+/// gated against the scalar ones at rounding level
+/// (`tests/pbc_intor_pair_batch.rs`), not bitwise.
+fn pair_batch_serves(ctx: &LatticeSumCtx<'_>) -> bool {
+    std::env::var("PYSCF_PBC_INTOR_PAIR_BATCH").is_ok_and(|v| v.trim() == "1")
+        && ctx.representation == Representation::Spheric
+        && ctx.omega.is_none()
+        && ctx.comp == 1
+        && matches!(ctx.full_name, "int1e_ovlp_sph" | "int1e_kin_sph")
+}
+
+/// [`image_blocks_one`] through one `PairBatchRequest` for the whole image:
+/// the same surviving pairs in the same order, each block in the scalar
+/// path's layout (the batch output is the per-tuple blocks concatenated).
+#[allow(clippy::too_many_arguments)]
+fn image_blocks_batched(
+    ctx: &LatticeSumCtx<'_>,
+    basis: &CintxBasisSet,
+    m: usize,
+    nl: Option<&NeighborList>,
+    nbas_a: usize,
+    nbas_b: usize,
+    bra_cnt: &[usize],
+    ket_cnt: &[usize],
+    opts: &ExecutionOptions,
+    ectx: &cintx_rs::EvaluationContext,
+) -> Result<Vec<(usize, Vec<f64>)>, PyscfRsError> {
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    for ish in 0..nbas_a {
+        if bra_cnt[ish] == 0 {
             continue;
         }
-        let (basis, _, _) = cross_basis(cell1, cell2, l)?;
-
-        for ish in 0..nbas_a {
-            let di = bra_cnt[ish];
-            if di == 0 {
+        for jsh in 0..nbas_b {
+            if ket_cnt[jsh] == 0 || (ctx.hermi != 0 && ish < jsh) {
                 continue;
             }
-            for jsh in 0..nbas_b {
-                let dj = ket_cnt[jsh];
-                if dj == 0 {
-                    continue;
-                }
-                // hermi != 0: upstream's `s2` fill evaluates only the i >= j
-                // half — `_nr2c_fill(..., ish0 = jsh)` at `fill_ints.c:1413`
-                // starts the bra loop at the ket shell — and `lib.hermi_triu`
-                // mirrors the rest. The test is on SHELL indices, matching
-                // upstream; it is only meaningful when bra and ket are the same
-                // shell list, which `hermi_triu`'s square check enforces.
-                if ctx.hermi != 0 && ish < jsh {
-                    continue;
-                }
-                if let Some(nl) = nl
-                    && nl.per_image[m].binary_search(&(ish, jsh)).is_err()
-                {
-                    continue;
-                }
+            if let Some(nl) = nl
+                && nl.per_image[m].binary_search(&(ish, jsh)).is_err()
+            {
+                continue;
+            }
+            pairs.push((ish, jsh));
+        }
+    }
+    if pairs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let out = cintx_rs::PairBatchRequest::new(
+        ctx.operator,
+        ctx.representation,
+        basis,
+        pairs.iter().map(|&(i, j)| [i as u32, (nbas_a + j) as u32]),
+        opts.clone(),
+    )
+    .evaluate_in(ectx)
+    .map_err(|e| {
+        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "cintx pair batch failed for '{}' at image {m}: {e}",
+            ctx.full_name
+        )))
+    })?;
+    let mut blocks = Vec::with_capacity(pairs.len());
+    for (n, &(ish, jsh)) in pairs.iter().enumerate() {
+        let len = bra_cnt[ish] * ket_cnt[jsh] * ctx.comp;
+        let start = out.offsets[n];
+        let block = out.values.get(start..start + len).ok_or_else(|| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "cintx pair batch for '{}' returned {} values, pair {n} needs {start}..{}",
+                ctx.full_name,
+                out.values.len(),
+                start + len
+            )))
+        })?;
+        blocks.push((m * nbas_a * nbas_b + ish * nbas_b + jsh, block.to_vec()));
+    }
+    Ok(blocks)
+}
 
-                let j_global = nbas_a + jsh;
-                let shells = basis
-                    .shell_tuple_for_indices([ish, j_global])
-                    .map_err(|e| {
-                        PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                            "shell_tuple_for_indices({ish}, {j_global}) failed for '{}': {e}",
-                            ctx.full_name
-                        )))
-                    })?;
-                let outcome = SessionRequest::new(
-                    ctx.operator,
-                    ctx.representation,
-                    &basis,
-                    shells,
-                    opts.clone(),
-                )
-                .query_workspace()
+/// The worker contexts of one lattice sum: one per thread, created ONCE and
+/// reused by every wave. Each cintx `EvaluationContext` owns a cubecl
+/// executor whose buffers it keeps; standing up fresh ones per wave grew a
+/// 54-atom DZVP overlap from 8 to 13+ GB. A worker's context also costs
+/// ~0.3 s, so small sums get one (or none, below).
+fn image_contexts(ctx: &LatticeSumCtx<'_>, nimg: usize, npair: usize) -> Vec<cintx_rs::EvaluationContext> {
+    let nthreads = image_block_threads()
+        .min(nimg.max(1))
+        .min((nimg * npair / MIN_PAIRS_PER_THREAD).max(1));
+    if nthreads <= 1 && !pair_batch_serves(ctx) {
+        return Vec::new();
+    }
+    (0..nthreads).map(|_| cintx_rs::EvaluationContext::new()).collect()
+}
+
+/// Fewest `(image, shell pair)` candidates worth a worker thread.
+const MIN_PAIRS_PER_THREAD: usize = 200_000;
+
+/// `PYSCF_NUM_THREADS`, else the core count.
+fn image_block_threads() -> usize {
+    if let Ok(v) = std::env::var("PYSCF_NUM_THREADS")
+        && let Ok(n) = v.trim().parse::<usize>()
+        && n > 0
+    {
+        return n;
+    }
+    std::thread::available_parallelism().map(std::num::NonZeroUsize::get).unwrap_or(1)
+}
+
+/// The surviving blocks of image `m` as `(slot, block)` pairs.
+#[allow(clippy::too_many_arguments)]
+fn image_blocks_one(
+    ctx: &LatticeSumCtx<'_>,
+    cell1: &Cell,
+    cell2: &Cell,
+    m: usize,
+    l: &[f64; 3],
+    nl: Option<&NeighborList>,
+    nbas_a: usize,
+    nbas_b: usize,
+    bra_cnt: &[usize],
+    ket_cnt: &[usize],
+    opts: &ExecutionOptions,
+    eval_ctx: Option<&cintx_rs::EvaluationContext>,
+) -> Result<Vec<(usize, Vec<f64>)>, PyscfRsError> {
+    let comp = ctx.comp;
+    let mut out = Vec::new();
+    // Nothing survives screening for this image -> skip the basis build too.
+    if let Some(nl) = nl
+        && nl.per_image[m].is_empty()
+    {
+        return Ok(out);
+    }
+    let (basis, _, _) = cross_basis(cell1, cell2, l)?;
+
+    if let Some(ectx) = eval_ctx
+        && pair_batch_serves(ctx)
+    {
+        return image_blocks_batched(ctx, &basis, m, nl, nbas_a, nbas_b, bra_cnt, ket_cnt, opts, ectx);
+    }
+
+    for ish in 0..nbas_a {
+        let di = bra_cnt[ish];
+        if di == 0 {
+            continue;
+        }
+        for jsh in 0..nbas_b {
+            let dj = ket_cnt[jsh];
+            if dj == 0 {
+                continue;
+            }
+            // hermi != 0: upstream's `s2` fill evaluates only the i >= j
+            // half — `_nr2c_fill(..., ish0 = jsh)` at `fill_ints.c:1413`
+            // starts the bra loop at the ket shell — and `lib.hermi_triu`
+            // mirrors the rest. The test is on SHELL indices, matching
+            // upstream; it is only meaningful when bra and ket are the same
+            // shell list, which `hermi_triu`'s square check enforces.
+            if ctx.hermi != 0 && ish < jsh {
+                continue;
+            }
+            if let Some(nl) = nl
+                && nl.per_image[m].binary_search(&(ish, jsh)).is_err()
+            {
+                continue;
+            }
+
+            let j_global = nbas_a + jsh;
+            let shells = basis
+                .shell_tuple_for_indices([ish, j_global])
                 .map_err(|e| {
                     PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                        "cintx workspace query failed for '{}' pair ({ish},{jsh}) \
-                         at image {m}: {e}",
-                        ctx.full_name
-                    )))
-                })?
-                .evaluate()
-                .map_err(|e| {
-                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                        "cintx evaluate failed for '{}' pair ({ish},{jsh}) at image {m}: {e}",
+                        "shell_tuple_for_indices({ish}, {j_global}) failed for '{}': {e}",
                         ctx.full_name
                     )))
                 })?;
+            let request = SessionRequest::new(
+                ctx.operator,
+                ctx.representation,
+                &basis,
+                shells,
+                opts.clone(),
+            );
+            let request = match eval_ctx {
+                Some(c) => request.query_workspace_in(c),
+                None => request.query_workspace(),
+            };
+            let outcome = request
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx workspace query failed for '{}' pair ({ish},{jsh}) \
+                     at image {m}: {e}",
+                    ctx.full_name
+                )))
+            })?
+            .evaluate()
+            .map_err(|e| {
+                PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx evaluate failed for '{}' pair ({ish},{jsh}) at image {m}: {e}",
+                    ctx.full_name
+                )))
+            })?;
 
-                let block = outcome.tensor.owned_values;
-                let dmjc = di * dj * comp;
-                if block.len() != dmjc {
-                    return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
-                        "cintx returned {} elements for '{}' pair ({ish},{jsh}), expected \
-                         {dmjc} (di={di} dj={dj} comp={comp}, extents={:?})",
-                        block.len(),
-                        ctx.full_name,
-                        outcome.tensor.extents,
-                    ))));
-                }
-                blocks[m * nbas_a * nbas_b + ish * nbas_b + jsh] = block;
+            let block = outcome.tensor.owned_values;
+            let dmjc = di * dj * comp;
+            if block.len() != dmjc {
+                return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                    "cintx returned {} elements for '{}' pair ({ish},{jsh}), expected \
+                     {dmjc} (di={di} dj={dj} comp={comp}, extents={:?})",
+                    block.len(),
+                    ctx.full_name,
+                    outcome.tensor.extents,
+                ))));
             }
+            out.push((m * nbas_a * nbas_b + ish * nbas_b + jsh, block));
         }
     }
-    Ok(blocks)
+    Ok(out)
 }
 
 /// 128-bit fingerprint of everything the image blocks depend on, or `None`
@@ -791,6 +1050,19 @@ type ImageBlocks = std::sync::Arc<Vec<Vec<f64>>>;
 /// never cached; inserting past the cap empties the cache first.
 const IMAGE_BLOCK_CACHE_MAX_F64: usize = 32 * 1024 * 1024;
 
+/// The cache cap in f64s: `PYSCF_PBC_INTOR_IMAGE_CACHE_MB` MiB, else
+/// [`IMAGE_BLOCK_CACHE_MAX_F64`]. A large cell's overlap and kinetic blocks
+/// (GBs at nao ~900) otherwise miss and are rebuilt for every band chunk.
+fn image_block_cache_max_f64() -> usize {
+    static MAX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("PYSCF_PBC_INTOR_IMAGE_CACHE_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .map_or(IMAGE_BLOCK_CACHE_MAX_F64, |mb| mb * 1024 * 1024 / 8)
+    })
+}
+
 type ImageBlockCache = std::sync::Mutex<Vec<((u64, u64), ImageBlocks)>>;
 
 fn image_block_cache() -> &'static ImageBlockCache {
@@ -806,12 +1078,12 @@ fn image_block_cache_get(key: (u64, u64)) -> Option<ImageBlocks> {
 fn image_block_cache_put(key: (u64, u64), blocks: &ImageBlocks) {
     let size = |b: &ImageBlocks| b.iter().map(Vec::len).sum::<usize>();
     let new = size(blocks);
-    if new > IMAGE_BLOCK_CACHE_MAX_F64 {
+    if new > image_block_cache_max_f64() {
         return;
     }
     if let Ok(mut cache) = image_block_cache().lock() {
         let held: usize = cache.iter().map(|(_, v)| size(v)).sum();
-        if held + new > IMAGE_BLOCK_CACHE_MAX_F64 {
+        if held + new > image_block_cache_max_f64() {
             cache.clear();
         }
         cache.push((key, blocks.clone()));

@@ -67,6 +67,52 @@ pub struct KScfConfig {
     pub chkfile: Option<std::path::PathBuf>,
     /// Emit per-cycle `tracing::info!` lines.
     pub verbose: bool,
+    /// Precomputed overlap matrices; when set the driver skips `get_ovlp`.
+    /// Must be the hooks' own `get_ovlp()` at the same k-points.
+    pub s1e: Option<KMats>,
+    /// Precomputed core Hamiltonians; when set the driver skips `get_hcore`.
+    pub h1e: Option<KMats>,
+    /// Called after every cycle with the new density and the Fock matrix the
+    /// cycle diagonalised, so a long run can checkpoint and resume (see
+    /// [`CycleState`]).
+    pub on_cycle: Option<CycleHook>,
+    /// Resume: the previous cycle's Fock matrices (as [`CycleState::fock`]
+    /// reported them), so damping continues from the first resumed cycle
+    /// instead of taking one undamped step.
+    pub fock_last: Option<KDms>,
+    /// Resume: the number of this call's first cycle. Continuing the counter
+    /// keeps damping (`cycle < diis_start_cycle - 1`) and DIIS
+    /// (`cycle >= diis_start_cycle`) at their positions; `max_cycle` stays the
+    /// TOTAL cycle count.
+    pub first_cycle: u32,
+}
+
+/// What [`KScfConfig::on_cycle`] sees after each cycle.
+///
+/// Resuming from `dm` with `init_guess = UserDm(dm)`, `fock_last = fock` and
+/// `first_cycle = cycle + 1` repeats the uninterrupted run bit for bit until
+/// DIIS starts (the DIIS subspace itself is not part of the state).
+pub struct CycleState<'a> {
+    /// The cycle just finished.
+    pub cycle: u32,
+    /// Its total energy.
+    pub e_tot: f64,
+    /// Its new density.
+    pub dm: &'a KDms,
+    /// The Fock matrices it diagonalised (after damping, DIIS and level shift).
+    pub fock: &'a KDms,
+    /// Whether this cycle met the convergence test (the driver stops after it).
+    pub converged: bool,
+}
+
+/// Per-cycle callback of [`KScfConfig::on_cycle`].
+#[derive(Clone)]
+pub struct CycleHook(pub std::sync::Arc<dyn Fn(&CycleState<'_>) + Send + Sync>);
+
+impl std::fmt::Debug for CycleHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CycleHook")
+    }
 }
 
 impl Default for KScfConfig {
@@ -83,6 +129,11 @@ impl Default for KScfConfig {
             init_guess: KInitGuess::default(),
             chkfile: None,
             verbose: false,
+            s1e: None,
+            h1e: None,
+            on_cycle: None,
+            fock_last: None,
+            first_cycle: 0,
         }
     }
 }

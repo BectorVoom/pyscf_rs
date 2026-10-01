@@ -216,6 +216,18 @@ fn build_gth_alias() -> HashMap<&'static str, &'static str> {
     m.insert("gthccdzvp", "gth-cc-dzvp.dat");
     m.insert("gthcctzvp", "gth-cc-tzvp.dat");
     m.insert("gthccqzvp", "gth-cc-qzvp.dat");
+    // MOLOPT sets. Upstream carries these in the same GTH_ALIAS table under a
+    // "legacy database" TODO (`pyscf/gto/basis/__init__.py:438-446`); they are
+    // standalone one-block-per-element `.dat` files, so `parse_cp2k` reads them
+    // exactly as it reads `gth-szv.dat`. They matter because the plain
+    // `gth-*` tables stop well short of the transition metals — `gth-szv.dat`
+    // has no Y and no Ta, `gth-szv-molopt-sr.dat` has both (q11 / q13).
+    m.insert("gthszvmolopt", "gth-szv-molopt.dat");
+    m.insert("gthdzvpmolopt", "gth-dzvp-molopt.dat");
+    m.insert("gthtzvpmolopt", "gth-tzvp-molopt.dat");
+    m.insert("gthtzv2pmolopt", "gth-tzv2p-molopt.dat");
+    m.insert("gthszvmoloptsr", "gth-szv-molopt-sr.dat");
+    m.insert("gthdzvpmoloptsr", "gth-dzvp-molopt-sr.dat");
     m
 }
 

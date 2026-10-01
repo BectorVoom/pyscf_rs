@@ -459,7 +459,8 @@ c.verbose = 0
 c.build()
 kpts = c.make_kpts(json.loads(nk_json))
 mats = c.pbc_intor(intor, kpts=kpts)
-out = {'nao': int(c.nao_nr()), 'nkpts': len(kpts), 'rcut': float(c.rcut),
+out = {'version': __import__('pyscf').__version__,
+       'nao': int(c.nao_nr()), 'nkpts': len(kpts), 'rcut': float(c.rcut),
        'nls': int(len(c.get_lattice_Ls())),
        'kpts': np.asarray(kpts).ravel().tolist(),
        'atom_charges': np.asarray(c.atom_charges()).tolist(),
@@ -849,7 +850,14 @@ fn compare_cell_with_upstream(
         ],
     );
 
-    // Preconditions: the same cell, the same truncation, the same k-points.
+    // Preconditions: the same cell, the same truncation, the same k-points —
+    // and the VENDORED 2.12.1 oracle, never site-packages 2.14.0 (carryover
+    // `20-oracle-harness-and-ci.md` item i).
+    assert_eq!(
+        want["version"].as_str().expect("version"),
+        "2.12.1",
+        "the oracle must be the VENDORED PySCF 2.12.1 — see tests/common in pyscf-pbc-dft"
+    );
     assert_eq!(want["nao"].as_u64().unwrap() as usize, cell.mol.nao_nr);
     assert!(
         (want["rcut"].as_f64().unwrap() - cell.rcut).abs() < 1e-10,
@@ -1030,10 +1038,17 @@ fn run_python(py: &PathBuf, script: &str, args: &[String]) -> serde_json::Value 
     let n = SCRIPT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("pbc_intor_oracle_{}_{n}.py", std::process::id()));
     std::fs::write(&path, script).expect("write oracle script");
+    // Pin the VENDORED tree: the script's own (temp) directory lands on
+    // `sys.path[0]`, not the CWD, so without this `import pyscf` resolves to
+    // site-packages 2.14.0 instead of the 2.12.1 port target. Same contract as
+    // `pyscf-pbc-dft/tests/common/mod.rs::run_python` (carryover
+    // `20-oracle-harness-and-ci.md` item i).
+    let root = workspace_root();
     let out = Command::new(py)
         .arg(&path)
         .args(args)
-        .current_dir(workspace_root())
+        .env("PYTHONPATH", &root)
+        .current_dir(&root)
         .output()
         .expect("spawn upstream python");
     let _ = std::fs::remove_file(&path);

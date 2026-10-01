@@ -216,3 +216,117 @@ pub fn project_mo_nr2nr(
     }
     Ok(out)
 }
+
+/// Project k-resolved density matrices from `cell1`'s basis onto `cell2`'s —
+/// the density form of [`project_mo_nr2nr`]:
+///
+/// ```text
+/// X[k]  = S22[k]^-1 S21[k]          (nao2 x nao1)
+/// D2[k] = X[k] D1[k] X[k]^H         (= C2 n C2^H with C2 = X C1)
+/// ```
+///
+/// Used to start a large-basis SCF from a density converged in a smaller
+/// basis on the same cell (e.g. `gth-szv-molopt-sr` → `gth-dzvp-molopt-sr`).
+/// `dm1[k]` and `s22[k]` are ROW-MAJOR (the SCF driver's layout); `s22` is
+/// the target SCF's own overlap, so the projected density is consistent with
+/// the metric the SCF will use. `S22^-1` comes from one eigendecomposition
+/// per k-point, and the three products run on the selected backend
+/// ([`pyscf_algebra::zgemm_dense`]) — one LU solve per MO column, as
+/// [`project_mo_nr2nr`] does, is far too slow at nao ~ 10^3. The projection
+/// can lose a little charge (the parts of `D1` outside `cell2`'s span); the
+/// SCF's init-guess renormalisation restores the electron count.
+///
+/// # Errors
+/// * [`CoreError::InvalidMolecule`] on a shape mismatch, a non-positive
+///   overlap eigenvalue, or a backend failure;
+/// * propagates the cross overlap.
+pub fn project_dm_nr2nr(
+    cell1: &Cell,
+    dm1: &KMats,
+    cell2: &Cell,
+    s22: &KMats,
+    kpts: &[[f64; 3]],
+) -> Result<KMats, PyscfRsError> {
+    let invalid = |msg: String| PyscfRsError::Core(CoreError::InvalidMolecule(msg));
+    let nao1 = cell1.mol.nao_nr;
+    let nao2 = cell2.mol.nao_nr;
+    if dm1.len() != kpts.len() || s22.len() != kpts.len() {
+        return Err(invalid(format!(
+            "project_dm_nr2nr: {} densities / {} overlaps for {} k-points",
+            dm1.len(),
+            s22.len(),
+            kpts.len()
+        )));
+    }
+    let s21 = pyscf_pbc_gto::intor_cross(
+        "int1e_ovlp",
+        cell2,
+        cell1,
+        kpts,
+        PbcIntorOpts {
+            hermi: 0,
+            ..Default::default()
+        },
+    )?;
+    if s21.ni != nao2 || s21.nj != nao1 || s21.comp != 1 {
+        return Err(invalid(format!(
+            "project_dm_nr2nr: cross overlap is {}x{}x{}, expected 1x{nao2}x{nao1}",
+            s21.comp, s21.ni, s21.nj
+        )));
+    }
+    let client = pyscf_algebra::select_backend()
+        .map_err(|e| invalid(format!("project_dm_nr2nr: backend: {e}")))?
+        .client;
+    let gemm = |a: &CTensor, b: &CTensor, m: usize, k: usize, n: usize| {
+        pyscf_algebra::zgemm_dense(&client, a, b, m, k, n)
+            .map_err(|e| invalid(format!("project_dm_nr2nr: zgemm {m}x{k}x{n}: {e}")))
+    };
+    let mut identity = CTensor::zeros(nao2 * nao2);
+    for i in 0..nao2 {
+        identity.re[i * nao2 + i] = 1.0;
+    }
+
+    let mut out = Vec::with_capacity(kpts.len());
+    for k in 0..kpts.len() {
+        if dm1[k].len() != nao1 * nao1 || s22[k].len() != nao2 * nao2 {
+            return Err(invalid(format!("project_dm_nr2nr: block {k} has the wrong size")));
+        }
+        // S22^-1 = V diag(1/w) V^H from the Hermitian eigenproblem S22 v = w v.
+        let (w, v) = pyscf_algebra::zeigh_gen(&s22[k], &identity, nao2)
+            .map_err(|e| invalid(format!("project_dm_nr2nr: eigh(S22) at k = {k}: {e}")))?;
+        if let Some(bad) = w.iter().find(|x| **x <= 0.0) {
+            return Err(invalid(format!(
+                "project_dm_nr2nr: S22 at k = {k} is not positive definite (eigenvalue {bad:e})"
+            )));
+        }
+        // v is COLUMN-MAJOR: v[ao + m * nao2]. Row-major A = V diag(1/w),
+        // B = V^H.
+        let mut a = CTensor::zeros(nao2 * nao2);
+        let mut b = CTensor::zeros(nao2 * nao2);
+        for i in 0..nao2 {
+            for m in 0..nao2 {
+                let (vr, vi) = (v.re[i + m * nao2], v.im[i + m * nao2]);
+                a.re[i * nao2 + m] = vr / w[m];
+                a.im[i * nao2 + m] = vi / w[m];
+                b.re[m * nao2 + i] = vr;
+                b.im[m * nao2 + i] = -vi;
+            }
+        }
+        let s22_inv = gemm(&a, &b, nao2, nao2, nao2)?;
+        let s21_k = pyscf_pbc_df::zlinalg::forder_to_c(s21.at(k), nao2, nao1);
+        let x = gemm(&s22_inv, &s21_k, nao2, nao2, nao1)?;
+        let xd = gemm(&x, &dm1[k], nao2, nao1, nao1)?;
+        // X^H, row-major nao1 x nao2.
+        let mut xh = CTensor::zeros(nao1 * nao2);
+        for i in 0..nao2 {
+            for j in 0..nao1 {
+                xh.re[j * nao2 + i] = x.re[i * nao1 + j];
+                xh.im[j * nao2 + i] = -x.im[i * nao1 + j];
+            }
+        }
+        let mut d2 = gemm(&xd, &xh, nao2, nao1, nao2)?;
+        pyscf_pbc_df::zlinalg::hermitise(&mut d2, nao2);
+        out.push(d2);
+    }
+    Ok(out)
+}

@@ -117,12 +117,19 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
         )));
     }
 
-    let s1e = hooks.get_ovlp()?;
-    let h1e = hooks.get_hcore()?;
-    let mut dm = hooks.get_init_guess(&cfg.init_guess, &s1e)?;
+    let s1e = match &cfg.s1e {
+        Some(s) => s.clone(),
+        None => tracing::info_span!("scf_get_ovlp").in_scope(|| hooks.get_ovlp())?,
+    };
+    let h1e = match &cfg.h1e {
+        Some(h) => h.clone(),
+        None => tracing::info_span!("scf_get_hcore").in_scope(|| hooks.get_hcore())?,
+    };
+    let mut dm = tracing::info_span!("scf_init_guess")
+        .in_scope(|| hooks.get_init_guess(&cfg.init_guess, &s1e))?;
     let e_nuc = hooks.energy_nuc()?;
 
-    let mut vhf = hooks.get_veff(&dm)?;
+    let mut vhf = tracing::info_span!("scf_get_veff").in_scope(|| hooks.get_veff(&dm))?;
     let (mut e_elec, mut e_coul) = hooks.energy_elec(&dm, &h1e, &vhf)?;
     let mut e_tot = e_elec + e_nuc;
     if cfg.verbose {
@@ -141,15 +148,17 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
     let mut mo_occ: Vec<Vec<f64>> = Vec::new();
     let mut fermi: Vec<f64> = Vec::new();
     let mut converged = false;
-    let mut cycles = 0_u32;
-    let mut fock_last: Option<KDms> = None;
+    // A resumed run reports the TOTAL cycle count, including earlier calls.
+    let mut cycles = cfg.first_cycle.min(cfg.max_cycle);
+    let mut fock_last: Option<KDms> = cfg.fock_last.clone();
 
-    for cycle in 0..cfg.max_cycle {
+    for cycle in cfg.first_cycle..cfg.max_cycle {
         cycles = cycle + 1;
         let last_e = e_tot;
 
         // khf.py:137-158 — the Fock build with its three modifiers.
-        let mut fock = hooks.get_fock(&h1e, &vhf, &dm)?;
+        let mut fock =
+            tracing::info_span!("scf_get_fock").in_scope(|| hooks.get_fock(&h1e, &vhf, &dm))?;
         if (cycle as i64) < cfg.diis_start_cycle as i64 - 1
             && cfg.damp.abs() > 1e-4
             && let Some(prev) = fock_last.as_ref()
@@ -159,6 +168,7 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
         if let Some(d) = diis.as_mut()
             && cycle >= cfg.diis_start_cycle
         {
+            let _diis_span = tracing::info_span!("scf_diis").entered();
             fock = diis_step(d, &s1e, &hooks.diis_dms(&dm), &fock, nao).map_err(|e| {
                 PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                     "periodic SCF: DIIS failed at cycle {cycle}: {e}"
@@ -170,11 +180,12 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
         }
         fock_last = Some(fock.clone());
 
-        let (e, c) = hooks.eig(&fock, &s1e)?;
+        let (e, c) = tracing::info_span!("scf_eig").in_scope(|| hooks.eig(&fock, &s1e))?;
         let (occ, f_levels) = hooks.get_occ(&e)?;
-        dm = hooks.make_rdm1(&c, &occ)?;
-        vhf = hooks.get_veff(&dm)?;
-        let (ee, ec) = hooks.energy_elec(&dm, &h1e, &vhf)?;
+        dm = tracing::info_span!("scf_make_rdm1").in_scope(|| hooks.make_rdm1(&c, &occ))?;
+        vhf = tracing::info_span!("scf_get_veff").in_scope(|| hooks.get_veff(&dm))?;
+        let (ee, ec) = tracing::info_span!("scf_energy_elec")
+            .in_scope(|| hooks.energy_elec(&dm, &h1e, &vhf))?;
         e_elec = ee;
         e_coul = ec;
         e_tot = e_elec + e_nuc;
@@ -182,7 +193,8 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
         // The gradient is measured on the BARE Fock of the NEW density: a
         // DIIS-extrapolated Fock is not the Fock of the current density, and
         // its gradient would converge to the wrong stationary point.
-        let norm_gorb = norm(&hooks.get_grad(&c, &occ, &h1e, &vhf));
+        let norm_gorb = tracing::info_span!("scf_get_grad")
+            .in_scope(|| norm(&hooks.get_grad(&c, &occ, &h1e, &vhf)));
         let de = e_tot - last_e;
         if cfg.verbose {
             tracing::info!(cycle, e_tot, de, norm_gorb, "periodic SCF cycle");
@@ -193,7 +205,16 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
         mo_occ = occ;
         fermi = f_levels;
 
-        if de.abs() < cfg.conv_tol && norm_gorb < grad_tol {
+        let converged_now = de.abs() < cfg.conv_tol && norm_gorb < grad_tol;
+        // After the convergence test, so a checkpoint written by the hook
+        // records whether this cycle finished the SCF (atomically with its
+        // density — no separate "done" marker to lose).
+        if let Some(hook) = &cfg.on_cycle
+            && let Some(fock) = fock_last.as_ref()
+        {
+            (hook.0)(&crate::types::CycleState { cycle, e_tot, dm: &dm, fock, converged: converged_now });
+        }
+        if converged_now {
             converged = true;
             break;
         }

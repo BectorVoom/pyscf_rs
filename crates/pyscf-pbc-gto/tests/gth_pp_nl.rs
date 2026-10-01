@@ -184,7 +184,8 @@ c.verbose = 0
 c.build()
 kpts = c.make_kpts(json.loads(nk_json))
 v = np.asarray(pp_int.get_pp_nl(c, kpts))
-out = {'nao': int(c.nao_nr()), 're': [], 'im': []}
+out = {'version': __import__('pyscf').__version__,
+       'nao': int(c.nao_nr()), 're': [], 'im': []}
 for m in v:
     m = np.asarray(m)
     out['re'].append(m.real.ravel(order='F').tolist())
@@ -224,6 +225,12 @@ fn compare_with_upstream(cell: &Cell, nk: [usize; 3], tol: f64) {
             serde_json::to_string(&sym).unwrap(),
             serde_json::to_string(&nk.to_vec()).unwrap(),
         ],
+    );
+    assert_eq!(
+        want["version"].as_str().expect("version"),
+        "2.12.1",
+        "the oracle must be the VENDORED PySCF 2.12.1, not site-packages 2.14.0 \
+         — see tests/common in pyscf-pbc-dft"
     );
     assert_eq!(want["nao"].as_u64().unwrap() as usize, cell.mol.nao_nr);
 
@@ -291,10 +298,17 @@ fn run_python(py: &PathBuf, script: &str, args: &[String]) -> serde_json::Value 
     let n = SCRIPT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("gth_pp_nl_oracle_{}_{n}.py", std::process::id()));
     std::fs::write(&path, script).expect("write oracle script");
+    // Pin the VENDORED tree: the script's own (temp) directory lands on
+    // `sys.path[0]`, not the CWD, so without this `import pyscf` resolves to
+    // site-packages 2.14.0 instead of the 2.12.1 port target. Same contract as
+    // `pyscf-pbc-dft/tests/common/mod.rs::run_python` (carryover
+    // `20-oracle-harness-and-ci.md` item i).
+    let root = workspace_root();
     let out = Command::new(py)
         .arg(&path)
         .args(args)
-        .current_dir(workspace_root())
+        .env("PYTHONPATH", &root)
+        .current_dir(&root)
         .output()
         .expect("spawn upstream python");
     let _ = std::fs::remove_file(&path);

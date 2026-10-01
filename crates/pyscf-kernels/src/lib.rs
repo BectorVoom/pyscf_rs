@@ -36,7 +36,7 @@ pub use eval_gto::{
     eval_gto_device_capable, eval_gto_sph, eval_gto_sph_deriv1, eval_gto_sph_deriv1_into,
     eval_gto_sph_deriv1_into_screened, eval_gto_sph_deriv1_into_target, eval_gto_sph_into,
     eval_gto_sph_into_screened, eval_gto_sph_into_target, fused_values_per_image,
-    RESIDENT_ACC_VECS,
+    GPU_RESIDENT_ACC_VECS, RESIDENT_ACC_VECS,
 };
 pub use multigrid_collocate::{PshellGridTable, collocate};
 pub use multigrid_gspace::{get_gga_vrho_gs, gradient_gs};

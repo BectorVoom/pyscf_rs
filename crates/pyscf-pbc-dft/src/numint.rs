@@ -96,6 +96,35 @@ fn numint_blksize_override() -> Option<usize> {
     })
 }
 
+/// `PYSCF_PBC_NUMINT_AO_BUDGET_MB` in bytes, read once — the most one grid
+/// block's AO table may hold in [`KNumInt::block_ranges_ao`]. Default 4096 MB.
+fn numint_ao_budget_bytes() -> f64 {
+    use std::sync::OnceLock;
+    static BUDGET: OnceLock<f64> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var("PYSCF_PBC_NUMINT_AO_BUDGET_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(4096.0)
+            * 1024.0
+            * 1024.0
+    })
+}
+
+/// `[p0, p1)` ranges of at most `blksize` points covering `0..ngrids`.
+fn split_grid(ngrids: usize, blksize: usize) -> Vec<(usize, usize)> {
+    let blksize = blksize.max(1);
+    let mut out = Vec::new();
+    let mut p0 = 0usize;
+    while p0 < ngrids {
+        let p1 = (p0 + blksize).min(ngrids);
+        out.push((p0, p1));
+        p0 = p1;
+    }
+    out
+}
+
 /// Upstream's block-loop cap, `BLKSIZE * 2400` (`numint.py:1290`).
 const MAX_BLOCK: usize = BLKSIZE * 2400;
 
@@ -517,6 +546,9 @@ pub struct KNumInt {
     /// the residue so a caller can assert on it.
     last_imag: std::cell::Cell<f64>,
     ao_cache: KNumIntCache,
+    /// SCF-02: device-resident AO tables for the device grid route, keyed
+    /// like `ao_cache`. Never read back to the host.
+    ao_dev_cache: Arc<Mutex<HashMap<AoKey, Arc<pyscf_kernels::pbc::DeviceAoTable>>>>,
 }
 
 /// A shareable handle on a [`KNumInt`]'s AO cache (BAND-04).
@@ -544,6 +576,7 @@ impl KNumInt {
             max_memory: default_max_memory(),
             last_imag: std::cell::Cell::new(0.0),
             ao_cache: KNumIntCache::default(),
+            ao_dev_cache: Arc::default(),
         }
     }
 
@@ -789,6 +822,87 @@ impl KNumInt {
         if let Ok(mut c) = self.ao_cache.0.lock() {
             c.clear();
         }
+        if let Ok(mut c) = self.ao_dev_cache.lock() {
+            c.clear();
+        }
+    }
+
+    /// SCF-02 — [`KNumInt::eval_ao`]'s table left on the device, memoised on
+    /// the device under the same key and budget rule.
+    fn eval_ao_device(
+        &self,
+        cell: &Cell,
+        coords: &[[f64; 3]],
+        kpts: &[[f64; 3]],
+        ty: XcType,
+    ) -> Result<Arc<pyscf_kernels::pbc::DeviceAoTable>, PbcDftError> {
+        let key: AoKey = (
+            0,
+            kpts.iter()
+                .map(|k| [k[0].to_bits(), k[1].to_bits(), k[2].to_bits()])
+                .collect(),
+            ty.ao_deriv(),
+            coords.len(),
+            coord_hash(coords),
+        );
+        if let Ok(c) = self.ao_dev_cache.lock()
+            && let Some(v) = c.get(&key)
+        {
+            return Ok(Arc::clone(v));
+        }
+        let table = Arc::new(pyscf_pbc_gto::eval_ao_kpts_device(
+            cell,
+            ty.eval_gto_name(),
+            coords,
+            kpts,
+        )?);
+        if (table.bytes() as f64) < device_cache_budget_bytes(self.max_memory)
+            && let Ok(mut c) = self.ao_dev_cache.lock()
+        {
+            c.insert(key, Arc::clone(&table));
+        }
+        Ok(table)
+    }
+
+    /// SCF-02 — `eval_rho` over a device-resident table: per k the kernel
+    /// returns the raw accumulators, folded here exactly as `eval_rho_into`
+    /// folds the host blocks (`add_assign` in k order, then `1/nkpts`).
+    fn eval_rho_device(
+        &self,
+        client: &pyscf_algebra::AlgebraClient,
+        table: &pyscf_kernels::pbc::DeviceAoTable,
+        dms: &KMats,
+        ty: XcType,
+    ) -> Result<RhoEff, PbcDftError> {
+        let (nkpts, ncomp, _, ngrids) = table.dims();
+        if dms.len() != nkpts {
+            return Err(err(format!(
+                "pbc eval_rho (device): {} density matrices for {nkpts} k-points",
+                dms.len()
+            )));
+        }
+        let mut rho = RhoEff::zeros(ty, ngrids);
+        let mut imag = 0.0_f64;
+        for (k, dm) in dms.iter().enumerate() {
+            let (acc_re, acc_im) = pyscf_kernels::pbc::rho_k_table(client, table, k, &dm.re, &dm.im)
+                .map_err(|e| err(format!("pbc eval_rho (device): {e}")))?;
+            let mut block = RhoEff::zeros(ty, ngrids);
+            for c in 0..ncomp {
+                let scale = if c == 0 { 1.0 } else { 2.0 };
+                let row = block.row_mut(c);
+                for g in 0..ngrids {
+                    row[g] = scale * acc_re[c * ngrids + g];
+                }
+                for v in &acc_im[c * ngrids..(c + 1) * ngrids] {
+                    imag = imag.max(v.abs());
+                }
+            }
+            rho.add_assign(&block);
+        }
+        rho.scale(1.0 / nkpts as f64);
+        self.last_imag
+            .set(self.last_imag.get().max(imag / nkpts as f64));
+        Ok(rho)
     }
 
     // -----------------------------------------------------------------
@@ -865,14 +979,38 @@ impl KNumInt {
         // shows. See `tests/numint_blocking.rs`.
         let raw = numint_blksize_override().unwrap_or(raw);
         let blksize = raw.clamp(BLKSIZE, MAX_BLOCK).min(ngrids.max(1));
-        let mut out = Vec::new();
-        let mut p0 = 0usize;
-        while p0 < ngrids {
-            let p1 = (p0 + blksize).min(ngrids);
-            out.push((p0, p1));
-            p0 = p1;
+        split_grid(ngrids, blksize)
+    }
+
+    /// [`KNumInt::block_ranges`] with the block's AO table capped at
+    /// `PYSCF_PBC_NUMINT_AO_BUDGET_MB` (default 4096 MB): `16·comp·nkpts·nao`
+    /// bytes per grid point, complex, every derivative component.
+    ///
+    /// `block_ranges` leaves `nao` out of its denominator, so for a large cell
+    /// its single whole-grid block would hold the full table — 133 GB for a
+    /// deriv-1 GGA table at nao 910, 9 k-points and 253k points, which no
+    /// device holds. A partition whose blocks already fit is returned
+    /// unchanged (so every small-cell energy keeps its bits); otherwise the
+    /// grid is re-split at the largest `BLKSIZE` multiple that fits. An
+    /// explicit `PYSCF_PBC_NUMINT_BLKSIZE` is honoured as given.
+    pub fn block_ranges_ao(
+        &self,
+        ngrids: usize,
+        ty: XcType,
+        nkpts: usize,
+        nao: usize,
+    ) -> Vec<(usize, usize)> {
+        let ranges = self.block_ranges(ngrids, ty, nkpts);
+        if numint_blksize_override().is_some() {
+            return ranges;
         }
-        out
+        let per_point = (16 * ty.ncomp() * nkpts.max(1) * nao.max(1)) as f64;
+        let cap = ((numint_ao_budget_bytes() / per_point) as usize / BLKSIZE * BLKSIZE).max(BLKSIZE);
+        if ranges.iter().all(|&(p0, p1)| p1 - p0 <= cap) {
+            return ranges;
+        }
+        tracing::info!(ngrids, nao, nkpts, blksize = cap, "numint: AO-budget grid blocking");
+        split_grid(ngrids, cap)
     }
 
     // -----------------------------------------------------------------
@@ -1007,18 +1145,57 @@ impl KNumInt {
         // S-07: a band list that is a subset of the sampling list is served
         // from the sampling table (see `band_subset_map`).
         let band_map = kpts_band.and_then(|b| self.band_subset_map(b));
-        for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
+        // SCF-02: the device route needs the band list to be the sampling
+        // list (or a subset of it) — then ONE device-resident table serves the
+        // density and the potential, and nothing crosses back per cycle.
+        let device = if kpts_band.is_none() || band_map.is_some() {
+            numint_device_client(ty)?
+        } else {
+            None
+        };
+        for (p0, p1) in self.block_ranges_ao(ngrids, ty, self.nkpts(), cell.mol.nao_nr) {
             let chunk = &coords[p0..p1];
             let w = &weights[p0..p1];
-            let ao2 = self.eval_ao(cell, chunk, &self.kpts, ty)?;
+            if let Some(client) = device.as_ref() {
+                let table = tracing::info_span!("nr_eval_ao")
+                    .in_scope(|| self.eval_ao_device(cell, chunk, &self.kpts, ty))?;
+                for i in 0..nset {
+                    let rho = tracing::info_span!("nr_eval_rho")
+                        .in_scope(|| self.eval_rho_device(client, &table, &dms[i], ty))?;
+                    let out = tracing::info_span!("nr_eval_xc").in_scope(|| eval_xc_eff_rks(xc_code, &rho))?;
+                    den.clear();
+                    den.extend(rho.row(0).iter().zip(w).map(|(r, wg)| r * wg));
+                    nelec_parts[i].push(oracle_sum(&den));
+                    terms.clear();
+                    terms.extend(den.iter().zip(&out.exc).map(|(d, e)| d * e));
+                    excsum_parts[i].push(oracle_sum(&terms));
+                    let wv = weighted(&out, 0, w);
+                    let flat: Vec<f64> = wv.concat();
+                    let planes = tracing::info_span!("nr_vxc_mat").in_scope(|| {
+                        pyscf_kernels::pbc::band_vmat_table(client, &table, &flat, ty.nvar())
+                    });
+                    let planes = planes.map_err(|e| err(format!("nr_rks _vxc_mat (device): {e}")))?;
+                    for (k, m) in vmat[i].iter_mut().enumerate() {
+                        let src = band_map.as_deref().map_or(k, |map| map[k]);
+                        let (re, im) = &planes[src];
+                        for t in 0..m.re.len() {
+                            m.re[t] += re[t];
+                            m.im[t] += im[t];
+                        }
+                    }
+                }
+                continue;
+            }
+            let ao2 = tracing::info_span!("nr_eval_ao").in_scope(|| self.eval_ao(cell, chunk, &self.kpts, ty))?;
             let ao1 = if kpts_band.is_none() || band_map.is_some() {
                 Arc::clone(&ao2)
             } else {
-                self.eval_ao(cell, chunk, band, ty)?
+                tracing::info_span!("nr_eval_ao").in_scope(|| self.eval_ao(cell, chunk, band, ty))?
             };
             for i in 0..nset {
-                let rho = self.eval_rho_into(&ao2, &dms[i], ty, &mut sc)?;
-                let out = eval_xc_eff_rks(xc_code, &rho)?;
+                let rho = tracing::info_span!("nr_eval_rho")
+                    .in_scope(|| self.eval_rho_into(&ao2, &dms[i], ty, &mut sc))?;
+                let out = tracing::info_span!("nr_eval_xc").in_scope(|| eval_xc_eff_rks(xc_code, &rho))?;
                 // numint.py:363-368 — den = rho[0]*weight.
                 //
                 // U-10: `clear` + `extend` reuses the allocation and produces
@@ -1031,7 +1208,9 @@ impl KNumInt {
                 excsum_parts[i].push(oracle_sum(&terms));
                 // numint.py:369 — wv = weight * vxc.
                 let wv = weighted(&out, 0, w);
-                self.accumulate_vxc_into(&mut vmat[i], &ao1, &wv, ty, &mut sc, band_map.as_deref());
+                tracing::info_span!("nr_vxc_mat").in_scope(|| {
+                    self.accumulate_vxc_into(&mut vmat[i], &ao1, &wv, ty, &mut sc, band_map.as_deref())
+                });
             }
         }
 
@@ -1119,7 +1298,7 @@ impl KNumInt {
 
         // S-07, as in `nr_rks`.
         let band_map = kpts_band.and_then(|b| self.band_subset_map(b));
-        for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
+        for (p0, p1) in self.block_ranges_ao(ngrids, ty, self.nkpts(), cell.mol.nao_nr) {
             let chunk = &coords[p0..p1];
             let w = &weights[p0..p1];
             let ao2 = self.eval_ao(cell, chunk, &self.kpts, ty)?;
@@ -1211,7 +1390,7 @@ impl KNumInt {
             .collect();
         let mut sc = Scratch::default();
         let mut imag = 0.0_f64;
-        for (p0, p1) in self.block_ranges(ngrids, ty, nibz) {
+        for (p0, p1) in self.block_ranges_ao(ngrids, ty, nibz, cell.mol.nao_nr) {
             let ao = self.eval_ao_route(cell, &coords[p0..p1], &kp.kpts_ibz, ty, 1)?;
             for (set, matrices) in dms.iter().enumerate() {
                 for ik in 0..nibz {
@@ -1291,7 +1470,7 @@ impl KNumInt {
         let mut excsum_parts = vec![Vec::new(); rho.len()];
         let mut vmat = vec![vec![CTensor::zeros(nao * nao); band.len()]; rho.len()];
         let mut sc = Scratch::default();
-        for (p0, p1) in self.block_ranges(coords.len(), ty, band.len()) {
+        for (p0, p1) in self.block_ranges_ao(coords.len(), ty, band.len(), cell.mol.nao_nr) {
             let w = &weights[p0..p1];
             let ao = self.eval_ao_route(cell, &coords[p0..p1], band, ty, 1)?;
             for set in 0..rho.len() {
@@ -1350,7 +1529,7 @@ impl KNumInt {
             vec![vec![CTensor::zeros(nao * nao); band.len()]; nset],
         ];
         let mut sc = Scratch::default();
-        for (p0, p1) in self.block_ranges(coords.len(), ty, band.len()) {
+        for (p0, p1) in self.block_ranges_ao(coords.len(), ty, band.len(), cell.mol.nao_nr) {
             let w = &weights[p0..p1];
             let ao = self.eval_ao_route(cell, &coords[p0..p1], band, ty, 1)?;
             for set in 0..nset {
@@ -1496,13 +1675,21 @@ impl KNumInt {
         let mut rho_total: Vec<f64> = Vec::with_capacity(ngrids);
         let mut sc = Scratch::default();
         self.last_imag.set(0.0);
-        for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
+        // SCF-02: the same device-resident sampling table the SCF built.
+        let device = numint_device_client(ty)?;
+        for (p0, p1) in self.block_ranges_ao(ngrids, ty, self.nkpts(), cell.mol.nao_nr) {
             let w = &weights[p0..p1];
-            let ao = self.eval_ao(cell, &coords[p0..p1], &self.kpts, ty)?;
-            let rhos: Vec<RhoEff> = dms
-                .iter()
-                .map(|dm| self.eval_rho_into(&ao, dm, ty, &mut sc))
-                .collect::<Result<_, _>>()?;
+            let rhos: Vec<RhoEff> = if let Some(client) = device.as_ref() {
+                let table = self.eval_ao_device(cell, &coords[p0..p1], &self.kpts, ty)?;
+                dms.iter()
+                    .map(|dm| self.eval_rho_device(client, &table, dm, ty))
+                    .collect::<Result<_, _>>()?
+            } else {
+                let ao = self.eval_ao(cell, &coords[p0..p1], &self.kpts, ty)?;
+                dms.iter()
+                    .map(|dm| self.eval_rho_into(&ao, dm, ty, &mut sc))
+                    .collect::<Result<_, _>>()?
+            };
             let out = if rhos.len() == 1 {
                 eval_xc_eff_rks(xc_code, &rhos[0])?
             } else {
@@ -1545,13 +1732,63 @@ impl KNumInt {
         let nao = cell.mol.nao_nr;
         let nk = kpts_band.len().max(1);
         let per_point = 16 * ty.ncomp() * nao.max(1) * nk;
-        let blk = ((BAND_AO_BUDGET_BYTES / per_point) / BLKSIZE).max(1) * BLKSIZE;
+        let blk = ((band_ao_budget_bytes() / per_point) / BLKSIZE).max(1) * BLKSIZE;
         let mut out: Vec<KMats> =
             vec![vec![CTensor::zeros(nao * nao); kpts_band.len()]; wvs.len()];
+        if kpts_band.is_empty() {
+            return Ok(out);
+        }
+        for (set, wv) in wvs.iter().enumerate() {
+            if wv.len() != ty.nvar() || wv.iter().any(|v| v.len() != ngrids) {
+                return Err(err(format!(
+                    "band_vmats: weight set {set} must hold {} vectors of {ngrids} points, got \
+                     {} vectors of lengths {:?}",
+                    ty.nvar(),
+                    wv.len(),
+                    wv.iter().map(Vec::len).collect::<Vec<_>>()
+                )));
+            }
+        }
         let mut sc = Scratch::default();
+        let on_device = band_vmat_on_device(ty);
         let mut p0 = 0;
         while p0 < ngrids {
             let p1 = (p0 + blk).min(ngrids);
+            if on_device {
+                // BAND-08: the table is contracted where it was evaluated; only
+                // `nset · nk · nao²` comes home per block, summed here.
+                let block: Vec<Vec<Vec<f64>>> = wvs
+                    .iter()
+                    .map(|wv| wv.iter().map(|v| v[p0..p1].to_vec()).collect())
+                    .collect();
+                let vm = pyscf_pbc_gto::eval_ao_kpts_band_vmat(
+                    cell,
+                    ty.eval_gto_name(),
+                    &coords[p0..p1],
+                    kpts_band,
+                    &block,
+                )?;
+                if vm.len() != out.len() || vm.iter().any(|p| p.len() != kpts_band.len()) {
+                    return Err(err(format!(
+                        "band_vmats: device block returned {} sets of {:?} k-points, expected {} \
+                         sets of {}",
+                        vm.len(),
+                        vm.iter().map(Vec::len).collect::<Vec<_>>(),
+                        out.len(),
+                        kpts_band.len()
+                    )));
+                }
+                for (set, part) in out.iter_mut().zip(vm) {
+                    for (m, v) in set.iter_mut().zip(part) {
+                        for i in 0..m.len() {
+                            m.re[i] += v.re[i];
+                            m.im[i] += v.im[i];
+                        }
+                    }
+                }
+                p0 = p1;
+                continue;
+            }
             let ao = eval_ao_kpts(cell, ty.eval_gto_name(), &coords[p0..p1], kpts_band)?;
             for (m, wv) in out.iter_mut().zip(wvs) {
                 let block: Vec<Vec<f64>> = wv.iter().map(|v| v[p0..p1].to_vec()).collect();
@@ -1588,7 +1825,7 @@ impl KNumInt {
         let coords = grids.coords()?;
         let ngrids = coords.len();
         let mut rho = vec![0.0_f64; ngrids];
-        for (p0, p1) in self.block_ranges(ngrids, XcType::Lda, self.nkpts()) {
+        for (p0, p1) in self.block_ranges_ao(ngrids, XcType::Lda, self.nkpts(), cell.mol.nao_nr) {
             let ao = self.eval_ao(cell, &coords[p0..p1], &self.kpts, XcType::Lda)?;
             let block = self.eval_rho(&ao, dms, XcType::Lda)?;
             rho[p0..p1].copy_from_slice(block.row(0));
@@ -1634,7 +1871,7 @@ impl KNumInt {
                 data: Vec::new(),
             })
             .collect();
-        for (p0, p1) in self.block_ranges(ngrids, ty, self.nkpts()) {
+        for (p0, p1) in self.block_ranges_ao(ngrids, ty, self.nkpts(), cell.mol.nao_nr) {
             let ao = self.eval_ao(cell, &coords[p0..p1], &self.kpts, ty)?;
             for (c, acc) in rho.iter_mut().enumerate() {
                 let block = self.eval_rho(&ao, &dms[c], ty)?;
@@ -1759,7 +1996,7 @@ impl KNumInt {
         let nvar = ty.nvar();
         let mut vmat: Vec<KMats> = vec![vec![CTensor::zeros(nao * nao); nk]; nset];
 
-        for (p0, p1) in self.block_ranges(ngrids, ty, nk) {
+        for (p0, p1) in self.block_ranges_ao(ngrids, ty, nk, cell.mol.nao_nr) {
             let ao = self.eval_ao(cell, &coords[p0..p1], kset, ty)?;
             let w = &weights[p0..p1];
             let block = fxc.slice(p0, p1);
@@ -1842,7 +2079,7 @@ impl KNumInt {
             vec![vec![CTensor::zeros(nao * nao); nk]; nset],
         ];
 
-        for (p0, p1) in self.block_ranges(ngrids, ty, nk) {
+        for (p0, p1) in self.block_ranges_ao(ngrids, ty, nk, cell.mol.nao_nr) {
             let ao = self.eval_ao(cell, &coords[p0..p1], kset, ty)?;
             let w = &weights[p0..p1];
             let block = fxc.slice(p0, p1);
@@ -2007,6 +2244,48 @@ fn weighted(out: &VxcEff, spin: usize, w: &[f64]) -> Vec<Vec<f64>> {
 }
 
 /// `m += m^H` in place (`numint.py:374`).
+/// BAND-08 — whether `band_vmats` contracts the band AO table on the device
+/// (`pyscf_pbc_gto::eval_ao_kpts_band_vmat`) or reads it back and reduces it
+/// on the host (`vxc_mat_one`).
+///
+/// `PYSCF_PBC_BAND_VMAT_DEVICE=0` pins the host route (the bit-identity
+/// reference of every pre-BAND-08 gate), `1` pins the device route on any
+/// backend (the CPU runtime included — the same kernel), and unset keys on
+/// the backend: the device route on a runtime with hardware planes (a GPU,
+/// where the table would otherwise cross PCIe and be reduced by the host),
+/// the host route on the CPU runtime. Only the two eval names with device
+/// kernels qualify; anything else stays on the host.
+///
+/// # Errors
+/// Propagates the backend probe.
+fn band_vmat_on_device(ty: XcType) -> bool {
+    if ty.nvar() > ty.ncomp() || !pyscf_pbc_gto::band_vmat_device_serves(ty.eval_gto_name()) {
+        return false;
+    }
+    let raw = std::env::var("PYSCF_PBC_BAND_VMAT_DEVICE").ok();
+    match raw.as_deref().map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+        Some("0" | "false" | "off" | "no") => false,
+        Some("1" | "true" | "on" | "yes") => true,
+        Some(other) => {
+            tracing::warn!(
+                value = other,
+                "PYSCF_PBC_BAND_VMAT_DEVICE: expected 0|1 (false|true, off|on, no|yes); \
+                 using the host route"
+            );
+            false
+        }
+        None => match pyscf_pbc_gto::backend_has_planes() {
+            Ok(planes) => planes,
+            Err(e) => {
+                // The pre-BAND-08 host route ran without a backend probe; a
+                // probe failure must not turn it into an error.
+                tracing::warn!(error = %e, "BAND-08 backend probe failed; using the host route");
+                false
+            }
+        },
+    }
+}
+
 fn add_conj_transpose(m: &mut CTensor, nao: usize) {
     let re = m.re.clone();
     let im = m.im.clone();
@@ -2200,6 +2479,42 @@ fn eval_rho_one(
     Ok((rho, imag))
 }
 
+/// SCF-01/02 — the device client when the SCF's grid loop (`nr_rks`) should
+/// run on a device-resident AO table (`eval_rho` + `_vxc_mat` on the device,
+/// no per-cycle transfer of the table), `None` for the host routes.
+///
+/// `PYSCF_PBC_NUMINT_DEVICE` = `1`/`0` pins it; unset = on for a runtime with
+/// hardware planes (GPU), off on the CPU runtime (the bit-exact host
+/// reference). MEASURED on a Kaggle T4 (KTaO3, 10 SCF cycles): with the AO
+/// table cached on the HOST and re-uploaded per call (2026-09-24) the XC loop
+/// went 14.5 → 37.4 s; with the table device-resident (SCF-02, 2026-09-25)
+/// it went 12.1 → 2.4 s and the whole SCF 63-68 → 52-55 s, for +0.9 GB of
+/// GPU memory.
+/// The device routes add the same terms in the same order (serial per
+/// output) but a GPU may contract them into FMAs, so they are gated at the
+/// band chain's `1e-9`.
+///
+/// # Errors
+/// Propagates the backend selection when the route is forced on.
+fn numint_device_client(ty: XcType) -> Result<Option<pyscf_algebra::AlgebraClient>, PbcDftError> {
+    if ty.nvar() > ty.ncomp() {
+        return Ok(None);
+    }
+    let want = match std::env::var("PYSCF_PBC_NUMINT_DEVICE").ok().as_deref().map(str::trim) {
+        Some("1") => Some(true),
+        Some("0") => Some(false),
+        _ => None,
+    };
+    if want == Some(false) {
+        return Ok(None);
+    }
+    let client = pyscf_algebra::select_backend()
+        .map_err(|e| err(format!("numint device route: backend selection failed: {e}")))?
+        .client;
+    let on = want.unwrap_or_else(|| client.has_planes());
+    Ok(on.then_some(client))
+}
+
 /// Reject a non-Hermitian input density rather than silently applying the
 /// `hermi = 1` shortcut. See the note on [`KNumInt::eval_rho`].
 fn require_hermitian(hermi: i32, who: &str) -> Result<(), PbcDftError> {
@@ -2211,6 +2526,31 @@ fn require_hermitian(hermi: i32, who: &str) -> Result<(), PbcDftError> {
          hermi = 1 branch only; a non-Hermitian density needs the complex \
          `eval_rho` of numint.py:118-121 and a complex fxc contraction with it."
     )))
+}
+
+/// The band step's per-grid-block AO budget: [`BAND_AO_BUDGET_BYTES`], or
+/// `PYSCF_PBC_BAND_AO_BUDGET_MB` MB. Every block re-runs the lattice-image
+/// loop, so a device with room for bigger blocks (a 98 GB GPU) should get
+/// them; the result does not depend on the block size beyond the band
+/// chain's rounding.
+fn band_ao_budget_bytes() -> usize {
+    std::env::var("PYSCF_PBC_BAND_AO_BUDGET_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&mb| mb > 0)
+        .map_or(BAND_AO_BUDGET_BYTES, |mb| mb * 1024 * 1024)
+}
+
+/// SCF-02 — how many bytes of device-resident AO tables the SCF may keep:
+/// `PYSCF_PBC_AO_DEVICE_CACHE_MB` MB, else a quarter of `max_memory` (the
+/// host cache's rule). Separate because device memory is not host RAM: a
+/// 98 GB GPU on a VM with less host RAM should still hold the table.
+fn device_cache_budget_bytes(max_memory_mb: f64) -> f64 {
+    std::env::var("PYSCF_PBC_AO_DEVICE_CACHE_MB")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|&mb| mb > 0.0)
+        .map_or(0.25 * max_memory_mb * 1e6, |mb| mb * 1e6)
 }
 
 /// Upstream's `lib.param.MAX_MEMORY`, overridable through `PYSCF_MAX_MEMORY`.
