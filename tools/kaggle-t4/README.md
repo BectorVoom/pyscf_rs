@@ -65,6 +65,13 @@ history restarts empty.
    - Memory budgets: XC blocks 2.5 GB, Coulomb blocks 2 GB, band blocks 1 GB,
      and the device AO cache off. That fits a 15 GB T4.
 
+**Other GPUs.** Set `kaggle.accelerator` to `p100` or `rtxpro6000`. Kaggle
+offers the RTX PRO 6000 (98 GB) only through a competition: add
+`"competition_sources": ["<competition-slug>"]` and `"enable_internet": false`
+to the `kaggle` block (the account must have joined the competition). The
+notebook refuses to run if it is handed a different GPU. Raise the memory
+budgets in `env` to match the card.
+
 ## Running
 
 ```bash

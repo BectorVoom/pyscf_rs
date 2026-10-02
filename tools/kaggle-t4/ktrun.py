@@ -258,8 +258,12 @@ def push_session(cfg, st, session):
     sources = [st["runner_dataset"]] + ([st["ckpt_dataset"]] if st.get("ckpt_dataset") else [])
     meta = {"id": f"{cfg['kaggle']['user']}/{cfg['run_name']}", "title": cfg["run_name"], "code_file": "run.ipynb",
             "language": "python", "kernel_type": "notebook", "is_private": True,
-            "enable_gpu": acc != "cpu", "enable_tpu": False, "enable_internet": True, "keywords": [],
-            "dataset_sources": sources, "kernel_sources": [], "competition_sources": [], "model_sources": []}
+            "enable_gpu": acc != "cpu", "enable_tpu": False,
+            # Some GPUs are only offered through a competition (the RTX PRO
+            # 6000 on Kaggle: attach it, and the notebook must run offline).
+            "enable_internet": bool(cfg["kaggle"].get("enable_internet", True)), "keywords": [],
+            "dataset_sources": sources, "kernel_sources": [],
+            "competition_sources": list(cfg["kaggle"].get("competition_sources", [])), "model_sources": []}
     shape = nbgen.machine_shape(acc)
     if shape:
         meta["machine_shape"] = shape

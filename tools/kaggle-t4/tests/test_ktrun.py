@@ -183,6 +183,20 @@ class KtrunTest(unittest.TestCase):
         nb2 = (self.tmp / "local" / "test-run" / "session_2" / "nb" / "run.ipynb").read_text()
         self.assertNotIn("YTA_ADOPT_CHECKPOINT", nb2)
 
+    def test_competition_gpu_settings_reach_the_notebook_metadata(self):
+        cfg = json.load(open(self.cfg))
+        cfg["kaggle"].update(accelerator="rtxpro6000", competition_sources=["some-competition"], enable_internet=False)
+        json.dump(cfg, open(self.cfg, "w"))
+        self.server(plan={"1": {"stage": "done", "cycles": 1}})
+        self.ktrun("publish-runner")
+        self.assertEqual(self.ktrun("run").returncode, 0)
+        meta = self.srv_state()["meta"]
+        self.assertEqual(meta["machine_shape"], "NvidiaRtxPro6000")
+        self.assertEqual(meta["competition_sources"], ["some-competition"])
+        self.assertFalse(meta["enable_internet"])
+        nb = (self.tmp / "local" / "test-run" / "session_1" / "nb" / "run.ipynb").read_text()
+        self.assertIn("RTX PRO 6000", nb)                      # the GPU guard matches the accelerator
+
     def test_refused_push_stops_without_a_phantom_session(self):
         # Kaggle prints a quota error and exits 0; the old kernel still says COMPLETE.
         self.server(plan={"1": {"stage": "s1", "cycles": 2}, "2": {"stage": "done", "cycles": 4}})
