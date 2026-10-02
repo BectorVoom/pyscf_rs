@@ -61,6 +61,9 @@ elif cmd == ["kernels", "push"]:
     mode = S.get("push_mode", "ok"); S["push_mode"] = "ok"
     if mode == "drop":
         save(); print("network error", file=sys.stderr); sys.exit(1)
+    if mode == "refuse":
+        # What the real CLI does on a quota error: message on stdout, exit 0.
+        save(); print("Kernel push error: Maximum weekly GPU quota of 30.00 hours reached."); sys.exit(0)
     S["kernel"] = session
     S["pushes"].append(session)
     meta = json.load(open(Path(arg("-p")) / "kernel-metadata.json"))

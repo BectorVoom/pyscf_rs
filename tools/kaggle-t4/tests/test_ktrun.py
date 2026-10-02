@@ -183,6 +183,24 @@ class KtrunTest(unittest.TestCase):
         nb2 = (self.tmp / "local" / "test-run" / "session_2" / "nb" / "run.ipynb").read_text()
         self.assertNotIn("YTA_ADOPT_CHECKPOINT", nb2)
 
+    def test_refused_push_stops_without_a_phantom_session(self):
+        # Kaggle prints a quota error and exits 0; the old kernel still says COMPLETE.
+        self.server(plan={"1": {"stage": "s1", "cycles": 2}, "2": {"stage": "done", "cycles": 4}})
+        self.ktrun("publish-runner")
+        self.assertEqual(self.ktrun("run-n", "1").returncode, 0)
+        self.set_srv(push_mode="refuse")
+        r = self.ktrun("run")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("quota", r.stdout + r.stderr)
+        st = self.state()
+        self.assertEqual(st["session"], 1)
+        self.assertNotIn("pending", st)
+        self.assertEqual(st["ckpt_dataset"], "tester/test-run-ckpt-s1")
+        r = self.ktrun("run")                                  # quota back: session 2 goes through
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.srv_state()["pushes"], [1, 2])
+        self.assertTrue(self.state()["done"])
+
     def test_no_progress_stops_with_a_consistent_handoff(self):
         self.server(plan={"1": {"stage": "s1", "cycles": 4}, "2": {"stage": "s1", "cycles": 4}})
         self.ktrun("publish-runner")

@@ -271,7 +271,17 @@ def push_session(cfg, st, session):
     st["push_confirmed"] = False
     save_state(cfg, st)
     log(f"pushing session {session} ({acc}, datasets {sources})")
-    log(kaggle(cfg, "kernels", "push", "-p", str(d)).splitlines()[-1])
+    out = kaggle(cfg, "kernels", "push", "-p", str(d))
+    log(out.splitlines()[-1] if out else "(no output from kaggle)")
+    if "successfully pushed" not in out:
+        # The CLI exits 0 even when Kaggle refuses the push (e.g. "Maximum
+        # weekly GPU quota of 30.00 hours reached"): nothing was submitted, so
+        # nothing is pending. The checkpoint handoff is untouched.
+        st.pop("pending", None)
+        st.pop("push_confirmed", None)
+        save_state(cfg, st)
+        sys.exit(f"Kaggle refused session {session}: {out.splitlines()[-1] if out else 'no output'}\n"
+                 "Nothing was submitted; `run` again once the cause is gone (a GPU quota resets weekly).")
     st["push_confirmed"] = True
     st["pushed_unix"] = time.time()
     save_state(cfg, st)

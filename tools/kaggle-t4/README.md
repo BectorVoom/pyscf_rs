@@ -104,6 +104,7 @@ run yta7o19-dzvp-ke60-k331: 3 session(s) finished
 | message | meaning | what to do |
 |---|---|---|
 | `wrong machine for t4` | Kaggle gave a different GPU | `run` again |
+| `Kaggle refused session N: … weekly GPU quota … reached` | the account's 30 h/week GPU quota is used up | wait for the weekly reset, then `run` again. Nothing was submitted and the checkpoint is kept. |
 | `stale runner mounted` | Kaggle mounted an old dataset version | `publish-runner` again, then `run` |
 | `an SCF stage hit YTA_MAXCYC unconverged` | the SCF did not converge | change the smearing, damping or level shift in `env`, raise `YTA_MAXCYC`, and `run` again. The stage resumes from its last cycle with the new settings. |
 | `this session made no progress` | the binary failed early | read `session_N/out/run.log` |
