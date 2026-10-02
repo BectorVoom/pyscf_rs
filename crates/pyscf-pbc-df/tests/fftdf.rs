@@ -14,15 +14,7 @@
 //!   PYSCF_ORACLE_VENV=1 cargo test -p pyscf-pbc-df --release -- --ignored
 //!   ```
 //!
-//! # Why `get_pp` is gated at mesh >= 31 and not at mesh 11
-//!
-//! Upstream's `fft.get_pp` builds the NON-LOCAL half from `ft_ao`, a planewave
-//! expansion truncated at the same mesh; this port uses Phase 10's real-space
-//! `get_pp_nl`, which is exact in the basis (see `fftdf.rs`'s module docs). The
-//! two agree only once the planewave expansion has converged. Measured on
-//! diamond 2x2x2: 1.5e-3 at mesh 11, 1.3e-9 at mesh 21, **1.1e-13 at mesh 31**
-//! and 1.1e-13 at the default mesh 47. The deviation is upstream's truncation
-//! error, not ours, so the gate runs where upstream is converged.
+//! `get_pp` is gated against upstream at mesh 31 and at the coarse mesh 11.
 
 mod common;
 
@@ -385,6 +377,25 @@ fn get_pp_matches_upstream_on_diamond_222() {
     let w = max_dev(&got, &want);
     println!("get_pp max|delta| vs upstream = {w:e}");
     assert!(w < 1e-11, "get_pp deviates from upstream by {w:e}");
+}
+
+/// The same at a COARSE mesh: upstream's reciprocal-space non-local part is
+/// mesh-dependent, and the port must reproduce it there too.
+#[test]
+#[ignore = "T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF"]
+fn get_pp_matches_upstream_on_diamond_222_at_a_coarse_mesh() {
+    let cell = diamond();
+    let kpts = kpts222(&cell);
+    let Some(want) = oracle_matrices(&cell, "gth-szv", "gth-pade", [2, 2, 2], MESH_FAST, "pp")
+    else {
+        eprintln!("SKIP: {GATE} is not set");
+        return;
+    };
+    let df = Fftdf::with_mesh(cell, &kpts, MESH_FAST).expect("FFTDF");
+    let got = df.get_pp(&kpts).expect("get_pp");
+    let w = max_dev(&got, &want);
+    println!("coarse-mesh get_pp max|delta| vs upstream = {w:e}");
+    assert!(w < 1e-10, "get_pp deviates from upstream by {w:e}");
 }
 
 /// `FFTDF.get_hcore` — the assembly this phase owes Phase 10.

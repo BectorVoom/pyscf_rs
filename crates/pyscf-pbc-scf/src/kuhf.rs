@@ -298,6 +298,11 @@ impl KOverrideHooks for Kuhf {
         Ok(energy_elec(dms, h1e, vhf, self.cell().mol.nao_nr))
     }
 
+    fn smeared(&self) -> bool {
+        // pbc/scf/smearing.py:152-154 — a zero width keeps the plain gradient.
+        self.smearing.as_ref().is_some_and(|sm| sm.sigma != 0.0)
+    }
+
     fn free_energy(&self) -> Option<f64> {
         self.entropy
             .get()

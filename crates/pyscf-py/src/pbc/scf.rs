@@ -510,6 +510,9 @@ impl KOverrideHooks for Driver {
     fn diis_dms(&self, dms: &KDms) -> KDms {
         each_driver!(self, d => d.diis_dms(dms))
     }
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        each_driver!(self, d => d.level_shift_dms(dms))
+    }
     fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         each_driver!(self, d => d.eig(fock, s1e))
     }

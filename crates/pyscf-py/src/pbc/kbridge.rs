@@ -264,6 +264,9 @@ impl<D: KOverrideHooks + ?Sized> KOverrideHooks for KPyOverrideBridge<'_, D> {
     fn diis_dms(&self, dms: &KDms) -> KDms {
         self.inner.diis_dms(dms)
     }
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        self.inner.level_shift_dms(dms)
+    }
     fn free_energy(&self) -> Option<f64> {
         self.inner.free_energy()
     }

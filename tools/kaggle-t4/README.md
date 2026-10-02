@@ -136,3 +136,35 @@ run is done.
 - The resume guarantee is tested in Rust by `crates/pyscf-pbc-scf/tests/kscf_resume.rs`.
 - The small-basis → large-basis projection is tested by
   `crates/pyscf-pbc-dft/tests/krks_dzvp_small_cell.rs`.
+
+## Changes that affect old runs (2026-10)
+
+- **Level shift.** The shift now follows PySCF: for a restricted run it
+  lowers occupied levels and raises virtual levels by the shift. To keep
+  the convergence an older run had, use HALF the old value (0.3 → 0.15).
+- **Non-local pseudopotential.** Default is PySCF's reciprocal-space
+  route. A checkpoint from an older runner is refused; either start a new
+  run or set `PYSCF_PBC_FFTDF_PP_NL=realspace` in `env` to continue it.
+- **Final diagonalisation.** The last SCF stage re-diagonalises the plain
+  Fock matrix after convergence (`YTA_CONV_CHECK`), as PySCF does.
+- **Convergence test with smearing.** The gradient is the full lower triangle
+  of the MO-basis Fock matrix, as in PySCF (it was the occupied-virtual block
+  only). A smeared stage can take a cycle or two more than before.
+
+## Checking a run against upstream PySCF
+
+`upstream_check.py` re-runs a finished result in upstream PySCF — same cell,
+basis, cutoff, k-mesh and SCF controls, stage by stage — and compares cycle
+energies, final energies, occupations, orbital energies and bands:
+
+```bash
+PYTHONPATH=<repo root> <repo>/.venv/bin/python upstream_check.py <ckpt dir>
+```
+
+It is for small cells (upstream holds whole AO tables in memory). Run the
+pipeline on a small material with `YTA_CELL=<geometry.json>` (see the runner's
+header for the format), then point the script at its checkpoint directory. It
+runs the `stock` arm (PySCF as is). `--arms like,stock` adds an arm that
+reproduces the port as it was before 2026-10 (see the script's header); it is
+only meaningful for results written by an older runner.
+

@@ -9,6 +9,7 @@ pub use error::*;
 pub mod df_jk;
 pub mod fft_jk;
 pub mod fftdf;
+pub mod pp_gspace;
 
 // Phase 18 — the budgeted k-point AO table (18-04 Task 2, shared with 18-05)
 // and the FFTDF gradient JK (18-04 Tasks 1/3/5).

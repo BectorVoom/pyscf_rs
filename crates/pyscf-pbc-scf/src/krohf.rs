@@ -324,6 +324,20 @@ impl KOverrideHooks for Krohf {
         vec![sum]
     }
 
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        // krohf.py:80 — dm_sf * 0.5
+        let mut sf = self.diis_dms(dms);
+        for m in sf[0].iter_mut() {
+            for v in m.re.iter_mut() {
+                *v *= 0.5;
+            }
+            for v in m.im.iter_mut() {
+                *v *= 0.5;
+            }
+        }
+        sf
+    }
+
     fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         eig_channel(&fock[0], s1e, self.cell().mol.nao_nr)
     }

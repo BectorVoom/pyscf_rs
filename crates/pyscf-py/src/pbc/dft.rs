@@ -588,6 +588,9 @@ impl<K: KOverrideHooks> KOverrideHooks for PuDriver<K> {
     fn diis_dms(&self, dms: &KDms) -> KDms {
         self.ks.diis_dms(dms)
     }
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        self.ks.level_shift_dms(dms)
+    }
     fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         self.ks.eig(fock, s1e)
     }
@@ -891,6 +894,9 @@ impl KOverrideHooks for Driver {
     fn diis_dms(&self, dms: &KDms) -> KDms {
         each_driver!(self, d => d.diis_dms(dms))
     }
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        each_driver!(self, d => d.level_shift_dms(dms))
+    }
     fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         each_driver!(self, d => d.eig(fock, s1e))
     }
@@ -973,6 +979,9 @@ impl KOverrideHooks for TagGuard<'_> {
     }
     fn diis_dms(&self, dms: &KDms) -> KDms {
         self.d.diis_dms(dms)
+    }
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        self.d.level_shift_dms(dms)
     }
     fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         self.d.eig(fock, s1e)
@@ -1487,7 +1496,9 @@ impl PyKohnShamDft {
             }
         }
         let key = h.finish();
-        let Ok(mut held) = self.ao_cache.lock() else { return };
+        let Ok(mut held) = self.ao_cache.lock() else {
+            return;
+        };
         match held.as_ref() {
             Some((k, cache)) if *k == key => knum.adopt_ao_cache(cache),
             _ => *held = Some((key, knum.ao_cache_handle())),

@@ -195,11 +195,297 @@ pub(crate) fn init_guess_by_1e(mol: &Mole) -> Result<Density, PyscfRsError> {
 /// whose minimal occupation needs >1 contraction per l (e.g. C/O 1s+2s) rely on
 /// that data's coverage — validated on H/H2O, see init_guess_minao.rs.
 pub(crate) fn init_guess_by_minao(mol: &Mole) -> Result<Density, PyscfRsError> {
+    // hf.py:444-445 — `nelec_ecp = mol.atom_nelec_core(ia)`. Without an ECP or
+    // a pseudopotential every count is zero and the all-electron walk below is
+    // upstream's `minao_basis(symb, 0)` (the unoccupied ANO contractions it
+    // drops do not contribute to the density).
+    let core = nelec_core_by_element(mol);
+    if core.iter().any(|(_, n)| *n > 0) {
+        return minao_with_core(mol, &core);
+    }
+    minao_all_electron(mol)
+}
+
+/// Core electrons per element (UPPERCASE symbol), first occurrence wins —
+/// `mol.atom_nelec_core(ia) = charge(symbol) − atom_charge(ia)`
+/// (`gto/mole.py:3228-3231`). `atom_charge` is the effective charge an ECP or
+/// a GTH pseudopotential leaves in `_atm`.
+fn nelec_core_by_element(mol: &Mole) -> Vec<(String, u32)> {
+    use pyscf_gto::format_atom::charge_for_symbol;
+    let charges = mol.atom_charges();
+    let mut out: Vec<(String, u32)> = Vec::new();
+    for (ia, (sym, _)) in mol._atom.iter().enumerate() {
+        let elem: String = sym.chars().take_while(|c| c.is_alphabetic()).collect();
+        let upper = elem.to_ascii_uppercase();
+        if out.iter().any(|(k, _)| *k == upper) {
+            continue;
+        }
+        let z = charge_for_symbol(&elem).unwrap_or(0);
+        let n = (z - charges.get(ia).copied().unwrap_or(z)).max(0) as u32;
+        out.push((upper, n));
+    }
+    out
+}
+
+/// `gto.ecp.core_configuration(nelec_core, atom_symbol)` —
+/// `pyscf/gto/ecp.py:128-158`: how many `s, p, d, f` shells the core holds.
+///
+/// # Errors
+/// An electron count upstream has no configuration for.
+pub(crate) fn core_configuration(nelec_core: u32, z: usize) -> Result<[u32; 4], PyscfRsError> {
+    use pyscf_core::CoreError;
+    // ecp.py:145-154 — f-in-core ECPs of the lanthanides (La..Yb) and the
+    // actinides (Ac..No).
+    let is_4f = (57..=70).contains(&z);
+    let is_5f = (89..=102).contains(&z);
+    Ok(match nelec_core {
+        0 => [0, 0, 0, 0],
+        2 => [1, 0, 0, 0],
+        10 => [2, 1, 0, 0],
+        18 => [3, 2, 0, 0],
+        28 => [3, 2, 1, 0],
+        36 => [4, 3, 1, 0],
+        46 => [4, 3, 2, 0],
+        54 => [5, 4, 2, 0],
+        60 => [4, 3, 2, 1],
+        68 => [5, 4, 2, 1],
+        78 => [5, 4, 3, 1],
+        92 => [5, 4, 3, 2],
+        n if is_4f && (47..=58).contains(&n) => [4, 3, 2, 1],
+        n if is_5f && (79..=90).contains(&n) => [5, 4, 3, 2],
+        n => {
+            return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "Core configuration for {n} core electrons is not available."
+            ))));
+        }
+    })
+}
+
+/// `|det(m)|` of a row-major `n × n` matrix, by Gaussian elimination with
+/// partial pivoting (the matrices here are a handful of valence functions).
+fn abs_det(mut m: Vec<f64>, n: usize) -> f64 {
+    let mut det = 1.0_f64;
+    for c in 0..n {
+        let mut piv = c;
+        for r in c + 1..n {
+            if m[r * n + c].abs() > m[piv * n + c].abs() {
+                piv = r;
+            }
+        }
+        let d = m[piv * n + c];
+        if d == 0.0 {
+            return 0.0;
+        }
+        if piv != c {
+            for k in 0..n {
+                m.swap(c * n + k, piv * n + k);
+            }
+        }
+        det *= d;
+        for r in c + 1..n {
+            let f = m[r * n + c] / d;
+            if f != 0.0 {
+                for k in c..n {
+                    m[r * n + k] -= f * m[c * n + k];
+                }
+            }
+        }
+    }
+    det.abs()
+}
+
+/// One atom of `elem` at the origin carrying `shells` — the `atm1` / `atm2`
+/// of `hf.py:424-430`.
+fn single_atom(elem: &str, z: usize, shells: &[pyscf_core::ShellSpec]) -> Result<Mole, PyscfRsError> {
+    use pyscf_core::{ParsedBasis, Unit};
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
+    M(MoleBuildArgs {
+        atom: AtomInput::Tuples(vec![(elem.to_string(), [0.0, 0.0, 0.0])]),
+        basis: BasisInput::Parsed(ParsedBasis { shells: shells.to_vec() }),
+        unit: Unit::Bohr,
+        spin: (z % 2) as i32,
+        ..Default::default()
+    })
+}
+
+/// `minao_basis(symb, nelec_ecp)` — `hf.py:366-437`: the occupations and the
+/// reference shells of one element.
+///
+/// The ANO valence shells with the core contractions removed; for an atom
+/// with a core (`nelec_ecp > 0`) the INPUT basis with the same valence
+/// occupations instead, when its occupied functions overlap the ANO valence
+/// ones (`|det| > 0.1`, `hf.py:432-433`).
+fn minao_basis(
+    elem: &str,
+    z: usize,
+    nelec_ecp: u32,
+    input: Option<&pyscf_core::ParsedBasis>,
+) -> Result<(Vec<f64>, Vec<pyscf_core::ShellSpec>), PyscfRsError> {
+    use pyscf_core::{CoreError, ShellSpec};
+    let bad = |m: String| PyscfRsError::Core(CoreError::InvalidMolecule(format!("init_guess_by_minao: {m}")));
+
+    let ano = pyscf_gto::load_basis("ano", elem).map_err(PyscfRsError::from)?;
+    let coreshl = core_configuration(nelec_ecp, z)?;
+
+    // hf.py:377-388 — the ANO valence part.
+    let mut occ: Vec<f64> = Vec::new();
+    let mut basis_ano: Vec<ShellSpec> = Vec::new();
+    for l in 0..4usize {
+        let (ndocc, frac) = crate::atom_config::frac_occ(z, l);
+        if ndocc < coreshl[l] {
+            // "ECP incorporates partially occupied shell of l" — skipped.
+            continue;
+        }
+        // `basis_add[l]`: the ANO set is one general-contraction shell per l.
+        let Some(sh) = ano.shells.iter().find(|s| s.l as usize == l) else {
+            if ndocc == 0 && frac == 0.0 {
+                continue;
+            }
+            return Err(bad(format!("the ANO basis of {elem} has no l = {l} shell")));
+        };
+        let (lo, hi) = (coreshl[l] as usize, ndocc as usize + 1);
+        if sh.coeffs.len() < hi {
+            return Err(bad(format!(
+                "the ANO basis of {elem} has {} contractions at l = {l}, {hi} needed",
+                sh.coeffs.len()
+            )));
+        }
+        for ctr in lo..hi {
+            let o = if ctr + 1 < hi { 2.0 } else { frac };
+            occ.extend(std::iter::repeat_n(o, 2 * l + 1));
+        }
+        basis_ano.push(ShellSpec {
+            l: l as u8,
+            exponents: sh.exponents.clone(),
+            coeffs: sh.coeffs[lo..hi].to_vec(),
+        });
+    }
+    if nelec_ecp == 0 {
+        return Ok((occ, basis_ano));
+    }
+
+    // hf.py:390-419 — the input basis with the valence occupations.
+    let input = input.ok_or_else(|| bad(format!("no input basis for {elem}")))?;
+    let mut occ4ecp: Vec<f64> = Vec::new();
+    let mut basis4ecp: Vec<ShellSpec> = Vec::new();
+    for l in 0..4usize {
+        let shells: Vec<&ShellSpec> = input.shells.iter().filter(|s| s.l as usize == l).collect();
+        let nbas_l: usize = shells.iter().map(|s| s.coeffs.len()).sum();
+        let (ndocc, frac) = crate::atom_config::frac_occ(z, l);
+        if ndocc < coreshl[l] {
+            // upstream indexes with a negative count here; no sensible guess
+            // on the input basis — keep the ANO valence part.
+            return Ok((occ, basis_ano));
+        }
+        let nd = (ndocc - coreshl[l]) as usize;
+        if nd > nbas_l || (frac > 0.0 && nd >= nbas_l && nbas_l > 0) {
+            return Err(bad(format!(
+                "{elem}: {nd} doubly occupied l = {l} shells (+ fraction {frac}) but the basis has {nbas_l}"
+            )));
+        }
+        if nbas_l > 0 {
+            let mut occ_l = vec![0.0_f64; nbas_l];
+            for o in occ_l.iter_mut().take(nd) {
+                *o = 2.0;
+            }
+            if frac > 0.0 {
+                occ_l[nd] = frac;
+            }
+            for o in occ_l {
+                occ4ecp.extend(std::iter::repeat_n(o, 2 * l + 1));
+            }
+            basis4ecp.extend(shells.into_iter().cloned());
+        }
+    }
+
+    // hf.py:421-436 — does the input basis have AO character?
+    let atm1 = single_atom(elem, z, &basis4ecp)?;
+    let atm2 = single_atom(elem, z, &basis_ano)?;
+    let s12 = pyscf_gto::intor_cross(&atm1, &atm2, "int1e_ovlp_sph")?;
+    let (n1, n2) = (atm1.nao_nr, atm2.nao_nr);
+    if occ4ecp.len() != n1 || occ.len() != n2 {
+        return Err(bad(format!(
+            "{elem}: occupation / AO layout mismatch ({} vs {n1}, {} vs {n2})",
+            occ4ecp.len(),
+            occ.len()
+        )));
+    }
+    let rows: Vec<usize> = (0..n1).filter(|i| occ4ecp[*i] > 0.0).collect();
+    let cols: Vec<usize> = (0..n2).filter(|j| occ[*j] > 0.0).collect();
+    if rows.len() != cols.len() {
+        return Err(bad(format!(
+            "{elem}: {} occupied input functions against {} occupied ANO functions",
+            rows.len(),
+            cols.len()
+        )));
+    }
+    let n = rows.len();
+    let mut sub = vec![0.0_f64; n * n];
+    for (a, &i) in rows.iter().enumerate() {
+        for (b, &j) in cols.iter().enumerate() {
+            // `s12` is F-order `(n1, n2)`.
+            sub[a * n + b] = s12.values[j * n1 + i];
+        }
+    }
+    if abs_det(sub, n) > 0.1 {
+        Ok((occ4ecp, basis4ecp))
+    } else {
+        Ok((occ, basis_ano))
+    }
+}
+
+/// `init_guess_by_minao` for a molecule or cell with core electrons removed
+/// by an ECP or a pseudopotential — `hf.py:444-474`.
+fn minao_with_core(mol: &Mole, core: &[(String, u32)]) -> Result<Density, PyscfRsError> {
+    use pyscf_core::{CoreError, ParsedBasis, Unit};
+    use pyscf_gto::format_atom::charge_for_symbol;
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
+    use std::collections::HashMap;
+
+    let mut occ_of: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut basis_of: HashMap<String, BasisInput> = HashMap::new();
+    for (upper, nelec_ecp) in core {
+        let z = charge_for_symbol(upper).unwrap_or(0).max(0) as usize;
+        let (occ, shells) = minao_basis(upper, z, *nelec_ecp, mol._basis.get(upper))?;
+        occ_of.insert(upper.clone(), occ);
+        basis_of.insert(upper.clone(), BasisInput::Parsed(ParsedBasis { shells }));
+    }
+
+    // hf.py:453-473 — the reference molecule and its occupation vector.
+    let pmol = M(MoleBuildArgs {
+        atom: AtomInput::Tuples(mol._atom.clone()),
+        basis: BasisInput::PerElement(basis_of),
+        unit: Unit::Bohr,
+        charge: mol.charge,
+        spin: mol.spin,
+        cart: mol.cart,
+        ..Default::default()
+    })?;
+    let mut occ: Vec<f64> = Vec::with_capacity(pmol.nao_nr);
+    for (sym, _) in &pmol._atom {
+        let upper: String = sym
+            .chars()
+            .take_while(|c| c.is_alphabetic())
+            .collect::<String>()
+            .to_ascii_uppercase();
+        occ.extend_from_slice(&occ_of[&upper]);
+    }
+    if occ.len() != pmol.nao_nr {
+        return Err(PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+            "init_guess_by_minao: {} occupations for {} reference AOs",
+            occ.len(),
+            pmol.nao_nr
+        ))));
+    }
+    project_occupations(mol, &pmol, &occ)
+}
+
+/// `init_guess_by_minao` without core electrons: the whole ANO set with the
+/// atomic ground-state occupations.
+fn minao_all_electron(mol: &Mole) -> Result<Density, PyscfRsError> {
     use pyscf_core::{CoreError, Unit};
     use pyscf_gto::format_atom::charge_for_symbol;
-    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs, intor, intor_cross};
-
-    let nao = mol.nao_nr;
+    use pyscf_gto::{AtomInput, BasisInput, M, MoleBuildArgs};
 
     // 1. ANO reference Mole — same atoms (Bohr), basis "ano".
     let ano = M(MoleBuildArgs {
@@ -263,9 +549,21 @@ pub(crate) fn init_guess_by_minao(mol: &Mole) -> Result<Density, PyscfRsError> {
         ))));
     }
 
+    project_occupations(mol, &ano, &occ)
+}
+
+/// `dm = (mo·occ)·moᵀ` with `mo = project_mo_nr2nr(reference, 1, mol)` —
+/// `hf.py:470-471`: the reference AOs expressed in the working basis.
+fn project_occupations(mol: &Mole, ano: &Mole, occ: &[f64]) -> Result<Density, PyscfRsError> {
+    use pyscf_core::CoreError;
+    use pyscf_gto::{intor, intor_cross};
+
+    let nao = mol.nao_nr;
+    let nao_ano = ano.nao_nr;
+
     // 3. Overlaps: S_working (nao×nao) and S_cross = <working|ANO> (nao×nao_ano), F-order.
     let s_w = intor(mol, "int1e_ovlp_sph")?;
-    let s_cross = intor_cross(mol, &ano, "int1e_ovlp_sph")?;
+    let s_cross = intor_cross(mol, ano, "int1e_ovlp_sph")?;
 
     // 4. mo[:,p] = S_working⁻¹ · S_cross[:,p] (per-ANO-column LU solve).
     //    mo stored F-order [nao, nao_ano]: mo[μ + p*nao].

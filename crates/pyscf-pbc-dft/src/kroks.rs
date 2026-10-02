@@ -174,6 +174,9 @@ impl KOverrideHooks for Kroks {
     fn diis_dms(&self, dms: &KDms) -> KDms {
         self.hf.diis_dms(dms)
     }
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        self.hf.level_shift_dms(dms)
+    }
 
     fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         self.hf.eig(fock, s1e)

@@ -3,24 +3,12 @@
 //! Ports `pyscf/pbc/df/fft.py:40-80` (`get_nuc`), `:82-178` (`get_pp`) and
 //! `:185-405` (the `FFTDF` class).
 //!
-//! # Deviation from upstream's `get_pp` (documented, deliberate)
+//! # The non-local half of `get_pp`
 //!
-//! `fft.py`'s `get_pp` evaluates the NON-LOCAL half in reciprocal space through
-//! `ft_ao.ft_ao`, the McMurchie-Davidson planewave AO transform that
-//! PBC-MASTER-PLAN schedules for Phase 13. Phase 10 already shipped the SAME
-//! quantity in real space — [`pyscf_pbc_gto::pseudo::get_pp_nl`], via
-//! `intor_cross` against the projector fake-cell — and gated it against
-//! upstream at 1.9e-15 on diamond. This port therefore assembles
-//!
-//! ```text
-//! V_pp(k) = ifft(-sum_a SI[a] * vlocG[a])  +  V_nl(k)
-//! ```
-//!
-//! using the FFT for the local half (identical to upstream) and the Phase-10
-//! real-space route for the non-local half. Both are the same operator; the
-//! only difference is which quadrature evaluates it, and the real-space one is
-//! the more accurate of the two (it is exact in the basis, with no planewave
-//! truncation). `tests/fftdf.rs` pins the assembled `V_pp` against upstream.
+//! Default: upstream's reciprocal-space evaluation on the FFT mesh
+//! (`fft.py:114-176`, [`crate::pp_gspace`]). `PYSCF_PBC_FFTDF_PP_NL=realspace`
+//! selects the analytic [`pyscf_pbc_gto::pseudo::get_pp_nl`] instead, which
+//! is exact in the basis and differs from upstream below a converged mesh.
 //!
 //! # The AO cache
 //!
@@ -869,7 +857,7 @@ pub fn get_pp(df: &Fftdf, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError>
     let cell = &df.cell;
     let vpplocr = pp_local_potential_r(df)?;
     let mut vpp = df.local_vmat(&vpplocr, kpts)?;
-    vpp_add_nonlocal(cell, kpts, &mut vpp)?;
+    vpp_add_nonlocal(cell, df.mesh, kpts, &mut vpp)?;
     Ok(vpp)
 }
 
@@ -901,16 +889,21 @@ fn pp_local_potential_r(df: &Fftdf) -> Result<Vec<f64>, PbcDfError> {
 /// `vpp += V_nl` and the gamma-point `.real` of `fft.py:114-176`.
 fn vpp_add_nonlocal(
     cell: &Cell,
+    mesh: [usize; 3],
     kpts: &[[f64; 3]],
     vpp: &mut [CTensor],
 ) -> Result<(), PbcDfError> {
-    // fft.py:114-176 — the non-local part. Phase 10 owns it in real space.
-    let vnl = pyscf_pbc_gto::pseudo::get_pp_nl(cell, kpts)?;
-    let nao = cell.mol.nao_nr;
+    let vnl_c: Vec<CTensor> = match crate::pp_gspace::pp_nonlocal_route() {
+        crate::pp_gspace::PpNonlocal::Reciprocal => {
+            crate::pp_gspace::get_pp_nl_gspace(cell, mesh, kpts)?
+        }
+        crate::pp_gspace::PpNonlocal::RealSpace => pyscf_pbc_gto::pseudo::get_pp_nl(cell, kpts)?
+            .iter()
+            .map(|m| forder_to_c(m, cell.mol.nao_nr, cell.mol.nao_nr))
+            .collect(),
+    };
     for (k, v) in vpp.iter_mut().enumerate() {
-        // Phase-10 output is F-order (see `zlinalg::forder_to_c`).
-        let nl = forder_to_c(&vnl[k], nao, nao);
-        zadd_assign(v, &nl);
+        zadd_assign(v, &vnl_c[k]);
         // fft.py:172-175 — a gamma-point block is real by construction.
         if pyscf_pbc_gto::is_zero(&kpts[k]) {
             for t in v.im.iter_mut() {
@@ -928,11 +921,15 @@ fn vpp_add_nonlocal(
 ///
 /// # Errors
 /// Propagates `get_pp_nl` and `pbc_intor('int1e_kin')`.
-pub fn get_hcore_nonlocal(cell: &Cell, kpts: &[[f64; 3]]) -> Result<Vec<CTensor>, PbcDfError> {
+pub fn get_hcore_nonlocal(
+    cell: &Cell,
+    mesh: [usize; 3],
+    kpts: &[[f64; 3]],
+) -> Result<Vec<CTensor>, PbcDfError> {
     let nao = cell.mol.nao_nr;
     let mut h = vec![CTensor::zeros(nao * nao); kpts.len()];
     if cell.pseudo.is_some() {
-        vpp_add_nonlocal(cell, kpts, &mut h)?;
+        vpp_add_nonlocal(cell, mesh, kpts, &mut h)?;
     }
     let t = pyscf_pbc_gto::get_t(cell, kpts)?;
     for (k, m) in h.iter_mut().enumerate() {

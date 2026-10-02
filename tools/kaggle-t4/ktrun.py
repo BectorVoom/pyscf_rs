@@ -342,7 +342,10 @@ def print_progress(ck):
         for stage, rs in by_stage.items():
             tail = rs[-6:]
             es = "  ".join(f"{r['e_tot']:.6f}" for r in tail)
-            print(f"  {stage:>4}: {len(rs):3d} cycles, last e_tot: {es}")
+            # The row written after the final diagonalisation is not a cycle.
+            ncyc = sum(1 for r in rs if not r.get("final"))
+            extra = " + final step" if ncyc != len(rs) else ""
+            print(f"  {stage:>4}: {ncyc:3d} cycles{extra}, last e_tot: {es}")
             if len(rs) >= 2:
                 dt = (rs[-1]["t_unix"] - rs[0]["t_unix"]) / max(1, len(rs) - 1)
                 if 0 < dt < 86400:

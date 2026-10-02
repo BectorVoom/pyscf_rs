@@ -453,6 +453,11 @@ impl KOverrideHooks for Kuks {
         Ok((e1 + tags.ecoul + tags.exc, tags.ecoul + tags.exc))
     }
 
+    fn smeared(&self) -> bool {
+        // pbc/scf/smearing.py:152-154 — a zero width keeps the plain gradient.
+        self.smearing.as_ref().is_some_and(|sm| sm.sigma != 0.0)
+    }
+
     fn free_energy(&self) -> Option<f64> {
         self.entropy
             .get()

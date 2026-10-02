@@ -86,6 +86,13 @@ pub trait KOverrideHooks {
         dms.clone()
     }
 
+    /// The density handed to the level shift. Default: the density channels
+    /// themselves (`khf.py:157`, `kuhf.py:99-101`). ROHF overrides it with
+    /// `(dma + dmb)·½` (`krohf.py:80`).
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        dms.clone()
+    }
+
     /// Solve `F^k C^k = S^k C^k eps^k` for every `(set, k)`.
     ///
     /// Returns `(mo_energy, mo_coeff)` indexed `set * nkpts + k`; `mo_coeff` is
@@ -122,13 +129,22 @@ pub trait KOverrideHooks {
         self.cell().energy_nuc()
     }
 
+    /// Whether the occupations are smeared with a non-zero width — upstream's
+    /// `sigma` test in `_SmearingKSCF.get_grad` (`pbc/scf/smearing.py:152-154`).
+    /// A driver with a smearing option overrides this; it selects the
+    /// gradient [`KOverrideHooks::get_grad`] returns.
+    fn smeared(&self) -> bool {
+        false
+    }
+
     /// The SCF convergence gradient — `khf.py:227-236`.
     ///
     /// The default is the occupied-virtual block of the MO-basis Fock matrix,
-    /// concatenated over `(set, k)`. Smearing overrides it with the strict
-    /// lower triangle of the FULL MO-basis Fock matrix
-    /// (`pbc/scf/smearing.py:25-31`), because with fractional occupations the
-    /// occupied-virtual split no longer separates the stationary conditions.
+    /// concatenated over `(set, k)`. With smeared occupations
+    /// ([`KOverrideHooks::smeared`]) it is the strict lower triangle of the
+    /// FULL MO-basis Fock matrix (`pbc/scf/smearing.py:25-31, 152-164`),
+    /// because with fractional occupations the occupied-virtual split no
+    /// longer separates the stationary conditions.
     fn get_grad(
         &self,
         mo_coeff: &[CTensor],
@@ -139,11 +155,16 @@ pub trait KOverrideHooks {
         let nao = self.nao();
         let nkpts = self.kpts().len();
         let fock = crate::kscf::bare_fock(h1e, vhf);
+        let smeared = self.smeared();
         let mut g = Vec::new();
         for (s, set) in fock.iter().enumerate() {
             for (k, f) in set.iter().enumerate() {
                 let i = s * nkpts + k;
-                g.extend_from_slice(&crate::kocc::get_grad(&mo_coeff[i], &mo_occ[i], f, nao));
+                if smeared {
+                    g.extend_from_slice(&crate::smearing::grad_tril(&mo_coeff[i], f, nao, mo_occ[i].len()));
+                } else {
+                    g.extend_from_slice(&crate::kocc::get_grad(&mo_coeff[i], &mo_occ[i], f, nao));
+                }
             }
         }
         g

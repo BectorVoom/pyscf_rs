@@ -388,7 +388,7 @@ pub(crate) fn fused_band_fock(
     };
     let hnl = {
         let _s = tracing::info_span!("band_hcore_nl").entered();
-        pyscf_pbc_df::fftdf::get_hcore_nonlocal(cell, kpts_band)
+        pyscf_pbc_df::fftdf::get_hcore_nonlocal(cell, g.mesh, kpts_band)
             .map_err(|e| df_err("band T + V_nl", e))?
     };
     for set in fock.iter_mut() {
@@ -491,6 +491,11 @@ impl KOverrideHooks for Krks {
         }
         e1 *= weight;
         Ok((e1 + tags.ecoul + tags.exc, tags.ecoul + tags.exc))
+    }
+
+    fn smeared(&self) -> bool {
+        // pbc/scf/smearing.py:152-154 — a zero width keeps the plain gradient.
+        self.smearing.as_ref().is_some_and(|sm| sm.sigma != 0.0)
     }
 
     fn free_energy(&self) -> Option<f64> {

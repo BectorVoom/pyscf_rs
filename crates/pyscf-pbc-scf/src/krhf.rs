@@ -276,35 +276,9 @@ impl KOverrideHooks for Krhf {
         Ok(energy_elec(dms, h1e, vhf, self.cell().mol.nao_nr))
     }
 
-    fn get_grad(
-        &self,
-        mo_coeff: &[CTensor],
-        mo_occ: &[Vec<f64>],
-        h1e: &KMats,
-        vhf: &KDms,
-    ) -> Vec<f64> {
-        let nao = self.cell().mol.nao_nr;
-        let fock = crate::kscf::bare_fock(h1e, vhf);
-        if self.smearing.is_none() {
-            let mut g = Vec::new();
-            for (k, f) in fock[0].iter().enumerate() {
-                g.extend_from_slice(&crate::kocc::get_grad(&mo_coeff[k], &mo_occ[k], f, nao));
-            }
-            return g;
-        }
-        // Smeared occupations: the strict lower triangle of the full MO Fock,
-        // because the occupied-virtual split no longer separates the
-        // stationary conditions (pbc/scf/smearing.py:25-31).
-        let mut g = Vec::new();
-        for (k, f) in fock[0].iter().enumerate() {
-            g.extend_from_slice(&crate::smearing::grad_tril(
-                &mo_coeff[k],
-                f,
-                nao,
-                mo_occ[k].len(),
-            ));
-        }
-        g
+    fn smeared(&self) -> bool {
+        // pbc/scf/smearing.py:152-154 — a zero width keeps the plain gradient.
+        self.smearing.as_ref().is_some_and(|sm| sm.sigma != 0.0)
     }
 
     fn free_energy(&self) -> Option<f64> {

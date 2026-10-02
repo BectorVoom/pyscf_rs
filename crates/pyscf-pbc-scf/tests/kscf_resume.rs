@@ -19,6 +19,7 @@ fn cfg(log: &Log) -> KScfConfig {
     let l = Arc::clone(log);
     let mut c = KScfConfig::for_cell(&diamond());
     c.conv_tol = 1e-14; // never converge inside the window
+    c.conv_check = false; // keep testing the loop itself, not the final step
     c.max_cycle = 7;
     c.damp = 0.6;
     c.diis_start_cycle = 8;

@@ -46,42 +46,44 @@ fn damp(fock: &mut KDms, prev: &KDms, factor: f64) {
     }
 }
 
-/// `mol_hf.level_shift(s, dm, f, factor)` — `khf.py:155-157`.
-///
-/// `F' = F + (S - S D S / 2) * factor` for a restricted density (where
-/// `D S D = 2 D`); the general form upstream uses is
-/// `F + (S - S D S * 0.5) * shift`.
-fn level_shift(fock: &mut KDms, s1e: &KMats, dms: &KDms, factor: f64, nao: usize) {
+/// `mol_hf.level_shift(s, d, f, factor)` — `scf/hf.py:794-795`:
+/// `F' = F + (S − S·D·S)·factor`. Which `D` each driver passes is
+/// [`KOverrideHooks::level_shift_dms`].
+pub fn level_shift(
+    fock: &mut KDms,
+    s1e: &KMats,
+    dms: &KDms,
+    factor: f64,
+    nao: usize,
+) -> Result<(), PyscfRsError> {
+    let client = pyscf_algebra::select_backend()
+        .map_err(|e| {
+            PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                "periodic SCF: level shift backend: {e}"
+            )))
+        })?
+        .client;
     for (s, set) in fock.iter_mut().enumerate() {
         for (k, f) in set.iter_mut().enumerate() {
-            let sd = mm(&s1e[k], &dms[s][k], nao);
-            let sds = mm(&sd, &s1e[k], nao);
+            let sd = pyscf_algebra::zgemm_dense(&client, &s1e[k], &dms[s][k], nao, nao, nao)
+                .map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "periodic SCF: level shift S·D at set {s} k-point {k}: {e}"
+                    )))
+                })?;
+            let sds =
+                pyscf_algebra::zgemm_dense(&client, &sd, &s1e[k], nao, nao, nao).map_err(|e| {
+                    PyscfRsError::Core(CoreError::InvalidMolecule(format!(
+                        "periodic SCF: level shift (S·D)·S at set {s} k-point {k}: {e}"
+                    )))
+                })?;
             for i in 0..f.len() {
-                f.re[i] += factor * (s1e[k].re[i] - 0.5 * sds.re[i]);
-                f.im[i] += factor * (s1e[k].im[i] - 0.5 * sds.im[i]);
+                f.re[i] += factor * (s1e[k].re[i] - sds.re[i]);
+                f.im[i] += factor * (s1e[k].im[i] - sds.im[i]);
             }
         }
     }
-}
-
-fn mm(a: &CTensor, b: &CTensor, n: usize) -> CTensor {
-    let mut re = vec![0.0_f64; n * n];
-    let mut im = vec![0.0_f64; n * n];
-    for i in 0..n {
-        for j in 0..n {
-            let mut sr = 0.0_f64;
-            let mut si = 0.0_f64;
-            for t in 0..n {
-                let (ar, ai) = (a.re[i * n + t], a.im[i * n + t]);
-                let (br, bi) = (b.re[t * n + j], b.im[t * n + j]);
-                sr += ar * br - ai * bi;
-                si += ar * bi + ai * br;
-            }
-            re[i * n + j] = sr;
-            im[i * n + j] = si;
-        }
-    }
-    CTensor::from_planes(re, im)
+    Ok(())
 }
 
 /// The periodic SCF cycle.
@@ -141,6 +143,14 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
     } else {
         None
     };
+    // scf/hf.py:152-157 — the DIIS error vector lives in the orthonormal
+    // basis of the INITIAL Fock matrix's eigenvectors (`mf_diis.Corth`).
+    let corth: Option<Vec<CTensor>> = if diis.is_some() {
+        let fock0 = hooks.get_fock(&h1e, &vhf, &dm)?;
+        Some(hooks.eig(&fock0, &s1e)?.1)
+    } else {
+        None
+    };
     let grad_tol = cfg.grad_tol();
 
     let mut mo_energy: Vec<Vec<f64>> = Vec::new();
@@ -169,14 +179,20 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
             && cycle >= cfg.diis_start_cycle
         {
             let _diis_span = tracing::info_span!("scf_diis").entered();
-            fock = diis_step(d, &s1e, &hooks.diis_dms(&dm), &fock, nao).map_err(|e| {
+            fock = diis_step(d, &s1e, &hooks.diis_dms(&dm), &fock, nao, corth.as_deref()).map_err(|e| {
                 PyscfRsError::Core(CoreError::InvalidMolecule(format!(
                     "periodic SCF: DIIS failed at cycle {cycle}: {e}"
                 )))
             })?;
         }
         if cfg.level_shift.abs() > 1e-4 {
-            level_shift(&mut fock, &s1e, &hooks.diis_dms(&dm), cfg.level_shift, nao);
+            level_shift(
+                &mut fock,
+                &s1e,
+                &hooks.level_shift_dms(&dm),
+                cfg.level_shift,
+                nao,
+            )?;
         }
         fock_last = Some(fock.clone());
 
@@ -212,11 +228,58 @@ pub fn kernel<H: KOverrideHooks>(hooks: &H, cfg: &KScfConfig) -> Result<KScfResu
         if let Some(hook) = &cfg.on_cycle
             && let Some(fock) = fock_last.as_ref()
         {
-            (hook.0)(&crate::types::CycleState { cycle, e_tot, dm: &dm, fock, converged: converged_now });
+            (hook.0)(&crate::types::CycleState {
+                cycle,
+                e_tot,
+                dm: &dm,
+                fock,
+                converged: converged_now && !cfg.conv_check,
+                final_state: false,
+            });
         }
         if converged_now {
             converged = true;
             break;
+        }
+    }
+
+    // scf/hf.py:211-232 — the final diagonalisation ("conv_check").
+    if converged && cfg.conv_check {
+        let fock = hooks.get_fock(&h1e, &vhf, &dm)?;
+        let (e, c) = hooks.eig(&fock, &s1e)?;
+        let (occ, f_levels) = hooks.get_occ(&e)?;
+        dm = hooks.make_rdm1(&c, &occ)?;
+        vhf = hooks.get_veff(&dm)?;
+        let last_e = e_tot;
+        let (ee, ec) = hooks.energy_elec(&dm, &h1e, &vhf)?;
+        e_elec = ee;
+        e_coul = ec;
+        e_tot = e_elec + e_nuc;
+        let norm_gorb = norm(&hooks.get_grad(&c, &occ, &h1e, &vhf));
+        converged = (e_tot - last_e).abs() < cfg.conv_tol * 10.0 || norm_gorb < grad_tol * 3.0;
+        if cfg.verbose {
+            tracing::info!(
+                e_tot,
+                de = e_tot - last_e,
+                norm_gorb,
+                converged,
+                "periodic SCF final diagonalisation"
+            );
+        }
+        mo_energy = e;
+        mo_coeff = c;
+        mo_occ = occ;
+        fermi = f_levels;
+        if let Some(hook) = &cfg.on_cycle {
+            let bare = hooks.get_fock(&h1e, &vhf, &dm)?;
+            (hook.0)(&crate::types::CycleState {
+                cycle: cycles.saturating_sub(1),
+                e_tot,
+                dm: &dm,
+                fock: &bare,
+                converged,
+                final_state: true,
+            });
         }
     }
 

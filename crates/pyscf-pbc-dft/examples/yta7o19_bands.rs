@@ -40,6 +40,7 @@
 //!
 //! | var | default | meaning |
 //! |---|---|---|
+//! | `YTA_CELL` | unset | another material: a JSON file, or the JSON text itself, `{"name", "lattice_ang": [[..]; 3], "sites_ang": [["K", [x, y, z]], ..], "bravais": "cubic"\|"fcc"\|"bcc"\|"hexagonal"\|"tetragonal"}` (same pipeline, its own checkpoints) |
 //! | `YTA_KE` | `100` | plane-wave `ke_cutoff`, Hartree |
 //! | `YTA_KMESH` | `3,3,1` | SCF Monkhorst-Pack mesh |
 //! | `YTA_BASIS` | `gth-szv-molopt-sr` | target basis (e.g. `gth-dzvp-molopt-sr`) |
@@ -65,6 +66,9 @@
 //! | `YTA_STOP_AFTER` | unset | `1e`: exit after the one-electron matrices are checkpointed |
 //! | `YTA_REQUIRE_BACKEND` | unset | abort unless the resolved backend has this name |
 //! | `YTA_REQUIRE_XC` | unset | abort unless the XC backend's `Debug` name is this (`Libxc`) |
+//! | `YTA_CONV_CHECK` | `final` | final diagonalisation after convergence (`scf/hf.py:211-232`): `final` = last SCF stage only, `all`, or `off` |
+//! | `PYSCF_PBC_FFTDF_PP_NL` | unset | `realspace`: the analytic non-local pseudopotential (the route of runs made before 2026-10); default is upstream's reciprocal-space route |
+//! | `PYSCF_PBC_PP_NL_BUDGET_MB` | `1024` | device memory for one G-block of the reciprocal-space route |
 //!
 //! 2026-09-26: with plain DIIS and aufbau occupations the SCF of this cell
 //! oscillates by thousands of Hartree (identically on the CPU and CUDA
@@ -229,25 +233,79 @@ fn kmesh() -> [usize; 3] {
     [v[0], v[1], v[2]]
 }
 
-fn build_cell(ke_cutoff: f64, basis: &str) -> Cell {
-    Cell::build(CellBuildArgs {
-        mole: MoleBuildArgs {
-            atom: AtomInput::Tuples(
-                SITES_ANG
+/// The material: YTa7O19 unless `YTA_CELL` names a geometry file.
+struct System {
+    /// `result["system"]`.
+    title: String,
+    /// What `fingerprint.json` pins (the built-in cell keeps its original
+    /// value; a `YTA_CELL` material is pinned by name AND geometry).
+    fingerprint: serde_json::Value,
+    lattice_ang: [[f64; 3]; 3],
+    sites_ang: Vec<(String, [f64; 3])>,
+    bravais: BravaisLattice,
+}
+
+impl System {
+    fn from_env() -> Self {
+        let Some(path) = std::env::var("YTA_CELL")
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+        else {
+            return Self {
+                title: "YTa7O19 (mp-772036, P-6c2, Z=2)".into(),
+                fingerprint: json!("YTa7O19 mp-772036"),
+                lattice_ang: LATTICE_ANG,
+                sites_ang: SITES_ANG
                     .iter()
                     .map(|(s, r)| ((*s).to_string(), *r))
                     .collect(),
-            ),
-            basis: BasisInput::Name(basis.into()),
-            unit: Unit::Ang,
+                bravais: BravaisLattice::Hexagonal,
+            };
+        };
+        let raw = if path.trim_start().starts_with('{') {
+            path.clone()
+        } else {
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("YTA_CELL {path}: {e}"))
+        };
+        let v: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or_else(|e| panic!("YTA_CELL {path}: {e}"));
+        let name = v["name"].as_str().expect("YTA_CELL: name").to_string();
+        let lattice_ang: [[f64; 3]; 3] =
+            serde_json::from_value(v["lattice_ang"].clone()).expect("YTA_CELL: lattice_ang");
+        let sites_ang: Vec<(String, [f64; 3])> =
+            serde_json::from_value(v["sites_ang"].clone()).expect("YTA_CELL: sites_ang");
+        let bravais = match v["bravais"].as_str().expect("YTA_CELL: bravais") {
+            "cubic" => BravaisLattice::Cubic,
+            "fcc" => BravaisLattice::Fcc,
+            "bcc" => BravaisLattice::Bcc,
+            "hexagonal" => BravaisLattice::Hexagonal,
+            "tetragonal" => BravaisLattice::Tetragonal,
+            other => panic!("YTA_CELL: bravais {other:?}: cubic|fcc|bcc|hexagonal|tetragonal"),
+        };
+        Self {
+            fingerprint: json!({"name": name, "lattice_ang": lattice_ang, "sites_ang": sites_ang}),
+            title: name,
+            lattice_ang,
+            sites_ang,
+            bravais,
+        }
+    }
+
+    fn build_cell(&self, ke_cutoff: f64, basis: &str) -> Cell {
+        Cell::build(CellBuildArgs {
+            mole: MoleBuildArgs {
+                atom: AtomInput::Tuples(self.sites_ang.clone()),
+                basis: BasisInput::Name(basis.into()),
+                unit: Unit::Ang,
+                ..Default::default()
+            },
+            a: ALattice::Matrix(self.lattice_ang),
+            pseudo: Some("gth-pbe".into()),
+            ke_cutoff: Some(ke_cutoff),
             ..Default::default()
-        },
-        a: ALattice::Matrix(LATTICE_ANG),
-        pseudo: Some("gth-pbe".into()),
-        ke_cutoff: Some(ke_cutoff),
-        ..Default::default()
-    })
-    .expect("the YTa7O19 cell must build")
+        })
+        .unwrap_or_else(|e| panic!("the {} cell must build: {e:?}", self.title))
+    }
 }
 
 /// `kind:sigma` (`fermi`/`gauss`) or `none` (aufbau occupations).
@@ -504,6 +562,7 @@ struct Stage {
     damp: f64,
     level_shift: f64,
     diis_start: u32,
+    conv_check: bool,
 }
 
 impl Stage {
@@ -514,8 +573,11 @@ impl Stage {
     /// a different upstream it is discarded. Damping, level shift and DIIS only
     /// steer the path and may change between sessions.
     fn identity(&self, conv_tol: f64, upstream: &str) -> String {
-        json!({"stage": self.name, "smearing": self.smearing, "conv_tol": conv_tol, "upstream": upstream})
-            .to_string()
+        let mut v = json!({"stage": self.name, "smearing": self.smearing, "conv_tol": conv_tol, "upstream": upstream});
+        if self.conv_check {
+            v["conv_check"] = json!(true);
+        }
+        v.to_string()
     }
 }
 
@@ -656,6 +718,7 @@ fn run_stage(
                 save_state(p, st, &identity);
             }
             ck.history(json!({"stage": name, "cycle": st.cycle, "e_tot": st.e_tot, "converged": st.converged,
+                              "final": st.final_state,
                               "t_unix": unix_now(), "stage_seconds": t_stage.elapsed().as_secs_f64()}));
             ck.status(name, json!({"cycle": st.cycle, "e_tot": st.e_tot}));
         }))
@@ -670,6 +733,7 @@ fn run_stage(
         damp: stage.damp,
         level_shift: stage.level_shift,
         diis_start_cycle: stage.diis_start,
+        conv_check: stage.conv_check,
         ..base.clone()
     };
     eprintln!(
@@ -703,10 +767,12 @@ fn run_stage(
     );
     let report = json!({
         "controls": {"smearing": stage.smearing, "damp": cfg.damp, "level_shift": cfg.level_shift,
-                     "diis_space": cfg.diis_space, "diis_start": cfg.diis_start_cycle},
+                     "diis_space": cfg.diis_space, "diis_start": cfg.diis_start_cycle,
+                     "conv_check": cfg.conv_check},
         "converged": scf.converged, "cycles_total": scf.cycles, "e_tot_ha": scf.e_tot,
         "homo_ha": homo, "lumo_ha": lumo, "seconds_this_session": seconds,
-        "kpts_mo_energy_ha": scf.mo_energy,
+        "kpts_mo_energy_ha": scf.mo_energy, "kpts_mo_occ": scf.mo_occ,
+        "e_free_ha": scf.e_free, "conv_tol": cfg.conv_tol,
     });
     let token = token(scf.cycles, scf.e_tot);
     let mut report = report;
@@ -765,6 +831,14 @@ fn main() {
         .ok()
         .filter(|v| !v.trim().is_empty());
     let require = std::env::var("YTA_REQUIRE_CONVERGED").is_ok_and(|v| v == "1");
+    let conv_check_mode: String = env_or("YTA_CONV_CHECK", "final".to_string());
+    assert!(
+        matches!(conv_check_mode.as_str(), "final" | "all" | "off"),
+        "YTA_CONV_CHECK: final|all|off"
+    );
+    let has_s2 = std::env::var("YTA_REFINE_SMEARING")
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty());
     let ck = Ckpt(
         std::env::var("YTA_CKPT_DIR")
             .ok()
@@ -808,13 +882,16 @@ fn main() {
         );
     }
 
-    let cell = build_cell(ke, &basis);
+    let system = System::from_env();
+    let cell = system.build_cell(ke, &basis);
     let nao = cell.mol.nao_nr;
     let nelec = cell.tot_electrons(1);
     let nocc = nelec / 2;
     let mesh = cell.mesh;
     eprintln!(
-        "[yta] cell: 54 atoms, basis {basis}, nao {nao}, nelectron {nelec}, mesh {mesh:?}, ke_cutoff {ke} Ha"
+        "[yta] cell: {}, {} atoms, basis {basis}, nao {nao}, nelectron {nelec}, mesh {mesh:?}, ke_cutoff {ke} Ha",
+        system.title,
+        system.sites_ang.len()
     );
     let kpts = make_kpts_default(&cell, mesh_k).expect("k mesh");
 
@@ -824,16 +901,38 @@ fn main() {
             .and_then(|_| std::fs::read_to_string(&out).ok())
             .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             .unwrap_or_else(|| json!({}));
-    result["system"] = json!("YTa7O19 (mp-772036, P-6c2, Z=2)");
+    result["system"] = json!(system.title);
+    // A checkpoint without pp_nonlocal was written with the analytic
+    // (real-space) non-local pseudopotential — its one-electron matrices
+    // differ. Read here so both `result["method"]` and the fingerprint below
+    // see it.
+    let pp_reciprocal =
+        pyscf_pbc_df::pp_gspace::pp_nonlocal_route() == pyscf_pbc_df::pp_gspace::PpNonlocal::Reciprocal;
     result["method"] = json!({"xc": xc, "basis": basis, "pre_basis": pre_basis, "pseudo": "gth-pbe",
                               "ke_cutoff_ha": ke, "mesh": mesh, "kmesh": mesh_k, "nao": nao,
-                              "nelectron": nelec, "nocc": nocc});
+                              "nelectron": nelec, "nocc": nocc,
+                              "conv_tol": conv_tol, "pre_conv_tol": env_or("YTA_PRE_CONV", 1e-4),
+                              "max_cycle": max_cycle, "diis_space": env_or("YTA_DIIS_SPACE", 8),
+                              "init_guess": env_or("YTA_INIT_GUESS", "minao".to_string())});
+    result["method"]["pp_nonlocal"] = json!(if pp_reciprocal { "reciprocal" } else { "realspace" });
+    // The geometry as the integrals see it (Bohr), so an upstream PySCF run
+    // can be given the same cell to the last bit (`tools/kaggle-t4/upstream_check.py`).
+    result["cell"] = json!({
+        "a_bohr": cell.a,
+        "atoms_bohr": cell.mol._atom.iter().zip(cell.mol.atom_coords())
+            .map(|((sym, _), r)| json!([sym, r])).collect::<Vec<_>>(),
+    });
     result["backend"] = json!(backend);
     result["xc_backend"] = json!(xc_backend);
 
     // Everything in the checkpoint depends on these; refuse to mix runs.
-    let fingerprint = json!({"system": "YTa7O19 mp-772036", "pseudo": "gth-pbe", "basis": basis,
+    let mut fingerprint = json!({"system": system.fingerprint, "pseudo": "gth-pbe", "basis": basis,
                              "pre_basis": pre_basis, "ke_cutoff_ha": ke, "kmesh": mesh_k, "xc": xc});
+    // A checkpoint without this key was written with the analytic (real-space)
+    // non-local pseudopotential — its one-electron matrices differ.
+    if pp_reciprocal {
+        fingerprint["pp_nonlocal"] = json!("reciprocal");
+    }
     if let Some(fp) = ck.path("fingerprint.json") {
         let refuse = |why: String| -> ! {
             eprintln!("[yta] {why}");
@@ -887,6 +986,7 @@ fn main() {
         damp: env_or("YTA_DAMP", 0.0),
         level_shift: env_or("YTA_LEVEL_SHIFT", 0.0),
         diis_start: env_or("YTA_DIIS_START", 1),
+        conv_check: conv_check_mode == "all" || (conv_check_mode == "final" && !has_s2),
     };
     let base_for = |cell: &Cell| KScfConfig {
         conv_tol,
@@ -926,7 +1026,7 @@ fn main() {
     if let Some(pre) = pre_basis.as_deref()
         && !s1_started
     {
-        let pre_cell = build_cell(ke, pre);
+        let pre_cell = system.build_cell(ke, pre);
         let pre_nocc = pre_cell.tot_electrons(1) / 2;
         eprintln!("[yta] stage pre: basis {pre}, nao {}", pre_cell.mol.nao_nr);
         let mut pre_mf = Krks::new(pre_cell, &kpts, &xc).expect("pre KRKS must build");
@@ -934,6 +1034,7 @@ fn main() {
         let pre_h1e = ck.one_e("pre_h1e.bin", || pre_mf.get_hcore().expect("pre get_hcore"));
         let pre_stage = Stage {
             name: "pre",
+            conv_check: conv_check_mode == "all",
             ..s1_controls.clone_controls()
         };
         let pre_base = KScfConfig {
@@ -1039,6 +1140,7 @@ fn main() {
             damp: env_or("YTA_REFINE_DAMP", 0.0),
             level_shift: env_or("YTA_REFINE_LEVEL_SHIFT", 0.0),
             diis_start: env_or("YTA_REFINE_DIIS_START", 1),
+            conv_check: conv_check_mode != "off",
         };
         let s1_dm = dm.clone();
         let s2 = run_stage(
@@ -1068,10 +1170,11 @@ fn main() {
     write_json(&out, &result);
 
     // Stage bands — chunks an earlier session already wrote are kept.
-    let path = band_path(mf.cell(), BravaisLattice::Hexagonal, npath).expect("band path");
+    let path = band_path(mf.cell(), system.bravais, npath).expect("band path");
     eprintln!(
-        "[yta] bands: {} k-points on G-M-K-G-A-L-H-A|L-M|K-H, {chunk} per call",
-        path.len()
+        "[yta] bands: {} k-points on {}, {chunk} per call",
+        path.len(),
+        path.tick_labels.join("-")
     );
     let t = Instant::now();
     let mut bands: Vec<Vec<f64>> = match result["bands"]["energies_ha"].as_array() {
@@ -1157,6 +1260,7 @@ impl Stage {
             damp: self.damp,
             level_shift: self.level_shift,
             diis_start: self.diis_start,
+            conv_check: self.conv_check,
         }
     }
 }

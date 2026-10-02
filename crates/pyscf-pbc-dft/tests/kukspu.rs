@@ -192,6 +192,9 @@ impl KOverrideHooks for KukspuScf {
     fn diis_dms(&self, dms: &KDms) -> KDms {
         self.ks.diis_dms(dms)
     }
+    fn level_shift_dms(&self, dms: &KDms) -> KDms {
+        self.ks.level_shift_dms(dms)
+    }
     fn eig(&self, fock: &KDms, s1e: &KMats) -> Result<(Vec<Vec<f64>>, Vec<CTensor>), PyscfRsError> {
         self.ks.eig(fock, s1e)
     }

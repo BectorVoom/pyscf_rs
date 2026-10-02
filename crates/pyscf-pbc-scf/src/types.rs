@@ -61,6 +61,9 @@ pub struct KScfConfig {
     pub damp: f64,
     /// Level shift applied to the virtual block (`mf.level_shift`).
     pub level_shift: f64,
+    /// Upstream's `conv_check` (`scf/hf.py:211-232`): after convergence,
+    /// diagonalise the plain Fock matrix once more and re-test.
+    pub conv_check: bool,
     /// The initial guess.
     pub init_guess: KInitGuess,
     /// Write the converged result to this HDF5 checkpoint.
@@ -103,6 +106,8 @@ pub struct CycleState<'a> {
     pub fock: &'a KDms,
     /// Whether this cycle met the convergence test (the driver stops after it).
     pub converged: bool,
+    /// `true` only for the extra call made after the final diagonalisation.
+    pub final_state: bool,
 }
 
 /// Per-cycle callback of [`KScfConfig::on_cycle`].
@@ -126,6 +131,7 @@ impl Default for KScfConfig {
             diis_start_cycle: 1,
             damp: 0.0,
             level_shift: 0.0,
+            conv_check: true,
             init_guess: KInitGuess::default(),
             chkfile: None,
             verbose: false,

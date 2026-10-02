@@ -46,6 +46,10 @@ pub use multigrid_pair::{
 };
 pub use pbc::ewald::{EWALD_G0_SENTINEL, ewald_gs_terms, ewald_rlij};
 pub use pbc::gv::gv;
+pub use pbc::pp_gspace::{
+    PpFtAoTables, PpGspaceTables, PpProjTables, pp_fold, pp_ftao_block, pp_gspace_project,
+    pp_proj_block,
+};
 pub use pbc::strain_ao::{
     Deriv2AoOutput, StrainAoOutput, eval_ao_deriv2, eval_strain_ao, strain_block_map, strain_comp,
     strain_nblocks, strain_scale,

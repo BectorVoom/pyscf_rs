@@ -1,0 +1,82 @@
+Baseline for upstream-parity-scf plan, recorded 2026-10-02.
+NOTE: crates/pyscf-pbc-scf/src/kscf.rs `fn level_shift` -> `pub fn level_shift` (T02 step 1, no behaviour change) was already applied when k02 ran; no test in k02 covers level_shift.
+
+$ CARGO_TARGET_DIR=target/gate CARGO_PROFILE_RELEASE_LTO=false cargo test --release -p pyscf-kernels --test pbc_gv --test pbc_band_vmat -- --nocapture
+test band_vmat_rejects_wrong_shapes ... ok
+test band_vmat_nvar_below_comp_uses_only_the_leading_components ... ok
+test band_vmat_deriv1_matches_serial_reference_bitwise ... ok
+test band_vmat_with_one_variable_reduces_to_local_vmat ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+test shape_violations_are_rejected ... ok
+test struct_factor_at_g_zero_is_one ... ok
+test struct_factor_is_unit_modulus ... ok
+test gv_kernel_distinguishes_transposed_meshes ... ok
+test gv_kernel_matches_host_reference_bitwise ... ok
+test struct_factor_kernel_matches_host_reference_bitwise ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.66s
+[kept 12 lines]
+
+$ CARGO_TARGET_DIR=target/gate CARGO_PROFILE_RELEASE_LTO=false cargo test --release -p pyscf-pbc-scf --test kscf --test kscf_resume --test grad_fc_hoist -- --nocapture
+test hoisted_gradients_are_bit_identical ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test krhf_diamond_222_matches_upstream ... ignored, T2: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF; ~4 min
+test krhf_diamond_222_matches_upstream_at_the_default_mesh ... ignored, T3: needs PYSCF_ORACLE_VENV; runs at the default mesh 47^3 (~30 min)
+test krhf_he_all_electron_matches_upstream ... ignored, T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF
+test kuhf_he_all_electron_matches_upstream ... ignored, T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF
+test gamma_helpers_agree_with_the_single_kpoint_drivers ... ok
+test chkfile_round_trips ... ok
+test krohf_reproduces_krhf_on_a_closed_shell_cell ... ok
+test init_guesses_reach_the_same_solution ... ok
+test converged_energy_is_independent_of_diis ... ok
+test kuhf_and_kghf_reproduce_krhf_on_a_closed_shell_cell ... ok
+test fermi_smearing_conserves_electrons_and_lowers_the_free_energy has been running for over 60 seconds
+test krhf_diamond_222_converges_to_a_valid_state has been running for over 60 seconds
+test supercell_equivalence_holds has been running for over 60 seconds
+test fermi_smearing_conserves_electrons_and_lowers_the_free_energy ... ok
+test krhf_diamond_222_converges_to_a_valid_state ... ok
+test supercell_equivalence_holds ... ok
+test result: ok. 9 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 82.92s
+test resumed_damped_cycles_are_bit_identical has been running for over 60 seconds
+test resumed_damped_cycles_are_bit_identical ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 184.20s
+[kept 22 lines]
+
+$ CARGO_TARGET_DIR=target/gate CARGO_PROFILE_RELEASE_LTO=false cargo test --release -p pyscf-pbc-df --test fftdf -- --nocapture
+test get_hcore_matches_upstream_on_diamond_222 ... ignored, T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF
+test get_nuc_matches_upstream_on_he ... ignored, T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF
+test get_pp_matches_upstream_on_diamond_222 ... ignored, T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF
+test jk_matches_upstream_on_diamond_222 ... ignored, T1: needs PYSCF_ORACLE_VENV + the vendored upstream PySCF
+test get_nuc_all_electron_is_hermitian_and_attractive ... ok
+test coulomb_energy_is_symmetric_in_its_two_densities ... ok
+test vj_and_vk_are_hermitian ... ok
+test explicit_band_kpts_equal_the_default_path ... ok
+test get_pp_is_hermitian_and_real_at_gamma ... ok
+test ewald_exxdiv_adds_exactly_madelung_sds ... ok
+test get_hcore_is_hermitian ... ok
+test result: ok. 7 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 7.12s
+[kept 12 lines]
+
+$ CARGO_TARGET_DIR=target/gate CARGO_PROFILE_RELEASE_LTO=false cargo test --release -p pyscf-pbc-dft --test krks_dzvp_small_cell --test numint_ao_budget -- --nocapture
+test dzvp_scf_converges_below_szv has been running for over 60 seconds
+test projected_szv_density_starts_the_dzvp_scf has been running for over 60 seconds
+test dzvp_scf_converges_below_szv ... ok
+test projected_szv_density_starts_the_dzvp_scf ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 334.53s
+test large_table_is_split_under_the_budget ... ok
+test small_table_keeps_the_memory_partition ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[kept 8 lines]
+
+$ PYSCF_ORACLE_VENV=1 CARGO_TARGET_DIR=target/gate CARGO_PROFILE_RELEASE_LTO=false PYSCF_ORACLE_VENV=1 cargo test --release -p pyscf-pbc-df --test fftdf -- --ignored --nocapture
+test get_nuc_matches_upstream_on_he ... ok
+test get_pp_matches_upstream_on_diamond_222 ... ok
+test get_hcore_matches_upstream_on_diamond_222 ... ok
+test jk_matches_upstream_on_diamond_222 ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 7.46s
+[kept 5 lines]
+
+$ PYSCF_ORACLE_VENV=1 CARGO_TARGET_DIR=target/gate CARGO_PROFILE_RELEASE_LTO=false PYSCF_ORACLE_VENV=1 cargo test --release -p pyscf-pbc-dft --test scf_ovlp_smearing_oracle -- --ignored --nocapture
+test al_smearing_sigma_0p1_free_energy_matches_upstream has been running for over 60 seconds
+test al_smearing_sigma_0p1_free_energy_matches_upstream ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 183.02s
+[kept 3 lines]

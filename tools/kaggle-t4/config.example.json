@@ -32,11 +32,14 @@
     "YTA_REQUIRE_CONVERGED": "1",
     "YTA_SMEARING": "gauss:0.03",
     "YTA_DAMP": "0.7",
-    "YTA_LEVEL_SHIFT": "0.3",
+    "YTA_LEVEL_SHIFT": "0.15",
     "YTA_DIIS_START": "8",
     "YTA_DIIS_SPACE": "16",
     "YTA_REFINE_SMEARING": "gauss:0.002",
-    "YTA_REFINE_LEVEL_SHIFT": "0.1",
+    "YTA_REFINE_LEVEL_SHIFT": "0.05",
+
+    "YTA_CONV_CHECK": "final",
+    "PYSCF_PBC_PP_NL_BUDGET_MB": "1024",
 
     "PYSCF_MAX_MEMORY": "8000",
     "PYSCF_PBC_NUMINT_AO_BUDGET_MB": "2500",
