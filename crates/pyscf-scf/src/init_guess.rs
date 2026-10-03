@@ -379,9 +379,22 @@ fn minao_basis(
         }
         let nd = (ndocc - coreshl[l]) as usize;
         if nd > nbas_l || (frac > 0.0 && nd >= nbas_l && nbas_l > 0) {
-            return Err(bad(format!(
-                "{elem}: {nd} doubly occupied l = {l} shells (+ fraction {frac}) but the basis has {nbas_l}"
-            )));
+            // The input basis has too few contractions to hold the valence
+            // configuration (Y in gth-szv-molopt-sr: 3 p shells, 1/3 of a
+            // fourth, one p contraction). Upstream fails here — an
+            // `AssertionError` or, with a fractional shell, an `IndexError`
+            // at `occ_l[ndocc] = frac` (hf.py:409-415). The port takes
+            // upstream's other branch, the ANO valence density.
+            tracing::warn!(
+                elem,
+                l,
+                nd,
+                frac,
+                nbas_l,
+                "init_guess_by_minao: the input basis cannot hold the valence configuration; \
+                 using the ANO valence density (upstream raises here)"
+            );
+            return Ok((occ, basis_ano));
         }
         if nbas_l > 0 {
             let mut occ_l = vec![0.0_f64; nbas_l];

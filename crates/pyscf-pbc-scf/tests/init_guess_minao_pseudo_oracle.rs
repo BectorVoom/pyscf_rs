@@ -112,3 +112,57 @@ fn minao_guess_matches_upstream_on_diamond() {
     println!("diamond gth-szv: minao guess max|delta| vs upstream = {w:e}");
     assert!(w < 1e-10, "diamond: minao guess deviates by {w:e}");
 }
+
+/// One yttrium atom in a box, Bohr.
+fn yttrium(basis: &str) -> Cell {
+    Cell::build(CellBuildArgs {
+        mole: MoleBuildArgs {
+            atom: AtomInput::Tuples(vec![("Y".into(), [0.0, 0.0, 0.0])]),
+            basis: BasisInput::Name(basis.into()),
+            unit: Unit::Bohr,
+            spin: 1,
+            ..Default::default()
+        },
+        a: ALattice::Matrix([[6.0, 0.0, 0.0], [0.0, 6.0, 0.0], [0.0, 0.0, 6.0]]),
+        pseudo: Some("gth-pbe".into()),
+        ..Default::default()
+    })
+    .expect("Y cell must build")
+}
+
+/// Y has a fractional 5p shell in the atomic configuration upstream uses; in
+/// gth-dzvp-molopt-sr (two p contractions) the input basis holds it and the
+/// guess must match upstream.
+#[test]
+#[ignore = "oracle: set PYSCF_ORACLE_VENV (upstream PySCF 2.12.1)"]
+fn minao_guess_matches_upstream_on_yttrium_dzvp() {
+    let cell = yttrium("gth-dzvp-molopt-sr");
+    let Some(w) = guess_dev(&cell, "gth-dzvp-molopt-sr", "gth-pbe") else {
+        eprintln!("SKIP: {GATE} is not set");
+        return;
+    };
+    println!("Y gth-dzvp-molopt-sr: minao guess max|delta| vs upstream = {w:e}");
+    assert!(w < 1e-10, "Y DZVP: minao guess deviates by {w:e}");
+}
+
+/// In gth-szv-molopt-sr (one p contraction) upstream raises an IndexError;
+/// the port uses the ANO valence density instead and must still give a
+/// usable guess.
+#[test]
+fn minao_guess_falls_back_where_upstream_raises() {
+    let cell = yttrium("gth-szv-molopt-sr");
+    let dm = default_get_init_guess(&cell.mol, &InitGuessMode::Minao).expect("minao must not fail");
+    let s = pyscf_gto::intor(&cell.mol, "int1e_ovlp_sph").expect("overlap");
+    let n = cell.mol.nao_nr;
+    let mut ne = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            ne += dm.data[i * n + j] * s.values[j + i * n];
+        }
+    }
+    // Projecting the ANO valence shells onto a minimal basis loses charge
+    // (9.13 of 11 here); the periodic driver renormalises the electron count
+    // (`khf.py:838-852`), as upstream does for its own ANO branch.
+    println!("Y gth-szv-molopt-sr fallback guess: {ne:.6} electrons (11 valence)");
+    assert!(ne > 5.0 && ne < 11.0 + 1e-8, "fallback guess holds {ne} electrons");
+}
