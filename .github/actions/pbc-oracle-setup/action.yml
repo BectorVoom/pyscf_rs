@@ -1,9 +1,10 @@
 name: PBC oracle setup
 description: >-
-  Shared setup for the pbc-oracle jobs (plan 20-03): the two sibling crates
-  setup-sibling-crates does not clone, the oracle venv at $GITHUB_WORKSPACE/.venv,
-  and the assertion that the oracle the Rust harness will import is the pinned
-  PySCF. Run after actions/checkout and ./.github/actions/setup-sibling-crates.
+  Shared setup for the pbc-oracle jobs (plan 20-03): the oracle venv at
+  $GITHUB_WORKSPACE/.venv, and the assertion that the oracle the Rust harness
+  will import is the pinned PySCF. Run after actions/checkout and
+  ./.github/actions/setup-sibling-crates (which also clones the cube-math and
+  rmath path siblings the PBC stack needs).
 
 # How the Rust harness imports PySCF (read before changing anything below)
 # -----------------------------------------------------------------------
@@ -19,11 +20,15 @@ description: >-
 #      vendored tree has no compiled libraries, so `pyscf.lib.load_library`
 #      falls back through `pyscf.__path__` to the site-packages wheel's
 #      pyscf/lib/*.so.
-#   B. unpinned: script in a temp dir, no PYTHONPATH (pbc-gto gth_pp_loc,
-#      gth_pp_nl, pbc_intor). `import pyscf` resolves to the site-packages wheel.
+#   B. unpinned: script in a temp dir, no PYTHONPATH. `import pyscf` resolves
+#      to the site-packages wheel. No Rust oracle runner relies on this
+#      anymore — pbc-gto gth_pp_loc/gth_pp_nl/pbc_intor pinned PYTHONPATH in
+#      the `20-oracle-harness-and-ci` item-(i) fix and every other runner
+#      already pinned (route A).
 #
-# Pinning the wheel to the same version makes A and B the same PySCF; the
-# assertion step checks both, from exactly those cwd/PYTHONPATH settings.
+# Pinning the wheel to the same version keeps A and B the same PySCF; the
+# assertion step checks both, from exactly those cwd/PYTHONPATH settings, so
+# the venv stays correct for any future unpinned caller too.
 #
 # NumPy is built from source WITHOUT BLAS (measured, not a preference)
 # ---------------------------------------------------------------------
@@ -58,19 +63,9 @@ runs:
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         df -h /
 
-    # `cube-math` (Cargo.toml workspace dependency, used by pyscf-kernels) and
-    # `rmath` (pyscf-pbc-gto) are path siblings that setup-sibling-crates does
-    # not clone. Without them no PBC crate resolves.
-    - name: Clone the sibling crates the PBC stack also needs (cube-math, rmath)
-      shell: bash
-      run: |
-        set -euo pipefail
-        parent="$(dirname "$GITHUB_WORKSPACE")"
-        for repo in cube-math rmath; do
-          rm -rf "${parent:?}/$repo"
-          git clone --depth 1 "https://github.com/BectorVoom/${repo}.git" "$parent/$repo"
-        done
-
+    # setup-sibling-crates now clones the cube-math/rmath path siblings too
+    # (carryover 20-oracle-harness-and-ci item m2), so there is nothing to
+    # clone here anymore — just the venv and the assertions below.
     - uses: actions/setup-python@v5
       with:
         python-version: ${{ inputs.python-version }}
@@ -125,7 +120,7 @@ runs:
         PY
         )
 
-        echo "== route B: neutral cwd, no PYTHONPATH (pbc-gto gth_pp_*/pbc_intor)"
+        echo "== route B: neutral cwd, no PYTHONPATH (venv invariant: the wheel itself is 2.12.1)"
         (cd / && env -u PYTHONPATH "$py" - <<'PY'
         import os, sys, pyscf
         want, site = os.environ["EXPECTED"], os.path.join(os.environ["GITHUB_WORKSPACE"], ".venv")

@@ -35,6 +35,32 @@
 //! path therefore compare at `1e-9`, the same band-chain floor the upstream
 //! oracle uses ([`band_energies_are_never_bitwise_identical`]).
 //!
+//! # SCF-03 — the tiled route
+//!
+//! One lane per output re-reads its two AO rows for every element: `2 + 3 ·
+//! nvar` loads per grid point per `(p, q)`. At `nao = 910` and `nvar = 4`
+//! that is 4 TB of device memory traffic for one 4 992-point block, and it —
+//! not the AO evaluation — was the SCF cycle on a Kaggle T4 (2026-10-01:
+//! 44 s per XC block, scaling with `nao²`). The tiled route is a GEMM:
+//! [`aow_kernel`] materialises `aow[k]` once (one component of one k-point
+//! of the table), and a [`band_vmat_tile_kernel`] lane owns a
+//! [`VMAT_TILE`]`×`[`VMAT_TILE`] block of outputs, so each loaded value feeds
+//! four outputs — one load per output per grid point instead of fourteen.
+//! The `nsplit` lanes of a tile read consecutive grid points of the same
+//! rows, so every load is coalesced.
+//!
+//! MEASURED 2026-10-07 on a Kaggle T4 (`grid_contract_bench`, `nao = 910`,
+//! 4 992 points, 9 k-points, `nvar = 4` — one XC block of that run): 34.9 s
+//! per-output, 2.45 s tiled; the Coulomb block (16 003 points, `nvar = 1`)
+//! 13.7 s against 7.0 s. On the 16-core CPU runtime the XC shape at 3
+//! k-points went 17.6 s to 2.0 s.
+//!
+//! Each output still adds `conj(ao⁰) · aow` over its grid points in the order
+//! of [`band_vmat_kernel`] at the same split, and `aow` is formed by the same
+//! expression — the same operations in the same order, so at one split the
+//! two routes are bitwise identical on the CPU runtime. The partials are
+//! folded launch by launch, so their size no longer caps the split.
+//!
 //! Generic over the device float (`F: Float`, AGENTS.md §3 / RULE 5).
 
 use cubecl::Runtime;
@@ -42,7 +68,7 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 use pyscf_algebra::dispatch_backend;
-use pyscf_algebra::launch::{launch_1d, upload};
+use pyscf_algebra::launch::{launch_1d, launch_1d_chunked, upload};
 use pyscf_algebra::{AlgebraClient, AlgebraError};
 
 use crate::pbc::AoKAccumulator;
@@ -171,6 +197,204 @@ fn band_vmat_reduce_kernel<F: Float>(
     }
 }
 
+/// AO rows per side of one [`band_vmat_tile_kernel`] lane's output tile.
+const VMAT_TILE: usize = 4;
+
+/// SCF-03 — `aow[kk][q, g] = Σ_{n<nvar} wv[n][g] · aoⁿ[kk, q, g]` for `kn`
+/// k-points of K-MAJOR planes (k-point `kk`'s block starts at `base + kk ·
+/// kstride`), one lane per `(kk, q, g)`; `aow_*[kk · nao · ngrids + q ·
+/// ngrids + g]`. The expression is [`band_vmat_kernel`]'s.
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+fn aow_kernel<F: Float>(
+    ao_re: &Array<F>,
+    ao_im: &Array<F>,
+    wv: &Array<F>,
+    aow_re: &mut Array<F>,
+    aow_im: &mut Array<F>,
+    nao: usize,
+    ngrids: usize,
+    nvar: usize,
+    base: usize,
+    kstride: usize,
+    kn: usize,
+    #[comptime] im_zero: bool,
+) {
+    let i = ABSOLUTE_POS;
+    let cstride = nao * ngrids;
+    if i < kn * cstride {
+        let r = i % cstride;
+        let g = r % ngrids;
+        let kb = base + (i / cstride) * kstride + r;
+        let zero = F::from_int(0);
+        let mut ar = F::from_int(0);
+        let mut ai = F::from_int(0);
+        for n in 0..nvar {
+            let w = wv[n * ngrids + g];
+            ar += w * ao_re[kb + n * cstride];
+            let mut qim = zero;
+            if comptime!(!im_zero) {
+                qim = ao_im[kb + n * cstride];
+            }
+            ai += w * qim;
+        }
+        aow_re[i] = ar;
+        aow_im[i] = ai;
+    }
+}
+
+/// SCF-03 — `v[kk][p, q] = Σ_g conj(ao⁰[kk, p, g]) · aow[kk][q, g]` for the
+/// tile rows `[row0, row0 + rows)` of `kn` k-points, one lane per
+/// `(kk, tile, s)`: lane `s` sums grid points `s, s + nsplit, ...` of its
+/// tile's sixteen outputs into `part[s · kn · kout + kk · kout + (p − row0 ·
+/// VMAT_TILE) · nao + q]`, `kout = rows · VMAT_TILE · nao`. A tile hanging
+/// over the edge reads row `nao − 1` again and stores nothing for it.
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+fn band_vmat_tile_kernel<F: Float>(
+    ao_re: &Array<F>,
+    ao_im: &Array<F>,
+    aow_re: &Array<F>,
+    aow_im: &Array<F>,
+    part_re: &mut Array<F>,
+    part_im: &mut Array<F>,
+    nao: usize,
+    ngrids: usize,
+    base: usize,
+    kstride: usize,
+    kn: usize,
+    row0: usize,
+    rows: usize,
+    nsplit: usize,
+    lane0: usize,
+    #[comptime] im_zero: bool,
+) {
+    // `lane0`: chunked on the CPU runtime — the tile is stack per iteration
+    // there (`launch_1d_chunked`).
+    let tid = ABSOLUTE_POS + lane0;
+    let ntq = (nao + VMAT_TILE - 1) / VMAT_TILE;
+    let ktiles = rows * ntq;
+    if tid < kn * ktiles * nsplit {
+        let s = tid % nsplit;
+        let t = tid / nsplit;
+        let kk = t / ktiles;
+        let tt = t % ktiles;
+        let p0 = (row0 + tt / ntq) * VMAT_TILE;
+        let q0 = (tt % ntq) * VMAT_TILE;
+        let pbase = base + kk * kstride;
+        let wbase = kk * nao * ngrids;
+        let zero = F::from_int(0);
+        let mut sr = Array::<F>::new(VMAT_TILE * VMAT_TILE);
+        let mut si = Array::<F>::new(VMAT_TILE * VMAT_TILE);
+        let mut pr = Array::<F>::new(VMAT_TILE);
+        let mut pi = Array::<F>::new(VMAT_TILE);
+        let mut ar = Array::<F>::new(VMAT_TILE);
+        let mut ai = Array::<F>::new(VMAT_TILE);
+        #[unroll]
+        for i in 0..VMAT_TILE * VMAT_TILE {
+            sr[i] = zero;
+            si[i] = zero;
+        }
+        for g in range_stepped(s, ngrids, nsplit) {
+            #[unroll]
+            for a in 0..VMAT_TILE {
+                let mut p = p0 + a;
+                if p >= nao {
+                    p = nao - 1;
+                }
+                pr[a] = ao_re[pbase + p * ngrids + g];
+                // Gamma: `+0.0` without touching the plane, as
+                // `band_vmat_kernel` reads it.
+                let mut pim = zero;
+                if comptime!(!im_zero) {
+                    pim = ao_im[pbase + p * ngrids + g];
+                }
+                pi[a] = -pim;
+                let mut q = q0 + a;
+                if q >= nao {
+                    q = nao - 1;
+                }
+                ar[a] = aow_re[wbase + q * ngrids + g];
+                ai[a] = aow_im[wbase + q * ngrids + g];
+            }
+            #[unroll]
+            for a in 0..VMAT_TILE {
+                #[unroll]
+                for b in 0..VMAT_TILE {
+                    sr[a * VMAT_TILE + b] += pr[a] * ar[b] - pi[a] * ai[b];
+                    si[a * VMAT_TILE + b] += pr[a] * ai[b] + pi[a] * ar[b];
+                }
+            }
+        }
+        let kout = rows * VMAT_TILE * nao;
+        #[unroll]
+        for a in 0..VMAT_TILE {
+            #[unroll]
+            for b in 0..VMAT_TILE {
+                let p = p0 + a;
+                let q = q0 + b;
+                if p < nao {
+                    if q < nao {
+                        let o = s * kn * kout + kk * kout + (p - row0 * VMAT_TILE) * nao + q;
+                        part_re[o] = sr[a * VMAT_TILE + b];
+                        part_im[o] = si[a * VMAT_TILE + b];
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// SCF-03 — fold the `nsplit` partials of one tiled launch, `s` ascending:
+/// the first `valid` elements of each of the `kn` k-points' `kout` go to
+/// `out[out0 + kk · npair + i]`.
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+fn band_vmat_tile_reduce_kernel<F: Float>(
+    part_re: &Array<F>,
+    part_im: &Array<F>,
+    out_re: &mut Array<F>,
+    out_im: &mut Array<F>,
+    kout: usize,
+    valid: usize,
+    kn: usize,
+    nsplit: usize,
+    out0: usize,
+    npair: usize,
+) {
+    let j = ABSOLUTE_POS;
+    if j < kn * valid {
+        let kk = j / valid;
+        let i = j % valid;
+        let src = kk * kout + i;
+        let mut sr = F::from_int(0);
+        let mut si = F::from_int(0);
+        for s in 0..nsplit {
+            sr += part_re[s * kn * kout + src];
+            si += part_im[s * kn * kout + src];
+        }
+        out_re[out0 + kk * npair + i] = sr;
+        out_im[out0 + kk * npair + i] = si;
+    }
+}
+
+/// SCF-03 — k-points `[k0, k0 + kn)` of POINT-MAJOR planes (`src[e · nkpts +
+/// k]`) into a K-MAJOR scratch (`dst[kk · n + e]`). Pure data movement.
+#[cube(launch_unchecked)]
+fn gather_k_range_kernel<F: Float>(
+    src: &Array<F>,
+    dst: &mut Array<F>,
+    nkpts: usize,
+    n: usize,
+    k0: usize,
+    kn: usize,
+) {
+    let j = ABSOLUTE_POS;
+    if j < kn * n {
+        dst[j] = src[(j % n) * nkpts + k0 + j / n];
+    }
+}
+
 /// BAND-09 — POINT-MAJOR planes (`src[e · nkpts + k]`) to K-MAJOR
 /// (`dst[k · n + e]`) in one launch, so the split contraction can cover every
 /// k-point at once instead of one 729-lane launch per k. Pure data movement.
@@ -283,8 +507,18 @@ pub(crate) fn run<R: Runtime>(
     // Lanes per launch the split is sized against: the whole output, or one
     // k-point's block when a Γ point forces per-k launches.
     let launch_outputs = if has_gamma { npair } else { total };
-    let nsplit = split_factor(client, launch_outputs, total, ngrids);
-    if nsplit > 1 {
+    let tiled = tiled_contractions(client);
+    let nsplit = if tiled {
+        1
+    } else {
+        split_factor(client, launch_outputs, total, ngrids)
+    };
+    if tiled {
+        run_tiled(
+            client, ao_re, ao_im, ao_len, stride_k, stride_e, &wv_h, nvar, comp, nkpts, nao,
+            ngrids, gamma, &out_re, &out_im,
+        );
+    } else if nsplit > 1 {
         // BAND-09: k-major planes (transposed once if point-major), every
         // output's grid sum split over `nsplit` coalesced lanes, then a
         // fixed-order fold of the partials.
@@ -447,6 +681,239 @@ pub(crate) fn run<R: Runtime>(
             )
         })
         .collect()
+}
+
+/// Device bytes one tiled launch's partial planes may take.
+const TILE_PARTIAL_BUDGET: usize = 128 << 20;
+/// Device bytes the tiled route's `aow` planes (and, for point-major planes,
+/// its gathered k-points) may take — what bounds the k-points per launch.
+const TILE_SCRATCH_BUDGET: usize = 256 << 20;
+
+/// `PYSCF_PBC_GRID_TILE_BUDGET=<bytes>` pins both tiled-route budgets
+/// ([`TILE_PARTIAL_BUDGET`], [`TILE_SCRATCH_BUDGET`]) — how many k-points and
+/// tile rows share a launch. It moves launch boundaries only, never a sum's
+/// order, so every value gives the same bits (the gates' dial).
+fn tile_budgets() -> (usize, usize) {
+    match std::env::var("PYSCF_PBC_GRID_TILE_BUDGET")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+    {
+        Some(n) => (n, n),
+        None => (TILE_PARTIAL_BUDGET, TILE_SCRATCH_BUDGET),
+    }
+}
+
+/// `PYSCF_PBC_GRID_TILED` — whether the grid contractions (this module's and
+/// [`crate::pbc::rho`]'s) take the SCF-03 tiled route. `0` pins the
+/// one-lane-per-output kernels (the reference the gates compare against),
+/// `1` forces the tiled ones; unset, the tiled route is taken on every
+/// backend.
+pub(crate) fn tiled_contractions<R: Runtime>(_client: &ComputeClient<R>) -> bool {
+    !std::env::var("PYSCF_PBC_GRID_TILED").is_ok_and(|v| v.trim() == "0")
+}
+
+/// SCF-03 — how many lanes share one tile's grid sum.
+///
+/// `PYSCF_PBC_BAND_VMAT_SPLIT=<n>` pins it, as it pins [`split_factor`].
+/// Unset: `1` on the CPU runtime, and with hardware planes the power of two
+/// that brings one launch's `tiles · split` to [`SPLIT_TARGET_LANES`],
+/// between [`SPLIT_MIN`] (a plane of consecutive grid points per tile) and
+/// [`SPLIT_MAX`]. The partials are folded per launch, so no memory cap.
+fn tile_split_factor<R: Runtime>(client: &ComputeClient<R>, tiles: usize, ngrids: usize) -> usize {
+    let cap = |s: usize| s.min(ngrids.max(1)).max(1);
+    if let Some(n) = std::env::var("PYSCF_PBC_BAND_VMAT_SPLIT")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+    {
+        return cap(n);
+    }
+    if !pyscf_algebra::launch::has_planes(client) {
+        return 1;
+    }
+    let want = (SPLIT_TARGET_LANES / tiles.max(1)).clamp(SPLIT_MIN, SPLIT_MAX);
+    cap(1usize << (usize::BITS - 1 - want.leading_zeros()))
+}
+
+/// SCF-03 — queue the tiled contraction of every k-point into `out_*`
+/// (`nkpts · nao²`, row-major per k). See the module docs.
+///
+/// As many k-points share a launch as [`TILE_SCRATCH_BUDGET`] lets `aow`
+/// hold (a run of k-points with one Γ flag — the flag is compiled in), so a
+/// small basis at many k-points still fills the device; a large one goes a
+/// few tile rows of one k-point at a time.
+#[allow(clippy::too_many_arguments)]
+fn run_tiled<R: Runtime>(
+    client: &ComputeClient<R>,
+    ao_re: &Handle,
+    ao_im: &Handle,
+    ao_len: usize,
+    stride_k: usize,
+    stride_e: usize,
+    wv: &Handle,
+    nvar: usize,
+    comp: usize,
+    nkpts: usize,
+    nao: usize,
+    ngrids: usize,
+    gamma: &[bool],
+    out_re: &Handle,
+    out_im: &Handle,
+) {
+    let f64s = core::mem::size_of::<f64>();
+    let npair = nao * nao;
+    let total = nkpts * npair;
+    let n = comp * nao * ngrids;
+    let plane = nao * ngrids;
+    let ntq = nao.div_ceil(VMAT_TILE);
+    let point_major = stride_e != 1;
+    let (partial_budget, scratch_budget) = tile_budgets();
+    // K-points per launch, by scratch memory first.
+    let per_k = if point_major { n } else { plane };
+    let mut kb = (scratch_budget / (2 * f64s * per_k)).clamp(1, nkpts);
+    let nsplit = tile_split_factor(client, kb * ntq * ntq, ngrids);
+    // ... then so that one tile row of every k-point fits a launch's lanes
+    // and its partial planes.
+    let row_out = VMAT_TILE * nao;
+    kb = kb
+        .min((LANES_PER_LAUNCH / (ntq * nsplit)).max(1))
+        .min((partial_budget / (2 * f64s * nsplit * row_out)).max(1));
+    let rows_max = (partial_budget / (2 * f64s * nsplit * kb * row_out))
+        .min(LANES_PER_LAUNCH / (kb * ntq * nsplit))
+        .clamp(1, ntq);
+    let part_len = nsplit * kb * rows_max * row_out;
+    let aow_re = client.empty(kb * plane * f64s);
+    let aow_im = client.empty(kb * plane * f64s);
+    let part_re = client.empty(part_len * f64s);
+    let part_im = client.empty(part_len * f64s);
+    // Point-major planes: the launch's k-points gathered into a contiguous
+    // scratch (the stride, not the kernel, is the cost — see `local_vmat`'s
+    // module docs).
+    let scratch = point_major.then(|| (client.empty(kb * n * f64s), client.empty(kb * n * f64s)));
+    let local_bytes = (2 * VMAT_TILE * VMAT_TILE + 4 * VMAT_TILE) * f64s;
+    let mut k0 = 0usize;
+    while k0 < nkpts {
+        let im_zero = gamma[k0];
+        let mut kn = 1usize;
+        while kn < kb && k0 + kn < nkpts && gamma[k0 + kn] == im_zero {
+            kn += 1;
+        }
+        let (src_re, src_im, src_len, base, kstride) = match &scratch {
+            None => (ao_re, ao_im, ao_len, k0 * stride_k, stride_k),
+            Some((sre, sim)) => {
+                let (count, dim) = launch_1d(client, kn * n, 1);
+                let planes = [(ao_re, sre, true), (ao_im, sim, !im_zero)];
+                for (src, dst, wanted) in planes {
+                    if wanted {
+                        unsafe {
+                            gather_k_range_kernel::launch_unchecked::<f64, R>(
+                                client,
+                                count.clone(),
+                                dim,
+                                // SAFETY: `src` holds `ao_len = nkpts · n`
+                                // point-major values and `k0 + kn <= nkpts`;
+                                // `dst` holds `kb · n >= kn · n`.
+                                ArrayArg::from_raw_parts(src.clone(), ao_len),
+                                ArrayArg::from_raw_parts(dst.clone(), kb * n),
+                                nkpts,
+                                n,
+                                k0,
+                                kn,
+                            );
+                        }
+                    }
+                }
+                (sre, sim, kb * n, 0, n)
+            }
+        };
+        let (count, dim) = launch_1d(client, kn * plane, 4 * nvar);
+        unsafe {
+            aow_kernel::launch_unchecked::<f64, R>(
+                client,
+                count,
+                dim,
+                // SAFETY: the planes hold `src_len >= base + (kn − 1) ·
+                // kstride + comp · nao · ngrids` values with `nvar <= comp`,
+                // `wv` `nvar · ngrids`, `aow` `kb · nao · ngrids`; the kernel
+                // guards `i < kn · nao · ngrids`.
+                ArrayArg::from_raw_parts(src_re.clone(), src_len),
+                ArrayArg::from_raw_parts(src_im.clone(), src_len),
+                ArrayArg::from_raw_parts(wv.clone(), nvar * ngrids),
+                ArrayArg::from_raw_parts(aow_re.clone(), kb * plane),
+                ArrayArg::from_raw_parts(aow_im.clone(), kb * plane),
+                nao,
+                ngrids,
+                nvar,
+                base,
+                kstride,
+                kn,
+                im_zero,
+            );
+        }
+        let mut row0 = 0usize;
+        while row0 < ntq {
+            let rows = (ntq - row0).min(rows_max);
+            let lanes = kn * rows * ntq * nsplit;
+            let per_lane = 8 * VMAT_TILE * VMAT_TILE * ngrids.div_ceil(nsplit);
+            for chunk in launch_1d_chunked(client, lanes, per_lane, local_bytes) {
+                unsafe {
+                    band_vmat_tile_kernel::launch_unchecked::<f64, R>(
+                        client,
+                        CubeCount::Static(chunk.count_x, 1, 1),
+                        chunk.dim,
+                        // SAFETY: the AO planes hold every `(kk, p, g)` of
+                        // the launch's k-points, `aow` `kb · nao · ngrids`,
+                        // the partials `part_len >= nsplit · kn · rows ·
+                        // VMAT_TILE · nao`; the kernel guards the lane and
+                        // clamps every row to `nao − 1`.
+                        ArrayArg::from_raw_parts(src_re.clone(), src_len),
+                        ArrayArg::from_raw_parts(src_im.clone(), src_len),
+                        ArrayArg::from_raw_parts(aow_re.clone(), kb * plane),
+                        ArrayArg::from_raw_parts(aow_im.clone(), kb * plane),
+                        ArrayArg::from_raw_parts(part_re.clone(), part_len),
+                        ArrayArg::from_raw_parts(part_im.clone(), part_len),
+                        nao,
+                        ngrids,
+                        base,
+                        kstride,
+                        kn,
+                        row0,
+                        rows,
+                        nsplit,
+                        chunk.lane0,
+                        im_zero,
+                    );
+                }
+            }
+            // This launch's rows `[row0 · T, min((row0 + rows) · T, nao))`.
+            let p_first = row0 * VMAT_TILE;
+            let valid = (((row0 + rows) * VMAT_TILE).min(nao) - p_first) * nao;
+            let (count, dim) = launch_1d(client, kn * valid, nsplit);
+            unsafe {
+                band_vmat_tile_reduce_kernel::launch_unchecked::<f64, R>(
+                    client,
+                    count,
+                    dim,
+                    // SAFETY: partials hold `part_len >= nsplit · kn · rows ·
+                    // VMAT_TILE · nao`, outputs `total`, and `(k0 + kn − 1) ·
+                    // npair + p_first · nao + valid <= total`.
+                    ArrayArg::from_raw_parts(part_re.clone(), part_len),
+                    ArrayArg::from_raw_parts(part_im.clone(), part_len),
+                    ArrayArg::from_raw_parts(out_re.clone(), total),
+                    ArrayArg::from_raw_parts(out_im.clone(), total),
+                    rows * row_out,
+                    valid,
+                    kn,
+                    nsplit,
+                    k0 * npair + p_first * nao,
+                    npair,
+                );
+            }
+            row0 += rows;
+        }
+        k0 += kn;
+    }
 }
 
 /// Target concurrent lanes per contraction launch on a GPU (BAND-09).

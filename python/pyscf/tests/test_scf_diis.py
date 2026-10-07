@@ -8,20 +8,31 @@ upstream PySCF default; the iteration count is expected to agree within
 """
 from pyscf import scf
 
+#: Upstream RHF cycle count, out of process (vendored oracle — see conftest.py).
+ORACLE_RHF_CYCLES = """
+import json
+import sys
 
-def test_scf_cdiis_iteration_count_within_one(h2o_mol, upstream):
+from pyscf import gto, scf
+
+request = json.load(sys.stdin)
+mol = gto.M(atom=request["atom"], basis=request["basis"], verbose=0)
+mf = scf.RHF(mol).run()
+payload = {"converged": bool(mf.converged), "cycles": int(mf.cycles)}
+print("__PYSCF_RS_ORACLE__" + json.dumps(payload))
+"""
+
+
+def test_scf_cdiis_iteration_count_within_one(h2o_mol, run_upstream):
     mf_rs = scf.RHF(h2o_mol).run()
     assert mf_rs.converged, "pyscf-rs RHF did not converge"
 
-    mol_up = upstream.gto.M(atom=h2o_mol.atom, basis="cc-pvdz")
-    mf_up = upstream.scf.RHF(mol_up).run()
-    assert mf_up.converged
+    up = run_upstream(ORACLE_RHF_CYCLES, {"atom": h2o_mol.atom, "basis": "cc-pvdz"})
+    assert up["converged"]
 
     # Both pyscf-rs and upstream report a non-negative integer cycle count.
     rs_cycles = int(mf_rs.cycles)
-    # Upstream's attribute is `.cycles` (returned from `mf.kernel(...)` and
-    # cached on the SCF instance).
-    up_cycles = int(mf_up.cycles)
+    up_cycles = int(up["cycles"])
     diff = abs(rs_cycles - up_cycles)
     assert diff <= 1, (
         f"C-DIIS iteration count drift: pyscf-rs converged in {rs_cycles}, "

@@ -28,7 +28,23 @@ pub fn pyscf_to_py(err: PyscfRsError) -> PyErr {
     let kind = error_kind(&err);
     let msg = format!("{}", err);
     let source_chain = collect_source_chain(&err);
-    PyscfRsRuntimeError::new_err((msg, kind, source_chain))
+    // Raise the OVERLAY subclass `pyscf.PyscfRsError` — which grafts `.kind`
+    // and `.source_chain` onto these same positional args — so user code can
+    // `except PyscfRsError` / `pytest.raises(PyscfRsError)` (BIND-09;
+    // carryover 20-molecular-python-suite-drift item 4). The bare native
+    // class is the fallback for contexts where the overlay is not importable
+    // (interpreter teardown, embedded callers). Cold path only; the
+    // `Python::attach` re-acquires the GIL when called under `py.detach`.
+    Python::attach(|py| {
+        let overlay = py
+            .import("pyscf")
+            .and_then(|m| m.getattr("PyscfRsError"))
+            .and_then(|cls| cls.call1((msg.clone(), kind, source_chain.clone())));
+        match overlay {
+            Ok(v) => PyErr::from_value(v),
+            Err(_) => PyscfRsRuntimeError::new_err((msg, kind, source_chain)),
+        }
+    })
 }
 
 /// Convert a Python error raised inside a subclass-override callback back

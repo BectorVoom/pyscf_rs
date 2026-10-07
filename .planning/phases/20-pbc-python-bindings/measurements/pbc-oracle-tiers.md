@@ -161,6 +161,16 @@ is `cell.mesh`. Some last-digit shifts come from the **upstream** side (e.g. LDA
 noise, consistent with `measurements/README.md` §3. The KRKS Si PBE floor
 (`README.md` §1 row 3, 6.45e-12) is **re-confirmed at 6.453e-12**.
 
+**Superseded 2026-09-14 by 20-19 D** (`20-19-D-SUMMARY.md` §T1 gate re-run, SCF
+`get_ovlp` at upstream's `precision*1e-5`): every P4 number in the table above
+still stands as the outcome of that run, but as *floor readings* rows 136–151
+are superseded — KRHF Si gth 4.158e-12 → **2.931e-14**, KRKS Si PBE 6.453e-12 →
+**4.086e-14**, LDA 6.507e-12 → 3.730e-14, KUKS PBE 6.448e-12 → 4.086e-14, He AE
+PBE 8.482e-14 → 6.217e-14, KUHF Li γ 1.493e-11 → 3.490e-12. No tolerance was
+changed (the "~4e-12 inherited from `get_pp`" explanation is refuted; most of
+it was overlap precision). `measurements/README.md` §1 carries the struck-through
+old values; rows 84–99 below are left verbatim as the P4 run record.
+
 ## §5 — Failures for follow-up
 
 ### §5a — real oracle regressions (route owner: `pyscf-pbc-df` GDF `df_ao2mo`)

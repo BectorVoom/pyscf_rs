@@ -17,8 +17,8 @@
 
 use cubecl::prelude::*;
 use cubecl::server::Handle;
-use pyscf_algebra::launch::launch_1d;
-use pyscf_algebra::{AlgebraClient, dispatch_backend};
+use pyscf_algebra::launch::{launch_1d, upload};
+use pyscf_algebra::{AlgebraClient, AlgebraError, dispatch_backend};
 
 use crate::pbc::AoKAccumulator;
 
@@ -104,6 +104,43 @@ impl DeviceAoTable {
             nao,
             ngrids,
         }
+    }
+
+    /// A table uploaded from HOST k-major planes (`[k · n + e]`, `n = ncomp ·
+    /// nao · ngrids`) as given — the caller has already zeroed whatever Γ
+    /// imaginary planes it wants zero. For the kernel gates and benches; the
+    /// SCF builds its tables with [`DeviceAoTable::from_accumulator`].
+    ///
+    /// # Errors
+    /// [`AlgebraError::ShapeMismatch`] when a plane is not `nkpts · ncomp ·
+    /// nao · ngrids` long.
+    pub fn from_host_planes(
+        client: &AlgebraClient,
+        re: &[f64],
+        im: &[f64],
+        nkpts: usize,
+        ncomp: usize,
+        nao: usize,
+        ngrids: usize,
+    ) -> Result<Self, AlgebraError> {
+        let want = nkpts * ncomp * nao * ngrids;
+        if re.len() != want || im.len() != want {
+            return Err(AlgebraError::ShapeMismatch {
+                expected: format!("both AO planes of length nkpts·ncomp·nao·ngrids = {want}"),
+                actual: format!("re {} im {}", re.len(), im.len()),
+            });
+        }
+        let (re, im) = dispatch_backend!(client, c, Rt, {
+            (upload::<Rt, f64>(c, re), upload::<Rt, f64>(c, im))
+        });
+        Ok(Self {
+            re,
+            im,
+            nkpts,
+            ncomp,
+            nao,
+            ngrids,
+        })
     }
 
     /// An all-zero table (every image screened out): the contraction of an

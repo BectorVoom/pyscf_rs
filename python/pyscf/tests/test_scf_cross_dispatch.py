@@ -1,11 +1,11 @@
 """Phase 3 SCF-11 cross-module dispatch.
 
 Covers: SCF-11 — `to_uhf` / `to_rhf` / `to_ghf` work; `to_uks` / `to_rks`
-raise `PyscfRsError` (KS targets stubbed for Phase 4).
+are wired to the real KS targets (carryover 20-molecular-python-suite-drift
+item 2: wired in `fbe1e35`, 2026-05-22 — the Phase-3 stub refusal this file
+asserted is long gone).
 """
-import pytest
-
-from pyscf import PyscfRsError, scf
+from pyscf import scf
 
 
 def test_rhf_to_uhf(h2o_mol):
@@ -25,38 +25,25 @@ def test_rhf_to_ghf(h2o_mol):
     assert type(ghf).__name__ == "GHF", f"expected GHF, got {type(ghf).__name__}"
 
 
-def test_rhf_to_uks_raises_phase4_stub(h2o_mol):
-    """`to_uks()` raises PyscfRsError citing Phase 4 (KS stubs deferred)."""
+def test_rhf_to_uks_is_wired(h2o_mol):
+    """`to_uks(xc)` returns a working UKS instance (wired, not a stub)."""
     mf = scf.RHF(h2o_mol)
-    with pytest.raises(PyscfRsError) as exc_info:
-        mf.to_uks()
-    # The error message must reference NotYetImplemented or Phase 4.
-    msg = str(exc_info.value).lower()
-    assert ("notyetimplemented" in msg
-            or "phase" in msg
-            or "phase 4" in msg
-            or "uks" in msg), (
-        f"to_uks must raise PyscfRsError citing Phase 4 KS stub; got: {exc_info.value}"
-    )
+    uks = mf.to_uks(xc="lda,vwn")
+    assert uks is not None
+    assert type(uks).__name__ == "UKS", f"expected UKS, got {type(uks).__name__}"
 
 
-def test_rhf_to_rks_raises_phase4_stub(h2o_mol):
-    """`to_rks()` raises PyscfRsError citing Phase 4."""
+def test_rhf_to_rks_is_wired(h2o_mol):
+    """`to_rks(xc)` returns a working RKS instance (wired, not a stub)."""
     mf = scf.RHF(h2o_mol)
-    with pytest.raises(PyscfRsError) as exc_info:
-        mf.to_rks()
-    msg = str(exc_info.value).lower()
-    assert ("notyetimplemented" in msg
-            or "phase" in msg
-            or "phase 4" in msg
-            or "rks" in msg), (
-        f"to_rks must raise PyscfRsError citing Phase 4 KS stub; got: {exc_info.value}"
-    )
+    rks = mf.to_rks(xc="lda,vwn")
+    assert rks is not None
+    assert type(rks).__name__ == "RKS", f"expected RKS, got {type(rks).__name__}"
 
 
 def test_scf_cross_dispatch_to_methods_and_ks_stubs(h2o_mol):
     """Aggregator name kept for grep continuity (plan 03-02 stub name)."""
     test_rhf_to_uhf(h2o_mol)
     test_rhf_to_ghf(h2o_mol)
-    test_rhf_to_uks_raises_phase4_stub(h2o_mol)
-    test_rhf_to_rks_raises_phase4_stub(h2o_mol)
+    test_rhf_to_uks_is_wired(h2o_mol)
+    test_rhf_to_rks_is_wired(h2o_mol)

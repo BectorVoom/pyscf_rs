@@ -121,6 +121,16 @@ port uses Phase 10's exact real-space lattice sum, and the two agree to ~1e-13
 per matrix element rather than exactly. Phase 11 gated its own pseudopotential
 system at 1e-11 for this reason; Phase 12 does the same.
 
+> **Addendum 2026-09-14 (Phase 20, item 20-19 D).** The §1a table and the §1c
+> explanation above are the record of the 12-VERIFICATION run and are left
+> verbatim. They are SUPERSEDED as floor readings: with the SCF overlap at
+> upstream's `precision*1e-5` (`pbc/scf/hf.py:47-55`), KRKS Si PBE fell
+> 6.45e-12 → **4.086e-14** and the KRHF no-XC control 4.16e-12 → **2.931e-14**
+> (`20-19-D-SUMMARY.md` §T1). Most of the ~4e-12 was overlap precision, not the
+> `get_pp` planewave-vs-real-space difference — though the per-element
+> `get_pp` agreement stays as measured in §1b. No tolerance changed;
+> `measurements/README.md` §1 rows 3/3a carry the struck-through values.
+
 **The all-electron control is where the tight claim lives.** He-fcc/`sto-3g` has
 no pseudopotential, so `get_nuc` carries no planewave-sum component — and the
 identical `KRKS` code path lands at **9.81e-14**. Every piece of Phase-12

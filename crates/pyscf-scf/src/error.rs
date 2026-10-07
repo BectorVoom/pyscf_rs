@@ -21,10 +21,17 @@ pub enum ScfError {
 
 impl From<ScfError> for pyscf_core::PyscfRsError {
     fn from(e: ScfError) -> Self {
-        // Bridge ScfError → core::PyscfRsError via the Core(InvalidMolecule(...))
-        // arm, which carries an arbitrary String. This avoids touching
-        // pyscf-core::error.rs in plan 03-03 — adding a dedicated
-        // PyscfRsError::Scf variant is plan-03-11 / plan-03-07 territory.
+        // Non-convergence keeps its typed variant so the Python boundary can
+        // report kind `ConvergenceFailure` (BIND-09; carryover
+        // 20-molecular-python-suite-drift item 4). Everything else still
+        // bridges via Core(InvalidMolecule(..)), which carries an arbitrary
+        // String — adding a dedicated PyscfRsError::Scf variant remains
+        // deferred as in plan 03-03.
+        if let ScfError::ConvergenceFailure { cycles, .. } = &e {
+            let iterations = *cycles;
+            let reason = e.to_string();
+            return pyscf_core::PyscfRsError::ConvergenceFailure { iterations, reason };
+        }
         pyscf_core::PyscfRsError::Core(pyscf_core::CoreError::InvalidMolecule(format!("{}", e)))
     }
 }

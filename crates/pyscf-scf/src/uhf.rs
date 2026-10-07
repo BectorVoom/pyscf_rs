@@ -119,7 +119,9 @@ impl UHF {
         Ok(result)
     }
 
-    fn to_kernel_config(&self) -> KernelConfig {
+    /// Kernel config for the Python boundary (`PyUHF::kernel` drives the
+    /// generic kernel itself; `pub` like `RHF::to_kernel_config`).
+    pub fn to_kernel_config(&self) -> KernelConfig {
         KernelConfig {
             conv_tol: self.conv_tol,
             conv_tol_grad: self.conv_tol_grad,

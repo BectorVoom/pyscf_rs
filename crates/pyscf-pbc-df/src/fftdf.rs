@@ -327,6 +327,26 @@ impl Fftdf {
         })
     }
 
+    /// [`Fftdf::ao_kpts_block`] left on the device (SCF-03): the blocked
+    /// device route contracts it in place, so neither the block nor its
+    /// per-k planes cross to the host and back.
+    ///
+    /// # Errors
+    /// Propagates [`pyscf_pbc_gto::eval_ao_kpts_device`].
+    pub fn ao_kpts_block_device(
+        &self,
+        kpts: &[[f64; 3]],
+        p0: usize,
+        p1: usize,
+    ) -> Result<pyscf_kernels::pbc::DeviceAoTable, PbcDfError> {
+        Ok(pyscf_pbc_gto::eval_ao_kpts_device(
+            &self.cell,
+            "GTOval_sph",
+            &self.grids.coords[p0..p1],
+            kpts,
+        )?)
+    }
+
     /// Whether the table at `kpts` is in the AO cache (no evaluation).
     pub fn ao_is_cached(&self, kpts: &[[f64; 3]]) -> bool {
         self.ao_cached(kpts).is_some()

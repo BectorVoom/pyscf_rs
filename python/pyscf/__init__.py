@@ -26,8 +26,9 @@ from pyscf._native import PyscfRsRuntimeError as _PyscfRsBase  # type: ignore[at
 class PyscfRsError(_PyscfRsBase):  # type: ignore[misc, valid-type]
     """Phase 3 BIND-09 panic→exception with .kind and .source_chain attrs.
 
-    The Rust side raises the bare PyException subclass `PyscfRsRuntimeError`
-    with positional args `(msg, kind, source_chain)`; this overlay grafts
+    The Rust side raises this overlay subclass directly (falling back to the
+    bare `PyscfRsRuntimeError` only where the overlay is not importable)
+    with positional args `(msg, kind, source_chain)`; this class grafts
     them onto Python `.kind: str` and `.source_chain: list[str]` properties.
 
     Attributes:

@@ -114,7 +114,10 @@ impl GHF {
         Ok(result)
     }
 
-    fn to_kernel_config(&self) -> KernelConfig {
+    /// Kernel config for the Python boundary (`PyGHF::kernel` drives the
+    /// generic kernel itself so it can mirror state without borrowing
+    /// `self`; `pub` like `RHF::to_kernel_config` — UHF/GHF parity).
+    pub fn to_kernel_config(&self) -> KernelConfig {
         KernelConfig {
             conv_tol: self.conv_tol,
             conv_tol_grad: self.conv_tol_grad,

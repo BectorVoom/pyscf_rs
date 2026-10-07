@@ -96,16 +96,25 @@ means Rust code exists and is gated in Rust, but a Python user of
 Measured 2026-09-14 over all 195 modules of the vendored `pyscf/pbc` tree
 (`.planning/phases/20-pbc-python-bindings/measurements/overlay-passthrough.md`):
 
-* **41 / 195 import** under the overlay: 18 are overlay packages/shims/stubs,
-  **23 are upstream modules**. **154 of the 177 modules the overlay does not
-  shadow fail to import** — identically whether the fallthrough target is
-  site-packages 2.14.0 or the vendored 2.12.1 tree.
-* The failures are caused by the **molecular** overlay packages
-  (`python/pyscf/{gto,scf,dft,cc,mp,grad}/__init__.py`), which shadow upstream's
-  without `extend_path` and without the names upstream imports:
-  `pyscf.gto.basis` (39), `pyscf.gto.moleintor` (35), `pyscf.grad.rhf` (15),
-  `pyscf.mp.mp2` (9), `pyscf.gto.mole` (9), `ATOM_OF` (6), `pyscf.cc.rccsd` (5),
-  `mpi4py` (5, a genuine missing dependency), …
+* **41 / 195 import** under the overlay at 20-17 (18 overlay packages/shims/stubs,
+  **23 upstream**); **73 / 195 after 20-19 A** (`measurements/upstream-pbc-suite-after-20-19.md`:
+  the molecular `_passthrough.py` fallthrough resolved every missing-name import error,
+  suite collection errors 746 → **684**). **122 of the 177 modules the overlay does not
+  shadow fail to import** (195 − 73) — identically whether the fallthrough target is
+  site-packages 2.14.0 or the vendored 2.12.1 tree: 70 on M1, 43 on M2, 5 on the
+  genuine missing `mpi4py` dependency, 1 each on `geometric`/`spglib`/ASE/`libwannier90`.
+* The 122 failures are NOT missing names anymore. Every one of the **684**
+  suite collection errors is one of two subclass mismatches the identity
+  contract creates on purpose (`20-19-AC-SUMMARY.md` M1/M2, `20-VERIFICATION.md` §3.3):
+  **M1, 240 tests** — upstream `pyscf/scf/rohf.py:349` does `class ROHF(hf.RHF)`
+  and 39 upstream files read `hf.RHF`, but the overlay's `hf.RHF` is the native,
+  non-subclassable class (70 / 195 modules); **M2, 444 tests** — upstream
+  `pbc/df/ft_ao.py:565` does `class ExtendedMole(gto.Mole)`, but the overlay's
+  `gto.Mole` is native and not subclassable (43 modules). 240 + 444 = **684**;
+  **0** missing-name import errors remain. (At 20-17 the causes were missing
+  molecular names: `pyscf.gto.basis` (39), `pyscf.gto.moleintor` (35),
+  `pyscf.grad.rhf` (15), `pyscf.mp.mp2` (9), `pyscf.gto.mole` (9), `ATOM_OF` (6),
+  `pyscf.cc.rccsd` (5), `mpi4py` (5) — all resolved by 20-19 A except `mpi4py`.)
 * Every one of the ten "upstream" families fails at `import pyscf.pbc.<family>`
   except `x2c`, `eph` and `mpitools`, whose `__init__` imports but whose
   submodules do not. **In practice an unported family is unavailable, not

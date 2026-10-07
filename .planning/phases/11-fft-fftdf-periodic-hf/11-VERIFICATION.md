@@ -141,6 +141,16 @@ Reproducing upstream bit-for-bit here would mean implementing `ft_ao` and
 summing the same planewaves in the same order. That is Phase 13's plan 13-01
 and is recorded in §3.
 
+> **Addendum 2026-09-14 (Phase 20, item 20-19 D).** The table and analysis above
+> are the record of the 11-VERIFICATION run and are left verbatim. They are
+> SUPERSEDED as floor readings for the Si `gth` analogue: with the SCF overlap
+> at upstream's `precision*1e-5`, `dft gate::krhf_si_222_is_the_pseudopotential_floor`
+> fell 4.158e-12 → **2.931e-14** (`20-19-D-SUMMARY.md` §T1), so the diamond
+> 4.00e-12 row here is expected to fall on re-measurement too (not re-measured;
+> `measurements/README.md` §1 row 2). The mesh-tracking experiment (§1b table)
+> stands — it still isolates `get_pp`'s contribution — but the "~4e-12
+> inherited from `get_pp`" headline reading is refuted. No tolerance changed.
+
 ---
 
 ## 2. Per-plan results

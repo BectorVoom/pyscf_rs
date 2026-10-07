@@ -204,6 +204,12 @@ pub fn get_j_kpts(
 /// `Σ_g conj(ao) vR ao` block by block (a different summation order over
 /// `g` than the one-table route — last bits only). Peak memory is one
 /// block's table instead of the whole grid's.
+///
+/// SCF-03: on the device route each block's table stays on the device
+/// ([`Fftdf::ao_kpts_block_device`]) and both contractions read it in place.
+/// It used to be read back, split per k on the host and uploaded again per
+/// k — 2 GB each way per block on a Kaggle T4. The kernels and their
+/// operands are the same, so the numbers are too.
 fn get_j_kpts_blocked(
     df: &Fftdf,
     dms: &[KMats],
@@ -226,30 +232,29 @@ fn get_j_kpts_blocked(
     let mut rhos: Vec<CTensor> = (0..nset).map(|_| CTensor::zeros(ngrids)).collect();
     for &(p0, p1) in blocks {
         let n = p1 - p0;
-        let ao = tracing::info_span!("fftjk_block_ao", p0, n).in_scope(|| df.ao_kpts_block(kpts, p0, p1))?;
+        let span = tracing::info_span!("fftjk_block_ao", p0, n);
+        if let Some(client) = device.as_ref() {
+            let table = span.in_scope(|| df.ao_kpts_block_device(kpts, p0, p1))?;
+            for (rho, dmset) in rhos.iter_mut().zip(dms.iter().take(nset)) {
+                let mut part = CTensor::zeros(n);
+                for (k, dm) in dmset.iter().enumerate().take(nkpts) {
+                    let (re, im) = pyscf_kernels::pbc::rho_k_table(client, &table, k, &dm.re, &dm.im)
+                        .map_err(|e| device_err("get_j_kpts rho", e))?;
+                    for g in 0..n {
+                        part.re[g] += re[g];
+                        part.im[g] += im[g];
+                    }
+                }
+                rho.re[p0..p1].copy_from_slice(&part.re);
+                rho.im[p0..p1].copy_from_slice(&part.im);
+            }
+            continue;
+        }
+        let ao = span.in_scope(|| df.ao_kpts_block(kpts, p0, p1))?;
         for (rho, dmset) in rhos.iter_mut().zip(dms.iter().take(nset)) {
             let mut part = CTensor::zeros(n);
             for k in 0..nkpts {
-                match device.as_ref() {
-                    Some(client) => {
-                        let (re, im) = pyscf_kernels::pbc::rho_k(
-                            client,
-                            &ao.at(k).re,
-                            &ao.at(k).im,
-                            &dmset[k].re,
-                            &dmset[k].im,
-                            1,
-                            nao,
-                            n,
-                        )
-                        .map_err(|e| device_err("get_j_kpts rho", e))?;
-                        for g in 0..n {
-                            part.re[g] += re[g];
-                            part.im[g] += im[g];
-                        }
-                    }
-                    None => accumulate_rho(&mut part, ao.at(k), &dmset[k], nao, n),
-                }
+                accumulate_rho(&mut part, ao.at(k), &dmset[k], nao, n);
             }
             rho.re[p0..p1].copy_from_slice(&part.re);
             rho.im[p0..p1].copy_from_slice(&part.im);
@@ -286,33 +291,31 @@ fn get_j_kpts_blocked(
         .collect();
     for &(p0, p1) in blocks {
         let n = p1 - p0;
-        let ao = tracing::info_span!("fftjk_block_ao", p0, n).in_scope(|| df.ao_kpts_block(band, p0, p1))?;
+        let span = tracing::info_span!("fftjk_block_ao", p0, n);
+        if let Some(client) = device.as_ref() {
+            let table = span.in_scope(|| df.ao_kpts_block_device(band, p0, p1))?;
+            for (v, per_k) in vr.iter().zip(out.iter_mut()) {
+                // `vR` is real here (`real_rho`): BAND-08's contraction with
+                // one weight, every band k-point of the block at once.
+                let planes = pyscf_kernels::pbc::band_vmat_table(client, &table, &v.re[p0..p1], 1)
+                    .map_err(|e| device_err("get_j_kpts vj", e))?;
+                for (acc, (re, im)) in per_k.iter_mut().zip(&planes) {
+                    for t in 0..acc.re.len() {
+                        acc.re[t] += re[t];
+                        acc.im[t] += im[t];
+                    }
+                }
+            }
+            continue;
+        }
+        let ao = span.in_scope(|| df.ao_kpts_block(band, p0, p1))?;
         for (v, per_k) in vr.iter().zip(out.iter_mut()) {
             let vb = CTensor {
                 re: v.re[p0..p1].to_vec(),
                 im: v.im[p0..p1].to_vec(),
             };
             for (k, acc) in per_k.iter_mut().enumerate() {
-                let a = ao.at(k);
-                let m = match device.as_ref() {
-                    Some(client) => {
-                        let planes = pyscf_kernels::pbc::band_vmat(
-                            client,
-                            &pyscf_kernels::pbc::AoPlanes { re: &a.re, im: &a.im },
-                            &vb.re,
-                            1,
-                            1,
-                            1,
-                            nao,
-                            n,
-                            &[false],
-                        )
-                        .map_err(|e| device_err("get_j_kpts vj", e))?;
-                        let (re, im) = planes.into_iter().next().unwrap_or_default();
-                        CTensor::from_planes(re, im)
-                    }
-                    None => contract_ao_v_ao(a, &vb, nao, n),
-                };
+                let m = contract_ao_v_ao(ao.at(k), &vb, nao, n);
                 for t in 0..acc.re.len() {
                     acc.re[t] += m.re[t];
                     acc.im[t] += m.im[t];

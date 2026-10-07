@@ -16,8 +16,8 @@ This is the Python-overlay twin of the kernel-level regressions in
 ``crates/pyscf-scf/tests/int2e_general_contraction.rs`` (He/H2) and
 ``crates/pyscf-scf/tests/d_shell_rys.rs`` (H2O d-shell).
 
-Per RESEARCH §Validation Architecture: pyscf-rs runs alongside upstream PySCF
-(loaded via a separate interpreter / importlib — see conftest.py).
+Upstream runs out of process against the vendored 2.12.1 tree
+(`upstream_rhf_energy` fixture — see conftest.py).
 """
 import pytest
 

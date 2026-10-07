@@ -41,3 +41,9 @@ runs:
         clone_sibling cintx
         clone_sibling xcfun_rs
         clone_libxc_rs
+        # Carryover 20-oracle-harness-and-ci item m2: cube-math (workspace
+        # path dependency of pyscf-kernels) and rmath (pyscf-pbc-gto) were
+        # missing here, so every non-PBC Rust job lacked them since 2026-08-27.
+        # pbc-oracle-setup used to clone them itself; it no longer does.
+        clone_sibling cube-math
+        clone_sibling rmath

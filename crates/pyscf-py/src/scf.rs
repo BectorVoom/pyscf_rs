@@ -779,6 +779,65 @@ impl PyUHF {
         self.inner.init_guess.clone()
     }
 
+    /// Drive UHF SCF — Python: `mf.kernel()`. Always the `NoOverrides` path
+    /// (PyUHF exposes no hook defaults). State mirror follows `UHF::kernel`
+    /// itself: scalar state only — the alpha/beta MO packing is deferred in
+    /// the driver, so `mo_coeff` stays unset here too. The GIL is released
+    /// for the full compute (BIND-05).
+    ///
+    /// Same surface gap as `PyGHF::kernel` (carryover
+    /// 20-molecular-python-suite-drift item 3): without this,
+    /// `test_scf_uhf.py` fails at `.run()` with `AttributeError`.
+    fn kernel<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<f64> {
+        let (cfg, mol) = {
+            let me = slf.borrow();
+            (me.inner.to_kernel_config(), me.inner.mol.clone())
+        };
+        let result = py
+            .detach(|| scf_kernel(&mol, &NoOverrides, cfg))
+            .map_err(pyscf_to_py)?;
+        let e_tot = result.e_tot.0;
+
+        // SCF-10 auto-write chkfile on convergence (same contract as
+        // PyRHF::kernel).
+        let chkfile_path: Option<std::path::PathBuf> = {
+            let me = slf.borrow();
+            if result.converged {
+                me.inner.chkfile.clone()
+            } else {
+                None
+            }
+        };
+        if let Some(path) = chkfile_path {
+            let mol_json: String = {
+                let me = slf.borrow();
+                let bound = me.py_mol.bind(py);
+                if bound.hasattr("dumps")? {
+                    bound.call_method0("dumps")?.extract::<String>()?
+                } else {
+                    pyscf_gto::dumps(&me.inner.mol).map_err(pyscf_to_py)?
+                }
+            };
+            pyscf_scf::dump_scf_to_file(&path, &mol_json, &result).map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("chkfile dump failed: {e}"))
+            })?;
+        }
+
+        {
+            let mut me = slf.borrow_mut();
+            me.inner.e_tot = e_tot;
+            me.inner.converged = result.converged;
+            me.inner.cycles = result.cycles;
+        }
+        Ok(e_tot)
+    }
+
+    /// `mf.run()` — alias for kernel, returns self for chaining (BIND-02).
+    fn run<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, Self>> {
+        let _ = PyUHF::kernel(slf.clone(), py)?;
+        Ok(slf)
+    }
+
     fn to_rhf(slf: PyRef<'_, Self>) -> PyResult<Py<PyRHF>> {
         let rhf_inner = pyscf_scf::to_rhf(&slf.inner).map_err(pyscf_to_py)?;
         let py = slf.py();
@@ -842,6 +901,66 @@ impl PyGHF {
     #[setter]
     fn set_conv_tol(&mut self, v: f64) {
         self.inner.conv_tol = v;
+    }
+
+    /// Drive GHF SCF — Python: `mf.kernel()`. Always the `NoOverrides` path:
+    /// PyGHF exposes no hook defaults, so there is no subclass-override
+    /// dispatch to preserve (unlike PyRHF::kernel's bridge arm). The GIL is
+    /// released for the full compute (BIND-05).
+    ///
+    /// Carryover 20-molecular-python-suite-drift item 3 (`test_scf_ghf.py`:
+    /// `GHF has no run`).
+    fn kernel<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<f64> {
+        let (cfg, mol) = {
+            let me = slf.borrow();
+            (me.inner.to_kernel_config(), me.inner.mol.clone())
+        };
+        let result = py
+            .detach(|| scf_kernel(&mol, &NoOverrides, cfg))
+            .map_err(pyscf_to_py)?;
+        let e_tot = result.e_tot.0;
+
+        // SCF-10 auto-write chkfile on convergence (same contract as
+        // PyRHF::kernel).
+        let chkfile_path: Option<std::path::PathBuf> = {
+            let me = slf.borrow();
+            if result.converged {
+                me.inner.chkfile.clone()
+            } else {
+                None
+            }
+        };
+        if let Some(path) = chkfile_path {
+            let mol_json: String = {
+                let me = slf.borrow();
+                let bound = me.py_mol.bind(py);
+                if bound.hasattr("dumps")? {
+                    bound.call_method0("dumps")?.extract::<String>()?
+                } else {
+                    pyscf_gto::dumps(&me.inner.mol).map_err(pyscf_to_py)?
+                }
+            };
+            pyscf_scf::dump_scf_to_file(&path, &mol_json, &result).map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("chkfile dump failed: {e}"))
+            })?;
+        }
+
+        {
+            let mut me = slf.borrow_mut();
+            me.inner.mo_coeff = Some(result.mo_coeff);
+            me.inner.mo_energy = Some(result.mo_energy);
+            me.inner.mo_occ = Some(result.mo_occ);
+            me.inner.e_tot = e_tot;
+            me.inner.converged = result.converged;
+            me.inner.cycles = result.cycles;
+        }
+        Ok(e_tot)
+    }
+
+    /// `mf.run()` — alias for kernel, returns self for chaining (BIND-02).
+    fn run<'py>(slf: Bound<'py, Self>, py: Python<'py>) -> PyResult<Bound<'py, Self>> {
+        let _ = PyGHF::kernel(slf.clone(), py)?;
+        Ok(slf)
     }
 }
 

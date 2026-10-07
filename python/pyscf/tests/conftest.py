@@ -2,100 +2,114 @@
 
 Plan 03-10 fills the Wave-0 skip-stubs with real Mole-construction bodies.
 Fixtures use the pyscf-rs overlay (`pyscf.gto.M`) for the rs side; upstream
-PySCF is loaded via importlib under a different module name so both
-libraries are importable in the same Python process (RESEARCH §Validation
-Architecture lines 1313-1357 — in-process comparison is faster than
-subprocess isolation and good enough for the µHartree contract because
-the Rust kernel cannot mutate upstream Python state).
+PySCF runs in a SEPARATE interpreter (carryover 20-molecular-python-suite-drift
+item 1 — the in-process importlib loader is retired).
+
+Why out-of-process: the overlay IS the `pyscf` package in this process
+(molecular `_passthrough.py` fallthrough included), so executing the vendored
+`pyscf/__init__.py` in-process binds the overlay's native `M`/`RHF`/`UHF`
+and any "oracle" built from it compares pyscf-rs against itself (a vacuous
+pass; guarded since 20-19 A, now removed outright). The subprocess runs with
+`PYTHONPATH=<repo root>` from a neutral cwd, so `import pyscf` resolves to
+the vendored 2.12.1 tree — asserted on every run — and never to site-packages
+2.14.0 or the overlay.
 """
-import importlib.util
 import json
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 
 import pytest
 
+#: Sentinel prefix marking the oracle payload line (C-level stdout from
+#: libcint/libxc can precede it regardless of verbosity).
+ORACLE_MARKER = "__PYSCF_RS_ORACLE__"
 
-def _refuse_overlay_backed_upstream(mod):
-    """20-19 A: refuse an `_upstream_pyscf` whose `gto`/`scf` are the OVERLAY packages.
-
-    The molecular overlay packages now fall through to upstream, so executing the
-    vendored `pyscf/__init__.py` SUCCEEDS — but its `from pyscf import gto, scf` binds
-    the overlay packages, whose `M`/`RHF`/`UHF` are the native classes. An oracle built
-    from that module compares pyscf-rs against itself (a vacuous pass). The same holds
-    for the half-upstream module `test_intor_spinor.py` caches (its `gto` is upstream,
-    its `scf` is the overlay). The genuine oracle is the `PYSCF_RS_UPSTREAM_PYTHON`
-    subprocess (ci.yml).
-    """
-    overlay_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for sub in ("gto", "scf"):
-        f = getattr(getattr(mod, sub, None), "__file__", None)
-        if f is None or os.path.abspath(f).startswith(overlay_dir + os.sep):
-            raise RuntimeError(
-                f"in-process upstream loader is not upstream: `_upstream_pyscf.{sub}` is "
-                f"{getattr(mod, sub, None)!r}, the pyscf-rs overlay (20-19 A), so an oracle "
-                "built from it would be vacuous; set PYSCF_RS_UPSTREAM_PYTHON to use the "
-                "subprocess oracle"
-            )
+#: Hard cap per upstream evaluation (benzene/6-31G* is the slowest caller).
+UPSTREAM_TIMEOUT = 1500
 
 
-def _load_upstream():
-    """Load upstream PySCF (the original `pyscf/` tree under repo root)
-    under the namespace `_upstream_pyscf` so it coexists with the overlay.
-
-    The maturin install puts `python/pyscf/` on sys.path ahead of the
-    upstream tree, so `import pyscf` resolves to the overlay. We bypass
-    that by loading upstream's `__init__.py` via importlib directly.
-    """
+def _repo_root():
     # <repo>/python/pyscf/tests/conftest.py → walk up 3 dirs to <repo>
     here = os.path.abspath(os.path.dirname(__file__))
-    repo_root = os.path.abspath(os.path.join(here, "..", "..", ".."))
-    upstream_init = os.path.join(repo_root, "pyscf", "__init__.py")
-    if not os.path.exists(upstream_init):
-        pytest.skip(f"upstream pyscf not found at {upstream_init}")
+    return os.path.abspath(os.path.join(here, "..", "..", ".."))
 
-    # Cache hit if already loaded.
-    if "_upstream_pyscf" in sys.modules:
-        mod = sys.modules["_upstream_pyscf"]
-        _refuse_overlay_backed_upstream(mod)
-        return mod
 
-    spec = importlib.util.spec_from_file_location(
-        "_upstream_pyscf",
-        upstream_init,
-        submodule_search_locations=[os.path.dirname(upstream_init)],
+def upstream_eval(script, request):
+    """Run `script` against the VENDORED upstream PySCF and return its payload.
+
+    `script` reads its JSON `request` from stdin and prints
+    `ORACLE_MARKER + json.dumps(payload)` to stdout. The interpreter is
+    `PYSCF_RS_UPSTREAM_PYTHON` when set (CI free-threaded escape hatch),
+    else `sys.executable`; `PYTHONPATH=<repo root>` from a neutral cwd pins
+    `import pyscf` to the vendored 2.12.1 tree, and a preamble asserts the
+    version so a mis-resolved import fails loudly instead of comparing
+    against the wrong PySCF.
+    """
+    interpreter = os.environ.get("PYSCF_RS_UPSTREAM_PYTHON") or sys.executable
+    root = _repo_root()
+    existing = os.environ.get("PYTHONPATH", "")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = root + (os.pathsep + existing if existing else "")
+    preamble = textwrap.dedent(
+        """
+        import pyscf
+        assert pyscf.__version__ == "2.12.1", (
+            "upstream oracle resolved PySCF %s from %s, expected vendored 2.12.1"
+            % (pyscf.__version__, pyscf.__file__)
+        )
+        """
     )
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_upstream_pyscf"] = mod
+    # Callers often indent the script inside the call — normalize once here.
+    script = textwrap.dedent(script)
     try:
-        spec.loader.exec_module(mod)
-    except BaseException:
-        sys.modules.pop("_upstream_pyscf", None)
-        raise
-    try:
-        _refuse_overlay_backed_upstream(mod)
-    except RuntimeError:
-        sys.modules.pop("_upstream_pyscf", None)
-        raise
-    return mod
+        proc = subprocess.run(
+            [interpreter, "-c", preamble + script],
+            input=json.dumps(request),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=UPSTREAM_TIMEOUT,
+            cwd=tempfile.gettempdir(),
+            env=env,
+        )
+    except subprocess.TimeoutExpired as e:
+        pytest.fail(f"upstream PySCF subprocess timed out after {UPSTREAM_TIMEOUT}s: {e}")
+    if proc.returncode != 0:
+        pytest.fail(
+            "upstream PySCF subprocess failed\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}"
+        )
+    line = next(
+        (ln for ln in proc.stdout.splitlines() if ln.startswith(ORACLE_MARKER)),
+        None,
+    )
+    if line is None:
+        pytest.fail(
+            "upstream PySCF subprocess emitted no oracle result\n"
+            f"stdout:\n{proc.stdout}\n"
+            f"stderr:\n{proc.stderr}"
+        )
+    return json.loads(line[len(ORACLE_MARKER):])
 
 
-@pytest.fixture(scope="session")
-def upstream():
-    """Upstream PySCF imported as `_upstream_pyscf` — coexists with overlay."""
-    return _load_upstream()
+@pytest.fixture
+def run_upstream():
+    """The out-of-process vendored oracle: `run_upstream(script, request)`."""
+
+    return upstream_eval
 
 
 @pytest.fixture
 def upstream_rhf_energy():
-    """Return upstream RHF energy, using a separate interpreter when provided."""
+    """Return upstream RHF energy via the out-of-process vendored oracle."""
 
     def calculate(atom: str, basis: str):
-        upstream_python = os.environ.get("PYSCF_RS_UPSTREAM_PYTHON")
-        if upstream_python:
-            code = textwrap.dedent(
+        return upstream_eval(
+            textwrap.dedent(
                 """
                 import json
                 import sys
@@ -112,37 +126,9 @@ def upstream_rhf_energy():
                 payload = {"converged": bool(mf.converged), "e_tot": float(mf.e_tot)}
                 print("__PYSCF_RS_ORACLE__" + json.dumps(payload))
                 """
-            )
-            proc = subprocess.run(
-                [upstream_python, "-c", code],
-                input=json.dumps({"atom": atom, "basis": basis}),
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-            if proc.returncode != 0:
-                pytest.fail(
-                    "upstream PySCF subprocess failed\n"
-                    f"stdout:\n{proc.stdout}\n"
-                    f"stderr:\n{proc.stderr}"
-                )
-            marker = "__PYSCF_RS_ORACLE__"
-            line = next(
-                (ln for ln in proc.stdout.splitlines() if ln.startswith(marker)),
-                None,
-            )
-            if line is None:
-                pytest.fail(
-                    "upstream PySCF subprocess emitted no oracle result\n"
-                    f"stdout:\n{proc.stdout}\n"
-                    f"stderr:\n{proc.stderr}"
-                )
-            return json.loads(line[len(marker):])
-
-        upstream = _load_upstream()
-        mol = upstream.gto.M(atom=atom, basis=basis, verbose=0)
-        mf = upstream.scf.RHF(mol).run()
-        return {"converged": bool(mf.converged), "e_tot": float(mf.e_tot)}
+            ),
+            {"atom": atom, "basis": basis},
+        )
 
     return calculate
 

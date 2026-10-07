@@ -2,10 +2,8 @@
 
 Covers: SCF-01 — RHF total energy ≤ 1 µHartree vs upstream.
 
-Per RESEARCH §Validation Architecture: pyscf-rs runs in-process alongside
-upstream PySCF (loaded via importlib under the `_upstream_pyscf` name —
-see conftest.py). The Rust kernel cannot mutate upstream state, so
-side-by-side comparison is safe and ~10× faster than subprocess isolation.
+Upstream runs out of process against the vendored 2.12.1 tree
+(`upstream_rhf_energy` fixture — see conftest.py).
 """
 from pyscf import scf
 

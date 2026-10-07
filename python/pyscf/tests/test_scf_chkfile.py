@@ -114,27 +114,42 @@ def test_chkfile_pyscf_rs_writes_h5py_reads(h2o_mol):
             os.unlink(path)
 
 
-def test_chkfile_upstream_writes_pyscf_rs_reads(h2o_mol, upstream):
+def test_chkfile_upstream_writes_pyscf_rs_reads(h2o_mol, run_upstream):
     """Direction (B): upstream writes → pyscf-rs `mf.from_chk` reads.
 
     Live — `mf.from_chk(mol, path)` is exposed on the PyRHF surface
     (scf.rs:420, via `pyscf_scf::chkfile::load_scf_from_file`); the
     `init_guess = "chkfile"` path reconstructs MO state from disk.
+    The upstream half runs out of process (vendored oracle — see conftest.py).
     """
     with tempfile.NamedTemporaryFile(suffix=".chk", delete=False) as tf:
         path = tf.name
     try:
-        mol_up = upstream.gto.M(atom=h2o_mol.atom, basis="cc-pvdz")
-        mf_up = upstream.scf.RHF(mol_up)
-        mf_up.chkfile = path
-        mf_up.run()
+        up = run_upstream(
+            """
+            import json
+            import sys
+
+            from pyscf import gto, scf
+
+            request = json.load(sys.stdin)
+            mol = gto.M(atom=request["atom"], basis=request["basis"], verbose=0)
+            mf = scf.RHF(mol)
+            mf.chkfile = request["path"]
+            mf.run()
+            payload = {"converged": bool(mf.converged), "e_tot": float(mf.e_tot)}
+            print("__PYSCF_RS_ORACLE__" + json.dumps(payload))
+            """,
+            {"atom": h2o_mol.atom, "basis": "cc-pvdz", "path": path},
+        )
+        assert up["converged"], "upstream RHF did not converge"
 
         mf_rs = scf.RHF(h2o_mol)
         mf_rs.init_guess = "chkfile"
         mf_rs.chkfile = path
         mf_rs.run()
         assert mf_rs.converged
-        assert abs(mf_rs.e_tot - mf_up.e_tot) < 1e-6
+        assert abs(mf_rs.e_tot - up["e_tot"]) < 1e-6
     finally:
         if os.path.exists(path):
             os.unlink(path)

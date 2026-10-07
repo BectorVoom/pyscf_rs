@@ -16,8 +16,29 @@ import pytest
 
 from pyscf import scf
 
+#: Upstream RHF + analysis in one run (out-of-process vendored oracle —
+#: `run_upstream` fixture, see conftest.py). Upstream `mulliken_pop()`
+#: returns the (pop, charges) tuple.
+ORACLE_RHF_ANALYZE = """
+import json
+import sys
 
-def test_mulliken_pop_h2o_ccpvdz(h2o_mol, upstream):
+from pyscf import gto, scf
+
+request = json.load(sys.stdin)
+mol = gto.M(atom=request["atom"], basis=request["basis"], verbose=0)
+mf = scf.RHF(mol).run()
+_pop, charges = mf.mulliken_pop()
+payload = {
+    "converged": bool(mf.converged),
+    "charges": [float(x) for x in charges],
+    "dip": [float(x) for x in mf.dip_moment()],
+}
+print("__PYSCF_RS_ORACLE__" + json.dumps(payload))
+"""
+
+
+def test_mulliken_pop_h2o_ccpvdz(h2o_mol, run_upstream):
     """Mulliken atomic charges match upstream within 1e-6."""
     mf_rs = scf.RHF(h2o_mol).run()
     assert mf_rs.converged
@@ -27,18 +48,16 @@ def test_mulliken_pop_h2o_ccpvdz(h2o_mol, upstream):
         pytest.xfail(f"mulliken_pop body pending — gap-closure follow-up: {e}")
         return
 
-    mol_up = upstream.gto.M(atom=h2o_mol.atom, basis="cc-pvdz")
-    mf_up = upstream.scf.RHF(mol_up).run()
-    # Upstream: `mulliken_pop()` returns (pop, charges) tuple.
-    _pop_up, charges_up = mf_up.mulliken_pop()
+    up = run_upstream(ORACLE_RHF_ANALYZE, {"atom": h2o_mol.atom, "basis": "cc-pvdz"})
+    assert up["converged"], "upstream RHF did not converge"
     np.testing.assert_allclose(
-        np.asarray(atom_charges_rs), np.asarray(charges_up),
+        np.asarray(atom_charges_rs), np.asarray(up["charges"]),
         atol=1e-6, rtol=0,
         err_msg="Mulliken atomic charges mismatch vs upstream",
     )
 
 
-def test_dip_moment_h2o_ccpvdz(h2o_mol, upstream):
+def test_dip_moment_h2o_ccpvdz(h2o_mol, run_upstream):
     """Dipole moment vector matches upstream within 1e-6."""
     mf_rs = scf.RHF(h2o_mol).run()
     try:
@@ -47,17 +66,16 @@ def test_dip_moment_h2o_ccpvdz(h2o_mol, upstream):
         pytest.xfail(f"dip_moment body pending — gap-closure follow-up: {e}")
         return
 
-    mol_up = upstream.gto.M(atom=h2o_mol.atom, basis="cc-pvdz")
-    mf_up = upstream.scf.RHF(mol_up).run()
-    d_up = mf_up.dip_moment()  # numpy.ndarray shape (3,)
+    up = run_upstream(ORACLE_RHF_ANALYZE, {"atom": h2o_mol.atom, "basis": "cc-pvdz"})
+    assert up["converged"], "upstream RHF did not converge"
     np.testing.assert_allclose(
-        np.asarray(d_rs), np.asarray(d_up),
+        np.asarray(d_rs), np.asarray(up["dip"]),
         atol=1e-6, rtol=0,
         err_msg="Dipole moment mismatch vs upstream",
     )
 
 
-def test_scf_analyze_mulliken_dipole_vs_upstream(h2o_mol, upstream):
+def test_scf_analyze_mulliken_dipole_vs_upstream(h2o_mol, run_upstream):
     """Aggregator name kept for grep continuity (plan 03-02 stub name)."""
-    test_mulliken_pop_h2o_ccpvdz(h2o_mol, upstream)
-    test_dip_moment_h2o_ccpvdz(h2o_mol, upstream)
+    test_mulliken_pop_h2o_ccpvdz(h2o_mol, run_upstream)
+    test_dip_moment_h2o_ccpvdz(h2o_mol, run_upstream)

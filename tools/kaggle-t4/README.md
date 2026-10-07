@@ -2,8 +2,8 @@
 
 A large periodic DFT band structure does not fit one Kaggle session. For
 example, YTa7O19 with `gth-dzvp-molopt-sr`, a 60 Ha cutoff and a 3×3×1 k-mesh
-takes about 55 minutes per SCF cycle on a T4, and a GPU session ends after
-12 hours. This tool splits the run into sessions. Each session picks up where
+takes about 13 minutes per SCF cycle on a T4 (55 before the grid contractions
+were tiled, 2026-10), and a GPU session ends after 12 hours. This tool splits the run into sessions. Each session picks up where
 the last one stopped. You start it with one command and can walk away.
 
 ## How it works
@@ -63,7 +63,13 @@ history restarts empty.
    - The example config is YTa7O19 with DZVP, ke 60 and 3×3×1, pre-converged
      in SZV.
    - Memory budgets: XC blocks 2.5 GB, Coulomb blocks 2 GB, band blocks 1 GB,
-     and the device AO cache off. That fits a 15 GB T4.
+     and the device AO cache off. That fits a 15 GB T4 (measured peak
+     10.6 GB). A block's table is built and contracted on the GPU (about
+     twice the block budget while it is being built) and never crosses to
+     the host.
+   - `PYSCF_PBC_GRID_TILED=0` restores the one-lane-per-output grid
+     contractions (bit-identical on the CPU runtime, several times slower on
+     either backend) for an A/B.
 
 **Other GPUs.** Set `kaggle.accelerator` to `p100` or `rtxpro6000`. Kaggle
 offers the RTX PRO 6000 (98 GB) only through a competition: add
@@ -103,7 +109,7 @@ run yta7o19-dzvp-ke60-k331: 3 session(s) finished
   stage: s1   {"cycle": 21, "e_tot": -1505.1234567}
    pre:  25 cycles, last e_tot: -1503.39...
     s1:  22 cycles, last e_tot: ...
-        ~55 min per cycle
+        ~13 min per cycle
 ```
 
 ## When it stops by itself

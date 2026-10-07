@@ -91,6 +91,16 @@
 //! one k-point's worth — `1/nkpts` of the table — and a gather copies values
 //! without combining them, so the numbers are untouched.
 //!
+//! # SCF-03 — the tiled kernel
+//!
+//! One lane per output loads its two AO rows again for every element: five
+//! loads per grid point per `(p, q)`. [`local_vmat_tile_kernel`] gives a lane
+//! a [`VLOC_TILE`]`×`[`VLOC_TILE`] block of outputs instead, so the eight rows
+//! it loads feed sixteen sums. Every sum is still its own serial chain over
+//! `g` — carried across grid blocks exactly as above — so the result is the
+//! per-output kernel's, bit for bit. `PYSCF_PBC_GRID_TILED=0` pins the
+//! per-output kernel.
+//!
 //! Generic over the device float (`F: Float`, AGENTS.md §3 / RULE 5).
 
 use cubecl::Runtime;
@@ -98,7 +108,7 @@ use cubecl::client::ComputeClient;
 use cubecl::prelude::*;
 use cubecl::server::Handle;
 use pyscf_algebra::dispatch_backend;
-use pyscf_algebra::launch::{launch_1d, upload};
+use pyscf_algebra::launch::{launch_1d, launch_1d_chunked, upload};
 use pyscf_algebra::{AlgebraClient, AlgebraError};
 
 use crate::pbc::AoKAccumulator;
@@ -176,6 +186,107 @@ fn local_vmat_kernel<F: Float>(
     }
 }
 
+/// AO rows per side of one [`local_vmat_tile_kernel`] lane's output tile.
+const VLOC_TILE: usize = 4;
+
+/// SCF-03 — [`local_vmat_kernel`] with one lane per `(k, p-tile, q-tile)` of
+/// the k-points `[k0, k0 + nk)`, K-MAJOR planes only (`plane[k · stride_k +
+/// mu · ngrids + g]`). A tile hanging over the edge reads row `nao − 1` again
+/// and stores nothing for it.
+#[cube(launch_unchecked)]
+#[allow(clippy::too_many_arguments)]
+fn local_vmat_tile_kernel<F: Float>(
+    ao_re: &Array<F>,
+    ao_im: &Array<F>,
+    vr: &Array<F>,
+    out_re: &mut Array<F>,
+    out_im: &mut Array<F>,
+    nao: usize,
+    ngrids: usize,
+    stride_k: usize,
+    k0: usize,
+    nk: usize,
+    accumulate: u32,
+    lane0: usize,
+) {
+    // `lane0`: chunked on the CPU runtime — the tile is stack per iteration
+    // there (`launch_1d_chunked`).
+    let tid = ABSOLUTE_POS + lane0;
+    let ntq = (nao + VLOC_TILE - 1) / VLOC_TILE;
+    let ntile = ntq * ntq;
+    if tid < nk * ntile {
+        let k = k0 + tid / ntile;
+        let t = tid % ntile;
+        let p0 = (t / ntq) * VLOC_TILE;
+        let q0 = (t % ntq) * VLOC_TILE;
+        let kb = k * stride_k;
+        let ob = k * nao * nao;
+        let zero = F::from_int(0);
+        let mut sr = Array::<F>::new(VLOC_TILE * VLOC_TILE);
+        let mut si = Array::<F>::new(VLOC_TILE * VLOC_TILE);
+        let mut pr = Array::<F>::new(VLOC_TILE);
+        let mut pi = Array::<F>::new(VLOC_TILE);
+        let mut qr = Array::<F>::new(VLOC_TILE);
+        let mut qi = Array::<F>::new(VLOC_TILE);
+        #[unroll]
+        for a in 0..VLOC_TILE {
+            #[unroll]
+            for b in 0..VLOC_TILE {
+                let mut vr0 = zero;
+                let mut vi0 = zero;
+                if accumulate == 1 {
+                    if p0 + a < nao {
+                        if q0 + b < nao {
+                            vr0 = out_re[ob + (p0 + a) * nao + q0 + b];
+                            vi0 = out_im[ob + (p0 + a) * nao + q0 + b];
+                        }
+                    }
+                }
+                sr[a * VLOC_TILE + b] = vr0;
+                si[a * VLOC_TILE + b] = vi0;
+            }
+        }
+        for g in 0..ngrids {
+            let w = vr[g];
+            #[unroll]
+            for a in 0..VLOC_TILE {
+                let mut p = p0 + a;
+                if p >= nao {
+                    p = nao - 1;
+                }
+                pr[a] = ao_re[kb + p * ngrids + g];
+                pi[a] = -ao_im[kb + p * ngrids + g];
+                let mut q = q0 + a;
+                if q >= nao {
+                    q = nao - 1;
+                }
+                qr[a] = ao_re[kb + q * ngrids + g];
+                qi[a] = ao_im[kb + q * ngrids + g];
+            }
+            #[unroll]
+            for a in 0..VLOC_TILE {
+                #[unroll]
+                for b in 0..VLOC_TILE {
+                    sr[a * VLOC_TILE + b] += (pr[a] * qr[b] - pi[a] * qi[b]) * w;
+                    si[a * VLOC_TILE + b] += (pr[a] * qi[b] + pi[a] * qr[b]) * w;
+                }
+            }
+        }
+        #[unroll]
+        for a in 0..VLOC_TILE {
+            #[unroll]
+            for b in 0..VLOC_TILE {
+                if p0 + a < nao {
+                    if q0 + b < nao {
+                        out_re[ob + (p0 + a) * nao + q0 + b] = sr[a * VLOC_TILE + b];
+                        out_im[ob + (p0 + a) * nao + q0 + b] = si[a * VLOC_TILE + b];
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Copy one k-point's `n` elements out of a POINT-MAJOR plane
 /// (`plane[e·nkpts + k]`) into a contiguous scratch buffer.
 ///
@@ -241,6 +352,47 @@ fn launch_range<R: Runtime, F: DeviceScalar>(
     range_len: usize,
     accumulate: u32,
 ) {
+    let npair = nao * nao;
+    // SCF-03: whole k-points over contiguous `g` take the tiled kernel (both
+    // callers pass whole k-points; the stride test keeps a point-major table
+    // on the per-output kernel, which is the only one that can walk it).
+    if stride_e == 1
+        && npair > 0
+        && range0.is_multiple_of(npair)
+        && range_len.is_multiple_of(npair)
+        && crate::pbc::band_vmat::tiled_contractions(client)
+    {
+        let (k0, nk) = (range0 / npair, range_len / npair);
+        let ntq = nao.div_ceil(VLOC_TILE);
+        let local_bytes = (2 * VLOC_TILE * VLOC_TILE + 4 * VLOC_TILE) * core::mem::size_of::<f64>();
+        let per_lane = 8 * VLOC_TILE * VLOC_TILE * ngrids;
+        for chunk in launch_1d_chunked(client, nk * ntq * ntq, per_lane, local_bytes) {
+            unsafe {
+                local_vmat_tile_kernel::launch_unchecked::<F, R>(
+                    client,
+                    CubeCount::Static(chunk.count_x, 1, 1),
+                    chunk.dim,
+                    // SAFETY: as the per-output launch below — the planes
+                    // hold every `(k, p, g)` of the k-points in range, `vr`
+                    // `ngrids`, the outputs `total >= (k0 + nk) · nao²`; the
+                    // kernel guards the lane and clamps rows to `nao − 1`.
+                    ArrayArg::from_raw_parts(ao_re.clone(), ao_len),
+                    ArrayArg::from_raw_parts(ao_im.clone(), ao_len),
+                    ArrayArg::from_raw_parts(vr.clone(), ngrids),
+                    ArrayArg::from_raw_parts(out_re.clone(), total),
+                    ArrayArg::from_raw_parts(out_im.clone(), total),
+                    nao,
+                    ngrids,
+                    stride_k,
+                    k0,
+                    nk,
+                    accumulate,
+                    chunk.lane0,
+                );
+            }
+        }
+        return;
+    }
     let end = range0 + range_len;
     let mut lane0 = range0;
     while lane0 < end {
